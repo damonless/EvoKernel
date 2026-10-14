@@ -1,0 +1,23 @@
+{
+  "id": "workspace-metrics-scanner",
+  "title": "Fast Workspace Metrics & Extension Breakdown Scanner",
+  "l0_summary": "Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.",
+  "runtime": "node",
+  "entry_script": "run.mjs",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "maxDepth": {
+        "type": "number",
+        "description": "Maximum directory recursion depth (default: 4)"
+      }
+    }
+  },
+  "self_test_args": {
+    "maxDepth": 2
+  },
+  "timeout_ms": 5000,
+  "origin": "bootstrap",
+  "created_at": "2026-10-14T16:00:40.849Z",
+  "updated_at": "2026-10-14T16:00:40.849Z"
+}

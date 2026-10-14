@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "evo-kernel": {
+      "command": "node",
+      "args": [
+        "./dist/cli/index.js",
+        "mcp"
+      ]
+    }
+  }
+}

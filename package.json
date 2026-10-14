@@ -1,0 +1,47 @@
+{
+  "name": "evo-kernel",
+  "version": "0.1.0",
+  "description": "Deterministic Self-Evolving Meta-Kernel for AI Coding Agents — Evolves Rules, Skills, and Sandboxed Micro-Tools via a Single Fixed Meta-MCP Gateway with Zero Prompt-Cache Invalidation.",
+  "type": "module",
+  "bin": {
+    "evo": "./dist/cli/index.js",
+    "evokernel": "./dist/cli/index.js",
+    "evo-kernel": "./dist/cli/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/damonless/EvoKernel.git"
+  },
+  "homepage": "https://github.com/damonless/EvoKernel",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "start": "node ./dist/cli/index.js",
+    "mcp": "node ./dist/cli/index.js mcp",
+    "test": "node ./scripts/build.mjs && node --test ./dist/tests/evo-kernel.test.js"
+  },
+  "keywords": [
+    "ai-agents",
+    "mcp",
+    "mcp-server",
+    "self-evolving",
+    "claude-code",
+    "cursor",
+    "antigravity",
+    "codex",
+    "windsurf",
+    "gemini-cli",
+    "skills",
+    "rules",
+    "context-engineering"
+  ],
+  "author": "EvoKernel Contributors",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
