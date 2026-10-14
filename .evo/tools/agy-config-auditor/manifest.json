@@ -1,0 +1,16 @@
+{
+  "id": "agy-config-auditor",
+  "title": "Agent Rule Budget & Config Health Auditor",
+  "l0_summary": "Audits CLAUDE.md, GEMINI.md, AGENTS.md, and .evo/ rule files for token budget compliance and bloat.",
+  "runtime": "node",
+  "entry_script": "run.mjs",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "self_test_args": {},
+  "timeout_ms": 5000,
+  "origin": "evolved",
+  "created_at": "2026-10-14T16:41:40.915Z",
+  "updated_at": "2026-10-14T16:41:40.915Z"
+}

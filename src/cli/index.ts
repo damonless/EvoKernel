@@ -27,10 +27,30 @@ Commands:
 `);
 }
 
+function resolveWorkspaceRoot(args: string[], allowInstallFallback: boolean): string {
+  const wsFlagIdx = args.indexOf('--workspace');
+  if (wsFlagIdx !== -1 && args[wsFlagIdx + 1]) {
+    return path.resolve(args[wsFlagIdx + 1]);
+  }
+  if (process.env.EVO_WORKSPACE) {
+    return path.resolve(process.env.EVO_WORKSPACE);
+  }
+  const cwd = process.cwd();
+  if (!allowInstallFallback || fs.existsSync(path.join(cwd, '.evo'))) {
+    return cwd;
+  }
+  const installRoot = path.resolve(import.meta.dirname, '..', '..');
+  if (fs.existsSync(path.join(installRoot, '.evo'))) {
+    return installRoot;
+  }
+  return cwd;
+}
+
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   const cmd = (args[0] || 'help').toLowerCase();
-  const workspaceRoot = process.cwd();
+  const isLocalMutationCmd = ['init', 'bootstrap', 'uninstall'].includes(cmd);
+  const workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
 
   switch (cmd) {
     case 'mcp': {
