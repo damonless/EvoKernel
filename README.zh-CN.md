@@ -67,7 +67,7 @@
 
 ## 🚀 60 秒快速开始
 
-> **环境要求**：Node.js `>= 22.5` 或 `24+`（基于 Node 原生内置 `node:sqlite` FTS5 引擎与 `node:module` 原生 TypeScript 剥离器构建 —— **0 第三方 npm 依赖，无需 `npm install` 漫长等待**）。
+> **环境要求**：Node.js `>= 22.5` 或 `24+`（基于 Node 原生内置 `node:sqlite` 与 `node:module` 原生 TypeScript 剥离器构建 —— **0 第三方 npm 依赖，无需 `npm install` 漫长等待**；Windows 下推荐 `>= 22.16` / `22.23 LTS` 或 `24+` 以启用原生 SQLite FTS5，早期 `v22.5–v22.14` 版本会自动无缝降级至内置 JS BM25 检索引擎）。
 
 ```bash
 # 1. 克隆并构建（耗时 <50ms，零外部依赖）
@@ -76,6 +76,7 @@ cd EvoKernel
 node ./scripts/build.mjs
 
 # 2. 自动探测并注入 L0 元规则种子与 Meta-MCP 到 Claude Code / Cursor / Antigravity / Codex / Gemini
+#    （可选：--stealth 仅写入本地 .git/info/exclude；--targets agents 或 --targets auto 过滤目标宿主）
 node ./dist/cli/index.js init
 
 # 3. 冷启动基因提取：10 秒扫描当前仓库配置与 Git 历史 fix 记录生成初始规则与微工具

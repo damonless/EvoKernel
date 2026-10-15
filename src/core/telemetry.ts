@@ -3,17 +3,30 @@ import { DatabaseSync } from 'node:sqlite';
 import type { EvoKind, SearchHit, TelemetryRecord } from './types.js';
 import { EvoStorage } from './storage.js';
 
+export interface TelemetryOptions {
+  forceFts5Fallback?: boolean;
+}
+
 export class EvoTelemetry {
   private readonly dbPath: string;
   private readonly storage: EvoStorage;
+  private readonly forceFallback: boolean;
+  private fts5Enabled = false;
   private db: DatabaseSync;
 
-  constructor(storage: EvoStorage) {
+  constructor(storage: EvoStorage, options?: TelemetryOptions) {
     this.storage = storage;
     this.storage.ensureInitialized();
+    this.forceFallback = Boolean(
+      options?.forceFts5Fallback || process.env.EVO_FORCE_FTS5_FALLBACK === '1'
+    );
     this.dbPath = path.join(this.storage.cacheDir, 'telemetry.db');
     this.db = new DatabaseSync(this.dbPath);
     this.initSchema();
+  }
+
+  public isFts5Enabled(): boolean {
+    return this.fts5Enabled;
   }
 
   private initSchema(): void {
@@ -32,13 +45,13 @@ export class EvoTelemetry {
         created_at TEXT NOT NULL
       );
 
-      CREATE VIRTUAL TABLE IF NOT EXISTS capability_fts USING fts5(
-        id UNINDEXED,
-        kind UNINDEXED,
-        title,
-        l0_summary,
-        keywords,
-        body
+      CREATE TABLE IF NOT EXISTS capability_fts_fallback (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        l0_summary TEXT NOT NULL,
+        keywords TEXT NOT NULL,
+        body TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS session_state (
@@ -47,6 +60,29 @@ export class EvoTelemetry {
         updated_at TEXT NOT NULL
       );
     `);
+
+    if (this.forceFallback) {
+      this.fts5Enabled = false;
+      return;
+    }
+
+    try {
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS capability_fts USING fts5(
+          id UNINDEXED,
+          kind UNINDEXED,
+          title,
+          l0_summary,
+          keywords,
+          body
+        );
+      `);
+      this.db.prepare('SELECT count(*) FROM capability_fts').get();
+      this.fts5Enabled = true;
+    } catch {
+      // Node.js v22.5 ~ v22.14 on Windows compiled node:sqlite without SQLITE_ENABLE_FTS5
+      this.fts5Enabled = false;
+    }
   }
 
   public syncFromDisk(): void {
@@ -54,11 +90,24 @@ export class EvoTelemetry {
     const skills = this.storage.listSkills();
     const tools = this.storage.listTools();
 
-    this.db.exec('DELETE FROM capability_fts;');
-
-    const insertFts = this.db.prepare(
-      'INSERT INTO capability_fts (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
+    this.db.exec('DELETE FROM capability_fts_fallback;');
+    const insertFallback = this.db.prepare(
+      'INSERT INTO capability_fts_fallback (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
     );
+
+    let insertFts: ReturnType<DatabaseSync['prepare']> | null = null;
+    if (this.fts5Enabled) {
+      try {
+        this.db.exec('DELETE FROM capability_fts;');
+        insertFts = this.db.prepare(
+          'INSERT INTO capability_fts (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
+        );
+      } catch {
+        this.fts5Enabled = false;
+        insertFts = null;
+      }
+    }
+
     const upsertTelemetry = this.db.prepare(`
       INSERT INTO telemetry (id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, tokens_saved, last_used_at, created_at)
       VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)
@@ -72,17 +121,22 @@ export class EvoTelemetry {
     const now = new Date().toISOString();
 
     for (const r of rules) {
-      insertFts.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, r.content);
+      insertFallback.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, r.content);
+      insertFts?.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, r.content);
       upsertTelemetry.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, now, r.created_at);
     }
 
     for (const s of skills) {
-      insertFts.run(s.id, 'skill', s.title, s.l0_summary, s.tags.join(' '), `${s.l1_contract}\n${s.l2_sop}`);
+      const bodyText = `${s.l1_contract}\n${s.l2_sop}`;
+      insertFallback.run(s.id, 'skill', s.title, s.l0_summary, s.tags.join(' '), bodyText);
+      insertFts?.run(s.id, 'skill', s.title, s.l0_summary, s.tags.join(' '), bodyText);
       upsertTelemetry.run(s.id, 'skill', s.title, s.l0_summary, '**/*', now, s.created_at);
     }
 
     for (const t of tools) {
-      insertFts.run(t.id, 'tool', t.title, t.l0_summary, t.runtime, JSON.stringify(t.input_schema));
+      const schemaText = JSON.stringify(t.input_schema);
+      insertFallback.run(t.id, 'tool', t.title, t.l0_summary, t.runtime, schemaText);
+      insertFts?.run(t.id, 'tool', t.title, t.l0_summary, t.runtime, schemaText);
       upsertTelemetry.run(t.id, 'tool', t.title, t.l0_summary, '**/*', now, t.created_at);
     }
   }
@@ -98,33 +152,40 @@ export class EvoTelemetry {
     let rows: Array<Record<string, unknown>> = [];
 
     if (tokens.length > 0) {
-      const ftsQuery = tokens.map((t) => `"${t.replace(/"/g, '')}"*`).join(' OR ');
-      const sql =
-        kind === 'all'
-          ? `
-            SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count, bm25(capability_fts) as rank
-            FROM capability_fts f
-            JOIN telemetry t ON f.id = t.id
-            WHERE capability_fts MATCH ?
-            ORDER BY rank ASC, t.hit_count DESC
-            LIMIT ?
-          `
-          : `
-            SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count, bm25(capability_fts) as rank
-            FROM capability_fts f
-            JOIN telemetry t ON f.id = t.id
-            WHERE capability_fts MATCH ? AND f.kind = ?
-            ORDER BY rank ASC, t.hit_count DESC
-            LIMIT ?
-          `;
+      if (this.fts5Enabled) {
+        const ftsQuery = tokens.map((t) => `"${t.replace(/"/g, '')}"*`).join(' OR ');
+        const sql =
+          kind === 'all'
+            ? `
+              SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count, bm25(capability_fts) as rank
+              FROM capability_fts f
+              JOIN telemetry t ON f.id = t.id
+              WHERE capability_fts MATCH ?
+              ORDER BY rank ASC, t.hit_count DESC
+              LIMIT ?
+            `
+            : `
+              SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count, bm25(capability_fts) as rank
+              FROM capability_fts f
+              JOIN telemetry t ON f.id = t.id
+              WHERE capability_fts MATCH ? AND f.kind = ?
+              ORDER BY rank ASC, t.hit_count DESC
+              LIMIT ?
+            `;
 
-      try {
-        const stmt = this.db.prepare(sql);
-        rows = (kind === 'all' ? stmt.all(ftsQuery, limit) : stmt.all(ftsQuery, kind, limit)) as Array<
-          Record<string, unknown>
-        >;
-      } catch {
-        rows = [];
+        try {
+          const stmt = this.db.prepare(sql);
+          rows = (kind === 'all' ? stmt.all(ftsQuery, limit) : stmt.all(ftsQuery, kind, limit)) as Array<
+            Record<string, unknown>
+          >;
+        } catch {
+          this.fts5Enabled = false;
+          rows = [];
+        }
+      }
+
+      if (!this.fts5Enabled) {
+        rows = this.searchFallbackBm25(tokens, kind, limit);
       }
     }
 
@@ -153,6 +214,63 @@ export class EvoTelemetry {
         score: Math.abs(Number(r.rank || 0)),
       };
     });
+  }
+
+  private searchFallbackBm25(
+    tokens: string[],
+    kind: EvoKind | 'all',
+    limit: number
+  ): Array<Record<string, unknown>> {
+    const sql =
+      kind === 'all'
+        ? `
+          SELECT f.id, f.kind, f.title, f.l0_summary, f.keywords, f.body,
+                 t.scope_glob, t.hit_count, t.success_count, t.fail_count
+          FROM capability_fts_fallback f
+          JOIN telemetry t ON f.id = t.id
+        `
+        : `
+          SELECT f.id, f.kind, f.title, f.l0_summary, f.keywords, f.body,
+                 t.scope_glob, t.hit_count, t.success_count, t.fail_count
+          FROM capability_fts_fallback f
+          JOIN telemetry t ON f.id = t.id
+          WHERE f.kind = ?
+        `;
+    const candidates = (
+      kind === 'all' ? this.db.prepare(sql).all() : this.db.prepare(sql).all(kind)
+    ) as Array<Record<string, unknown>>;
+
+    const lowerTokens = tokens.map((t) => t.toLowerCase());
+    const scored: Array<Record<string, unknown> & { _score: number }> = [];
+
+    for (const row of candidates) {
+      const idStr = String(row.id || '').toLowerCase();
+      const titleStr = String(row.title || '').toLowerCase();
+      const l0Str = String(row.l0_summary || '').toLowerCase();
+      const kwStr = String(row.keywords || '').toLowerCase();
+      const bodyStr = String(row.body || '').toLowerCase();
+
+      let score = 0;
+      for (const tok of lowerTokens) {
+        if (idStr.includes(tok)) score += 3.0;
+        if (titleStr.includes(tok)) score += 2.5;
+        if (kwStr.includes(tok)) score += 2.0;
+        if (l0Str.includes(tok)) score += 1.8;
+        if (bodyStr.includes(tok)) score += 1.0;
+      }
+
+      if (score > 0) {
+        scored.push({
+          ...row,
+          rank: -score,
+          _score: score,
+        });
+      }
+    }
+
+    return scored
+      .sort((a, b) => b._score - a._score || Number(b.hit_count || 0) - Number(a.hit_count || 0))
+      .slice(0, limit);
   }
 
   public findSimilarCapabilities(

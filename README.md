@@ -67,7 +67,7 @@ Every developer using Claude Code, Cursor, Antigravity, or Codex hits three wall
 
 ## 🚀 Quick Start (60 Seconds)
 
-> **Prerequisites**: Node.js `>= 22.5` or `24+` (uses native `node:sqlite` FTS5 & native TypeScript stripping — **0 third-party npm dependencies**).
+> **Prerequisites**: Node.js `>= 22.5` or `24+` (uses native `node:sqlite` & native TypeScript stripping — **0 third-party npm dependencies**; on Windows x64, `>= 22.16` / `22.23 LTS` or `24+` enables native SQLite FTS5, while earlier `v22.5–v22.14` builds automatically use the built-in JS BM25 fallback).
 
 ```bash
 # 1. Clone and build (takes <50ms, zero npm install required)
@@ -76,6 +76,7 @@ cd EvoKernel
 node ./scripts/build.mjs
 
 # 2. Wire L0 Meta-Rule Seed + Single Meta-MCP into your active coding agents
+#    (Optional: add --stealth for .git/info/exclude and --targets agents,claude or --targets auto)
 node ./dist/cli/index.js init
 
 # 3. Cold-start mine your repository's build scripts & git fix history

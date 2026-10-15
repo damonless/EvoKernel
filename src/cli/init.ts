@@ -76,11 +76,44 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   return updated;
 }
 
+export function findGitRoot(startDir: string): string | null {
+  let current = path.resolve(startDir);
+  while (true) {
+    if (fs.existsSync(path.join(current, '.git'))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function resolveGitDir(gitRoot: string): string {
+  const dotGit = path.join(gitRoot, '.git');
+  try {
+    const stat = fs.statSync(dotGit);
+    if (stat.isFile()) {
+      const content = fs.readFileSync(dotGit, 'utf8').trim();
+      const match = content.match(/^gitdir:\s*(.+)$/i);
+      if (match) {
+        return path.resolve(gitRoot, match[1].trim());
+      }
+    }
+  } catch {
+    // fallback to standard .git directory
+  }
+  return dotGit;
+}
+
 export function ensureGitInfoExclude(workspaceRoot: string, patterns: string[]): string[] {
-  const gitInfoDir = path.join(workspaceRoot, '.git', 'info');
-  if (!fs.existsSync(path.join(workspaceRoot, '.git'))) {
+  const gitRoot = findGitRoot(workspaceRoot);
+  if (!gitRoot) {
     return [];
   }
+  const gitDir = resolveGitDir(gitRoot);
+  const gitInfoDir = path.join(gitDir, 'info');
   fs.mkdirSync(gitInfoDir, { recursive: true });
   const excludePath = path.join(gitInfoDir, 'exclude');
   const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf8') : '';
@@ -91,8 +124,27 @@ export function ensureGitInfoExclude(workspaceRoot: string, patterns: string[]):
       .filter(Boolean)
   );
 
-  const added: string[] = [];
+  const relPrefix = path
+    .relative(gitRoot, path.resolve(workspaceRoot))
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+
+  const expandedPatterns: string[] = [];
   for (const pat of patterns) {
+    if (!expandedPatterns.includes(pat)) {
+      expandedPatterns.push(pat);
+    }
+    if (relPrefix && !relPrefix.startsWith('..')) {
+      const cleanPat = pat.replace(/^\/+/, '');
+      const prefixed = `/${relPrefix}/${cleanPat}`;
+      if (!expandedPatterns.includes(prefixed)) {
+        expandedPatterns.push(prefixed);
+      }
+    }
+  }
+
+  const added: string[] = [];
+  for (const pat of expandedPatterns) {
     if (!existingLines.has(pat)) {
       added.push(pat);
     }
@@ -112,6 +164,50 @@ export function ensureGitInfoExclude(workspaceRoot: string, patterns: string[]):
   return added;
 }
 
+export function parseInitTargets(
+  rawTargets: string | string[] | undefined,
+  workspaceRoot: string
+): string[] {
+  const allTargets = Object.keys(HARNESS_RULE_TARGETS);
+  if (!rawTargets) {
+    return allTargets;
+  }
+
+  const tokens = (Array.isArray(rawTargets) ? rawTargets.join(',') : rawTargets)
+    .split(/[\s,]+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (tokens.length === 0 || tokens.includes('all')) {
+    return allTargets;
+  }
+
+  if (tokens.includes('auto')) {
+    const detected = allTargets.filter((target) => {
+      const relPath = HARNESS_RULE_TARGETS[target];
+      if (target === 'cursor') {
+        return (
+          fs.existsSync(path.join(workspaceRoot, relPath)) ||
+          fs.existsSync(path.join(workspaceRoot, '.cursor'))
+        );
+      }
+      return fs.existsSync(path.join(workspaceRoot, relPath));
+    });
+    return detected.length > 0 ? detected : ['agents'];
+  }
+
+  const normalized = new Set<string>();
+  for (const token of tokens) {
+    const clean = token.replace(/\.md$/i, '');
+    if (clean === 'claude') normalized.add('claude');
+    else if (clean === 'agents' || clean === 'agent') normalized.add('agents');
+    else if (clean === 'gemini') normalized.add('gemini');
+    else if (clean === 'cursor' || clean === 'cursorrules' || clean === 'mdc') normalized.add('cursor');
+  }
+
+  return normalized.size > 0 ? Array.from(normalized) : allTargets;
+}
+
 export function runInit(
   workspaceRoot: string,
   targetsOrOptions: string[] | InitOptions = ['claude', 'agents', 'gemini', 'cursor']
@@ -119,7 +215,9 @@ export function runInit(
   const opts: InitOptions = Array.isArray(targetsOrOptions)
     ? { targets: targetsOrOptions, stealth: false }
     : targetsOrOptions;
-  const targets = opts.targets ?? ['claude', 'agents', 'gemini', 'cursor'];
+  const targets = opts.targets
+    ? parseInitTargets(opts.targets, workspaceRoot)
+    : ['claude', 'agents', 'gemini', 'cursor'];
   const stealth = Boolean(opts.stealth);
 
   const storage = new EvoStorage(workspaceRoot);

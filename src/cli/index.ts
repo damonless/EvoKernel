@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import { runInit, runUninstall } from './init.js';
+import { parseInitTargets, runInit, runUninstall } from './init.js';
 import { runBootstrap } from './bootstrap.js';
 import { renderEvoStats, renderEvoTree } from './visualizer.js';
 import { startMcpStdioServer } from '../mcp/server.js';
@@ -16,7 +17,9 @@ Usage:
   evo <command> [options]
 
 Commands:
-  init [--stealth]    Detect and wire L0 Meta-Rule Seed + Single Meta-MCP (--stealth uses .git/info/exclude for strict commit whitelists)
+  init [--stealth] [--targets <list|auto>]
+                      Detect and wire L0 Meta-Rule Seed + Single Meta-MCP
+                      (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
   bootstrap           Cold-start 10s repo gene mining: extract verified initial Rules, Skills, and Micro-Tools from repo & git history
   tree                Render the ASCII Self-Evolving Capability Tree (.evo/)
   stats               Display the ROI Telemetry Ledger, Token Budget bar, and Prompt-Cache savings
@@ -27,7 +30,54 @@ Commands:
 `);
 }
 
-function resolveWorkspaceRoot(args: string[], allowInstallFallback: boolean): string {
+function copyDirNonOverwriting(srcDir: string, destDir: string): void {
+  if (!fs.existsSync(srcDir)) return;
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    if (entry.name === '.cache' || entry.name === 'archive') continue;
+    const srcPath = path.join(srcDir, entry.name);
+    const destPath = path.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      copyDirNonOverwriting(srcPath, destPath);
+    } else if (entry.isFile() && !fs.existsSync(destPath)) {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+export function resolveGlobalFallbackDir(customGlobalDir?: string): string {
+  if (customGlobalDir) {
+    return path.resolve(customGlobalDir);
+  }
+  if (process.env.EVO_GLOBAL_DIR) {
+    return path.resolve(process.env.EVO_GLOBAL_DIR);
+  }
+  return path.join(os.homedir(), '.evo', 'global');
+}
+
+export function ensureGlobalFallbackSeeded(
+  globalRoot: string = resolveGlobalFallbackDir(),
+  installRoot: string = path.resolve(import.meta.dirname, '..', '..')
+): string {
+  const storage = new EvoStorage(globalRoot);
+  storage.ensureInitialized();
+
+  const seedEvoDir = path.join(installRoot, '.evo');
+  if (fs.existsSync(seedEvoDir) && path.resolve(seedEvoDir) !== path.resolve(storage.evoDir)) {
+    for (const sub of ['rules', 'skills', 'tools']) {
+      copyDirNonOverwriting(path.join(seedEvoDir, sub), path.join(storage.evoDir, sub));
+    }
+    storage.rebuildCoreInvariantsDigest();
+  }
+
+  return globalRoot;
+}
+
+export function resolveWorkspaceRoot(
+  args: string[],
+  allowGlobalFallback: boolean,
+  cwdOverride?: string
+): string {
   const wsFlagIdx = args.indexOf('--workspace');
   if (wsFlagIdx !== -1 && args[wsFlagIdx + 1]) {
     return path.resolve(args[wsFlagIdx + 1]);
@@ -35,15 +85,28 @@ function resolveWorkspaceRoot(args: string[], allowInstallFallback: boolean): st
   if (process.env.EVO_WORKSPACE) {
     return path.resolve(process.env.EVO_WORKSPACE);
   }
-  const cwd = process.cwd();
-  if (!allowInstallFallback || fs.existsSync(path.join(cwd, '.evo'))) {
+  const cwd = path.resolve(cwdOverride || process.cwd());
+  if (!allowGlobalFallback || fs.existsSync(path.join(cwd, '.evo'))) {
     return cwd;
   }
-  const installRoot = path.resolve(import.meta.dirname, '..', '..');
-  if (fs.existsSync(path.join(installRoot, '.evo'))) {
-    return installRoot;
+  return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
+}
+
+export function parseTargetsArg(args: string[], workspaceRoot: string): string[] | undefined {
+  const eqArg = args.find((a) => a.startsWith('--targets='));
+  if (eqArg) {
+    return parseInitTargets(eqArg.slice('--targets='.length), workspaceRoot);
   }
-  return cwd;
+  const idx = args.indexOf('--targets');
+  if (idx !== -1) {
+    const collected: string[] = [];
+    for (let i = idx + 1; i < args.length; i++) {
+      if (args[i].startsWith('-')) break;
+      collected.push(args[i]);
+    }
+    return parseInitTargets(collected.join(','), workspaceRoot);
+  }
+  return undefined;
 }
 
 export function runCli(argv: string[]): void {
@@ -60,7 +123,8 @@ export function runCli(argv: string[]): void {
 
     case 'init': {
       const stealth = args.includes('--stealth');
-      const res = runInit(workspaceRoot, { stealth });
+      const targets = parseTargetsArg(args, workspaceRoot);
+      const res = runInit(workspaceRoot, { stealth, targets });
       console.log('🧬 EvoKernel initialized successfully!');
       console.log(`  ├─ Harnesses wired : ${res.initializedHarnesses.join(', ')}`);
       console.log(`  ├─ Rule seeds      : ${res.updatedFiles.join(', ')}`);
@@ -121,10 +185,17 @@ export function runCli(argv: string[]): void {
       storage.ensureInitialized();
       const telemetry = new EvoTelemetry(storage);
       telemetry.syncFromDisk();
+      const ftsEnabled = telemetry.isFts5Enabled();
       telemetry.close();
       console.log('🩺 EvoKernel Doctor — Diagnostics Check');
       console.log(`  ├─ [x] Node.js Runtime       : ${process.version} (${process.execPath})`);
-      console.log('  ├─ [x] Native node:sqlite    : Operational (FTS5 BM25 enabled)');
+      console.log(
+        `  ├─ [x] Native node:sqlite    : ${
+          ftsEnabled
+            ? 'Operational (FTS5 BM25 enabled)'
+            : 'Operational (JS BM25 Fallback active — upgrade to Node >=22.16 / 22.23+ or 24+ for native FTS5)'
+        }`
+      );
       console.log(`  ├─ [x] .evo/ Storage Tree    : ${storage.evoDir}`);
       console.log(`  └─ [x] Meta-MCP Config       : ${fs.existsSync(path.join(workspaceRoot, '.mcp.json')) ? 'Registered (.mcp.json)' : 'Run `evo init` to register'}`);
       break;
@@ -145,4 +216,6 @@ export function runCli(argv: string[]): void {
   }
 }
 
-runCli(process.argv);
+if (!process.env.NODE_TEST_CONTEXT && !process.argv[1]?.endsWith('.test.js')) {
+  runCli(process.argv);
+}

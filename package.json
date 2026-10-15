@@ -38,7 +38,7 @@
   "author": "EvoKernel Contributors",
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

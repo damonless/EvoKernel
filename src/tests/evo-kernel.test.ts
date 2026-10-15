@@ -4,10 +4,16 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
-import { runInit, runUninstall } from '../cli/init.js';
+import { findGitRoot, runInit, runUninstall } from '../cli/init.js';
 import { runBootstrap } from '../cli/bootstrap.js';
 import { renderEvoStats, renderEvoTree } from '../cli/visualizer.js';
+import {
+  ensureGlobalFallbackSeeded,
+  parseTargetsArg,
+  resolveWorkspaceRoot,
+} from '../cli/index.js';
 import { EvoStorage } from '../core/storage.js';
+import { EvoTelemetry } from '../core/telemetry.js';
 
 function createTempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-test-ws-'));
@@ -262,4 +268,102 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test('7. Issue #1: Global fallback isolates writes to ~/.evo/global and keeps repo .evo/ free of private rules', () => {
+    const uninitializedDir = createTempWorkspace();
+    const fakeGlobalDir = createTempWorkspace();
+    const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+    const prevGlobalEnv = process.env.EVO_GLOBAL_DIR;
+    const prevWsEnv = process.env.EVO_WORKSPACE;
+
+    try {
+      delete process.env.EVO_WORKSPACE;
+      process.env.EVO_GLOBAL_DIR = fakeGlobalDir;
+
+      const resolved = resolveWorkspaceRoot([], true, uninitializedDir);
+      assert.equal(resolved, path.resolve(fakeGlobalDir));
+      assert.notEqual(resolved, repoRoot);
+
+      ensureGlobalFallbackSeeded(fakeGlobalDir, repoRoot);
+      const globalStorage = new EvoStorage(fakeGlobalDir);
+      assert.ok(globalStorage.getRule('gatekeeper-self-test-invariant') !== null);
+
+      // Verify repository .evo/ does NOT contain private BMS/FSM rules
+      const repoStorage = new EvoStorage(repoRoot);
+      assert.equal(repoStorage.getRule('embedded-power-bms-guardrail'), null);
+      assert.equal(repoStorage.getSkill('embedded-fsm-lookup-audit'), null);
+    } finally {
+      if (prevGlobalEnv === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobalEnv;
+      if (prevWsEnv === undefined) delete process.env.EVO_WORKSPACE;
+      else process.env.EVO_WORKSPACE = prevWsEnv;
+      fs.rmSync(uninitializedDir, { recursive: true, force: true });
+      fs.rmSync(fakeGlobalDir, { recursive: true, force: true });
+    }
+  });
+
+  test('8. Issue #3 (1 & 2): Subdirectory --stealth parent .git discovery and --targets CLI filtering', () => {
+    const repoRoot = createTempWorkspace();
+    const subWorkspace = path.join(repoRoot, 'firmware', 'INV3K_5K_VMH');
+    fs.mkdirSync(path.join(repoRoot, '.git', 'info'), { recursive: true });
+    fs.mkdirSync(subWorkspace, { recursive: true });
+
+    try {
+      assert.equal(findGitRoot(subWorkspace), repoRoot);
+
+      const targets = parseTargetsArg(['init', '--stealth', '--targets', 'agents'], subWorkspace);
+      assert.deepEqual(targets, ['agents']);
+
+      const res = runInit(subWorkspace, { stealth: true, targets });
+      assert.deepEqual(res.updatedFiles, ['AGENTS.md']);
+      assert.equal(fs.existsSync(path.join(subWorkspace, 'AGENTS.md')), true);
+      assert.equal(fs.existsSync(path.join(subWorkspace, 'CLAUDE.md')), false);
+      assert.equal(fs.existsSync(path.join(subWorkspace, 'GEMINI.md')), false);
+
+      const excludePath = path.join(repoRoot, '.git', 'info', 'exclude');
+      const excludeContent = fs.readFileSync(excludePath, 'utf8');
+      assert.match(excludeContent, /\.evo\//);
+      assert.match(excludeContent, /\/firmware\/INV3K_5K_VMH\/\.evo\//);
+      assert.match(excludeContent, /\/firmware\/INV3K_5K_VMH\/AGENTS\.md/);
+
+      // Also verify --targets auto detects existing AGENTS.md
+      const autoTargets = parseTargetsArg(['init', '--targets=auto'], subWorkspace);
+      assert.deepEqual(autoTargets, ['agents']);
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('9. Issue #3 (3): SQLite FTS5-absent fallback mode operates with zero errors on Node v22 builds without FTS5', () => {
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    storage.ensureInitialized();
+    const now = new Date().toISOString();
+    storage.saveRule({
+      id: 'fallback-bm25-rule',
+      title: 'Fallback BM25 Search Verification Rule',
+      l0_summary: 'Ensures search works when SQLite FTS5 module is absent on Windows Node v22.14.',
+      scope_glob: 'src/**/*.ts',
+      core: true,
+      priority: 80,
+      content: 'Verify capability_fts_fallback table ranks rules accurately without FTS5.',
+      tokens: 45,
+      origin: 'test',
+      created_at: now,
+      updated_at: now,
+    });
+
+    const telemetry = new EvoTelemetry(storage, { forceFts5Fallback: true });
+    try {
+      assert.equal(telemetry.isFts5Enabled(), false);
+      const hits = telemetry.search('Fallback BM25 FTS5', 'rule', 5);
+      assert.equal(hits.length, 1);
+      assert.equal(hits[0].id, 'fallback-bm25-rule');
+      assert.ok(hits[0].score > 0);
+    } finally {
+      telemetry.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 });
+
