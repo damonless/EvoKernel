@@ -82,9 +82,11 @@ node ./dist/cli/index.js init
 # 3. Cold-start mine your repository's build scripts & git fix history
 node ./dist/cli/index.js bootstrap
 
-# 4. Inspect your evolved capability tree & ROI telemetry ledger
+# 4. Inspect your evolved capability tree, ROI telemetry ledger & rule/skill health
 node ./dist/cli/index.js tree
 node ./dist/cli/index.js stats
+node ./dist/cli/index.js audit --global
+node ./dist/cli/index.js refactor
 ```
 
 ### Live Terminal Output

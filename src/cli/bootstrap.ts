@@ -5,6 +5,7 @@ import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper } from '../core/gatekeeper.js';
 import { syncManagedRuleBlocks } from './init.js';
+import { EVO_RULE_ARCHITECT_PROPOSAL } from './audit.js';
 import type { ProposalPayload } from '../core/types.js';
 
 export interface BootstrapSummary {
@@ -96,7 +97,7 @@ export function runBootstrap(workspaceRoot: string): BootstrapSummary {
     ].join('\n'),
   });
 
-  // 3. Crystallize baseline Skill: Failure-to-Capability Evolution SOP
+  // 3. Crystallize baseline Skill #1: Failure-to-Capability Evolution SOP
   proposals.push({
     kind: 'skill',
     id: 'bug-to-guardrail-sop',
@@ -117,6 +118,9 @@ export function runBootstrap(workspaceRoot: string): BootstrapSummary {
       '3. **Submit via Gatekeeper**: Call `evo_propose`. If `ERR_DUPLICATE_CAPABILITY` is returned, pass `supersedes_id` to upgrade the older entry.',
     ].join('\n'),
   });
+
+  // 3b. Crystallize baseline Skill #2: Legacy Rule & Skill Decoupling Architect (evo-rule-architect)
+  proposals.push(EVO_RULE_ARCHITECT_PROPOSAL);
 
   // 4. Crystallize verified Micro-Tool #1: Workspace & Codebase Diagnostics Scanner
   const repoScannerScript = `import * as fs from 'node:fs';

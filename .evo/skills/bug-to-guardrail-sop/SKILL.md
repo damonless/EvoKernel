@@ -5,7 +5,7 @@ l0_summary: "Standard workflow to turn a resolved root cause or recurring review
 tags: ["debugging","evolution","guardrail","tdd"]
 origin: "bootstrap"
 created_at: "2026-10-14T16:00:40.696Z"
-updated_at: "2026-10-14T16:00:40.696Z"
+updated_at: "2026-10-15T17:23:29.017Z"
 ---
 
 ## L1 Contract

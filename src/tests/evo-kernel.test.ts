@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
 import { findGitRoot, runInit, runUninstall } from '../cli/init.js';
 import { runBootstrap } from '../cli/bootstrap.js';
+import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from '../cli/audit.js';
 import { renderEvoStats, renderEvoTree } from '../cli/visualizer.js';
 import {
   ensureGlobalFallbackSeeded,
@@ -365,5 +366,81 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test('10. Issue #2: evo audit [--global] and evo refactor [--apply] detect domain leaks, overlap, and decouple rules', () => {
+    const ws = createTempWorkspace();
+    const fakeHome = createTempWorkspace();
+
+    try {
+      // 1. Seed a polluted global ~/.gemini/GEMINI.md with C/C++ extensions, CodeGraph, and BMS macros
+      const globalGeminiDir = path.join(fakeHome, '.gemini');
+      fs.mkdirSync(globalGeminiDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(globalGeminiDir, 'GEMINI.md'),
+        [
+          '# Global Rules',
+          'When editing *.c and *.h firmware files, always run codegraph_explore first.',
+          'Check BMS_SERVICE_CAN_HAN_REQ_DISCHARGE_ENABLE and ADC/GPIO inverter protection.',
+        ].join('\n'),
+        'utf8'
+      );
+
+      // 2. Seed a workspace AGENTS.md and a local skill with high Jaccard overlap & hardware macros
+      const sharedArchitectureParagraph =
+        'Inverter firmware state machine transitions require lookup table verification, BMS_SERVICE_CAN_HAN_REQ_DISCHARGE_ENABLE pre-checks, and ADC relay protection guards before switching operating modes.';
+      fs.writeFileSync(path.join(ws, 'AGENTS.md'), `# Workspace Agents\n\n${sharedArchitectureParagraph}\n`, 'utf8');
+
+      const localSkillDir = path.join(ws, '.agents', 'skills', 'firmware-review');
+      fs.mkdirSync(localSkillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(localSkillDir, 'SKILL.md'),
+        `# Firmware Review Skill\n\n${sharedArchitectureParagraph}\n`,
+        'utf8'
+      );
+
+      // 3. Run evo audit --global
+      const report = runAudit(ws, {
+        includeGlobal: true,
+        globalHomeDir: fakeHome,
+        tokenBudgetLimit: 20,
+        overlapThreshold: 0.25,
+      });
+
+      assert.equal(report.healthy, false);
+      assert.ok(report.domainLeaks.some((l) => l.scope === 'global' && l.displayPath.includes('GEMINI.md')));
+      assert.ok(report.domainLeaks.some((l) => l.scope === 'workspace' && l.displayPath === 'AGENTS.md'));
+      assert.ok(report.budgetViolations.length >= 1);
+      assert.ok(report.redundancyOverlaps.length >= 1);
+
+      const renderedAudit = renderAuditReport(report);
+      assert.match(renderedAudit, /Domain Leak Warnings/);
+      assert.match(renderedAudit, /evo refactor/);
+
+      // 4. Run evo refactor --apply
+      const refactorRes = runRefactor(ws, {
+        includeGlobal: true,
+        globalHomeDir: fakeHome,
+        apply: true,
+      });
+
+      assert.equal(refactorRes.stages.length, 4);
+      assert.ok(refactorRes.appliedChanges.length >= 1);
+      assert.equal(
+        fs.existsSync(path.join(ws, '.evo', 'skills', 'evo-rule-architect', 'SKILL.md')),
+        true
+      );
+      assert.equal(
+        fs.existsSync(path.join(ws, '.evo', 'rules', 'scoped', 'scoped-agents-domain-guard.md')),
+        true
+      );
+
+      const renderedRefactor = renderRefactorReport(refactorRes);
+      assert.match(renderedRefactor, /evo-rule-architect/);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
 });
+
 

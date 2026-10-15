@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseInitTargets, runInit, runUninstall } from './init.js';
 import { runBootstrap } from './bootstrap.js';
+import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import { renderEvoStats, renderEvoTree } from './visualizer.js';
 import { startMcpStdioServer } from '../mcp/server.js';
 import { EvoStorage } from '../core/storage.js';
@@ -21,6 +22,8 @@ Commands:
                       Detect and wire L0 Meta-Rule Seed + Single Meta-MCP
                       (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
   bootstrap           Cold-start 10s repo gene mining: extract verified initial Rules, Skills, and Micro-Tools from repo & git history
+  audit [--global]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
+  refactor [--apply]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
   tree                Render the ASCII Self-Evolving Capability Tree (.evo/)
   stats               Display the ROI Telemetry Ledger, Token Budget bar, and Prompt-Cache savings
   mcp                 Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
@@ -112,7 +115,7 @@ export function parseTargetsArg(args: string[], workspaceRoot: string): string[]
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   const cmd = (args[0] || 'help').toLowerCase();
-  const isLocalMutationCmd = ['init', 'bootstrap', 'uninstall'].includes(cmd);
+  const isLocalMutationCmd = ['init', 'bootstrap', 'audit', 'refactor', 'uninstall'].includes(cmd);
   const workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
 
   switch (cmd) {
@@ -149,6 +152,21 @@ export function runCli(argv: string[]): void {
       if (summary.skippedOrDuplicate.length > 0) {
         console.log(`  └─ ⏭️  Skipped existing    : ${summary.skippedOrDuplicate.join(', ')}`);
       }
+      break;
+    }
+
+    case 'audit': {
+      const includeGlobal = args.includes('--global') || args.includes('-g');
+      const report = runAudit(workspaceRoot, { includeGlobal });
+      console.log(renderAuditReport(report));
+      break;
+    }
+
+    case 'refactor': {
+      const includeGlobal = !args.includes('--local-only');
+      const apply = args.includes('--apply');
+      const result = runRefactor(workspaceRoot, { includeGlobal, apply });
+      console.log(renderRefactorReport(result));
       break;
     }
 

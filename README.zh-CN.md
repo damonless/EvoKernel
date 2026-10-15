@@ -82,9 +82,11 @@ node ./dist/cli/index.js init
 # 3. 冷启动基因提取：10 秒扫描当前仓库配置与 Git 历史 fix 记录生成初始规则与微工具
 node ./dist/cli/index.js bootstrap
 
-# 4. 查看自演进能力树与 ROI 遥测账本
+# 4. 查看自演进能力树、ROI 遥测账本与存量规则/技能健康度审计
 node ./dist/cli/index.js tree
 node ./dist/cli/index.js stats
+node ./dist/cli/index.js audit --global
+node ./dist/cli/index.js refactor
 ```
 
 ---
