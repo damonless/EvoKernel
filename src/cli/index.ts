@@ -16,7 +16,7 @@ Usage:
   evo <command> [options]
 
 Commands:
-  init                Detect and wire L0 Meta-Rule Seed + Single Meta-MCP into Claude Code, Cursor, Antigravity, Codex, and Gemini CLI
+  init [--stealth]    Detect and wire L0 Meta-Rule Seed + Single Meta-MCP (--stealth uses .git/info/exclude for strict commit whitelists)
   bootstrap           Cold-start 10s repo gene mining: extract verified initial Rules, Skills, and Micro-Tools from repo & git history
   tree                Render the ASCII Self-Evolving Capability Tree (.evo/)
   stats               Display the ROI Telemetry Ledger, Token Budget bar, and Prompt-Cache savings
@@ -59,11 +59,19 @@ export function runCli(argv: string[]): void {
     }
 
     case 'init': {
-      const res = runInit(workspaceRoot);
+      const stealth = args.includes('--stealth');
+      const res = runInit(workspaceRoot, { stealth });
       console.log('🧬 EvoKernel initialized successfully!');
       console.log(`  ├─ Harnesses wired : ${res.initializedHarnesses.join(', ')}`);
       console.log(`  ├─ Rule seeds      : ${res.updatedFiles.join(', ')}`);
-      console.log(`  └─ MCP gateways    : ${res.mcpConfigFiles.join(', ')}`);
+      console.log(`  ├─ MCP gateways    : ${res.mcpConfigFiles.join(', ')}`);
+      console.log(
+        `  └─ Git Exclude     : ${
+          stealth
+            ? `Stealth mode active (.git/info/exclude -> ${res.stealthExcluded?.join(', ') || 'already excluded'})`
+            : 'Standard mode (.evo/.cache/ excluded locally)'
+        }`
+      );
       break;
     }
 

@@ -64,9 +64,13 @@ export class EvoStorage {
   public readonly configPath: string;
   public readonly coreInvariantsPath: string;
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, customEvoDir?: string) {
     this.rootDir = path.resolve(workspaceRoot);
-    this.evoDir = path.join(this.rootDir, '.evo');
+    this.evoDir = customEvoDir
+      ? path.resolve(customEvoDir)
+      : process.env.EVO_DATA_DIR
+        ? path.resolve(process.env.EVO_DATA_DIR)
+        : path.join(this.rootDir, '.evo');
     this.rulesDir = path.join(this.evoDir, 'rules');
     this.skillsDir = path.join(this.evoDir, 'skills');
     this.toolsDir = path.join(this.evoDir, 'tools');

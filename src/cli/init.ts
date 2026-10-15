@@ -12,6 +12,12 @@ export interface InitResult {
   initializedHarnesses: string[];
   updatedFiles: string[];
   mcpConfigFiles: string[];
+  stealthExcluded?: string[];
+}
+
+export interface InitOptions {
+  targets?: string[];
+  stealth?: boolean;
 }
 
 const HARNESS_RULE_TARGETS: Record<string, string> = {
@@ -70,10 +76,52 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   return updated;
 }
 
+export function ensureGitInfoExclude(workspaceRoot: string, patterns: string[]): string[] {
+  const gitInfoDir = path.join(workspaceRoot, '.git', 'info');
+  if (!fs.existsSync(path.join(workspaceRoot, '.git'))) {
+    return [];
+  }
+  fs.mkdirSync(gitInfoDir, { recursive: true });
+  const excludePath = path.join(gitInfoDir, 'exclude');
+  const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf8') : '';
+  const existingLines = new Set(
+    existing
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+  );
+
+  const added: string[] = [];
+  for (const pat of patterns) {
+    if (!existingLines.has(pat)) {
+      added.push(pat);
+    }
+  }
+
+  if (added.length > 0) {
+    const block = [
+      existing.trimEnd(),
+      '# EvoKernel Stealth Mode (Local-only exclude — never touches .gitignore or remote whitelist)',
+      ...added,
+      '',
+    ]
+      .filter((s, idx) => !(idx === 0 && !s))
+      .join('\n');
+    fs.writeFileSync(excludePath, block, 'utf8');
+  }
+  return added;
+}
+
 export function runInit(
   workspaceRoot: string,
-  targets: string[] = ['claude', 'agents', 'gemini', 'cursor']
+  targetsOrOptions: string[] | InitOptions = ['claude', 'agents', 'gemini', 'cursor']
 ): InitResult {
+  const opts: InitOptions = Array.isArray(targetsOrOptions)
+    ? { targets: targetsOrOptions, stealth: false }
+    : targetsOrOptions;
+  const targets = opts.targets ?? ['claude', 'agents', 'gemini', 'cursor'];
+  const stealth = Boolean(opts.stealth);
+
   const storage = new EvoStorage(workspaceRoot);
   const config = storage.ensureInitialized();
   const telemetry = new EvoTelemetry(storage);
@@ -122,10 +170,17 @@ export function runInit(
     mcpConfigFiles.push('.cursor/mcp.json');
   }
 
+  // Always exclude .evo/.cache/ in .git/info/exclude if .git exists; in --stealth mode, exclude all EvoKernel artifacts locally
+  const excludeCandidates = stealth
+    ? ['.evo/', '.mcp.json', '.cursor/', ...updatedFiles]
+    : ['.evo/.cache/'];
+  const stealthExcluded = ensureGitInfoExclude(workspaceRoot, excludeCandidates);
+
   return {
     initializedHarnesses: targets,
     updatedFiles,
     mcpConfigFiles,
+    stealthExcluded,
   };
 }
 
