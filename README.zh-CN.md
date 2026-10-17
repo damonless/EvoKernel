@@ -40,9 +40,9 @@
   ╔══════════════════════════════════════╗
   ║  4 道本地确定性编译门禁 (Gatekeeper) ║
   ║  1. 静态安全与结构审计               ║  拦截硬编码绝对路径、明文密钥与 rm -rf 高危指令
-  ║  2. 语法预检与沙盒 --self-test 实跑  ║  隔离沙盒执行脚本自测，退出码必须为 0 方可入库
-  ║  3. FTS5 BM25 相似度查重             ║  拦截重复造轮子，强制升级旧资产而非盲目新建
-  ║  4. 1,500 Token 硬预算与强制 GC      ║  超限时拒绝写入，逼迫模型先调 evo_compact 合并瘦身
+  ║  2. 沙盒自测 & AST 符号存在性校验    ║  微工具实跑退出码为 0；情景记忆校验 target_symbols 真实性并绑定 AST 指纹
+  ║  3. FTS5 BM25 相似度查重             ║  拦截重复造轮子与重复排障记忆，强制升级旧资产而非盲目新建
+  ║  4. 1,500 Token 硬预算与强制 GC      ║  核心规则超限时拒绝写入，情景记忆按需召回（0 常驻预算消耗）
   ╚══════════════════╤═══════════════════╝
                      ▼
         ┌─────────────────────────┐
@@ -59,6 +59,7 @@
 | **宿主接入形态** | 预装 311 个静态技能包 | 劫持 `/v1/chat` 本地代理 | 独立 TUI/Web 运行时 | 沙盒压缩输出 MCP | **寄生型单一 Meta-MCP + 80行元规则种子** |
 | **额外 API Key 依赖** | 无 | 强依赖后台演进模型 Key | 强依赖独立模型 Key | 无 | **零额外 API Key（100% 借脑宿主模型）** |
 | **MCP 动态能力自生长** | 仅静态配置 | 不支持（仅改写 `.md`） | 仅内部 `code_run` | 仅一次性沙盒脚本 | **临时脚本经沙盒自测自动晋升为持久微工具** |
+| **情景记忆与防漂移** | 无（纯静态文档） | 无 AST 校验 | 无 | 无跨会话排障记忆 | **3 阶认知记忆（AST 结构指纹防漂移 + 拓扑穿透）** |
 | **Prompt Cache 友好度** | 预置过多易稀释注意力 | 无直接影响 | 独立上下文 | 压缩工具输出 | **固定 5 个元工具签名，100% 保住前缀缓存** |
 | **防毒化/防膨胀机制** | 手动触发 `/learn-eval` | 后台 LLM 异步合并 | 直接覆写文件 | 会话结束即清空 | **4 道确定性脚本门禁 + 1,500 Token 硬上限 GC** |
 | **首分钟冷启动体验** | 通用静态大合集 | 空库等待对话积累 | 仅 9 个原子工具 | 空库等待索引 | **`evo bootstrap` 10秒挖掘仓库与 Git Fix 历史** |
@@ -79,11 +80,12 @@ node ./scripts/build.mjs
 #    （可选：--stealth 仅写入本地 .git/info/exclude；--targets agents 或 --targets auto 过滤目标宿主）
 node ./dist/cli/index.js init
 
-# 3. 冷启动基因提取：10 秒扫描当前仓库配置与 Git 历史 fix 记录生成初始规则与微工具
+# 3. 冷启动基因提取：10 秒扫描当前仓库配置与 Git 历史 fix 记录生成初始规则、微工具与情景排障记忆
 node ./dist/cli/index.js bootstrap
 
-# 4. 查看自演进能力树、ROI 遥测账本与存量规则/技能健康度审计
+# 4. 查看自演进能力树、认知记忆 AST 新鲜度校验、ROI 遥测账本与存量规则健康度审计
 node ./dist/cli/index.js tree
+node ./dist/cli/index.js memory verify
 node ./dist/cli/index.js stats
 node ./dist/cli/index.js audit --global
 node ./dist/cli/index.js refactor
@@ -95,11 +97,11 @@ node ./dist/cli/index.js refactor
 
 | 元工具名 | 披露层级 | 核心职责 |
 | :--- | :--- | :--- |
-| `evo_search` | **L0 摘要层** | 基于 SQLite FTS5 (BM25) 毫秒级检索 `.evo/` 下的规则、技能与微工具，仅返回 `<30 tokens` 的一句话摘要、命中次数与沙盒通过率。 |
-| `evo_inspect` | **L1 / L2 详情层** | 渐进式按需披露。仅在确认需要时读取某项能力的 `L1`（输入输出 JSON Schema 契约）或 `L2`（完整 SOP 步骤或脚本源码）。 |
+| `evo_search` | **L0 摘要层** | 基于 SQLite FTS5 (BM25) 毫秒级检索 `.evo/` 下的规则 (`rule`)、技能 (`skill`)、微工具 (`tool`) 与情景记忆 (`memory`)；自动实时计算 AST 结构指纹，对代码已重构的陈旧记忆标注 `[STALE]` 并自动降权。 |
+| `evo_inspect` | **L1 / L2 详情层** | 渐进式按需披露。对情景记忆支持 **3 阶认知召回**：`L1` 返回排障三元组与 AST 防漂移校验表 (`VERIFIED` / `STALE`)，`L2` 注入 **拓扑穿透锚点**（实时定位当前符号行号区间、上下游调用链与负面避坑记录）。 |
 | `evo_run` | **沙盒执行层** | 在受控子进程沙盒中直接调度执行 `.evo/tools/<id>/` 下的 `.mjs` / `.py` / `.ps1` / `.sh` 微工具，自动截断超长输出并记入 ROI 账本。 |
-| `evo_propose` | **门禁演进层** | 提交新提炼的 Rule、Skill 或 Micro-Tool 候选，同步触发本地 4 道 Gatekeeper 确定性检查，通过后原子落盘并实时同步至各宿主。 |
-| `evo_compact` | **垃圾回收层 (GC)** | 当常驻核心规则触及 1,500 Token 红线时，将多条碎片化旧规则归档至 `.evo/archive/` 并原子替换为合并后的高密度规则。 |
+| `evo_propose` | **门禁演进层** | 提交新提炼的 Rule、Skill、Micro-Tool 或 Episodic Memory (`memory`) 候选，同步触发本地 4 道 Gatekeeper 确定性检查（含 `target_symbols` AST 存在性预检），通过后原子落盘并实时同步至各宿主。 |
+| `evo_compact` | **垃圾回收层 (GC)** | 当常驻核心规则触及 1,500 Token 红线或情景记忆因代码重构变成 `[STALE]` 时，将旧规则或失效记忆归档至 `.evo/archive/` 并原子替换为最新资产。 |
 
 ---
 

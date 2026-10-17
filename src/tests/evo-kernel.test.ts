@@ -1,5 +1,6 @@
 import { test, describe } from 'node:test';
 import * as assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -7,7 +8,7 @@ import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
 import { findGitRoot, runInit, runUninstall } from '../cli/init.js';
 import { runBootstrap } from '../cli/bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from '../cli/audit.js';
-import { renderEvoStats, renderEvoTree } from '../cli/visualizer.js';
+import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from '../cli/visualizer.js';
 import {
   ensureGlobalFallbackSeeded,
   parseTargetsArg,
@@ -441,6 +442,296 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(fakeHome, { recursive: true, force: true });
     }
   });
+
+  test('11. CognitiveMemory Gate 2 (Symbol Grounding) blocks hallucinated symbols and fingerprints polyglot C/TS symbols', () => {
+    const ws = createTempWorkspace();
+    const srcDir = path.join(ws, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+
+    // Create a C firmware file and a TypeScript gateway file
+    fs.writeFileSync(
+      path.join(srcDir, 'bms_can.c'),
+      [
+        '#include <stdint.h>',
+        'static uint16_t g_u16CanRxTimer = 0;',
+        '',
+        'void BmsCanRxHandler(uint32_t frameId, const uint8_t* data) {',
+        '  if (frameId == 0x18FF50E5) {',
+        '    g_u16CanRxTimer = 0;',
+        '  }',
+        '}',
+      ].join('\n'),
+      'utf8'
+    );
+
+    fs.writeFileSync(
+      path.join(srcDir, 'gateway.ts'),
+      [
+        'export class CanGateway {',
+        '  public dispatchFrame(id: number): boolean {',
+        '    return id === 0x18ff50e5;',
+        '  }',
+        '}',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      // 1. Hallucinated symbol is rejected by AST Symbol Grounding Gate
+      const badSymRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'memory',
+        id: 'hallucinated-symbol-case',
+        title: 'Hallucinated Symbol Case',
+        l0_summary: 'Tests that non-existent symbols are blocked at Gate 2.',
+        symptom: 'CAN bus timeout error 0x99',
+        root_cause: 'Missing reset in PhantomNonExistentHandler',
+        solution: 'Clear timer in PhantomNonExistentHandler',
+        target_symbols: ['PhantomNonExistentHandler'],
+      });
+      assert.equal(badSymRes.isError, true);
+      assert.match(badSymRes.content[0].text, /ERR_SYMBOL_NOT_FOUND/);
+
+      // 2. Real C + TS symbols pass Gatekeeper and bind AST fingerprints with 0 core budget impact
+      const validMemRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'memory',
+        id: 'bms-can-rx-timeout-glitch',
+        title: 'BMS CAN 0x18FF50E5 Timeout Relay Drop',
+        l0_summary: 'CAN 0x18FF50E5 frame timeout causes relay drop when BmsCanRxHandler skips timer reset.',
+        symptom: 'Main relay drops after 5s of 0x18FF50E5 traffic burst.',
+        root_cause: 'BmsCanRxHandler and CanGateway.dispatchFrame frame ID mask mismatch.',
+        solution: 'Match full 29-bit extended CAN ID 0x18FF50E5 and reset g_u16CanRxTimer.',
+        target_symbols: ['BmsCanRxHandler', 'CanGateway.dispatchFrame'],
+        tags: ['bms', 'can', 'relay'],
+      });
+      assert.equal(Boolean(validMemRes.isError), false);
+      const parsedDiag = JSON.parse(validMemRes.content[0].text);
+      assert.equal(parsedDiag.passed, true);
+      assert.ok(parsedDiag.diagnostics.ast_fingerprints['BmsCanRxHandler'].ast_hash.length === 16);
+      assert.ok(
+        parsedDiag.diagnostics.ast_fingerprints['CanGateway.dispatchFrame'].ast_hash.length === 16
+      );
+
+      // Core rule budget remains 0 tokens
+      const storage = new EvoStorage(ws);
+      assert.equal(storage.getCoreRulesTokenUsage().totalTokens, 0);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('12. CognitiveMemory AST Fingerprint Immunity to comments/line-shifts + Stage 3 Topology Penetration', () => {
+    const ws = createTempWorkspace();
+    const srcDir = path.join(ws, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+
+    const bmsFile = path.join(srcDir, 'bms_can.c');
+    fs.writeFileSync(
+      bmsFile,
+      [
+        '#include <stdint.h>',
+        'void BmsCanRxHandler(uint32_t frameId) {',
+        '  if (frameId == 0x18FF50E5) {',
+        '    resetWatchdog();',
+        '  }',
+        '}',
+      ].join('\n'),
+      'utf8'
+    );
+
+    // Caller file for Stage 3 Topology Penetration
+    fs.writeFileSync(
+      path.join(srcDir, 'isr_router.c'),
+      [
+        'extern void BmsCanRxHandler(uint32_t frameId);',
+        'void CAN1_RX0_IRQHandler(void) {',
+        '  BmsCanRxHandler(0x18FF50E5);',
+        '}',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      const propRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'memory',
+        id: 'can-isr-watchdog-case',
+        title: 'CAN ISR Watchdog Reset Case',
+        l0_summary: 'Watchdog resets during CAN1 RX burst due to BmsCanRxHandler.',
+        symptom: 'MCU resets with IWDG flag during heavy CAN traffic.',
+        root_cause: 'BmsCanRxHandler only resets watchdog on 0x18FF50E5.',
+        solution: 'Ensure 0x18FF50E5 is not filtered out by hardware mask.',
+        target_symbols: ['BmsCanRxHandler'],
+      });
+      assert.equal(Boolean(propRes.isError), false);
+
+      // Now add 15 lines of comments, blank lines, and an unrelated helper function ABOVE BmsCanRxHandler,
+      // plus comments and whitespace changes INSIDE BmsCanRxHandler!
+      fs.writeFileSync(
+        bmsFile,
+        [
+          '/* ==========================================================',
+          ' * Header comment block added during refactoring',
+          ' * ========================================================== */',
+          '#include <stdint.h>',
+          '',
+          'void UnrelatedHelper(void) {',
+          '  int x = 1;',
+          '}',
+          '',
+          '// Shift BmsCanRxHandler down by many lines',
+          'void   BmsCanRxHandler ( uint32_t frameId ) {',
+          '  /* Internal comment that should not alter AST hash */',
+          '  if ( frameId == 0x18FF50E5 ) {',
+          '    // Another comment inside block',
+          '    resetWatchdog( );',
+          '  }',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      // Stage 1 + 2: evo_search should still report VERIFIED!
+      const searchRes = dispatcher.handleToolCall('evo_search', {
+        query: 'IWDG watchdog BmsCanRxHandler',
+        kind: 'memory',
+      });
+      assert.match(searchRes.content[0].text, /\[MEMORY\] ✅ \[VERIFIED 1\/1 symbols/);
+
+      // Stage 3: evo_inspect L2 should report VERIFIED, updated line numbers (L11-L17), and caller isr_router.c:3
+      const inspectRes = dispatcher.handleToolCall('evo_inspect', {
+        id: 'can-isr-watchdog-case',
+        tier: 'L2',
+      });
+      assert.match(inspectRes.content[0].text, /Status: VERIFIED \[置信度: HIGH \(≥80%\)\]/);
+      assert.match(inspectRes.content[0].text, /relocated from src\/bms_can\.c:L2-L6 -> src\/bms_can\.c:L11-L17/);
+      assert.match(inspectRes.content[0].text, /Callers: src\/isr_router\.c:3/);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('13. Anti-Drift Guardrail (防刻舟求剑): detects mutated/deleted code symbols, marks [STALE], and demotes search rank', () => {
+    const ws = createTempWorkspace();
+    const srcDir = path.join(ws, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+
+    const fsmFile = path.join(srcDir, 'inverter_fsm.c');
+    fs.writeFileSync(
+      fsmFile,
+      [
+        'int CheckGridVoltage(int v) {',
+        '  if (v < 180 || v > 260) {',
+        '    return -1;',
+        '  }',
+        '  return 0;',
+        '}',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      // Propose an Episodic Memory anchored to CheckGridVoltage
+      dispatcher.handleToolCall('evo_propose', {
+        kind: 'memory',
+        id: 'grid-voltage-trip-case',
+        title: 'Grid Voltage False Trip at 255V',
+        l0_summary: 'Grid voltage false trip when CheckGridVoltage threshold is 260V.',
+        symptom: 'Inverter trips with ERR_GRID_OVERVOLT at 255V RMS.',
+        root_cause: 'CheckGridVoltage upper bound 260V triggered by ADC spike.',
+        solution: 'Inspect CheckGridVoltage hysteresis.',
+        target_symbols: ['CheckGridVoltage'],
+      });
+
+      // Also propose an active Rule on the same topic
+      dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'grid-voltage-adc-rule',
+        title: 'Grid Voltage ADC Filtering Rule',
+        l0_summary: 'Always filter grid voltage ADC samples before threshold comparison.',
+        content: 'Apply 4-sample moving average before calling CheckGridVoltage.',
+      });
+
+      // Mutate the logic inside CheckGridVoltage (upper threshold changed from 260 to 285)
+      fs.writeFileSync(
+        fsmFile,
+        [
+          'int CheckGridVoltage(int v) {',
+          '  if (v < 170 || v > 285) {',
+          '    return -2;',
+          '  }',
+          '  return 0;',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      // Search across all capabilities: active Rule must rank above STALE Memory!
+      const searchRes = dispatcher.handleToolCall('evo_search', {
+        query: 'Grid Voltage CheckGridVoltage',
+        kind: 'all',
+      });
+      const searchText = searchRes.content[0].text;
+      assert.match(searchText, /⚠️ \[STALE: CheckGridVoltage:MISMATCH\] grid-voltage-trip-case/);
+
+      const ruleIdx = searchText.indexOf('grid-voltage-adc-rule');
+      const staleMemIdx = searchText.indexOf('grid-voltage-trip-case');
+      assert.ok(
+        ruleIdx < staleMemIdx,
+        'Active rule must rank above demoted [STALE] episodic memory'
+      );
+
+      // Inspecting the STALE memory emits the prominent ANTI-DRIFT GUARDRAIL ALERT
+      const inspectStale = dispatcher.handleToolCall('evo_inspect', {
+        id: 'grid-voltage-trip-case',
+        tier: 'L2',
+      });
+      assert.match(inspectStale.content[0].text, /ANTI-DRIFT GUARDRAIL ALERT/);
+      assert.match(inspectStale.content[0].text, /\[置信度: LOW \(20–50%\) · STALE\]/);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('14. Cold-Start Git Fix Mining: evo bootstrap extracts git fix commits into verified Episodic Memories', () => {
+    const ws = createTempWorkspace();
+    try {
+      const srcDir = path.join(ws, 'src');
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(srcDir, 'can_driver.c'),
+        'void CanBusReset(void) { int status = 0; }\n',
+        'utf8'
+      );
+
+      // Initialize git repo and create a fix commit touching src/can_driver.c
+      spawnSync('git', ['init'], { cwd: ws });
+      spawnSync('git', ['config', 'user.email', 'test@evokernel.dev'], { cwd: ws });
+      spawnSync('git', ['config', 'user.name', 'Evo Test'], { cwd: ws });
+      spawnSync('git', ['add', 'src/can_driver.c'], { cwd: ws });
+      spawnSync('git', ['commit', '-m', 'fix(can): prevent bus-off lockup in CanBusReset'], {
+        cwd: ws,
+      });
+
+      const bootSummary = runBootstrap(ws);
+      assert.ok(bootSummary.memoriesCreated.length >= 1);
+      assert.ok(bootSummary.memoriesCreated[0].startsWith('git-fix-'));
+
+      const verifyReport = renderMemoryVerifyReport(ws);
+      assert.match(verifyReport, /\[✅ VERIFIED\] git-fix-/);
+      assert.match(verifyReport, /src\/can_driver\.c/);
+
+      const treeReport = renderEvoTree(ws);
+      assert.match(treeReport, /Episodic Memories \(1 fault cases \| 1 VERIFIED · 0 STALE\)/);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 });
+
 
 

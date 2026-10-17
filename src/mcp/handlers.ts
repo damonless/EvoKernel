@@ -3,22 +3,23 @@ import { EvoStorage, sanitizeId } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper } from '../core/gatekeeper.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
+import { verifyMemoryFreshness } from '../core/memory.js';
 
 export const META_MCP_TOOLS = [
   {
     name: 'evo_search',
     description:
-      'Search evolved project Rules, Skills, and executable Micro-Tools using FTS5 BM25. Returns ultra-compact L0 summaries (<30 tokens per item) and hit/success metrics. Always call before debugging recurring issues or writing repetitive scripts.',
+      'Search evolved project Rules, Skills, Micro-Tools, and Episodic Memories (fault cases) using FTS5 BM25 + live AST Anti-Drift verification. Returns ultra-compact L0 summaries (<30 tokens per item), hit/success metrics, and symbol freshness badges.',
     inputSchema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Keywords, file paths, error codes, or domain concepts to search for.',
+          description: 'Keywords, error symptoms, packet hex, file paths, or symbol names to search for.',
         },
         kind: {
           type: 'string',
-          enum: ['all', 'rule', 'skill', 'tool'],
+          enum: ['all', 'rule', 'skill', 'tool', 'memory'],
           description: 'Filter by capability kind (default: "all").',
         },
         limit: {
@@ -32,7 +33,7 @@ export const META_MCP_TOOLS = [
   {
     name: 'evo_inspect',
     description:
-      'Progressive disclosure loader. Fetch L1 (input schema / contract) or L2 (full SOP or script source) for a specific Rule, Skill, or Micro-Tool discovered via evo_search.',
+      'Progressive disclosure loader. Fetch L1 (contract / schema / symbol freshness) or L2 (full SOP / script source / Episodic Memory with AST Anti-Drift report & CodeGraph Topology Penetration anchors) for a specific Rule, Skill, Micro-Tool, or Memory.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -43,7 +44,7 @@ export const META_MCP_TOOLS = [
         tier: {
           type: 'string',
           enum: ['L1', 'L2'],
-          description: 'Disclosure level: L1 for compact contract/schema, L2 for full SOP/code (default: L2).',
+          description: 'Disclosure level: L1 for compact contract/schema, L2 for full SOP/code/memory topology (default: L2).',
         },
       },
       required: ['id'],
@@ -71,18 +72,18 @@ export const META_MCP_TOOLS = [
   {
     name: 'evo_propose',
     description:
-      'Crystallize a newly discovered bug-prevention Rule, reusable multi-step Skill (SOP), or parameterized Micro-Tool script into .evo/. Enforces 4 deterministic Gatekeeper checks: Static Security, Sandbox --self-test Dry-Run, BM25 Deduplication, and 1,500-token Core Rule Budget.',
+      'Crystallize a newly discovered bug-prevention Rule, reusable multi-step Skill (SOP), parameterized Micro-Tool script, or AST-anchored Episodic Memory (fault case) into .evo/. Enforces deterministic Gatekeeper checks: Static Security, Sandbox/AST Grounding, BM25 Deduplication, and 1,500-token Core Rule Budget.',
     inputSchema: {
       type: 'object',
       properties: {
         kind: {
           type: 'string',
-          enum: ['rule', 'skill', 'tool'],
+          enum: ['rule', 'skill', 'tool', 'memory'],
           description: 'Capability type to evolve.',
         },
         id: {
           type: 'string',
-          description: 'Kebab-case identifier (e.g., "validate-i18n-keys", "prisma-migration-guard").',
+          description: 'Kebab-case identifier (e.g., "validate-i18n-keys", "can-rx-timeout-glitch").',
         },
         title: {
           type: 'string',
@@ -119,7 +120,7 @@ export const META_MCP_TOOLS = [
         tags: {
           type: 'array',
           items: { type: 'string' },
-          description: '[For skill] Searchable domain tags.',
+          description: '[For skill / memory] Searchable domain tags.',
         },
         runtime: {
           type: 'string',
@@ -138,6 +139,23 @@ export const META_MCP_TOOLS = [
           type: 'object',
           description: '[For tool] Sample arguments passed during Gatekeeper sandbox dry-run.',
         },
+        symptom: {
+          type: 'string',
+          description: '[For memory] Observed error message, fault symptom, or anomalous packet/log signature.',
+        },
+        root_cause: {
+          type: 'string',
+          description: '[For memory] Underlying root cause analysis explaining why the symptom occurred.',
+        },
+        solution: {
+          type: 'string',
+          description: '[For memory] Verified fix summary and verification steps.',
+        },
+        target_symbols: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '[For memory] Core code symbols or file#symbol targets (e.g., ["src/core/telemetry.ts#search", "BmsCanRxHandler"]) for automatic AST structural fingerprinting.',
+        },
       },
       required: ['kind', 'id', 'title', 'l0_summary'],
     },
@@ -145,7 +163,7 @@ export const META_MCP_TOOLS = [
   {
     name: 'evo_compact',
     description:
-      'Garbage-collect and merge multiple fragmented or low-hit capabilities into a single high-density entry, archiving the old versions to .evo/archive/ to free up the 1,500-token core budget.',
+      'Garbage-collect and merge multiple fragmented, stale, or low-hit capabilities into a single high-density entry, archiving the old versions to .evo/archive/ to free up the 1,500-token core budget.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -232,10 +250,13 @@ export class EvoMcpDispatcher {
       };
     }
 
-    const lines = hits.map(
-      (h) =>
-        `• [${h.kind.toUpperCase()}] ${h.id} — ${h.l0_summary} (scope: ${h.scope_glob} | hits: ${h.hit_count} | pass: ${h.success_rate})`
-    );
+    const lines = hits.map((h) => {
+      if (h.kind === 'memory' && h.memory_badge) {
+        const icon = h.memory_status === 'VERIFIED' ? '✅' : '⚠️';
+        return `• [MEMORY] ${icon} ${h.memory_badge} ${h.id} — ${h.l0_summary} (anchors: ${h.scope_glob} | hits: ${h.hit_count})`;
+      }
+      return `• [${h.kind.toUpperCase()}] ${h.id} — ${h.l0_summary} (scope: ${h.scope_glob} | hits: ${h.hit_count} | pass: ${h.success_rate})`;
+    });
 
     return {
       content: [
@@ -245,7 +266,7 @@ export class EvoMcpDispatcher {
             `Found ${hits.length} capability(s) [Core Budget: ${totalTokens}/${maxTokens} tokens]:`,
             ...lines,
             '',
-            'Tip: Call evo_inspect(id, "L1"|"L2") for details or evo_run(tool_id, args) to execute a TOOL.',
+            'Tip: Call evo_inspect(id, "L1"|"L2") for details/topology anchors or evo_run(tool_id, args) to execute a TOOL.',
           ].join('\n'),
         },
       ],
@@ -284,6 +305,80 @@ export class EvoMcpDispatcher {
           ? `[TOOL L1] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}`
           : `[TOOL L2] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}\n\nScript (${tool.entry_script}):\n\`\`\`${tool.runtime}\n${tool.script_code}\n\`\`\``;
       return { content: [{ type: 'text' as const, text: body }] };
+    }
+
+    const memory = this.storage.getMemory(id);
+    if (memory) {
+      const report = verifyMemoryFreshness(this.storage.rootDir, memory, {
+        includeCallers: tier !== 'L1',
+      });
+      this.telemetry.recordUsage(id, report.overall_status === 'VERIFIED', 650);
+
+      const driftLines = report.checks.map((c) => {
+        const badge = c.status === 'VERIFIED' ? '✅ [VERIFIED]' : `⚠️ [${c.status}]`;
+        return `- ${badge} \`${c.symbol}\`: ${c.detail}`;
+      });
+
+      const anchorLines = report.topology_anchors.map((a) => {
+        const callerText =
+          a.callers.length > 0 ? ` | Callers: ${a.callers.join(', ')}` : ' | Callers: (none detected)';
+        const hintText = a.codegraph_hint ? `\n    ↳ Next-Step Anchor: \`${a.codegraph_hint}\`` : '';
+        return `- \`${a.symbol}\` -> \`${a.file_path}:${a.lines}\` [${a.status}]\n    Signature: \`${a.signature}\`${callerText}${hintText}`;
+      });
+
+      const staleWarning =
+        report.overall_status === 'STALE'
+          ? [
+              '',
+              '> [!WARNING]',
+              `> **ANTI-DRIFT GUARDRAIL ALERT (防刻舟求剑警告)**: This episodic memory is marked **[STALE]** ${report.confidence_tag}.`,
+              `> Code symbols anchored at commit \`${report.recorded_commit}\` have mutated or disappeared in current commit \`${report.current_commit}\`.`,
+              '> Treat this case strictly as historical reference — DO NOT blindly apply without re-verifying the mutated code!',
+              '',
+            ].join('\n')
+          : '';
+
+      if (tier === 'L1') {
+        const l1Body = [
+          `[MEMORY L1] ${memory.id} — ${memory.title}`,
+          `Status: ${report.overall_status} ${report.confidence_tag} (${report.verified_count}/${report.total_symbols} AST symbols verified | commit ${report.recorded_commit} -> ${report.current_commit})`,
+          `L0: ${memory.l0_summary}`,
+          staleWarning,
+          '## Symptom',
+          memory.symptom,
+          '',
+          '## Stage 2: AST Anti-Drift Check',
+          ...driftLines,
+        ]
+          .filter(Boolean)
+          .join('\n');
+        return { content: [{ type: 'text' as const, text: l1Body }] };
+      }
+
+      const l2Body = [
+        `[MEMORY L2] ${memory.id} — ${memory.title}`,
+        `Status: ${report.overall_status} ${report.confidence_tag} (${report.verified_count}/${report.total_symbols} AST symbols verified | commit ${report.recorded_commit} -> ${report.current_commit})`,
+        `Tags: ${memory.tags.join(', ') || 'troubleshooting'}`,
+        `L0: ${memory.l0_summary}`,
+        staleWarning,
+        '## 1. Symptom (现象指纹)',
+        memory.symptom,
+        '',
+        '## 2. Root Cause (根本原因)',
+        memory.root_cause,
+        '',
+        '## 3. Solution (修复解法)',
+        memory.solution,
+        '',
+        '## 4. Stage 2: AST Anti-Drift Verification (防刻舟求剑核验)',
+        ...driftLines,
+        '',
+        '## 5. Stage 3: Topology Penetration Anchors (L3 拓扑穿透直达锚点)',
+        ...anchorLines,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      return { content: [{ type: 'text' as const, text: l2Body }] };
     }
 
     return {
@@ -386,7 +481,8 @@ export class EvoMcpDispatcher {
         this.storage.archiveCapability(id, mergedProposal.kind, reason) ||
         this.storage.archiveCapability(id, 'rule', reason) ||
         this.storage.archiveCapability(id, 'skill', reason) ||
-        this.storage.archiveCapability(id, 'tool', reason)
+        this.storage.archiveCapability(id, 'tool', reason) ||
+        this.storage.archiveCapability(id, 'memory', reason)
       ) {
         archived.push(id);
       }

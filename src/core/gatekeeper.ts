@@ -2,11 +2,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
+  EvoMemory,
   EvoRule,
   EvoSkill,
   EvoToolManifest,
   GatekeeperResult,
   ProposalPayload,
+  SymbolFingerprint,
 } from './types.js';
 import {
   EvoStorage,
@@ -16,6 +18,7 @@ import {
 } from './storage.js';
 import { EvoTelemetry } from './telemetry.js';
 import { checkScriptSyntax, executeSandboxedScript } from './sandbox.js';
+import { buildFingerprintsForTargets, resolveCurrentGitCommit } from './memory.js';
 
 const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\brm\s+-rf\s+(\/|~|\$HOME|c:\\)/i, reason: 'Destructive root/home directory deletion detected' },
@@ -75,6 +78,10 @@ export class EvoGatekeeper {
       rawProposal.l1_contract || '',
       rawProposal.l2_sop || '',
       rawProposal.script_code || '',
+      rawProposal.symptom || '',
+      rawProposal.root_cause || '',
+      rawProposal.solution || '',
+      ...(rawProposal.target_symbols || []),
     ].join('\n');
 
     for (const rule of DANGEROUS_PATTERNS) {
@@ -89,8 +96,55 @@ export class EvoGatekeeper {
     }
 
     // =========================================================================
-    // GATE 2: SYNTAX & SANDBOX DRY-RUN SELF-TEST (FOR MICRO-TOOLS)
+    // GATE 2: SYNTAX & SANDBOX DRY-RUN (FOR TOOLS) / AST GROUNDING (FOR MEMORY)
     // =========================================================================
+    let extractedMemoryFingerprints: Record<string, SymbolFingerprint> = {};
+
+    if (rawProposal.kind === 'memory') {
+      const symptom = (rawProposal.symptom || rawProposal.l1_contract || '').trim();
+      const rootCause = (rawProposal.root_cause || '').trim();
+      const solution = (rawProposal.solution || rawProposal.content || rawProposal.l2_sop || '').trim();
+      const targetSymbols = Array.isArray(rawProposal.target_symbols)
+        ? rawProposal.target_symbols.map((s) => String(s).trim()).filter(Boolean)
+        : [];
+
+      if (!symptom || !rootCause || !solution) {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message:
+            'Episodic memory proposal requires non-empty symptom, root_cause, and solution.',
+        };
+      }
+
+      if (targetSymbols.length === 0) {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message:
+            'Episodic memory proposal requires at least one symbol or file in target_symbols (e.g., ["src/core/telemetry.ts#search"]).',
+        };
+      }
+
+      const grounding = buildFingerprintsForTargets(this.storage.rootDir, targetSymbols);
+      if (grounding.missingSymbols.length > 0) {
+        return {
+          passed: false,
+          gate_failed: 'SYMBOL_GROUNDING',
+          error_code: 'ERR_SYMBOL_NOT_FOUND',
+          message: `AST Symbol Grounding Gate blocked memory proposal: target symbol(s) [${grounding.missingSymbols.join(', ')}] could not be resolved in workspace '${this.storage.rootDir}'. Verify real symbol/file names before crystallizing episodic memory.`,
+          diagnostics: {
+            resolved_symbols: grounding.resolvedSymbols,
+            missing_symbols: grounding.missingSymbols,
+          },
+        };
+      }
+
+      extractedMemoryFingerprints = grounding.fingerprints;
+    }
+
     if (rawProposal.kind === 'tool') {
       const runtime = rawProposal.runtime || 'node';
       const scriptCode = (rawProposal.script_code || '').trim();
@@ -150,12 +204,18 @@ export class EvoGatekeeper {
     // =========================================================================
     // GATE 3: BM25 / JACCARD DUPLICATE & CONFLICT DETECTION
     // =========================================================================
+    const extraSimText =
+      rawProposal.kind === 'memory'
+        ? `${rawProposal.symptom || ''} ${(rawProposal.target_symbols || []).join(' ')}`
+        : '';
+
     const similar = this.telemetry
       .findSimilarCapabilities(
         rawProposal.title,
         rawProposal.l0_summary,
         rawProposal.kind,
-        rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : cleanId
+        rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : cleanId,
+        extraSimText
       )
       .filter((s) => s.similarity >= config.duplicateBm25Threshold);
 
@@ -334,6 +394,56 @@ export class EvoGatekeeper {
         passed: true,
         message: `Micro-Tool '${cleanId}' (${runtime}) passed syntax & sandbox self-test and is live via evo_run('${cleanId}').`,
         diagnostics: { id: cleanId, kind: 'tool', runtime },
+      };
+    }
+
+    if (rawProposal.kind === 'memory') {
+      const symptom = (rawProposal.symptom || rawProposal.l1_contract || '').trim();
+      const rootCause = (rawProposal.root_cause || '').trim();
+      const solution = (rawProposal.solution || rawProposal.content || rawProposal.l2_sop || '').trim();
+      const targetSymbols = (rawProposal.target_symbols || []).map((s) => String(s).trim()).filter(Boolean);
+      const currentCommit = resolveCurrentGitCommit(this.storage.rootDir);
+
+      if (rawProposal.supersedes_id) {
+        this.storage.archiveCapability(
+          rawProposal.supersedes_id,
+          'memory',
+          `Superseded by ${cleanId}`
+        );
+      }
+
+      const existing = this.storage.getMemory(cleanId);
+      const memoryObj: EvoMemory = {
+        id: cleanId,
+        title: rawProposal.title.trim(),
+        l0_summary: rawProposal.l0_summary.trim(),
+        symptom,
+        root_cause: rootCause,
+        solution,
+        target_symbols: targetSymbols,
+        ast_fingerprints: extractedMemoryFingerprints,
+        created_commit: currentCommit,
+        tags: rawProposal.tags || [],
+        origin: rawProposal.origin || 'evolved',
+        supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
+        created_at: existing?.created_at || now,
+        updated_at: now,
+      };
+
+      this.storage.saveMemory(memoryObj);
+      this.telemetry.syncFromDisk();
+      this.telemetry.setSessionFlag('pending_evolution', 'false');
+
+      return {
+        passed: true,
+        message: `Episodic Memory '${cleanId}' passed AST Symbol Grounding (${targetSymbols.length} symbol(s) fingerprinted @ commit ${currentCommit}) and is crystallized at .evo/memories/${cleanId}.md (0 core budget tokens used).`,
+        diagnostics: {
+          id: cleanId,
+          kind: 'memory',
+          created_commit: currentCommit,
+          target_symbols: targetSymbols,
+          ast_fingerprints: extractedMemoryFingerprints,
+        },
       };
     }
 

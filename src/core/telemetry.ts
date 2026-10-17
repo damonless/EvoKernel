@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { EvoKind, SearchHit, TelemetryRecord } from './types.js';
 import { EvoStorage } from './storage.js';
+import { verifyMemoryFreshness } from './memory.js';
 
 export interface TelemetryOptions {
   forceFts5Fallback?: boolean;
@@ -42,6 +43,22 @@ export class EvoTelemetry {
         fail_count INTEGER NOT NULL DEFAULT 0,
         tokens_saved INTEGER NOT NULL DEFAULT 0,
         last_used_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS episodic_memories (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        l0_summary TEXT NOT NULL,
+        created_commit TEXT NOT NULL,
+        symptom_text TEXT NOT NULL,
+        root_cause TEXT NOT NULL,
+        solution_summary TEXT NOT NULL,
+        target_symbols TEXT NOT NULL,
+        ast_fingerprints TEXT NOT NULL,
+        hit_count INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        last_verified_at TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
 
@@ -89,6 +106,7 @@ export class EvoTelemetry {
     const rules = this.storage.listRules();
     const skills = this.storage.listSkills();
     const tools = this.storage.listTools();
+    const memories = this.storage.listMemories();
 
     this.db.exec('DELETE FROM capability_fts_fallback;');
     const insertFallback = this.db.prepare(
@@ -118,6 +136,23 @@ export class EvoTelemetry {
         scope_glob = excluded.scope_glob
     `);
 
+    const upsertEpisodic = this.db.prepare(`
+      INSERT INTO episodic_memories (
+        id, title, l0_summary, created_commit, symptom_text, root_cause, solution_summary,
+        target_symbols, ast_fingerprints, hit_count, is_active, last_verified_at, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        l0_summary = excluded.l0_summary,
+        created_commit = excluded.created_commit,
+        symptom_text = excluded.symptom_text,
+        root_cause = excluded.root_cause,
+        solution_summary = excluded.solution_summary,
+        target_symbols = excluded.target_symbols,
+        ast_fingerprints = excluded.ast_fingerprints
+    `);
+
     const now = new Date().toISOString();
 
     for (const r of rules) {
@@ -138,6 +173,28 @@ export class EvoTelemetry {
       insertFallback.run(t.id, 'tool', t.title, t.l0_summary, t.runtime, schemaText);
       insertFts?.run(t.id, 'tool', t.title, t.l0_summary, t.runtime, schemaText);
       upsertTelemetry.run(t.id, 'tool', t.title, t.l0_summary, '**/*', now, t.created_at);
+    }
+
+    for (const m of memories) {
+      const keywords = [...m.target_symbols, ...m.tags, m.created_commit].join(' ');
+      const bodyText = `${m.symptom}\n${m.root_cause}\n${m.solution}`;
+      const scopeDisplay = m.target_symbols.slice(0, 3).join(', ') || '**/*';
+      insertFallback.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
+      insertFts?.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
+      upsertTelemetry.run(m.id, 'memory', m.title, m.l0_summary, scopeDisplay, now, m.created_at);
+      upsertEpisodic.run(
+        m.id,
+        m.title,
+        m.l0_summary,
+        m.created_commit,
+        m.symptom,
+        m.root_cause,
+        m.solution,
+        JSON.stringify(m.target_symbols),
+        JSON.stringify(m.ast_fingerprints),
+        now,
+        m.created_at
+      );
     }
   }
 
@@ -198,21 +255,80 @@ export class EvoTelemetry {
       rows = (kind === 'all' ? stmt.all(limit) : stmt.all(kind, limit)) as Array<Record<string, unknown>>;
     }
 
-    return rows.map((r) => {
+    const updateActiveStmt = this.db.prepare(
+      'UPDATE episodic_memories SET is_active = ?, last_verified_at = ? WHERE id = ?'
+    );
+    const now = new Date().toISOString();
+
+    const hits: SearchHit[] = rows.map((r) => {
+      const id = String(r.id);
+      const itemKind = String(r.kind) as EvoKind;
       const succ = Number(r.success_count || 0);
       const fail = Number(r.fail_count || 0);
       const total = succ + fail;
       const rate = total > 0 ? `${((succ / total) * 100).toFixed(0)}%` : '100% (verified)';
+      let rawScore = Math.abs(Number(r.rank || 0));
+      if (rawScore === 0) rawScore = 1.0;
+
+      if (itemKind === 'memory') {
+        const mem = this.storage.getMemory(id);
+        if (mem) {
+          const ver = verifyMemoryFreshness(this.storage.rootDir, mem, { includeCallers: false });
+          const isActive = ver.overall_status === 'VERIFIED' ? 1 : 0;
+          updateActiveStmt.run(isActive, now, id);
+
+          if (ver.overall_status === 'VERIFIED') {
+            return {
+              id,
+              kind: itemKind,
+              title: String(r.title),
+              l0_summary: String(r.l0_summary),
+              scope_glob: String(r.scope_glob || '**/*'),
+              hit_count: Number(r.hit_count || 0),
+              success_rate: rate,
+              score: rawScore,
+              memory_status: 'VERIFIED',
+              memory_badge: `[VERIFIED ${ver.verified_count}/${ver.total_symbols} symbols @ ${ver.current_commit}]`,
+            };
+          } else {
+            const drifted = ver.checks
+              .filter((c) => c.status !== 'VERIFIED')
+              .map((c) => `${c.symbol}:${c.status}`)
+              .join(', ');
+            return {
+              id,
+              kind: itemKind,
+              title: String(r.title),
+              l0_summary: String(r.l0_summary),
+              scope_glob: String(r.scope_glob || '**/*'),
+              hit_count: Number(r.hit_count || 0),
+              success_rate: 'STALE (needs re-verification)',
+              score: rawScore * 0.25, // Demote stale memories in ranking
+              memory_status: 'STALE',
+              memory_badge: `[STALE: ${drifted || 'symbols drifted'}]`,
+            };
+          }
+        }
+      }
+
       return {
-        id: String(r.id),
-        kind: String(r.kind) as EvoKind,
+        id,
+        kind: itemKind,
         title: String(r.title),
         l0_summary: String(r.l0_summary),
         scope_glob: String(r.scope_glob || '**/*'),
         hit_count: Number(r.hit_count || 0),
         success_rate: rate,
-        score: Math.abs(Number(r.rank || 0)),
+        score: rawScore,
       };
+    });
+
+    // Ensure STALE memories are always ranked below active capabilities
+    return hits.sort((a, b) => {
+      const aStale = a.memory_status === 'STALE' ? 1 : 0;
+      const bStale = b.memory_status === 'STALE' ? 1 : 0;
+      if (aStale !== bStale) return aStale - bStale;
+      return b.score - a.score || b.hit_count - a.hit_count;
     });
   }
 
@@ -277,20 +393,30 @@ export class EvoTelemetry {
     title: string,
     l0Summary: string,
     kind: EvoKind,
-    excludeId?: string
+    excludeId?: string,
+    extraText = ''
   ): Array<{ id: string; similarity: number; l0_summary: string }> {
     this.syncFromDisk();
     const existing = this.db
-      .prepare('SELECT id, title, l0_summary FROM telemetry WHERE kind = ?')
-      .all(kind) as Array<{ id: string; title: string; l0_summary: string }>;
+      .prepare(
+        `SELECT t.id, t.title, t.l0_summary, f.keywords
+         FROM telemetry t
+         LEFT JOIN capability_fts_fallback f ON t.id = f.id
+         WHERE t.kind = ?`
+      )
+      .all(kind) as Array<{ id: string; title: string; l0_summary: string; keywords?: string }>;
 
-    const targetTokens = tokenizeForSimilarity(`${title} ${l0Summary}`);
+    const targetTokens = tokenizeForSimilarity(`${title} ${l0Summary} ${extraText}`);
     if (targetTokens.size === 0) return [];
 
     const matches: Array<{ id: string; similarity: number; l0_summary: string }> = [];
     for (const item of existing) {
       if (excludeId && item.id === excludeId) continue;
-      const candTokens = tokenizeForSimilarity(`${item.title} ${item.l0_summary}`);
+      const candText =
+        kind === 'memory' && extraText
+          ? `${item.title} ${item.l0_summary} ${item.keywords || ''}`
+          : `${item.title} ${item.l0_summary}`;
+      const candTokens = tokenizeForSimilarity(candText);
       const sim = jaccardSimilarity(targetTokens, candTokens);
       if (sim > 0) {
         matches.push({ id: item.id, similarity: sim, l0_summary: item.l0_summary });
@@ -312,6 +438,7 @@ export class EvoTelemetry {
       WHERE id = ?
     `);
     stmt.run(success ? 1 : 0, success ? 0 : 1, tokensSavedEstimate, now, id);
+    this.db.prepare('UPDATE episodic_memories SET hit_count = hit_count + 1 WHERE id = ?').run(id);
   }
 
   public getTelemetryMap(): Map<string, TelemetryRecord> {

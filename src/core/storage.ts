@@ -3,11 +3,13 @@ import * as path from 'node:path';
 import type {
   EvoConfig,
   EvoKind,
+  EvoMemory,
   EvoRule,
   EvoSkill,
   EvoTool,
   EvoToolManifest,
   ScriptRuntime,
+  SymbolFingerprint,
 } from './types.js';
 
 export const DEFAULT_EVO_CONFIG: EvoConfig = {
@@ -59,6 +61,7 @@ export class EvoStorage {
   public readonly rulesDir: string;
   public readonly skillsDir: string;
   public readonly toolsDir: string;
+  public readonly memoriesDir: string;
   public readonly archiveDir: string;
   public readonly cacheDir: string;
   public readonly configPath: string;
@@ -74,6 +77,7 @@ export class EvoStorage {
     this.rulesDir = path.join(this.evoDir, 'rules');
     this.skillsDir = path.join(this.evoDir, 'skills');
     this.toolsDir = path.join(this.evoDir, 'tools');
+    this.memoriesDir = path.join(this.evoDir, 'memories');
     this.archiveDir = path.join(this.evoDir, 'archive');
     this.cacheDir = path.join(this.evoDir, '.cache');
     this.configPath = path.join(this.evoDir, 'config.json');
@@ -87,6 +91,7 @@ export class EvoStorage {
       path.join(this.rulesDir, 'scoped'),
       this.skillsDir,
       this.toolsDir,
+      this.memoriesDir,
       this.archiveDir,
       this.cacheDir,
     ]) {
@@ -361,6 +366,90 @@ export class EvoStorage {
     return tools.sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  // ==================== EPISODIC MEMORIES ====================
+
+  public saveMemory(memory: EvoMemory): void {
+    this.ensureInitialized();
+    const filePath = path.join(this.memoriesDir, `${memory.id}.md`);
+
+    const content = [
+      '---',
+      `id: ${memory.id}`,
+      `title: ${JSON.stringify(memory.title)}`,
+      `l0_summary: ${JSON.stringify(memory.l0_summary)}`,
+      `created_commit: ${JSON.stringify(memory.created_commit)}`,
+      `target_symbols: ${JSON.stringify(memory.target_symbols)}`,
+      `ast_fingerprints: ${JSON.stringify(memory.ast_fingerprints)}`,
+      `tags: ${JSON.stringify(memory.tags)}`,
+      `origin: ${JSON.stringify(memory.origin)}`,
+      ...(memory.supersedes_id ? [`supersedes_id: ${JSON.stringify(memory.supersedes_id)}`] : []),
+      `created_at: ${JSON.stringify(memory.created_at)}`,
+      `updated_at: ${JSON.stringify(memory.updated_at)}`,
+      '---',
+      '',
+      '## Symptom',
+      memory.symptom.trim(),
+      '',
+      '## Root Cause',
+      memory.root_cause.trim(),
+      '',
+      '## Solution',
+      memory.solution.trim(),
+      '',
+    ].join('\n');
+
+    fs.writeFileSync(filePath, content, 'utf8');
+  }
+
+  public getMemory(id: string): EvoMemory | null {
+    const cleanId = sanitizeId(id);
+    const filePath = path.join(this.memoriesDir, `${cleanId}.md`);
+    if (!fs.existsSync(filePath)) return null;
+    try {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const { meta, body } = parseFrontmatter(raw);
+      const symptomMatch = body.match(/## Symptom\s+([\s\S]*?)(?=## Root Cause|$)/i);
+      const rootCauseMatch = body.match(/## Root Cause\s+([\s\S]*?)(?=## Solution|$)/i);
+      const solutionMatch = body.match(/## Solution\s+([\s\S]*)$/i);
+
+      const rawFingerprints =
+        meta.ast_fingerprints && typeof meta.ast_fingerprints === 'object'
+          ? (meta.ast_fingerprints as Record<string, SymbolFingerprint>)
+          : {};
+
+      return {
+        id: String(meta.id || cleanId),
+        title: String(meta.title || cleanId),
+        l0_summary: String(meta.l0_summary || ''),
+        symptom: symptomMatch ? symptomMatch[1].trim() : body.trim(),
+        root_cause: rootCauseMatch ? rootCauseMatch[1].trim() : '',
+        solution: solutionMatch ? solutionMatch[1].trim() : '',
+        target_symbols: Array.isArray(meta.target_symbols) ? meta.target_symbols.map(String) : [],
+        ast_fingerprints: rawFingerprints,
+        created_commit: String(meta.created_commit || 'uncommitted'),
+        tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
+        origin: String(meta.origin || 'session'),
+        supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,
+        created_at: String(meta.created_at || new Date().toISOString()),
+        updated_at: String(meta.updated_at || new Date().toISOString()),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  public listMemories(): EvoMemory[] {
+    if (!fs.existsSync(this.memoriesDir)) return [];
+    const memories: EvoMemory[] = [];
+    for (const entry of fs.readdirSync(this.memoriesDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.md')) {
+        const m = this.getMemory(path.basename(entry.name, '.md'));
+        if (m) memories.push(m);
+      }
+    }
+    return memories.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
   // ==================== ARCHIVE / COMPACTION ====================
 
   public archiveCapability(id: string, kind: EvoKind, reason: string): boolean {
@@ -394,6 +483,15 @@ export class EvoStorage {
       if (!tool) return false;
       fs.writeFileSync(archiveFile, JSON.stringify({ reason, archived_at: new Date().toISOString(), item: tool }, null, 2), 'utf8');
       fs.rmSync(path.join(this.toolsDir, cleanId), { recursive: true, force: true });
+      return true;
+    }
+
+    if (kind === 'memory') {
+      const memory = this.getMemory(cleanId);
+      if (!memory) return false;
+      fs.writeFileSync(archiveFile, JSON.stringify({ reason, archived_at: new Date().toISOString(), item: memory }, null, 2), 'utf8');
+      const memPath = path.join(this.memoriesDir, `${cleanId}.md`);
+      if (fs.existsSync(memPath)) fs.unlinkSync(memPath);
       return true;
     }
 

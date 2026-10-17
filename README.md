@@ -40,9 +40,9 @@ Every developer using Claude Code, Cursor, Antigravity, or Codex hits three wall
   ╔══════════════════════════════════════╗
   ║  4-Stage Deterministic Gatekeeper    ║
   ║  1. Static AST & Security Audit      ║  Blocks hardcoded user paths, secrets & rm -rf
-  ║  2. Sandbox --self-test Dry-Run      ║  Executes script in isolation; must exit 0
-  ║  3. FTS5 BM25 Duplicate Interception ║  Blocks redundant skills unless superseding
-  ║  4. 1,500-Token Hard Budget & GC     ║  Forces evo_compact merge when budget is full
+  ║  2. Sandbox Dry-Run & AST Grounding  ║  Scripts must exit 0; Memories verify target_symbols & bind AST hash
+  ║  3. FTS5 BM25 Duplicate Interception ║  Blocks redundant skills/memories unless superseding
+  ║  4. 1,500-Token Hard Budget & GC     ║  Forces evo_compact merge when core rule budget is full
   ╚══════════════════╤═══════════════════╝
                      ▼
         ┌─────────────────────────┐
@@ -59,6 +59,7 @@ Every developer using Claude Code, Cursor, Antigravity, or Codex hits three wall
 | **Integration Mode** | Preloads 311 static skills | Hijacks `/v1/chat` API proxy | Standalone TUI/Web agent | Output compression MCP | **Parasitic Meta-MCP + 80-line Seed** |
 | **Extra API Key Needed?** | No | Yes (background evolver LLM) | Yes (standalone agent key) | No | **Zero (Piggybacks on Host Model)** |
 | **Dynamic MCP Evolution** | Static `.mcp.json` only | `.md` skills only | Internal `code_run` only | Ephemeral sandbox only | **Temp scripts auto-promote to verified Micro-Tools** |
+| **Episodic Memory & Anti-Drift** | None (static docs) | No AST verification | None | Session-only | **3-Stage Cognitive Memory (AST Hash + Topology Anchors)** |
 | **Prompt Cache Impact** | High context footprint | Neutral | Separate runtime | Compresses tool stdout | **100% Byte-Stable (Fixed 5 Meta-Tools)** |
 | **Anti-Bloat / Verification** | Manual `/learn-eval` | Async LLM merge | Direct file overwrite | Cleared per session | **4-Stage Gatekeeper + 1,500-Token Hard Cap GC** |
 | **Cold-Start Experience** | Generic catalog | Empty until chat history grows | 9 atomic seed tools | Empty until indexed | **`evo bootstrap` mines repo & git fixes in 10s** |
@@ -79,11 +80,12 @@ node ./scripts/build.mjs
 #    (Optional: add --stealth for .git/info/exclude and --targets agents,claude or --targets auto)
 node ./dist/cli/index.js init
 
-# 3. Cold-start mine your repository's build scripts & git fix history
+# 3. Cold-start mine your repository's build scripts & git fix history (Rules + Tools + Memories)
 node ./dist/cli/index.js bootstrap
 
-# 4. Inspect your evolved capability tree, ROI telemetry ledger & rule/skill health
+# 4. Inspect your evolved capability tree, AST memory freshness, ROI ledger & rule health
 node ./dist/cli/index.js tree
+node ./dist/cli/index.js memory verify
 node ./dist/cli/index.js stats
 node ./dist/cli/index.js audit --global
 node ./dist/cli/index.js refactor
@@ -101,21 +103,11 @@ node ./dist/cli/index.js refactor
 │   └── [CORE] esm-typescript-imports (154 tok | hits: 7) — Always use explicit .js extensions on relative imports and import type for types in ESM TypeScript.
 ├── ⚡ Skills (1 verified L0/L1/L2 playbooks)
 │   └── [SOP] bug-to-guardrail-sop (hits: 3 | tags: debugging,evolution,guardrail,tdd) — Standard workflow to turn a resolved root cause or recurring review comment into a verified Rule or Micro-Tool.
-└── 🔧 Micro-Tools (2 sandboxed scripts | Fixed Meta-MCP Routed)
-    ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 most frequently modified files in recent git history to pinpoint fragile modules.
-    └── [NODE] workspace-metrics-scanner (runs: 9 | pass: 100%) — Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.
-
-╭──────────────────────────────────────────────────────────────────────────╮
-│ 📊 EvoKernel ROI & Telemetry Ledger                                      │
-├──────────────────────────────────────────────────────────────────────────┤
-│ 🛡️  Core Rule Token Budget : [████░░░░░░░░░░░░░░░░] 286/1500 (19%)
-│ 📦 Active Capabilities    : 2 Rules · 1 Skills · 2 Micro-Tools
-│ 🗄️  GC Archived Versions   : 0 historical snapshots in .evo/archive/
-│ 🎯 Total Capability Hits  : 28 recalls (100.0% sandbox pass rate)
-│ ⚡ Prompt Cache Stability : 100% (Fixed 5-Tool Meta-MCP Signature)
-│ 💰 Estimated Tokens Saved : ~14,850 tokens
-│ 🔌 Enabled Harnesses      : claude, agents, gemini, cursor
-╰──────────────────────────────────────────────────────────────────────────╯
+├── 🔧 Micro-Tools (2 sandboxed scripts | Fixed Meta-MCP Routed)
+│   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 most frequently modified files in recent git history to pinpoint fragile modules.
+│   └── [NODE] workspace-metrics-scanner (runs: 9 | pass: 100%) — Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.
+└── 🧠 Episodic Memories (1 troubleshooting experiences | 1 VERIFIED · 0 STALE)
+    └── [VERIFIED] mem-git-fix-insights (confidence: HIGH | symbols: 2/2 fresh | hits: 2) — Troubleshooting record mined from 2 recent fix commits.
 ```
 
 ---
@@ -127,11 +119,11 @@ Instead of registering 50 separate MCP tools (which bloats system prompts and in
 
 | Meta-Tool | Tier | Purpose |
 | :--- | :--- | :--- |
-| `evo_search` | **L0** | FTS5 BM25 search across all evolved Rules, Skills, and Micro-Tools. Returns `<30 token` L0 summaries + hit/pass rates. |
-| `evo_inspect` | **L1 / L2** | Progressive disclosure loader. Fetches L1 input schemas/contracts or L2 full Markdown SOPs/scripts on demand. |
+| `evo_search` | **L0** | FTS5 BM25 search across all evolved Rules, Skills, Micro-Tools, and Episodic Memories (`memory`). Performs live Stage-2 AST fingerprint verification and demotes `[STALE]` memories automatically. |
+| `evo_inspect` | **L1 / L2** | Progressive disclosure loader. For `memory`, delivers **3-Stage Cascaded Recall**: `L1` returns the Symptom/Root-Cause/Solution triad + AST Anti-Drift Status table; `L2` adds **Topology Penetration Anchors** (live line spans, callers, and negative dead-ends). |
 | `evo_run` | **Execution** | Executes any evolved `.mjs`, `.py`, `.ps1`, or `.sh` Micro-Tool inside a timeout-bounded sandbox and logs telemetry. |
-| `evo_propose` | **Evolution** | Submits a candidate Rule, Skill, or Micro-Tool through the 4-Stage Deterministic Gatekeeper. |
-| `evo_compact` | **GC** | Archives fragmented/low-hit rules into `.evo/archive/` and replaces them with a consolidated high-density invariant. |
+| `evo_propose` | **Evolution** | Submits a candidate Rule, Skill, Micro-Tool, or Episodic Memory (`memory`) through the 4-Stage Deterministic Gatekeeper (including `target_symbols` AST grounding). |
+| `evo_compact` | **GC** | Archives fragmented/low-hit rules or `[STALE]` memories into `.evo/archive/` and replaces them with a consolidated asset. |
 
 ### 2. Git-Friendly `.evo/` Storage Layout
 Everything your agent learns is stored as clean, human-readable Markdown and standard scripts in `.evo/`—ready to commit and share with your team—while dynamic FTS5 indexes and hit counters live in `.evo/.cache/telemetry.db` (git-ignored and 100% rebuildable from disk):
@@ -148,6 +140,8 @@ Everything your agent learns is stored as clean, human-readable Markdown and sta
 │   └── <tool-id>/
 │       ├── manifest.json       # Input JSON Schema, runtime, timeout, self_test_args
 │       └── run.{mjs|py|ps1|sh} # Deterministic executable script verified by Gatekeeper
+├── memories/
+│   └── <memory-id>.md          # Episodic memory (Symptom, Root Cause, Negative Dead-Ends, AST Fingerprints)
 └── archive/                    # Historical snapshots before compaction/upgrade
 ```
 

@@ -2,6 +2,7 @@ export * from './core/types.js';
 export * from './core/storage.js';
 export * from './core/telemetry.js';
 export * from './core/sandbox.js';
+export * from './core/memory.js';
 export * from './core/gatekeeper.js';
 export * from './mcp/handlers.js';
 export * from './mcp/server.js';
@@ -10,3 +11,4 @@ export * from './cli/bootstrap.js';
 export * from './cli/audit.js';
 export * from './cli/visualizer.js';
 export * from './templates/meta-rule.js';
+

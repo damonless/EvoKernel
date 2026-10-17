@@ -1,6 +1,75 @@
-export type EvoKind = 'rule' | 'skill' | 'tool';
+export type EvoKind = 'rule' | 'skill' | 'tool' | 'memory';
 
 export type ScriptRuntime = 'node' | 'python' | 'powershell' | 'bash';
+
+export type SymbolKind =
+  | 'function'
+  | 'class'
+  | 'method'
+  | 'interface'
+  | 'type'
+  | 'struct'
+  | 'macro'
+  | 'variable'
+  | 'file';
+
+export interface SymbolFingerprint {
+  symbol: string;
+  file_path: string;
+  kind: SymbolKind;
+  start_line: number;
+  end_line: number;
+  signature: string;
+  ast_hash: string;
+}
+
+export interface EvoMemory {
+  id: string;
+  title: string;
+  l0_summary: string;
+  symptom: string;
+  root_cause: string;
+  solution: string;
+  target_symbols: string[];
+  ast_fingerprints: Record<string, SymbolFingerprint>;
+  created_commit: string;
+  tags: string[];
+  origin: string;
+  supersedes_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SymbolDriftCheck {
+  symbol: string;
+  status: 'VERIFIED' | 'MISMATCH' | 'MISSING';
+  recorded: SymbolFingerprint;
+  current?: SymbolFingerprint;
+  detail: string;
+}
+
+export interface TopologyAnchor {
+  symbol: string;
+  file_path: string;
+  lines: string;
+  signature: string;
+  status: 'VERIFIED' | 'MISMATCH' | 'MISSING';
+  callers: string[];
+  codegraph_hint?: string;
+}
+
+export interface MemoryVerificationReport {
+  memory_id: string;
+  overall_status: 'VERIFIED' | 'STALE';
+  confidence_tag: '[置信度: HIGH (≥80%)]' | '[置信度: LOW (20–50%) · STALE]';
+  commit_match: boolean;
+  recorded_commit: string;
+  current_commit: string;
+  verified_count: number;
+  total_symbols: number;
+  checks: SymbolDriftCheck[];
+  topology_anchors: TopologyAnchor[];
+}
 
 export interface EvoConfig {
   version: string;
@@ -81,6 +150,11 @@ export interface ProposalPayload {
   input_schema?: Record<string, unknown>;
   self_test_args?: Record<string, unknown>;
   timeout_ms?: number;
+  // For memories (Episodic Troubleshooting Cases):
+  symptom?: string;
+  root_cause?: string;
+  solution?: string;
+  target_symbols?: string[];
 }
 
 export interface TelemetryRecord {
@@ -105,16 +179,24 @@ export interface SearchHit {
   hit_count: number;
   success_rate: string;
   score: number;
+  memory_status?: 'VERIFIED' | 'STALE';
+  memory_badge?: string;
 }
 
 export interface GatekeeperResult {
   passed: boolean;
-  gate_failed?: 'SCHEMA_SECURITY' | 'SYNTAX_SANDBOX' | 'DUPLICATE_CHECK' | 'TOKEN_BUDGET';
+  gate_failed?:
+    | 'SCHEMA_SECURITY'
+    | 'SYNTAX_SANDBOX'
+    | 'SYMBOL_GROUNDING'
+    | 'DUPLICATE_CHECK'
+    | 'TOKEN_BUDGET';
   error_code?:
     | 'ERR_INVALID_SCHEMA'
     | 'ERR_SECURITY_VIOLATION'
     | 'ERR_SYNTAX_CHECK'
     | 'ERR_SANDBOX_SELF_TEST'
+    | 'ERR_SYMBOL_NOT_FOUND'
     | 'ERR_DUPLICATE_CAPABILITY'
     | 'ERR_BUDGET_EXCEEDED';
   message: string;
@@ -127,3 +209,4 @@ export interface GatekeeperResult {
   }>;
   diagnostics?: Record<string, unknown>;
 }
+

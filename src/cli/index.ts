@@ -5,14 +5,15 @@ import * as path from 'node:path';
 import { parseInitTargets, runInit, runUninstall } from './init.js';
 import { runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
-import { renderEvoStats, renderEvoTree } from './visualizer.js';
+import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from './visualizer.js';
 import { startMcpStdioServer } from '../mcp/server.js';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
+import { verifyMemoryFreshness } from '../core/memory.js';
 
 function printHelp(): void {
   console.log(`
-🧬 EvoKernel v0.1.0 — Deterministic Self-Evolving Meta-Kernel for AI Agents
+🧬 EvoKernel v0.1.0 — Deterministic Self-Evolving Meta-Kernel & Cognitive Memory for AI Agents
 
 Usage:
   evo <command> [options]
@@ -21,14 +22,15 @@ Commands:
   init [--stealth] [--targets <list|auto>]
                       Detect and wire L0 Meta-Rule Seed + Single Meta-MCP
                       (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
-  bootstrap           Cold-start 10s repo gene mining: extract verified initial Rules, Skills, and Micro-Tools from repo & git history
+  bootstrap           Cold-start 10s repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories
+  memory [verify]     Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
   audit [--global]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
   refactor [--apply]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
-  tree                Render the ASCII Self-Evolving Capability Tree (.evo/)
-  stats               Display the ROI Telemetry Ledger, Token Budget bar, and Prompt-Cache savings
+  tree                Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/)
+  stats               Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings
   mcp                 Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
   hook <event>        Lifecycle hook handler (post-tool | stop) for anti-forgetting evolution enforcement
-  doctor              Verify Node runtime, SQLite FTS5 BM25 engine, and sandbox self-tests
+  doctor              Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and sandbox self-tests
   uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
 `);
 }
@@ -67,7 +69,7 @@ export function ensureGlobalFallbackSeeded(
 
   const seedEvoDir = path.join(installRoot, '.evo');
   if (fs.existsSync(seedEvoDir) && path.resolve(seedEvoDir) !== path.resolve(storage.evoDir)) {
-    for (const sub of ['rules', 'skills', 'tools']) {
+    for (const sub of ['rules', 'skills', 'tools', 'memories']) {
       copyDirNonOverwriting(path.join(seedEvoDir, sub), path.join(storage.evoDir, sub));
     }
     storage.rebuildCoreInvariantsDigest();
@@ -149,9 +151,16 @@ export function runCli(argv: string[]): void {
       console.log(`  ├─ 🛡️  Rules evolved       : ${summary.rulesCreated.join(', ') || '(none)'}`);
       console.log(`  ├─ ⚡ Skills evolved      : ${summary.skillsCreated.join(', ') || '(none)'}`);
       console.log(`  ├─ 🔧 Micro-Tools evolved : ${summary.toolsCreated.join(', ') || '(none)'}`);
+      console.log(`  ├─ 🧠 Memories evolved    : ${summary.memoriesCreated.join(', ') || '(none)'}`);
       if (summary.skippedOrDuplicate.length > 0) {
         console.log(`  └─ ⏭️  Skipped existing    : ${summary.skippedOrDuplicate.join(', ')}`);
       }
+      break;
+    }
+
+    case 'memory':
+    case 'memories': {
+      console.log(renderMemoryVerifyReport(workspaceRoot));
       break;
     }
 
@@ -190,7 +199,7 @@ export function runCli(argv: string[]): void {
         const pending = telemetry.getSessionFlag('pending_evolution');
         if (pending === 'true') {
           console.log(
-            '[EvoKernel Hook Reminder] Detected bug recovery or temporary script creation in this session without capability crystallization. Consider calling `evo_propose` to distill a reusable Rule, Skill, or Micro-Tool.'
+            '[EvoKernel Hook Reminder] Detected bug recovery or temporary script creation in this session without capability crystallization. Consider calling `evo_propose` to distill a reusable Memory, Rule, Skill, or Micro-Tool.'
           );
         }
       }
@@ -205,6 +214,10 @@ export function runCli(argv: string[]): void {
       telemetry.syncFromDisk();
       const ftsEnabled = telemetry.isFts5Enabled();
       telemetry.close();
+      const memories = storage.listMemories();
+      const verifiedMems = memories.filter(
+        (m) => verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false }).overall_status === 'VERIFIED'
+      ).length;
       console.log('🩺 EvoKernel Doctor — Diagnostics Check');
       console.log(`  ├─ [x] Node.js Runtime       : ${process.version} (${process.execPath})`);
       console.log(
@@ -213,6 +226,9 @@ export function runCli(argv: string[]): void {
             ? 'Operational (FTS5 BM25 enabled)'
             : 'Operational (JS BM25 Fallback active — upgrade to Node >=22.16 / 22.23+ or 24+ for native FTS5)'
         }`
+      );
+      console.log(
+        `  ├─ [x] Cognitive Memory AST  : ${verifiedMems}/${memories.length} VERIFIED (${memories.length - verifiedMems} STALE)`
       );
       console.log(`  ├─ [x] .evo/ Storage Tree    : ${storage.evoDir}`);
       console.log(`  └─ [x] Meta-MCP Config       : ${fs.existsSync(path.join(workspaceRoot, '.mcp.json')) ? 'Registered (.mcp.json)' : 'Run `evo init` to register'}`);

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper } from '../core/gatekeeper.js';
+import { extractSymbolsFromGitCommit } from '../core/memory.js';
 import { syncManagedRuleBlocks } from './init.js';
 import { EVO_RULE_ARCHITECT_PROPOSAL } from './audit.js';
 import type { ProposalPayload } from '../core/types.js';
@@ -12,6 +13,7 @@ export interface BootstrapSummary {
   rulesCreated: string[];
   skillsCreated: string[];
   toolsCreated: string[];
+  memoriesCreated: string[];
   skippedOrDuplicate: string[];
 }
 
@@ -25,6 +27,7 @@ export function runBootstrap(workspaceRoot: string): BootstrapSummary {
     rulesCreated: [],
     skillsCreated: [],
     toolsCreated: [],
+    memoriesCreated: [],
     skippedOrDuplicate: [],
   };
 
@@ -97,22 +100,73 @@ export function runBootstrap(workspaceRoot: string): BootstrapSummary {
     ].join('\n'),
   });
 
+  // 2b. Mine top git fix commits into AST-anchored Episodic Memories (.evo/memories/)
+  for (const commitLine of fixCommits.slice(0, 2)) {
+    const spaceIdx = commitLine.indexOf(' ');
+    if (spaceIdx === -1) continue;
+    const sha = commitLine.slice(0, spaceIdx).trim();
+    const subject = commitLine.slice(spaceIdx + 1).trim();
+    if (!sha || !subject) continue;
+
+    const showRes = spawnSync('git', ['show', '--name-only', '--pretty=format:', sha], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+    if (showRes.status !== 0 || !showRes.stdout) continue;
+
+    const touchedSourceFiles = showRes.stdout
+      .split(/\r?\n/)
+      .map((f) => f.trim().replace(/\\/g, '/'))
+      .filter((f) => {
+        if (!f || f.startsWith('.evo/')) return false;
+        const ext = path.extname(f).toLowerCase();
+        return (
+          ['.ts', '.js', '.mjs', '.c', '.h', '.cpp', '.py', '.go', '.rs'].includes(ext) &&
+          fs.existsSync(path.join(workspaceRoot, f))
+        );
+      })
+      .slice(0, 3);
+
+    if (touchedSourceFiles.length > 0) {
+      const symbolTargets = extractSymbolsFromGitCommit(
+        workspaceRoot,
+        sha,
+        touchedSourceFiles
+      );
+      const compactSummary = `Historical fix (${sha}): ${subject}`.slice(0, 135);
+      proposals.push({
+        kind: 'memory',
+        id: `git-fix-${sha}`,
+        title: `Historical Fix Case (${sha}): ${subject.slice(0, 70)}`,
+        l0_summary: compactSummary,
+        symptom: `Regression or issue addressed in commit ${sha}: "${subject}"`,
+        root_cause: `Historical bug/fix pattern affecting symbols: ${symbolTargets.join(', ')}.`,
+        solution: `Resolved in commit ${sha} (${subject}). Inspect the anchored source files and symbols below for current implementation guards.`,
+        target_symbols: symbolTargets,
+        tags: ['git-history', 'fix', 'bootstrap'],
+        origin: 'bootstrap',
+      });
+    }
+  }
+
   // 3. Crystallize baseline Skill #1: Failure-to-Capability Evolution SOP
   proposals.push({
     kind: 'skill',
     id: 'bug-to-guardrail-sop',
-    title: 'Closed-Loop Bug to Deterministic Guardrail SOP',
-    l0_summary: 'Standard workflow to turn a resolved root cause or recurring review comment into a verified Rule or Micro-Tool.',
-    tags: ['debugging', 'evolution', 'guardrail', 'tdd'],
+    title: 'Closed-Loop Bug to Deterministic Guardrail & Cognitive Memory SOP',
+    l0_summary: 'Standard workflow to turn a resolved root cause or recurring review comment into a verified Memory, Rule, or Micro-Tool.',
+    tags: ['debugging', 'evolution', 'guardrail', 'memory', 'tdd'],
     origin: 'bootstrap',
     l1_contract: [
       '- **Trigger**: Immediately after fixing a non-trivial bug, build failure, or user architectural correction.',
-      '- **Inputs**: Root cause summary, affected file glob, and verification command.',
-      '- **Outputs**: A committed `.evo/rules/` invariant or `.evo/tools/` diagnostic script via `evo_propose`.',
+      '- **Inputs**: Symptom signature, root cause summary, affected symbols/files, and verification command.',
+      '- **Outputs**: A committed `.evo/memories/` case, `.evo/rules/` invariant, or `.evo/tools/` diagnostic script via `evo_propose`.',
     ].join('\n'),
     l2_sop: [
-      '1. **Search Existing Capabilities**: Run `evo_search` with the error keyword or module name to check if an existing rule/tool already covers this area.',
+      '1. **Search Existing Capabilities**: Run `evo_search` with the error keyword or symbol name to check if an existing memory/rule/tool already covers this area.',
       '2. **Decide Modality**:',
+      '   - If the fix resolved a specific fault symptom tied to concrete functions/structs, crystallize an Episodic Memory (`kind: "memory"`, `symptom`, `root_cause`, `solution`, `target_symbols`) for AST-anchored recall.',
       '   - If the failure can be caught programmatically (e.g., missing imports, config drift, dead symbols), write a Node/Python Micro-Tool (`kind: "tool"`) with a `--self-test` check.',
       '   - If the failure is an architectural or reasoning pitfall, distill a concise Rule (`kind: "rule"`) with an exact `scope_glob`.',
       '3. **Submit via Gatekeeper**: Call `evo_propose`. If `ERR_DUPLICATE_CAPABILITY` is returned, pass `supersedes_id` to upgrade the older entry.',
@@ -231,6 +285,7 @@ console.log(JSON.stringify({ recent_hotspots: topFiles }, null, 2));
       if (prop.kind === 'rule') summary.rulesCreated.push(prop.id);
       if (prop.kind === 'skill') summary.skillsCreated.push(prop.id);
       if (prop.kind === 'tool') summary.toolsCreated.push(prop.id);
+      if (prop.kind === 'memory') summary.memoriesCreated.push(prop.id);
     } else {
       summary.skippedOrDuplicate.push(`${prop.id} (${res.error_code || 'skipped'})`);
     }
