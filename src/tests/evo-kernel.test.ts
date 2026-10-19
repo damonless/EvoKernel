@@ -795,7 +795,65 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(projectB, { recursive: true, force: true });
     }
   });
+
+  test('16. Issue #5: Multi-Host Native Plugin Manifests (Antigravity, Claude Code, Gemini CLI) & templates/seed-evo', () => {
+    const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+    const fakeGlobalDir = createTempWorkspace();
+    const fakePluginInstallRoot = createTempWorkspace();
+    try {
+      // 1. Verify Antigravity plugin.json & mcp_config.json
+      const agyPlugin = JSON.parse(fs.readFileSync(path.join(repoRoot, 'plugin.json'), 'utf8'));
+      assert.equal(agyPlugin.name, 'evo-kernel');
+      assert.equal(agyPlugin.mcpServers, './mcp_config.json');
+      assert.equal(agyPlugin.rules, './rules');
+      assert.equal(agyPlugin.skills, './skills');
+
+      const agyMcp = JSON.parse(fs.readFileSync(path.join(repoRoot, 'mcp_config.json'), 'utf8'));
+      assert.ok(agyMcp.mcpServers['evo-kernel']);
+      assert.ok(fs.existsSync(path.join(repoRoot, 'rules', 'AGENTS.md')));
+      assert.ok(fs.existsSync(path.join(repoRoot, 'skills', 'bug-to-guardrail-sop', 'SKILL.md')));
+
+      // 2. Verify Claude Code .claude-plugin/plugin.json
+      const claudePlugin = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, '.claude-plugin', 'plugin.json'), 'utf8')
+      );
+      assert.equal(claudePlugin.name, 'evo-kernel');
+      assert.match(
+        claudePlugin.mcpServers['evo-kernel'].args[0],
+        /\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\/index\.js/
+      );
+
+      // 3. Verify Gemini CLI gemini-extension.json
+      const geminiExt = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, 'gemini-extension.json'), 'utf8')
+      );
+      assert.equal(geminiExt.name, 'evo-kernel');
+      assert.equal(geminiExt.contextFileName, 'GEMINI.md');
+      assert.match(
+        geminiExt.mcpServers['evo-kernel'].args[0],
+        /\$\{extensionPath\}\/dist\/cli\/index\.js/
+      );
+
+      // 4. Verify templates/seed-evo seeds global fallback even when plugin .evo is absent
+      fs.cpSync(
+        path.join(repoRoot, 'templates', 'seed-evo'),
+        path.join(fakePluginInstallRoot, 'templates', 'seed-evo'),
+        { recursive: true }
+      );
+      ensureGlobalFallbackSeeded(fakeGlobalDir, fakePluginInstallRoot);
+      const seededStorage = new EvoStorage(fakeGlobalDir);
+      assert.ok(seededStorage.getRule('gatekeeper-self-test-invariant') !== null);
+      assert.ok(seededStorage.getRule('esm-typescript-imports') !== null);
+      assert.ok(seededStorage.getSkill('bug-to-guardrail-sop') !== null);
+      assert.ok(seededStorage.getTool('workspace-metrics-scanner') !== null);
+      assert.equal(seededStorage.listMemories().length, 0);
+    } finally {
+      fs.rmSync(fakeGlobalDir, { recursive: true, force: true });
+      fs.rmSync(fakePluginInstallRoot, { recursive: true, force: true });
+    }
+  });
 });
+
 
 
 
