@@ -1,9 +1,17 @@
+import * as path from 'node:path';
 import type { EvoKind, ProposalPayload } from '../core/types.js';
-import { EvoStorage, sanitizeId } from '../core/storage.js';
+import { EvoStorage, findNearestEvoWorkspace, sanitizeId } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper } from '../core/gatekeeper.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
+import { syncManagedRuleBlocks } from '../cli/init.js';
+
+const WORKSPACE_PARAM_SCHEMA = {
+  type: 'string',
+  description:
+    'Optional absolute path to the active project workspace. Routes EvoKernel to the nearest .evo/ directory at or above this path instead of the MCP server process cwd.',
+} as const;
 
 export const META_MCP_TOOLS = [
   {
@@ -26,6 +34,7 @@ export const META_MCP_TOOLS = [
           type: 'number',
           description: 'Maximum results to return (default: 8).',
         },
+        workspace: WORKSPACE_PARAM_SCHEMA,
       },
       required: ['query'],
     },
@@ -46,6 +55,7 @@ export const META_MCP_TOOLS = [
           enum: ['L1', 'L2'],
           description: 'Disclosure level: L1 for compact contract/schema, L2 for full SOP/code/memory topology (default: L2).',
         },
+        workspace: WORKSPACE_PARAM_SCHEMA,
       },
       required: ['id'],
     },
@@ -65,6 +75,7 @@ export const META_MCP_TOOLS = [
           type: 'object',
           description: 'JSON arguments passed to the Micro-Tool via EVO_ARGS and CLI.',
         },
+        workspace: WORKSPACE_PARAM_SCHEMA,
       },
       required: ['tool_id'],
     },
@@ -156,6 +167,7 @@ export const META_MCP_TOOLS = [
           items: { type: 'string' },
           description: '[For memory] Core code symbols or file#symbol targets (e.g., ["src/core/telemetry.ts#search", "BmsCanRxHandler"]) for automatic AST structural fingerprinting.',
         },
+        workspace: WORKSPACE_PARAM_SCHEMA,
       },
       required: ['kind', 'id', 'title', 'l0_summary'],
     },
@@ -180,23 +192,63 @@ export const META_MCP_TOOLS = [
           type: 'string',
           description: 'Brief explanation for compaction.',
         },
+        workspace: WORKSPACE_PARAM_SCHEMA,
       },
       required: ['target_ids', 'merged_proposal', 'reason'],
     },
   },
 ] as const;
 
+interface WorkspaceContext {
+  rootDir: string;
+  storage: EvoStorage;
+  telemetry: EvoTelemetry;
+  gatekeeper: EvoGatekeeper;
+}
+
 export class EvoMcpDispatcher {
-  private readonly storage: EvoStorage;
-  private readonly telemetry: EvoTelemetry;
-  private readonly gatekeeper: EvoGatekeeper;
+  private readonly defaultRoot: string;
+  private readonly contexts = new Map<string, WorkspaceContext>();
+  private storage: EvoStorage;
+  private telemetry: EvoTelemetry;
+  private gatekeeper: EvoGatekeeper;
   private readonly onCoreRulesChanged?: () => void;
 
   constructor(workspaceRoot: string, onCoreRulesChanged?: () => void) {
-    this.storage = new EvoStorage(workspaceRoot);
-    this.telemetry = new EvoTelemetry(this.storage);
-    this.gatekeeper = new EvoGatekeeper(this.storage, this.telemetry);
+    this.defaultRoot = path.resolve(workspaceRoot);
     this.onCoreRulesChanged = onCoreRulesChanged;
+    const initialCtx = this.getOrCreateContext(this.defaultRoot);
+    this.storage = initialCtx.storage;
+    this.telemetry = initialCtx.telemetry;
+    this.gatekeeper = initialCtx.gatekeeper;
+  }
+
+  private getOrCreateContext(targetRoot: string): WorkspaceContext {
+    const resolved = path.resolve(targetRoot);
+    const existing = this.contexts.get(resolved);
+    if (existing) {
+      return existing;
+    }
+    const storage = new EvoStorage(resolved);
+    const telemetry = new EvoTelemetry(storage);
+    const gatekeeper = new EvoGatekeeper(storage, telemetry);
+    const ctx: WorkspaceContext = { rootDir: resolved, storage, telemetry, gatekeeper };
+    this.contexts.set(resolved, ctx);
+    return ctx;
+  }
+
+  private bindActiveContext(args: Record<string, unknown>): WorkspaceContext {
+    const rawWs = args.workspace ?? args.workspace_path;
+    let targetRoot = this.defaultRoot;
+    if (typeof rawWs === 'string' && rawWs.trim()) {
+      const candidate = path.resolve(rawWs.trim());
+      targetRoot = findNearestEvoWorkspace(candidate) || candidate;
+    }
+    const ctx = this.getOrCreateContext(targetRoot);
+    this.storage = ctx.storage;
+    this.telemetry = ctx.telemetry;
+    this.gatekeeper = ctx.gatekeeper;
+    return ctx;
   }
 
   public handleToolCall(
@@ -204,6 +256,7 @@ export class EvoMcpDispatcher {
     args: Record<string, unknown> = {}
   ): { isError?: boolean; content: Array<{ type: 'text'; text: string }> } {
     try {
+      this.bindActiveContext(args);
       switch (name) {
         case 'evo_search':
           return this.handleSearch(args);
@@ -444,8 +497,11 @@ export class EvoMcpDispatcher {
       };
     }
 
-    if (proposal.kind === 'rule' && this.onCoreRulesChanged) {
-      this.onCoreRulesChanged();
+    if (proposal.kind === 'rule') {
+      syncManagedRuleBlocks(this.storage.rootDir);
+      if (this.onCoreRulesChanged) {
+        this.onCoreRulesChanged();
+      }
     }
 
     return {
@@ -495,6 +551,7 @@ export class EvoMcpDispatcher {
       origin: 'compacted',
     });
 
+    syncManagedRuleBlocks(this.storage.rootDir);
     if (this.onCoreRulesChanged) {
       this.onCoreRulesChanged();
     }
@@ -519,6 +576,13 @@ export class EvoMcpDispatcher {
   }
 
   public close(): void {
-    this.telemetry.close();
+    for (const ctx of this.contexts.values()) {
+      try {
+        ctx.telemetry.close();
+      } catch {
+        // ignore double close
+      }
+    }
+    this.contexts.clear();
   }
 }

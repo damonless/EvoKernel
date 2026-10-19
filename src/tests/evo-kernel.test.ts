@@ -731,7 +731,72 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test('15. Multi-Workspace MCP Routing & Plugin CWD Isolation (Refs #4, #5)', () => {
+    const defaultWs = createTempWorkspace();
+    const projectA = createTempWorkspace();
+    const projectB = createTempWorkspace();
+    const fakePluginDir = path.join(defaultWs, '.gemini', 'config', 'plugins', 'evo-kernel');
+    fs.mkdirSync(path.join(fakePluginDir, '.evo', 'rules'), { recursive: true });
+    const dispatcher = new EvoMcpDispatcher(defaultWs);
+    try {
+      // 1. Plugin directory CWD must never hijack user workspace routing
+      assert.equal(
+        resolveWorkspaceRoot([], true, fakePluginDir),
+        path.resolve(os.homedir(), '.evo', 'global')
+      );
+
+      // 2. Subdirectory inside projectA with .evo must walk up to projectA root
+      fs.mkdirSync(path.join(projectA, '.evo'), { recursive: true });
+      const subDirA = path.join(projectA, 'packages', 'firmware', 'src');
+      fs.mkdirSync(subDirA, { recursive: true });
+      assert.equal(resolveWorkspaceRoot([], true, subDirA), path.resolve(projectA));
+
+      // 3. Per-call workspace parameter routes evo_propose and evo_search to isolated project roots
+      const propA = dispatcher.handleToolCall('evo_propose', {
+        workspace: projectA,
+        kind: 'rule',
+        id: 'proj-a-can-guard',
+        title: 'Project A CAN Bus Guard',
+        l0_summary: 'Validate CAN DLC bounds before frame unpacking in Project A.',
+        content: 'Always verify DLC <= 8 before reading payload bytes.',
+      });
+      assert.equal(propA.isError, undefined, propA.content[0]?.text);
+
+      const propB = dispatcher.handleToolCall('evo_propose', {
+        workspace: projectB,
+        kind: 'rule',
+        id: 'proj-b-spi-guard',
+        title: 'Project B SPI DMA Guard',
+        l0_summary: 'Ensure SPI DMA buffer alignment in Project B.',
+        content: 'Align DMA buffers to 32-byte cache lines before transfer.',
+      });
+      assert.equal(propB.isError, undefined, propB.content[0]?.text);
+
+      // Search in Project A only finds Project A rule
+      const searchA = dispatcher.handleToolCall('evo_search', {
+        workspace: projectA,
+        query: 'guard',
+      });
+      assert.match(searchA.content[0].text, /proj-a-can-guard/);
+      assert.doesNotMatch(searchA.content[0].text, /proj-b-spi-guard/);
+
+      // Search in Project B only finds Project B rule
+      const searchB = dispatcher.handleToolCall('evo_search', {
+        workspace: projectB,
+        query: 'guard',
+      });
+      assert.match(searchB.content[0].text, /proj-b-spi-guard/);
+      assert.doesNotMatch(searchB.content[0].text, /proj-a-can-guard/);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(defaultWs, { recursive: true, force: true });
+      fs.rmSync(projectA, { recursive: true, force: true });
+      fs.rmSync(projectB, { recursive: true, force: true });
+    }
+  });
 });
+
 
 
 

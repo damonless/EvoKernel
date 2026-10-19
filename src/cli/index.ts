@@ -7,7 +7,11 @@ import { runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from './visualizer.js';
 import { startMcpStdioServer } from '../mcp/server.js';
-import { EvoStorage } from '../core/storage.js';
+import {
+  EvoStorage,
+  findNearestEvoWorkspace,
+  isPluginOrExtensionInstallDir,
+} from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
 
@@ -39,7 +43,7 @@ function copyDirNonOverwriting(srcDir: string, destDir: string): void {
   if (!fs.existsSync(srcDir)) return;
   fs.mkdirSync(destDir, { recursive: true });
   for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    if (entry.name === '.cache' || entry.name === 'archive') continue;
+    if (entry.name === '.cache' || entry.name === 'archive' || entry.name === 'scoped') continue;
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
     if (entry.isDirectory()) {
@@ -67,9 +71,13 @@ export function ensureGlobalFallbackSeeded(
   const storage = new EvoStorage(globalRoot);
   storage.ensureInitialized();
 
-  const seedEvoDir = path.join(installRoot, '.evo');
+  const templateSeedDir = path.join(installRoot, 'templates', 'seed-evo');
+  const seedEvoDir = fs.existsSync(templateSeedDir)
+    ? templateSeedDir
+    : path.join(installRoot, '.evo');
+
   if (fs.existsSync(seedEvoDir) && path.resolve(seedEvoDir) !== path.resolve(storage.evoDir)) {
-    for (const sub of ['rules', 'skills', 'tools', 'memories']) {
+    for (const sub of ['rules', 'skills', 'tools']) {
       copyDirNonOverwriting(path.join(seedEvoDir, sub), path.join(storage.evoDir, sub));
     }
     storage.rebuildCoreInvariantsDigest();
@@ -85,13 +93,25 @@ export function resolveWorkspaceRoot(
 ): string {
   const wsFlagIdx = args.indexOf('--workspace');
   if (wsFlagIdx !== -1 && args[wsFlagIdx + 1]) {
-    return path.resolve(args[wsFlagIdx + 1]);
+    const explicit = path.resolve(args[wsFlagIdx + 1]);
+    return findNearestEvoWorkspace(explicit) || explicit;
   }
   if (process.env.EVO_WORKSPACE) {
-    return path.resolve(process.env.EVO_WORKSPACE);
+    const envWs = path.resolve(process.env.EVO_WORKSPACE);
+    return findNearestEvoWorkspace(envWs) || envWs;
   }
   const cwd = path.resolve(cwdOverride || process.cwd());
-  if (!allowGlobalFallback || fs.existsSync(path.join(cwd, '.evo'))) {
+  if (!allowGlobalFallback) {
+    return cwd;
+  }
+  if (isPluginOrExtensionInstallDir(cwd)) {
+    return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
+  }
+  const nearest = findNearestEvoWorkspace(cwd);
+  if (nearest) {
+    return nearest;
+  }
+  if (fs.existsSync(path.join(cwd, '.evo'))) {
     return cwd;
   }
   return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());

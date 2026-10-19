@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
   EvoConfig,
@@ -20,6 +21,53 @@ export const DEFAULT_EVO_CONFIG: EvoConfig = {
   sandboxTimeoutMs: 5000,
   enabledHarnesses: [],
 };
+
+export function isPluginOrExtensionInstallDir(dirPath: string): boolean {
+  const norm = path.resolve(dirPath).replace(/\\/g, '/').toLowerCase();
+  return (
+    norm.includes('/plugins/') ||
+    norm.includes('/.claude-plugin') ||
+    norm.includes('/extensions/') ||
+    norm.includes('/.gemini/antigravity/mcp/') ||
+    norm.endsWith('/.evo/global')
+  );
+}
+
+function safeRealpath(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+export function findNearestEvoWorkspace(startDir: string): string | null {
+  let current = path.resolve(startDir);
+  const homeReal = safeRealpath(os.homedir()).toLowerCase();
+  const tmpReal = safeRealpath(os.tmpdir()).toLowerCase();
+  while (true) {
+    if (isPluginOrExtensionInstallDir(current)) {
+      return null;
+    }
+    const currentReal = safeRealpath(current).toLowerCase();
+    if (currentReal === homeReal || currentReal === tmpReal) {
+      break;
+    }
+    const candidateEvo = path.join(current, '.evo');
+    if (
+      fs.existsSync(candidateEvo) &&
+      !fs.existsSync(path.join(candidateEvo, 'global'))
+    ) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return null;
+}
 
 export function estimateTokens(text: string): number {
   if (!text) return 0;

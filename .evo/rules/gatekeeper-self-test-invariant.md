@@ -8,7 +8,7 @@ priority: 90
 tokens: 215
 origin: "bootstrap"
 created_at: "2026-10-14T16:00:40.662Z"
-updated_at: "2026-10-17T11:04:35.970Z"
+updated_at: "2026-10-19T17:24:35.360Z"
 ---
 
 When proposing a new Micro-Tool via `evo_propose(kind: "tool")`:
