@@ -15,12 +15,12 @@ You are connected to **EvoKernel** (\`evo-kernel\` MCP + \`.evo/\` capability & 
 
 ## 3. Mandatory Experience Crystallization (\`evo_propose\` & \`evo_compact\`)
 Whenever ANY of the following occurs in this session, you MUST call \`evo_propose\` before finishing your final response:
-- **Episodic Troubleshooting Case (\`memory\`)**: You diagnosed a non-trivial bug symptom to concrete code symbols — crystallize the case (\`symptom\`, \`root_cause\`, \`solution\`, and \`target_symbols\`) so EvoKernel binds AST structural fingerprints for instant future recall.
-- **Bug Recovery Invariant (\`rule\`)**: You discovered an architectural pitfall or branch macro constraint — distill the prevention rule (\`l0_summary\`, \`scope_glob\`, and actionable guardrails).
+- **Episodic Troubleshooting Case (\`memory\`)**: You diagnosed a specific bug symptom, concrete code symbol, or threshold defect — crystallize it as \`kind: "memory"\` (\`symptom\`, \`root_cause\`, \`solution\`, and \`target_symbols\`) so EvoKernel binds AST structural fingerprints at **0 core token cost**.
+- **1-Level-Up Architectural Guardrail (\`rule\`)**: You discovered a cross-module methodology or class-of-bug prevention invariant — distill it as \`kind: "rule"\` (\`l0_summary\`, wildcard \`scope_glob\`, and \`transfer_scenarios\`). **SSOT Exclusion Principle**: Source code is the Single Source of Truth for concrete variable names, macros, and physical thresholds; NEVER copy magic numbers or >=3 concrete identifiers into a rule body (place concrete examples in \`kind: "memory"\` or a single \`Case Anchor:\` line).
 - **User Correction (\`rule\` / \`skill\`)**: The user corrected an assumption, architectural bias, or workflow step — codify it immediately so the mistake is never repeated.
 - **Reusable Script (\`tool\`)**: You wrote a temporary script (>15 lines) to analyze, transform, or verify code — register it as a parameterized Micro-Tool (\`run.{mjs|py|sh|ps1}\`) with a deterministic \`--self-test\` verification path.
 
-> **Gatekeeper Notice**: \`evo_propose\` enforces Static Security, Sandbox \`--self-test\` / Live AST Symbol Grounding, BM25 Deduplication, and a strict **1,500-token core rule budget** (Episodic \`memory\` entries consume 0 core budget tokens). If \`ERR_BUDGET_EXCEEDED\` or \`ERR_DUPLICATE\` is returned, use \`evo_compact\` to merge or archive stale entries first.
+> **Gatekeeper Notice**: \`evo_propose\` enforces Static Security, Lexical De-Symbolization & 1-Level-Up Abstraction, Sandbox \`--self-test\` / Live AST Symbol Grounding, BM25 Deduplication, Scoped Bucket Quotas (max 3/bucket), and a strict **1,500-token core rule budget**. If \`ERR_BUDGET_EXCEEDED\`, \`ERR_SCOPED_BUCKET_FULL\`, or \`ERR_DUPLICATE\` is returned, use \`evo_compact\` to merge or archive existing entries first.
 <!-- EVO:END -->`;
 
 export function renderManagedBlock(coreRulesMarkdown: string): string {

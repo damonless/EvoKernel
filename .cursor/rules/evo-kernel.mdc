@@ -18,19 +18,19 @@ You are connected to **EvoKernel** (`evo-kernel` MCP + `.evo/` capability & memo
 
 ## 3. Mandatory Experience Crystallization (`evo_propose` & `evo_compact`)
 Whenever ANY of the following occurs in this session, you MUST call `evo_propose` before finishing your final response:
-- **Episodic Troubleshooting Case (`memory`)**: You diagnosed a non-trivial bug symptom to concrete code symbols — crystallize the case (`symptom`, `root_cause`, `solution`, and `target_symbols`) so EvoKernel binds AST structural fingerprints for instant future recall.
-- **Bug Recovery Invariant (`rule`)**: You discovered an architectural pitfall or branch macro constraint — distill the prevention rule (`l0_summary`, `scope_glob`, and actionable guardrails).
+- **Episodic Troubleshooting Case (`memory`)**: You diagnosed a specific bug symptom, concrete code symbol, or threshold defect — crystallize it as `kind: "memory"` (`symptom`, `root_cause`, `solution`, and `target_symbols`) so EvoKernel binds AST structural fingerprints at **0 core token cost**.
+- **1-Level-Up Architectural Guardrail (`rule`)**: You discovered a cross-module methodology or class-of-bug prevention invariant — distill it as `kind: "rule"` (`l0_summary`, wildcard `scope_glob`, and `transfer_scenarios`). **SSOT Exclusion Principle**: Source code is the Single Source of Truth for concrete variable names, macros, and physical thresholds; NEVER copy magic numbers or >=3 concrete identifiers into a rule body (place concrete examples in `kind: "memory"` or a single `Case Anchor:` line).
 - **User Correction (`rule` / `skill`)**: The user corrected an assumption, architectural bias, or workflow step — codify it immediately so the mistake is never repeated.
 - **Reusable Script (`tool`)**: You wrote a temporary script (>15 lines) to analyze, transform, or verify code — register it as a parameterized Micro-Tool (`run.{mjs|py|sh|ps1}`) with a deterministic `--self-test` verification path.
 
-> **Gatekeeper Notice**: `evo_propose` enforces Static Security, Sandbox `--self-test` / Live AST Symbol Grounding, BM25 Deduplication, and a strict **1,500-token core rule budget** (Episodic `memory` entries consume 0 core budget tokens). If `ERR_BUDGET_EXCEEDED` or `ERR_DUPLICATE` is returned, use `evo_compact` to merge or archive stale entries first.
+> **Gatekeeper Notice**: `evo_propose` enforces Static Security, Lexical De-Symbolization & 1-Level-Up Abstraction, Sandbox `--self-test` / Live AST Symbol Grounding, BM25 Deduplication, Scoped Bucket Quotas (max 3/bucket), and a strict **1,500-token core rule budget**. If `ERR_BUDGET_EXCEEDED`, `ERR_SCOPED_BUCKET_FULL`, or `ERR_DUPLICATE` is returned, use `evo_compact` to merge or archive existing entries first.
 
 ## 4. Evolved Core Invariants (Auto-Managed by EvoKernel)
 - **[gatekeeper-self-test-invariant]** (`.evo/tools/**/*`): Every evolved Micro-Tool script must handle --self-test or EVO_SELF_TEST=1 and exit 0 deterministically.
   When proposing a new Micro-Tool via `evo_propose(kind: "tool")`:
   - The script MUST check `process.env.EVO_SELF_TEST === "1"` or `process.argv.includes("--self-test")` and run a side-effect-free verification check exiting with code `0`.
   - Never hardcode user-specific absolute paths; read workspace root from `process.env.EVO_WORKSPACE || process.cwd()`.
-  - Historical fix commits analyzed (2 commits): d0d4e13 fix(cli,telemetry): isolate global fallback to ~/.evo/global, resolve parent .git in --stealth, expose --targets, and add FTS5 fallback (Closes #1, Closes #3) | a812bc7 fix(hygiene): remove private embedded BMS rule and FSM skill from open-source repo (Refs #1)
+  - Historical fix commits analyzed (3 commits): 387153f fix(mcp,cli): support per-call workspace routing and prevent plugin cwd hijacking (Closes #2, Refs #4, Refs #5) | d0d4e13 fix(cli,telemetry): isolate global fallback to ~/.evo/global, resolve parent .git in --stealth, expose --targets, and add FTS5 fallback (Closes #1, Closes #3) | a812bc7 fix(hygiene): remove private embedded BMS rule and FSM skill from open-source repo (Refs #1)
 - **[esm-typescript-imports]** (`src/**/*.ts`): Always use explicit .js extensions on relative imports and import type for types in ESM TypeScript.
   1. Use explicit `.js` file extensions in relative module imports (e.g., `import { EvoStorage } from "./storage.js"`).
   2. Always use `import type { ... }` when importing TypeScript interfaces or type aliases so native Node type-stripping (`node:module.stripTypeScriptTypes`) never fails at runtime.

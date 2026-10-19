@@ -16,11 +16,41 @@ import type {
 export const DEFAULT_EVO_CONFIG: EvoConfig = {
   version: '0.1.0',
   maxCoreRuleTokens: 1500,
+  maxScopedRulesPerBucket: 3,
+  maxTotalScopedRules: 12,
   maxL0SummaryChars: 140,
   duplicateBm25Threshold: 0.68,
   sandboxTimeoutMs: 5000,
   enabledHarnesses: [],
 };
+
+export function getScopeBucketKey(scopeGlob: string): string {
+  const norm = (scopeGlob || '**/*')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^(\.\/|\/)+/, '');
+  if (!norm || norm === '**/*' || norm === '*') {
+    return 'global';
+  }
+  const segments = norm.split('/').filter(Boolean);
+  const first = segments[0] || '';
+  if (!/[*?[\]{}]/.test(first)) {
+    const second = segments[1] || '';
+    if (
+      segments.length >= 2 &&
+      !/[*?[\]{}]/.test(second) &&
+      ['src', 'source', 'app', 'packages', 'lib'].includes(first.toLowerCase())
+    ) {
+      return `${first.toLowerCase()}/${second.toLowerCase()}`;
+    }
+    return first.toLowerCase();
+  }
+  const extMatch = norm.match(/\*(\.[a-zA-Z0-9_]+)$/);
+  if (extMatch) {
+    return `ext:${extMatch[1].toLowerCase()}`;
+  }
+  return 'global';
+}
 
 export function isPluginOrExtensionInstallDir(dirPath: string): boolean {
   const norm = path.resolve(dirPath).replace(/\\/g, '/').toLowerCase();
@@ -193,6 +223,9 @@ export class EvoStorage {
       `tokens: ${rule.tokens}`,
       `origin: ${JSON.stringify(rule.origin)}`,
       ...(rule.supersedes_id ? [`supersedes_id: ${JSON.stringify(rule.supersedes_id)}`] : []),
+      ...(rule.transfer_scenarios && rule.transfer_scenarios.length > 0
+        ? [`transfer_scenarios: ${JSON.stringify(rule.transfer_scenarios)}`]
+        : []),
       `created_at: ${JSON.stringify(rule.created_at)}`,
       `updated_at: ${JSON.stringify(rule.updated_at)}`,
       '---',
@@ -253,6 +286,9 @@ export class EvoStorage {
         tokens: Number(meta.tokens || estimateTokens(`${l0_summary}\n${content}`)),
         origin: String(meta.origin || 'session'),
         supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,
+        transfer_scenarios: Array.isArray(meta.transfer_scenarios)
+          ? meta.transfer_scenarios.map(String)
+          : undefined,
         created_at: String(meta.created_at || new Date().toISOString()),
         updated_at: String(meta.updated_at || new Date().toISOString()),
       };

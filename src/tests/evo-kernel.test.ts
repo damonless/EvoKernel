@@ -795,7 +795,156 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(projectB, { recursive: true, force: true });
     }
   });
+
+  test('16. Issue #4 & #6: Rule Abstraction, Lexical De-Symbolization, Transferability, and Scoped Bucket Cap', () => {
+    const ws = createTempWorkspace();
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      // 1. Reject single-file literal scope_glob without wildcards
+      const narrowScopeRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'energy-meter-scaling',
+        title: 'Energy Meter Scaling Guard',
+        l0_summary: 'Verify integer scaling units across metering boundaries.',
+        scope_glob: 'Source/EnergyMeter.c',
+        core: false,
+        content: 'Always verify unit scaling before accumulating energy counters.',
+      });
+      assert.equal(narrowScopeRes.isError, true);
+      assert.match(narrowScopeRes.content[0].text, /ERR_SCOPE_TOO_NARROW/);
+
+      // 2. Reject point-bug case log disguised as a rule
+      const pointBugRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'can-charge-timeout-zero-drop-defect',
+        title: 'CAN Charge Timeout Zero Drop Defect',
+        l0_summary: 'Prevent CAN charge timeout zero drop defect during frame loss.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content: 'Do not drop charge current to zero on single frame timeout.',
+      });
+      assert.equal(pointBugRes.isError, true);
+      assert.match(pointBugRes.content[0].text, /ERR_POINT_BUG_CASE_LOG/);
+
+      // 3. Reject hardcoded domain/physical parameter thresholds in rule body
+      const domainNumRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'bus-voltage-regulation-guard',
+        title: 'Bus Voltage Regulation Guard',
+        l0_summary: 'Maintain bus voltage regulation stability under high load.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'When apparent power exceeds 1500VA, clamp reference at 26.5V within hysteresis [-10V, -5V) and set wBusWeight=32.',
+      });
+      assert.equal(domainNumRes.isError, true);
+      assert.match(domainNumRes.content[0].text, /ERR_RULE_CONTAINS_DOMAIN_NUMBERS/);
+
+      // 4. Reject rules coupled to >= 3 concrete project identifiers/macros
+      const coupledIdRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'bus-reference-arbitration-guard',
+        title: 'Bus Reference Arbitration Guard',
+        l0_summary: 'Verify multi-source arbitration priority before updating bus reference.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Always arbitrate wBatBusSw, wPvKeepBusRef, and wBusWeight when cbCHG_MODE_LION is active.',
+      });
+      assert.equal(coupledIdRes.isError, true);
+      assert.match(coupledIdRes.content[0].text, /ERR_RULE_COUPLED_TO_IDENTIFIERS/);
+
+      // 5. Reject insufficient transfer_scenarios (< 2 scenarios)
+      const weakTransferRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'multi-source-setpoint-arbitration',
+        title: 'Multi-Source Setpoint Arbitration Invariant',
+        l0_summary: 'Verify priority arbitration and hysteresis deadband across all setpoint loops.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        transfer_scenarios: ['Only applies to bus voltage loop'],
+        content:
+          'Verify priority arbitration across competing control sources before writing target setpoints.\nCase Anchor: wBatBusSw / wPvKeepBusRef @ 1500VA in BusControl.c',
+      });
+      assert.equal(weakTransferRes.isError, true);
+      assert.match(weakTransferRes.content[0].text, /ERR_INSUFFICIENT_TRANSFER_SCENARIOS/);
+
+      // 6. Accept 1-level-up abstracted rule with Case Anchor exemption and >= 2 transfer_scenarios (Scoped #1)
+      const validScoped1 = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'multi-source-setpoint-arbitration',
+        title: 'Multi-Source Setpoint Arbitration Invariant',
+        l0_summary: 'Verify priority arbitration and hysteresis deadband across all setpoint loops.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        transfer_scenarios: [
+          'DC bus voltage reference arbitration between PV MPPT and battery loops',
+          'AC grid charge current limit arbitration between BMS CAN and thermal derating',
+        ],
+        content:
+          'Verify priority arbitration and hysteresis deadband across competing control sources before writing target setpoints.\nCase Anchor: wBatBusSw / wPvKeepBusRef @ 1500VA in BusControl.c',
+      });
+      assert.equal(validScoped1.isError, undefined, validScoped1.content[0]?.text);
+
+      // Add Scoped #2 and Scoped #3 in the same 'source' bucket
+      const validScoped2 = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'communication-timeout-hold-guard',
+        title: 'Communication Timeout State Hold Guard',
+        l0_summary: 'Hold last valid control command during transient communication frame loss.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Never zero out actuator limits on a single dropped frame; apply a bounded hold timer before failsafe fallback.',
+      });
+      assert.equal(validScoped2.isError, undefined, validScoped2.content[0]?.text);
+
+      const validScoped3 = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'adc-isr-pipeline-budget-guard',
+        title: 'High-Frequency ISR Execution Budget Guard',
+        l0_summary: 'Defer non-critical telemetry formatting outside high-frequency control ISRs.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Keep high-frequency interrupt handlers strictly bounded to sampling and protection checks; move string/frame formatting to background tasks.',
+      });
+      assert.equal(validScoped3.isError, undefined, validScoped3.content[0]?.text);
+
+      // 7. 4th scoped rule in 'source' bucket without supersedes_id triggers ERR_SCOPED_BUCKET_FULL
+      const overflowScoped4 = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'eeprom-wear-leveling-write-guard',
+        title: 'Non-Volatile Memory Write Debounce Guard',
+        l0_summary: 'Debounce and dirty-check configuration parameters before non-volatile writes.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Always compare new parameter values against cached shadow state and enforce write coalescing before committing to non-volatile storage.',
+      });
+      assert.equal(overflowScoped4.isError, true);
+      assert.match(overflowScoped4.content[0].text, /ERR_SCOPED_BUCKET_FULL/);
+
+      // 8. Passing supersedes_id allows upgrading within the full bucket
+      const upgradeScoped = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'communication-and-nvm-debounce-guard',
+        supersedes_id: 'communication-timeout-hold-guard',
+        title: 'Boundary I/O Timeout Hold & Write Debounce Guard',
+        l0_summary: 'Apply bounded hold timers on comm loss and dirty-check debounce on NVM writes.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Enforce bounded hold timers on transient communication loss and dirty-check coalescing before non-volatile storage writes.',
+      });
+      assert.equal(upgradeScoped.isError, undefined, upgradeScoped.content[0]?.text);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 });
+
 
 
 

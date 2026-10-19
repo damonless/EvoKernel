@@ -118,7 +118,12 @@ export const META_MCP_TOOLS = [
         },
         content: {
           type: 'string',
-          description: '[For rule] Actionable markdown guardrails and rationale.',
+          description: '[For rule] Actionable markdown guardrails and rationale (code-state SSOT decoupled; use "Case Anchor:" for concrete symbol/threshold examples).',
+        },
+        transfer_scenarios: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '[For rule] At least 2 distinct cross-module/cross-scenario applications proving 1-level-up transferability.',
         },
         l1_contract: {
           type: 'string',

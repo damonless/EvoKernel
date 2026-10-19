@@ -14,6 +14,7 @@ import {
   EvoStorage,
   estimateTokens,
   getExtensionForRuntime,
+  getScopeBucketKey,
   sanitizeId,
 } from './storage.js';
 import { EvoTelemetry } from './telemetry.js';
@@ -28,6 +29,61 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /[A-Za-z]:\\Users\\[A-Za-z0-9_.-]+\\/i, reason: 'Hardcoded user-specific Windows absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
   { pattern: /\/Users\/[A-Za-z0-9_.-]+\/|\/home\/[A-Za-z0-9_.-]+\//, reason: 'Hardcoded user-specific Unix absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
 ];
+
+function stripCaseAnchorLines(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:[-*>]+\s*)?(?:\*\*)?Case Anchor(?:\*\*)?\s*:/i.test(line))
+    .join('\n');
+}
+
+export function detectDomainNumbersInRule(text: string): string[] {
+  const found = new Set<string>();
+  const patterns = [
+    /\b\d+(?:\.\d+)?\s*(?:k?V|mV|mA|A|k?W|k?VA|Hz|kHz|MHz|Ohm|degC|℃|%SOC)\b/g,
+    /\[[-+]?\d+(?:\.\d+)?\s*[A-Za-z%]*\s*,\s*[-+]?\d+(?:\.\d+)?\s*[A-Za-z%]*[)\]]/g,
+    /\b(?:w|dw|u8|u16|u32|s16|s32|i16|i32|b|f|cb|st|en)[A-Z][A-Za-z0-9_]*\s*(?:==|!=|>=|<=|>|<|=)\s*[-+]?\d+(?:\.\d+)?\b/g,
+  ];
+  for (const regex of patterns) {
+    for (const match of text.matchAll(regex)) {
+      found.add(match[0].trim());
+    }
+  }
+  return Array.from(found);
+}
+
+export function detectCoupledIdentifiersInRule(text: string): string[] {
+  const found = new Set<string>();
+  const hungarianRegex =
+    /\b(?:w|dw|u8|u16|u32|s16|s32|i16|i32|f|cb|st|en|g_|s_)[A-Z][A-Za-z0-9_]{2,}\b/g;
+  const boolHungarianRegex = /\bb[A-Z][a-z]+[A-Z][A-Za-z0-9_]*\b/g;
+  const macroRegex = /\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}\b/g;
+  const backtickCallRegex = /`([A-Za-z_][A-Za-z0-9_.]*\(\))`/g;
+
+  for (const m of text.matchAll(hungarianRegex)) {
+    found.add(m[0]);
+  }
+  for (const m of text.matchAll(boolHungarianRegex)) {
+    found.add(m[0]);
+  }
+  for (const m of text.matchAll(macroRegex)) {
+    const token = m[0];
+    if (
+      !/^(?:EVO_|ERR_|NODE_|AST_|MCP_|CLI_|L0_|L1_|L2_|SSOT_|SOP_|BM25_|FTS5_|JSON_|UTF_|SQLITE_)/.test(
+        token
+      )
+    ) {
+      found.add(token);
+    }
+  }
+  for (const m of text.matchAll(backtickCallRegex)) {
+    const callExpr = m[1];
+    if (!/^(?:evo_|codegraph|import\.|process\.|fs\.|path\.)/i.test(callExpr)) {
+      found.add(callExpr);
+    }
+  }
+  return Array.from(found);
+}
 
 export class EvoGatekeeper {
   private readonly storage: EvoStorage;
@@ -92,6 +148,91 @@ export class EvoGatekeeper {
           error_code: 'ERR_SECURITY_VIOLATION',
           message: `Security gate blocked proposal: ${rule.reason}`,
         };
+      }
+    }
+
+    // =========================================================================
+    // GATE 1.5: RULE ABSTRACTION & LEXICAL DE-SYMBOLIZATION GATE (FOR RULES)
+    // =========================================================================
+    if (
+      rawProposal.kind === 'rule' &&
+      rawProposal.origin !== 'bootstrap' &&
+      rawProposal.origin !== 'compacted'
+    ) {
+      const scopeGlob = (rawProposal.scope_glob || '**/*').trim();
+      const rawContent = (rawProposal.content || '').trim();
+      const bodyForLexicalAudit = stripCaseAnchorLines(
+        `${rawProposal.l0_summary}\n${rawContent}`
+      );
+
+      // 1. Reject single-file literal scope_glob without wildcards (Issue #4 Problem 1)
+      if (scopeGlob !== '**/*' && !/[*?[\]{}]/.test(scopeGlob)) {
+        return {
+          passed: false,
+          gate_failed: 'ABSTRACTION_GATE',
+          error_code: 'ERR_SCOPE_TOO_NARROW',
+          message: `Scope '${scopeGlob}' targets a single literal file without glob wildcards (*, ?, {}). Single-file bug fixes belong in Episodic Memory (kind: 'memory' with target_symbols) or must be abstracted 1-level-up to a subsystem pattern (e.g., 'Source/**/*.c' or 'src/**/*.ts').`,
+        };
+      }
+
+      // 2. Reject point-bug case logs disguised as rules (Issue #4 Problem 1 & Issue #6)
+      if (
+        /-(?:bug|defect|hotfix|crash)$/i.test(cleanId) ||
+        /\b(?:fixed in commit|root cause in commit|regression in commit)\s+[0-9a-f]{7,40}\b/i.test(
+          bodyForLexicalAudit
+        )
+      ) {
+        return {
+          passed: false,
+          gate_failed: 'ABSTRACTION_GATE',
+          error_code: 'ERR_POINT_BUG_CASE_LOG',
+          message: `Rule proposal '${cleanId}' reads like a point-bug postmortem or commit log rather than a reusable architectural guardrail. Use kind: 'memory' (with symptom, root_cause, solution, target_symbols) to record specific bug cases at 0 core token cost, or abstract the rule 1-level-up into a general class invariant.`,
+        };
+      }
+
+      // 3. Reject hardcoded domain/physical parameter thresholds in rule body (Issue #6 Layer 1)
+      const domainNumbers = detectDomainNumbersInRule(bodyForLexicalAudit);
+      if (domainNumbers.length >= 2) {
+        return {
+          passed: false,
+          gate_failed: 'ABSTRACTION_GATE',
+          error_code: 'ERR_RULE_CONTAINS_DOMAIN_NUMBERS',
+          message: `Lexical De-Symbolization Gate blocked rule '${cleanId}': detected hardcoded domain/physical parameter thresholds (${domainNumbers.slice(0, 4).join(', ')}). Code is the Single Source of Truth (SSOT) for concrete thresholds and magic numbers; rules must express the verification methodology or move concrete case parameters into kind: 'memory' / a single 'Case Anchor:' line.`,
+          diagnostics: { matched_domain_numbers: domainNumbers },
+        };
+      }
+
+      // 4. Reject rules coupled to >= 3 concrete project identifiers/macros (Issue #6 Layer 1)
+      const coupledIdentifiers = detectCoupledIdentifiersInRule(bodyForLexicalAudit);
+      if (coupledIdentifiers.length >= 3) {
+        return {
+          passed: false,
+          gate_failed: 'ABSTRACTION_GATE',
+          error_code: 'ERR_RULE_COUPLED_TO_IDENTIFIERS',
+          message: `Lexical De-Symbolization Gate blocked rule '${cleanId}': main body is tightly coupled to concrete project identifiers (${coupledIdentifiers.slice(0, 5).join(', ')}). Replace specific variable/macro names with architectural domain concepts in the rule body, and either use kind: 'memory' (with target_symbols) or isolate concrete symbols inside a single 'Case Anchor:' line.`,
+          diagnostics: { coupled_identifiers: coupledIdentifiers },
+        };
+      }
+
+      // 5. Validate transfer_scenarios when provided (Issue #6 Layer 2)
+      if (rawProposal.transfer_scenarios !== undefined) {
+        const validScenarios = Array.isArray(rawProposal.transfer_scenarios)
+          ? Array.from(
+              new Set(
+                rawProposal.transfer_scenarios
+                  .map((s) => String(s).trim())
+                  .filter((s) => s.length >= 8)
+              )
+            )
+          : [];
+        if (validScenarios.length < 2) {
+          return {
+            passed: false,
+            gate_failed: 'ABSTRACTION_GATE',
+            error_code: 'ERR_INSUFFICIENT_TRANSFER_SCENARIOS',
+            message: `Transferability Gate blocked rule '${cleanId}': 'transfer_scenarios' must provide at least 2 distinct cross-module/cross-scenario applications (>= 8 chars each) proving the rule is not overfitted to a single bug location.`,
+          };
+        }
       }
     }
 
@@ -230,7 +371,7 @@ export class EvoGatekeeper {
     }
 
     // =========================================================================
-    // GATE 4: TOKEN BUDGET CAP & GARBAGE COLLECTION ENFORCEMENT
+    // GATE 4: TOKEN BUDGET CAP & SCOPED BUCKET QUOTA ENFORCEMENT
     // =========================================================================
     const now = new Date().toISOString();
 
@@ -246,11 +387,12 @@ export class EvoGatekeeper {
       }
 
       const isCore = Boolean(rawProposal.core ?? true);
+      const scopeGlob = (rawProposal.scope_glob || '**/*').trim();
       const newRuleTokens = estimateTokens(`- **[${cleanId}]**: ${rawProposal.l0_summary}\n${content}`);
+      const supersededId = rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : null;
 
       if (isCore) {
         const { rules: existingCoreRules } = this.storage.getCoreRulesTokenUsage();
-        const supersededId = rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : null;
         const filteredRules = existingCoreRules.filter(
           (r) => r.id !== cleanId && r.id !== supersededId
         );
@@ -276,6 +418,29 @@ export class EvoGatekeeper {
             low_value_candidates: lowValueCandidates,
           };
         }
+      } else {
+        const targetBucket = getScopeBucketKey(scopeGlob);
+        const existingScopedRules = this.storage
+          .listRules()
+          .filter((r) => !r.core && r.id !== cleanId && r.id !== supersededId);
+        const sameBucketRules = existingScopedRules.filter(
+          (r) => getScopeBucketKey(r.scope_glob) === targetBucket
+        );
+        const maxPerBucket = config.maxScopedRulesPerBucket ?? 3;
+        const maxTotalScoped = config.maxTotalScopedRules ?? 12;
+
+        if (
+          sameBucketRules.length >= maxPerBucket ||
+          existingScopedRules.length >= maxTotalScoped
+        ) {
+          return {
+            passed: false,
+            gate_failed: 'TOKEN_BUDGET',
+            error_code: 'ERR_SCOPED_BUCKET_FULL',
+            message: `Scoped rule bucket '${targetBucket}' is full (${sameBucketRules.length}/${maxPerBucket} in bucket, ${existingScopedRules.length}/${maxTotalScoped} total scoped rules: [${sameBucketRules.map((r) => r.id).join(', ')}]). Specify 'supersedes_id' to upgrade an existing scoped rule, or call 'evo_compact' to merge overlapping rules in '${targetBucket}' into a single subsystem checklist.`,
+            conflicting_ids: sameBucketRules.map((r) => r.id),
+          };
+        }
       }
 
       if (rawProposal.supersedes_id) {
@@ -291,13 +456,16 @@ export class EvoGatekeeper {
         id: cleanId,
         title: rawProposal.title.trim(),
         l0_summary: rawProposal.l0_summary.trim(),
-        scope_glob: rawProposal.scope_glob || '**/*',
+        scope_glob: scopeGlob,
         core: isCore,
         priority: rawProposal.priority ?? 50,
         content,
         tokens: newRuleTokens,
         origin: rawProposal.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
+        transfer_scenarios: Array.isArray(rawProposal.transfer_scenarios)
+          ? rawProposal.transfer_scenarios.map((s) => String(s).trim()).filter(Boolean)
+          : undefined,
         created_at: existing?.created_at || now,
         updated_at: now,
       };
@@ -308,7 +476,7 @@ export class EvoGatekeeper {
 
       return {
         passed: true,
-        message: `Rule '${cleanId}' passed all 4 Gatekeeper checks and is now active (${newRuleTokens} tokens).`,
+        message: `Rule '${cleanId}' passed all Gatekeeper checks and is now active (${newRuleTokens} tokens).`,
         diagnostics: { id: cleanId, kind: 'rule', tokens: newRuleTokens, core: isCore },
       };
     }
