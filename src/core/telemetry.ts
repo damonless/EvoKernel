@@ -246,7 +246,7 @@ export class EvoTelemetry {
       }
     }
 
-    if (rows.length === 0) {
+    if (tokens.length === 0) {
       const fallbackSql =
         kind === 'all'
           ? `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry ORDER BY hit_count DESC, created_at DESC LIMIT ?`

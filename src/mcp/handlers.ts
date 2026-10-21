@@ -242,7 +242,8 @@ export class EvoMcpDispatcher {
     let targetRoot = this.defaultRoot;
     if (typeof rawWs === 'string' && rawWs.trim()) {
       const candidate = path.resolve(rawWs.trim());
-      targetRoot = findNearestEvoWorkspace(candidate) || candidate;
+      const nearestEvo = findNearestEvoWorkspace(candidate);
+      targetRoot = nearestEvo || this.defaultRoot;
     }
     const ctx = this.getOrCreateContext(targetRoot);
     this.storage = ctx.storage;

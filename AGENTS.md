@@ -6,6 +6,7 @@ You are connected to **EvoKernel** (`evo-kernel` MCP + `.evo/` capability & memo
 ## 1. Two-Stage Cascaded Recall (`evo_search` -> `evo_inspect`)
 - Before debugging recurring build/test failures, analyzing error logs/packets, or modifying unfamiliar modules, call `evo_search` with error symptoms, keywords, or symbol names.
 - `evo_search` searches **Rules, Skills, Micro-Tools, and Episodic Memories (`memory`)** with live **AST Anti-Drift verification** (`[VERIFIED]` vs `[STALE]`). Call `evo_inspect(id, "L1" | "L2")` on relevant hits to load SOPs or Stage 3 **Topology Penetration Anchors** (live `file:line`, signatures, and callers).
+- Skip `evo_search` during non-project general chat or built-in host slash-command wizards (e.g., `/automation`, `/schedule`) when no code workspace is involved.
 
 ## 2. Think in Code via Micro-Tools (`evo_run`)
 - When inspecting >5 files, validating schemas, or running project diagnostics, prefer executing a verified Micro-Tool via `evo_run(tool_id, args)` instead of dumping raw file contents into the context window.
@@ -24,7 +25,7 @@ Whenever ANY of the following occurs in this session, you MUST call `evo_propose
   When proposing a new Micro-Tool via `evo_propose(kind: "tool")`:
   - The script MUST check `process.env.EVO_SELF_TEST === "1"` or `process.argv.includes("--self-test")` and run a side-effect-free verification check exiting with code `0`.
   - Never hardcode user-specific absolute paths; read workspace root from `process.env.EVO_WORKSPACE || process.cwd()`.
-  - Historical fix commits analyzed (2 commits): d0d4e13 fix(cli,telemetry): isolate global fallback to ~/.evo/global, resolve parent .git in --stealth, expose --targets, and add FTS5 fallback (Closes #1, Closes #3) | a812bc7 fix(hygiene): remove private embedded BMS rule and FSM skill from open-source repo (Refs #1)
+  - Historical fix commits analyzed (3 commits): 387153f fix(mcp,cli): support per-call workspace routing and prevent plugin cwd hijacking (Closes #2, Refs #4, Refs #5) | d0d4e13 fix(cli,telemetry): isolate global fallback to ~/.evo/global, resolve parent .git in --stealth, expose --targets, and add FTS5 fallback (Closes #1, Closes #3) | a812bc7 fix(hygiene): remove private embedded BMS rule and FSM skill from open-source repo (Refs #1)
 - **[esm-typescript-imports]** (`src/**/*.ts`): Always use explicit .js extensions on relative imports and import type for types in ESM TypeScript.
   1. Use explicit `.js` file extensions in relative module imports (e.g., `import { EvoStorage } from "./storage.js"`).
   2. Always use `import type { ... }` when importing TypeScript interfaces or type aliases so native Node type-stripping (`node:module.stripTypeScriptTypes`) never fails at runtime.
