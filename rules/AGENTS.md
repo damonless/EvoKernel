@@ -6,6 +6,7 @@ You are connected to **EvoKernel** (`evo-kernel` MCP + `.evo/` capability & memo
 ## 1. Two-Stage Cascaded Recall (`evo_search` -> `evo_inspect`)
 - Before debugging recurring build/test failures, analyzing error logs/packets, or modifying unfamiliar modules, call `evo_search` with error symptoms, keywords, or symbol names (pass `workspace` pointing to the active project root when running as a global plugin).
 - `evo_search` searches **Rules, Skills, Micro-Tools, and Episodic Memories (`memory`)** with live **AST Anti-Drift verification** (`[VERIFIED]` vs `[STALE]`). Call `evo_inspect(id, "L1" | "L2")` on relevant hits to load SOPs or Stage 3 **Topology Penetration Anchors** (live `file:line`, signatures, and callers).
+- Skip `evo_search` during non-project general chat or built-in host slash-command wizards (e.g., `/automation`, `/schedule`) when no code workspace is involved.
 
 ## 2. Think in Code via Micro-Tools (`evo_run`)
 - When inspecting >5 files, validating schemas, or running project diagnostics, prefer executing a verified Micro-Tool via `evo_run(tool_id, args)` instead of dumping raw file contents into the context window.

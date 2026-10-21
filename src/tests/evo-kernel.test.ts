@@ -748,6 +748,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // 2. Subdirectory inside projectA with .evo must walk up to projectA root
       fs.mkdirSync(path.join(projectA, '.evo'), { recursive: true });
+      fs.mkdirSync(path.join(projectB, '.evo'), { recursive: true });
       const subDirA = path.join(projectA, 'packages', 'firmware', 'src');
       fs.mkdirSync(subDirA, { recursive: true });
       assert.equal(resolveWorkspaceRoot([], true, subDirA), path.resolve(projectA));
@@ -850,6 +851,58 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     } finally {
       fs.rmSync(fakeGlobalDir, { recursive: true, force: true });
       fs.rmSync(fakePluginInstallRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('17. Issue #7: evo_search returns empty on zero-match queries and never creates .evo/ in uninitialized folders', () => {
+    const defaultWs = createTempWorkspace();
+    const uninitializedDir = createTempWorkspace();
+    const dispatcher = new EvoMcpDispatcher(defaultWs);
+    try {
+      // Seed a domain rule into defaultWs
+      const seeded = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'pv-charge-cap-feedback-invariant',
+        title: 'PV Charge Cap Feedback Invariant',
+        l0_summary: 'Verify off-grid PV charge current feedback loop stability.',
+        content: 'Always clamp PV charge current reference before updating PWM duty cycle.',
+      });
+      assert.equal(seeded.isError, undefined, seeded.content[0]?.text);
+
+      // 1. Unrelated query must return zero-match message, NOT dump existing unrelated rules
+      const zeroHitRes = dispatcher.handleToolCall('evo_search', {
+        query: 'automation schedule',
+      });
+      assert.match(
+        zeroHitRes.content[0].text,
+        /No evolved capabilities matched query "automation schedule"\./
+      );
+      assert.doesNotMatch(zeroHitRes.content[0].text, /pv-charge-cap-feedback-invariant/);
+
+      // 2. Empty query ("") still returns the Top capability overview
+      const emptyQueryRes = dispatcher.handleToolCall('evo_search', {
+        query: '',
+      });
+      assert.match(emptyQueryRes.content[0].text, /pv-charge-cap-feedback-invariant/);
+
+      // 3. Passing an uninitialized folder in `workspace` must NOT create `.evo/` inside it
+      const uninitSearchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: uninitializedDir,
+        query: 'automation schedule',
+      });
+      assert.equal(
+        fs.existsSync(path.join(uninitializedDir, '.evo')),
+        false,
+        'evo_search must never silently create .evo/ inside an uninitialized directory'
+      );
+      assert.match(
+        uninitSearchRes.content[0].text,
+        /No evolved capabilities matched query "automation schedule"\./
+      );
+    } finally {
+      dispatcher.close();
+      fs.rmSync(defaultWs, { recursive: true, force: true });
+      fs.rmSync(uninitializedDir, { recursive: true, force: true });
     }
   });
 });
