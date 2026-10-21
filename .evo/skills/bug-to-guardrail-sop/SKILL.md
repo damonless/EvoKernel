@@ -5,7 +5,7 @@ l0_summary: "Route concrete bugs to Episodic Memory and abstract reusable method
 tags: ["debugging","evolution","guardrail","memory","abstraction","ssot"]
 origin: "bootstrap"
 created_at: "2026-10-19T17:34:35.710Z"
-updated_at: "2026-10-19T17:34:35.710Z"
+updated_at: "2026-10-21T15:16:27.105Z"
 ---
 
 ## L1 Contract

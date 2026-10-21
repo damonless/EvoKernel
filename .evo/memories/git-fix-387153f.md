@@ -2,13 +2,13 @@
 id: git-fix-387153f
 title: "Historical Fix Case (387153f): fix(mcp,cli): support per-call workspace routing and prevent plugin cw"
 l0_summary: "Historical fix (387153f): fix(mcp,cli): support per-call workspace routing and prevent plugin cwd hijacking (Closes #2, Refs #4, Refs #"
-created_commit: "387153f"
+created_commit: "17fc8e9"
 target_symbols: ["src/cli/index.ts#copyDirNonOverwriting","src/core/storage.ts#isPluginOrExtensionInstallDir","src/mcp/handlers.ts#EvoMcpDispatcher"]
-ast_fingerprints: {"src/cli/index.ts#copyDirNonOverwriting":{"symbol":"src/cli/index.ts#copyDirNonOverwriting","file_path":"src/cli/index.ts","kind":"function","start_line":42,"end_line":55,"signature":"function copyDirNonOverwriting(srcDir: string, destDir: string): void","ast_hash":"e7a81af76891793d"},"src/core/storage.ts#isPluginOrExtensionInstallDir":{"symbol":"src/core/storage.ts#isPluginOrExtensionInstallDir","file_path":"src/core/storage.ts","kind":"function","start_line":55,"end_line":64,"signature":"export function isPluginOrExtensionInstallDir(dirPath: string): boolean","ast_hash":"12610322dbcbae51"},"src/mcp/handlers.ts#EvoMcpDispatcher":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher","file_path":"src/mcp/handlers.ts","kind":"class","start_line":214,"end_line":593,"signature":"export class EvoMcpDispatcher","ast_hash":"eabecc2794f257ba"}}
+ast_fingerprints: {"src/cli/index.ts#copyDirNonOverwriting":{"symbol":"src/cli/index.ts#copyDirNonOverwriting","file_path":"src/cli/index.ts","kind":"function","start_line":42,"end_line":55,"signature":"function copyDirNonOverwriting(srcDir: string, destDir: string): void","ast_hash":"e7a81af76891793d"},"src/core/storage.ts#isPluginOrExtensionInstallDir":{"symbol":"src/core/storage.ts#isPluginOrExtensionInstallDir","file_path":"src/core/storage.ts","kind":"function","start_line":55,"end_line":64,"signature":"export function isPluginOrExtensionInstallDir(dirPath: string): boolean","ast_hash":"12610322dbcbae51"},"src/mcp/handlers.ts#EvoMcpDispatcher":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher","file_path":"src/mcp/handlers.ts","kind":"class","start_line":214,"end_line":594,"signature":"export class EvoMcpDispatcher","ast_hash":"311558e67865ff67"}}
 tags: ["git-history","fix","bootstrap"]
 origin: "bootstrap"
-created_at: "2026-10-19T17:34:35.355Z"
-updated_at: "2026-10-19T17:34:35.355Z"
+created_at: "2026-10-21T15:16:26.722Z"
+updated_at: "2026-10-21T15:16:26.722Z"
 ---
 
 ## Symptom
