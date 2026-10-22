@@ -13,6 +13,7 @@ import {
   ensureGlobalFallbackSeeded,
   parseTargetsArg,
   resolveWorkspaceRoot,
+  runCli,
 } from '../cli/index.js';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
@@ -144,6 +145,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'codegraph-first-protocol',
         title: 'Always Check CodeGraph Index Before Grepping',
         l0_summary: 'Check .codegraph directory and run codegraph explore before grep or read_file.',
+        core: true,
         content: 'Always verify .codegraph exists and query symbol graph first.',
       });
       assert.equal(Boolean(r1.isError), false);
@@ -154,6 +156,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'duplicate-codegraph-rule',
         title: 'Check CodeGraph Index Before Grepping Files',
         l0_summary: 'Always check .codegraph directory and run codegraph explore before grep.',
+        core: true,
         content: 'Duplicate content here.',
       });
       assert.equal(r2.isError, true);
@@ -166,6 +169,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         supersedes_id: 'codegraph-first-protocol',
         title: 'Check CodeGraph Index Before Grepping Files v2',
         l0_summary: 'Always check .codegraph directory and run codegraph explore before grep.',
+        core: true,
         content: 'Upgraded v2 protocol with automatic codegraph init -i fallback.',
       });
       assert.equal(Boolean(r3.isError), false);
@@ -652,6 +656,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'grid-voltage-adc-rule',
         title: 'Grid Voltage ADC Filtering Rule',
         l0_summary: 'Always filter grid voltage ADC samples before threshold comparison.',
+        core: true,
         content: 'Apply 4-sample moving average before calling CheckGridVoltage.',
       });
 
@@ -760,6 +765,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'proj-a-can-guard',
         title: 'Project A CAN Bus Guard',
         l0_summary: 'Validate CAN DLC bounds before frame unpacking in Project A.',
+        core: true,
         content: 'Always verify DLC <= 8 before reading payload bytes.',
       });
       assert.equal(propA.isError, undefined, propA.content[0]?.text);
@@ -770,6 +776,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'proj-b-spi-guard',
         title: 'Project B SPI DMA Guard',
         l0_summary: 'Ensure SPI DMA buffer alignment in Project B.',
+        core: true,
         content: 'Align DMA buffers to 32-byte cache lines before transfer.',
       });
       assert.equal(propB.isError, undefined, propB.content[0]?.text);
@@ -797,7 +804,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('16. Issue #4 & #6: Rule Abstraction, Lexical De-Symbolization, Transferability, and Scoped Bucket Cap', () => {
+  test('16. Issue #4, #6 & #8 (Module 7.1–7.3): Rule Abstraction, Backtick Identifier Detection, Chinese Case Anchor Section Exemption, Mandatory Transferability, and Scoped Bucket Cap', () => {
     const ws = createTempWorkspace();
     const dispatcher = new EvoMcpDispatcher(ws);
     try {
@@ -841,7 +848,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(domainNumRes.isError, true);
       assert.match(domainNumRes.content[0].text, /ERR_RULE_CONTAINS_DOMAIN_NUMBERS/);
 
-      // 4. Reject rules coupled to >= 3 concrete project identifiers/macros
+      // 4. Reject rules coupled to >= 3 concrete project identifiers/macros (Hungarian C & Backticked C# PascalCase/camelCase)
       const coupledIdRes = dispatcher.handleToolCall('evo_propose', {
         kind: 'rule',
         id: 'bus-reference-arbitration-guard',
@@ -855,7 +862,33 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(coupledIdRes.isError, true);
       assert.match(coupledIdRes.content[0].text, /ERR_RULE_COUPLED_TO_IDENTIFIERS/);
 
-      // 5. Reject insufficient transfer_scenarios (< 2 scenarios)
+      const backtickCsRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'wpf-ui-dispatch-throttling',
+        title: 'WPF UI Thread Dispatch Throttling',
+        l0_summary: 'Prevent UI thread starvation during high-frequency packet reception.',
+        scope_glob: 'Views/**/*.cs',
+        core: false,
+        content:
+          'In high-frequency callbacks, batch collection updates via `RemoveRange` and `BeginInvoke` instead of updating `CanCharge` and `CanDischarge` properties per frame.',
+      });
+      assert.equal(backtickCsRes.isError, true);
+      assert.match(backtickCsRes.content[0].text, /ERR_RULE_COUPLED_TO_IDENTIFIERS/);
+
+      // 5. Reject missing or insufficient transfer_scenarios (< 2 scenarios) on new non-core/scoped rules
+      const missingTransferRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'rule',
+        id: 'multi-source-setpoint-arbitration',
+        title: 'Multi-Source Setpoint Arbitration Invariant',
+        l0_summary: 'Verify priority arbitration and hysteresis deadband across all setpoint loops.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Verify priority arbitration across competing control sources before writing target setpoints.\nCase Anchor: wBatBusSw / wPvKeepBusRef @ 1500VA in BusControl.c',
+      });
+      assert.equal(missingTransferRes.isError, true);
+      assert.match(missingTransferRes.content[0].text, /ERR_INSUFFICIENT_TRANSFER_SCENARIOS/);
+
       const weakTransferRes = dispatcher.handleToolCall('evo_propose', {
         kind: 'rule',
         id: 'multi-source-setpoint-arbitration',
@@ -870,7 +903,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(weakTransferRes.isError, true);
       assert.match(weakTransferRes.content[0].text, /ERR_INSUFFICIENT_TRANSFER_SCENARIOS/);
 
-      // 6. Accept 1-level-up abstracted rule with Case Anchor exemption and >= 2 transfer_scenarios (Scoped #1)
+      // 6. Accept 1-level-up abstracted rule with Chinese '## 典型反例锚点' section exemption and >= 2 transfer_scenarios (Scoped #1)
       const validScoped1 = dispatcher.handleToolCall('evo_propose', {
         kind: 'rule',
         id: 'multi-source-setpoint-arbitration',
@@ -882,8 +915,13 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
           'DC bus voltage reference arbitration between PV MPPT and battery loops',
           'AC grid charge current limit arbitration between BMS CAN and thermal derating',
         ],
-        content:
-          'Verify priority arbitration and hysteresis deadband across competing control sources before writing target setpoints.\nCase Anchor: wBatBusSw / wPvKeepBusRef @ 1500VA in BusControl.c',
+        content: [
+          'Verify priority arbitration and hysteresis deadband across competing control sources before writing target setpoints.',
+          '',
+          '## 典型反例锚点 (Case Anchors)',
+          '- 固件案例：`wBatBusSw`、`wPvKeepBusRef` 与 `wBusWeight` 在 1500VA / 26.5V 阈值下发生竞争',
+          '- 上位机案例：`RemoveRange`、`BeginInvoke`、`CanCharge` 与 `CanDischarge` 高频刷新',
+        ].join('\n'),
       });
       assert.equal(validScoped1.isError, undefined, validScoped1.content[0]?.text);
 
@@ -895,6 +933,10 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         l0_summary: 'Hold last valid control command during transient communication frame loss.',
         scope_glob: 'Source/**/*.c',
         core: false,
+        transfer_scenarios: [
+          'CAN bus BMS current limit hold during transient frame loss',
+          'RS485 meter power feedback hold during packet CRC retry',
+        ],
         content:
           'Never zero out actuator limits on a single dropped frame; apply a bounded hold timer before failsafe fallback.',
       });
@@ -907,6 +949,10 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         l0_summary: 'Defer non-critical telemetry formatting outside high-frequency control ISRs.',
         scope_glob: 'Source/**/*.c',
         core: false,
+        transfer_scenarios: [
+          'High-frequency ADC PWM current control loop ISR',
+          'High-speed grid PLL zero-crossing capture ISR',
+        ],
         content:
           'Keep high-frequency interrupt handlers strictly bounded to sampling and protection checks; move string/frame formatting to background tasks.',
       });
@@ -920,6 +966,10 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         l0_summary: 'Debounce and dirty-check configuration parameters before non-volatile writes.',
         scope_glob: 'Source/**/*.c',
         core: false,
+        transfer_scenarios: [
+          'EEPROM calibration parameter write coalescing',
+          'Flash fault log ring-buffer wear leveling',
+        ],
         content:
           'Always compare new parameter values against cached shadow state and enforce write coalescing before committing to non-volatile storage.',
       });
@@ -956,6 +1006,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'pv-charge-cap-feedback-invariant',
         title: 'PV Charge Cap Feedback Invariant',
         l0_summary: 'Verify off-grid PV charge current feedback loop stability.',
+        core: true,
         content: 'Always clamp PV charge current reference before updating PWM duty cycle.',
       });
       assert.equal(seeded.isError, undefined, seeded.content[0]?.text);
@@ -994,6 +1045,273 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       dispatcher.close();
       fs.rmSync(defaultWs, { recursive: true, force: true });
       fs.rmSync(uninitializedDir, { recursive: true, force: true });
+    }
+  });
+
+  test('18. Issue #8 (Modules 1 & 2): Mandatory workspace schema, Anti-Write-Through Isolation, Two-Tier Lookup & scope_glob Language Filter', () => {
+    const globalWs = createTempWorkspace();
+    const uninitClone = createTempWorkspace();
+    const cFirmwareWs = createTempWorkspace();
+    const prevGlobalEnv = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = globalWs;
+
+    const dispatcher = new EvoMcpDispatcher(globalWs);
+    try {
+      // 1. All 5 tools require 'workspace' in inputSchema.required
+      for (const tool of META_MCP_TOOLS) {
+        assert.ok(
+          (tool.inputSchema.required as readonly string[]).includes('workspace'),
+          `${tool.name} must require 'workspace'`
+        );
+      }
+
+      // 2. Seed a global tool, global skill, and a C# rule into globalWs
+      const globalToolRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'tool',
+        id: 'cwd-echo-tool',
+        title: 'Workspace CWD Echo Tool',
+        l0_summary: 'Outputs process.cwd() to verify active workspace execution directory.',
+        runtime: 'node',
+        script_code:
+          'if (process.env.EVO_SELF_TEST === "1") process.exit(0); console.log(JSON.stringify({ cwd: process.cwd() }));',
+      });
+      assert.equal(Boolean(globalToolRes.isError), false);
+
+      const csRuleRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'rule',
+        id: 'csharp-bms-framer-rule',
+        title: 'C# BMS Frame Timeout Guard',
+        l0_summary: 'Verify C# BMS protocol frame timeout and buffer isolation.',
+        scope_glob: '**/*.cs',
+        transfer_scenarios: [
+          'C# serial port frame parser timeout handling',
+          'WPF background telemetry stream buffer reuse',
+        ],
+        content: 'Do not clear shared buffer on single parser CRC mismatch.',
+      });
+      assert.equal(Boolean(csRuleRes.isError), false);
+
+      // 3. Block global memory proposals (ERR_GLOBAL_MEMORY_FORBIDDEN)
+      const globalMemRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'memory',
+        id: 'illegal-global-memory',
+        title: 'Illegal Global Memory',
+        l0_summary: 'Should be rejected in global fallback tree.',
+        symptom: 'Error',
+        root_cause: 'Cause',
+        solution: 'Fix',
+        target_symbols: ['foo'],
+      });
+      assert.equal(globalMemRes.isError, true);
+      assert.match(globalMemRes.content[0].text, /ERR_GLOBAL_MEMORY_FORBIDDEN/);
+
+      // 4. Write operation in uninitialized git clone NEVER writes to globalWs; creates Stealth .evo locally
+      fs.mkdirSync(path.join(uninitClone, '.git', 'info'), { recursive: true });
+      const cloneRuleRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: uninitClone,
+        kind: 'rule',
+        id: 'clone-local-rule',
+        title: 'Clone Local Private Rule',
+        l0_summary: 'Private rule for uninitialized clone must stay in clone.',
+        transfer_scenarios: [
+          'Local clone configuration validation before build',
+          'Submodule path resolution across developer worktrees',
+        ],
+        content: 'Keep private rule inside uninitClone/.evo.',
+      });
+      assert.equal(Boolean(cloneRuleRes.isError), false);
+      assert.equal(fs.existsSync(path.join(uninitClone, '.evo')), true);
+      const globalStorage = new EvoStorage(globalWs);
+      assert.equal(globalStorage.getRule('clone-local-rule'), null);
+      const excludeText = fs.readFileSync(path.join(uninitClone, '.git', 'info', 'exclude'), 'utf8');
+      assert.match(excludeText, /\.evo\//);
+
+      // 5. Pure C firmware workspace filters out '**/*.cs' rule, but can inspect & run global tool with cwd = cFirmwareWs
+      fs.mkdirSync(path.join(cFirmwareWs, '.evo'), { recursive: true });
+      fs.writeFileSync(path.join(cFirmwareWs, 'main.c'), 'int main(void) { return 0; }\n', 'utf8');
+
+      const cRuleRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: cFirmwareWs,
+        kind: 'rule',
+        id: 'c-bms-timeout-rule',
+        title: 'C Firmware BMS Frame Timeout Guard',
+        l0_summary: 'Verify C firmware BMS protocol frame timeout counter.',
+        scope_glob: '**/*.{c,h}',
+        transfer_scenarios: [
+          'CAN RX interrupt frame timeout counter handling',
+          'UART Modbus RTU slave response watchdog',
+        ],
+        content: 'Check frame timeout counter in C ISR.',
+      });
+      assert.equal(Boolean(cRuleRes.isError), false);
+
+      const searchC = dispatcher.handleToolCall('evo_search', {
+        workspace: cFirmwareWs,
+        query: 'BMS frame timeout',
+      });
+      assert.match(searchC.content[0].text, /c-bms-timeout-rule/);
+      assert.doesNotMatch(
+        searchC.content[0].text,
+        /csharp-bms-framer-rule/,
+        'C# rule (**/*.cs) must be filtered out in pure C workspace'
+      );
+
+      // Two-tier evo_run executes global tool with cwd = cFirmwareWs
+      const runGlobalInLocal = dispatcher.handleToolCall('evo_run', {
+        workspace: cFirmwareWs,
+        tool_id: 'cwd-echo-tool',
+      });
+      assert.equal(Boolean(runGlobalInLocal.isError), false);
+      assert.ok(
+        runGlobalInLocal.content[0].text
+          .toLowerCase()
+          .includes(path.resolve(cFirmwareWs).replace(/\\/g, '\\\\').toLowerCase())
+      );
+    } finally {
+      dispatcher.close();
+      if (prevGlobalEnv === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobalEnv;
+      fs.rmSync(globalWs, { recursive: true, force: true });
+      fs.rmSync(uninitClone, { recursive: true, force: true });
+      fs.rmSync(cFirmwareWs, { recursive: true, force: true });
+    }
+  });
+
+  test('19. Issue #8 (Modules 3, 4, 5, 6): Atomic evo_compact, Default core:false, Anti-Poisoning Hook, Alias Normalization & CJK 2-gram / C Comment Grounding', () => {
+    const ws = createTempWorkspace();
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      // Module 4 & 5: Default core is false, and 'body' alias works for rule 'content'
+      const r1 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'bus-ripple-deadzone-guard',
+        title: '母线纹波与死区偏置控制护栏',
+        l0_summary: '离网母线大纹波工况下必须确保维持死区偏置在目标点下方防止积分泄漏。',
+        transfer_scenarios: [
+          '离网逆变器大负载下直流母线稳压环死区偏置设计',
+          '储能变流器并离网切换期间电流环抗积分饱和死区设置',
+        ],
+        body: '当慢速积分器将系统拉向稳态目标点时，维持死区必须置于目标点单侧。',
+      } as unknown as Record<string, unknown>);
+      assert.equal(Boolean(r1.isError), false);
+      const storage = new EvoStorage(ws);
+      const savedR1 = storage.getRule('bus-ripple-deadzone-guard');
+      assert.ok(savedR1);
+      assert.equal(savedR1.core, false, 'Rule must default to core: false when omitted');
+      const originalCreatedAt = savedR1.created_at;
+
+      // Module 5: 'level: "L1"' alias works in evo_inspect
+      const inspectL1 = dispatcher.handleToolCall('evo_inspect', {
+        workspace: ws,
+        id: 'bus-ripple-deadzone-guard',
+        level: 'L1',
+      });
+      assert.match(inspectL1.content[0].text, /\[RULE L1\]/);
+
+      // Module 6.1: Unspaced CJK compound query matches via 2-gram tokenization
+      const cjkSearch = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: '母线纹波死区',
+      });
+      assert.match(cjkSearch.content[0].text, /bus-ripple-deadzone-guard/);
+
+      // Module 3.2: Same-ID update archives prior version and preserves created_at
+      const r1Update = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'bus-ripple-deadzone-guard',
+        title: '母线纹波与死区偏置控制护栏 v2',
+        l0_summary: '离网母线大纹波工况下必须确保维持死区偏置在目标点下方防止积分泄漏。',
+        content: '更新后的规则正文：包含多环路极值工况正交校核。',
+      });
+      assert.equal(Boolean(r1Update.isError), false);
+      assert.equal(storage.getRule('bus-ripple-deadzone-guard')?.created_at, originalCreatedAt);
+      assert.ok(storage.listArchivedCount() >= 1);
+
+      // Add second rule to test atomic evo_compact
+      dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'second-rule-for-compact',
+        title: 'Second Rule For Atomic Compact Test',
+        l0_summary: 'Second rule to verify atomic rollback on invalid compact.',
+        transfer_scenarios: [
+          'Scenario A for atomic compact verification',
+          'Scenario B for atomic compact verification',
+        ],
+        content: 'Second rule body.',
+      });
+
+      // Module 3.1: Atomic evo_compact — invalid merged_proposal (oversized l0_summary) must NOT delete target_ids!
+      const failedCompact = dispatcher.handleToolCall('evo_compact', {
+        workspace: ws,
+        target_ids: ['bus-ripple-deadzone-guard', 'second-rule-for-compact'],
+        reason: 'Test atomic failure',
+        merged_proposal: {
+          kind: 'rule',
+          id: 'merged-invalid-rule',
+          title: 'Invalid Merged Rule',
+          l0_summary: 'x'.repeat(180), // > 140 limit -> fails Gate 1
+          content: 'Merged content',
+        },
+      });
+      assert.equal(failedCompact.isError, true);
+      assert.ok(
+        storage.getRule('bus-ripple-deadzone-guard') !== null,
+        'Original rule 1 must remain intact when evo_compact precheck fails'
+      );
+      assert.ok(
+        storage.getRule('second-rule-for-compact') !== null,
+        'Original rule 2 must remain intact when evo_compact precheck fails'
+      );
+
+      // Module 6.2 & 6.3: C function with ';' in end-of-line comment + Windows user path in memory.symptom
+      const cFile = path.join(ws, 'mode_switch.c');
+      fs.writeFileSync(
+        cFile,
+        [
+          'void sTaskModeSwitch(void) // handles mode switch; called every 10ms',
+          '{',
+          '  int mode = 1;',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const memRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        id: 'mode-switch-semicolon-comment-case',
+        title: 'Mode Switch Semicolon Comment Case',
+        l0_summary: 'Verifies C declaration with semicolon in comment and path redaction.',
+        symptom: 'Crash in C:\\Users\\Administrator\\Project\\mode_switch.c at line 2',
+        root_cause: 'sTaskModeSwitch transition race condition',
+        solution: 'Guard mode transition in sTaskModeSwitch',
+        target_symbols: ['mode_switch.c#sTaskModeSwitch'],
+      });
+      assert.equal(Boolean(memRes.isError), false, memRes.content[0]?.text);
+      const savedMem = storage.getMemory('mode-switch-semicolon-comment-case');
+      assert.ok(savedMem);
+      assert.match(savedMem.symptom, /<WORKSPACE>\/Project\\mode_switch\.c/);
+
+      // Module 4.2: Mid-session code mutation after crystallization triggers Anti-Poisoning Alert in hook
+      runCli(['node', 'evo', 'hook', 'post-tool', '--workspace', ws]);
+      const logs: string[] = [];
+      const origLog = console.log;
+      console.log = (...args: unknown[]) => logs.push(args.join(' '));
+      try {
+        runCli(['node', 'evo', 'hook', 'stop', '--workspace', ws]);
+      } finally {
+        console.log = origLog;
+      }
+      assert.match(logs.join('\n'), /\[EvoKernel Anti-Poisoning Alert\].*mode-switch-semicolon-comment-case/);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
     }
   });
 });

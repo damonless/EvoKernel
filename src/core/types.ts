@@ -184,6 +184,7 @@ export interface SearchHit {
   hit_count: number;
   success_rate: string;
   score: number;
+  tier?: 'LOCAL' | 'GLOBAL';
   memory_status?: 'VERIFIED' | 'STALE';
   memory_badge?: string;
 }
@@ -200,6 +201,7 @@ export interface GatekeeperResult {
   error_code?:
     | 'ERR_INVALID_SCHEMA'
     | 'ERR_SECURITY_VIOLATION'
+    | 'ERR_GLOBAL_MEMORY_FORBIDDEN'
     | 'ERR_SCOPE_TOO_NARROW'
     | 'ERR_POINT_BUG_CASE_LOG'
     | 'ERR_RULE_CONTAINS_DOMAIN_NUMBERS'
@@ -212,6 +214,7 @@ export interface GatekeeperResult {
     | 'ERR_BUDGET_EXCEEDED'
     | 'ERR_SCOPED_BUCKET_FULL';
   message: string;
+  warning?: string;
   conflicting_ids?: string[];
   low_value_candidates?: Array<{
     id: string;

@@ -1,8 +1,140 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { EvoKind, SearchHit, TelemetryRecord } from './types.js';
 import { EvoStorage } from './storage.js';
 import { verifyMemoryFreshness } from './memory.js';
+
+export function extractCjkBigrams(text: string): string[] {
+  const bigrams = new Set<string>();
+  const matches = text.match(/[\u4e00-\u9fa5]{2,}/g) || [];
+  for (const seq of matches) {
+    if (seq.length === 2) {
+      bigrams.add(seq);
+    } else {
+      for (let i = 0; i <= seq.length - 2; i++) {
+        bigrams.add(seq.slice(i, i + 2));
+      }
+    }
+  }
+  return Array.from(bigrams);
+}
+
+export function extractQueryTokens(query: string): string[] {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  const tokens = new Set<string>();
+  const asciiMatches = trimmed.match(/[A-Za-z0-9_-]{2,}/g) || [];
+  for (const t of asciiMatches) {
+    tokens.add(t);
+  }
+  for (const bg of extractCjkBigrams(trimmed)) {
+    tokens.add(bg);
+  }
+  return Array.from(tokens);
+}
+
+const CODE_EXTENSIONS_FOR_SCOPE = new Set([
+  '.c',
+  '.h',
+  '.cpp',
+  '.hpp',
+  '.cc',
+  '.cs',
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.py',
+  '.go',
+  '.rs',
+  '.java',
+  '.kt',
+  '.swift',
+  '.rb',
+  '.php',
+]);
+
+const SCOPE_SCAN_IGNORED_DIRS = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  'out',
+  '.evo',
+  '.codegraph',
+  '.cursor',
+  '.claude-plugin',
+  '.gemini',
+  '__pycache__',
+  '.venv',
+  'venv',
+]);
+
+export function extractExtensionsFromGlob(scopeGlob: string): string[] {
+  if (!scopeGlob || scopeGlob === '**/*' || scopeGlob === '*') return [];
+  const exts = new Set<string>();
+  const braceMatches = scopeGlob.match(/\.?\{([a-zA-Z0-9_.,\s]+)\}/g);
+  if (braceMatches) {
+    for (const bm of braceMatches) {
+      const inner = bm.replace(/^[.{]+|\}+$/g, '');
+      for (const part of inner.split(',')) {
+        const clean = part.trim().replace(/^\./, '').toLowerCase();
+        if (clean && CODE_EXTENSIONS_FOR_SCOPE.has(`.${clean}`)) {
+          exts.add(`.${clean}`);
+        }
+      }
+    }
+  }
+  const stripped = scopeGlob.replace(/\{[^}]*\}/g, '');
+  for (const m of stripped.matchAll(/\.([a-zA-Z0-9_]{1,10})\b/g)) {
+    const ext = `.${m[1].toLowerCase()}`;
+    if (CODE_EXTENSIONS_FOR_SCOPE.has(ext)) {
+      exts.add(ext);
+    }
+  }
+  return Array.from(exts);
+}
+
+export function isScopeCompatibleWithWorkspace(scopeGlob: string, workspaceRoot: string): boolean {
+  const requiredExts = extractExtensionsFromGlob(scopeGlob);
+  if (requiredExts.length === 0) return true;
+  if (!workspaceRoot || !fs.existsSync(workspaceRoot)) return true;
+
+  const foundCodeExts = new Set<string>();
+  let scannedFiles = 0;
+  const maxScan = 200;
+
+  const walk = (dir: string, depth: number) => {
+    if (depth > 4 || scannedFiles >= maxScan) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (scannedFiles >= maxScan) break;
+      if (SCOPE_SCAN_IGNORED_DIRS.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, depth + 1);
+      } else if (entry.isFile()) {
+        scannedFiles++;
+        const ext = path.extname(entry.name).toLowerCase();
+        if (CODE_EXTENSIONS_FOR_SCOPE.has(ext)) {
+          foundCodeExts.add(ext);
+        }
+      }
+    }
+  };
+
+  walk(path.resolve(workspaceRoot), 0);
+  if (foundCodeExts.size === 0) return true;
+  return requiredExts.some((ext) => foundCodeExts.has(ext));
+}
 
 export interface TelemetryOptions {
   forceFts5Fallback?: boolean;
@@ -156,27 +288,34 @@ export class EvoTelemetry {
     const now = new Date().toISOString();
 
     for (const r of rules) {
-      insertFallback.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, r.content);
-      insertFts?.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, r.content);
+      const cjkKw = extractCjkBigrams(`${r.title} ${r.l0_summary} ${r.content}`).join(' ');
+      const kw = `${r.scope_glob} ${cjkKw}`.trim();
+      insertFallback.run(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
+      insertFts?.run(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
       upsertTelemetry.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, now, r.created_at);
     }
 
     for (const s of skills) {
       const bodyText = `${s.l1_contract}\n${s.l2_sop}`;
-      insertFallback.run(s.id, 'skill', s.title, s.l0_summary, s.tags.join(' '), bodyText);
-      insertFts?.run(s.id, 'skill', s.title, s.l0_summary, s.tags.join(' '), bodyText);
+      const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary}`).join(' ');
+      const kw = `${s.tags.join(' ')} ${cjkKw}`.trim();
+      insertFallback.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
+      insertFts?.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
       upsertTelemetry.run(s.id, 'skill', s.title, s.l0_summary, '**/*', now, s.created_at);
     }
 
     for (const t of tools) {
       const schemaText = JSON.stringify(t.input_schema);
-      insertFallback.run(t.id, 'tool', t.title, t.l0_summary, t.runtime, schemaText);
-      insertFts?.run(t.id, 'tool', t.title, t.l0_summary, t.runtime, schemaText);
+      const cjkKw = extractCjkBigrams(`${t.title} ${t.l0_summary}`).join(' ');
+      const kw = `${t.runtime} ${cjkKw}`.trim();
+      insertFallback.run(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
+      insertFts?.run(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
       upsertTelemetry.run(t.id, 'tool', t.title, t.l0_summary, '**/*', now, t.created_at);
     }
 
     for (const m of memories) {
-      const keywords = [...m.target_symbols, ...m.tags, m.created_commit].join(' ');
+      const cjkKw = extractCjkBigrams(`${m.title} ${m.l0_summary} ${m.symptom}`).join(' ');
+      const keywords = [...m.target_symbols, ...m.tags, m.created_commit, cjkKw].filter(Boolean).join(' ');
       const bodyText = `${m.symptom}\n${m.root_cause}\n${m.solution}`;
       const scopeDisplay = m.target_symbols.slice(0, 3).join(', ') || '**/*';
       insertFallback.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
@@ -198,14 +337,16 @@ export class EvoTelemetry {
     }
   }
 
-  public search(query: string, kind: EvoKind | 'all' = 'all', limit = 10): SearchHit[] {
+  public search(
+    query: string,
+    kind: EvoKind | 'all' = 'all',
+    limit = 10,
+    activeWorkspaceRoot?: string
+  ): SearchHit[] {
     this.syncFromDisk();
-    const tokens = query
-      .trim()
-      .replace(/[^\p{L}\p{N}_-]+/gu, ' ')
-      .split(/\s+/)
-      .filter((t) => t.length >= 2);
+    const tokens = extractQueryTokens(query);
 
+    const fetchLimit = Math.max(limit * 3, 24);
     let rows: Array<Record<string, unknown>> = [];
 
     if (tokens.length > 0) {
@@ -232,7 +373,7 @@ export class EvoTelemetry {
 
         try {
           const stmt = this.db.prepare(sql);
-          rows = (kind === 'all' ? stmt.all(ftsQuery, limit) : stmt.all(ftsQuery, kind, limit)) as Array<
+          rows = (kind === 'all' ? stmt.all(ftsQuery, fetchLimit) : stmt.all(ftsQuery, kind, fetchLimit)) as Array<
             Record<string, unknown>
           >;
         } catch {
@@ -242,7 +383,7 @@ export class EvoTelemetry {
       }
 
       if (!this.fts5Enabled) {
-        rows = this.searchFallbackBm25(tokens, kind, limit);
+        rows = this.searchFallbackBm25(tokens, kind, fetchLimit);
       }
     }
 
@@ -252,15 +393,23 @@ export class EvoTelemetry {
           ? `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry ORDER BY hit_count DESC, created_at DESC LIMIT ?`
           : `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry WHERE kind = ? ORDER BY hit_count DESC, created_at DESC LIMIT ?`;
       const stmt = this.db.prepare(fallbackSql);
-      rows = (kind === 'all' ? stmt.all(limit) : stmt.all(kind, limit)) as Array<Record<string, unknown>>;
+      rows = (kind === 'all' ? stmt.all(fetchLimit) : stmt.all(kind, fetchLimit)) as Array<Record<string, unknown>>;
     }
+
+    const wsForScope = activeWorkspaceRoot || this.storage.rootDir;
+    const filteredRows = rows.filter((r) => {
+      if (String(r.kind) === 'rule') {
+        return isScopeCompatibleWithWorkspace(String(r.scope_glob || '**/*'), wsForScope);
+      }
+      return true;
+    });
 
     const updateActiveStmt = this.db.prepare(
       'UPDATE episodic_memories SET is_active = ?, last_verified_at = ? WHERE id = ?'
     );
     const now = new Date().toISOString();
 
-    const hits: SearchHit[] = rows.map((r) => {
+    const hits: SearchHit[] = filteredRows.map((r) => {
       const id = String(r.id);
       const itemKind = String(r.kind) as EvoKind;
       const succ = Number(r.success_count || 0);
@@ -324,12 +473,14 @@ export class EvoTelemetry {
     });
 
     // Ensure STALE memories are always ranked below active capabilities
-    return hits.sort((a, b) => {
-      const aStale = a.memory_status === 'STALE' ? 1 : 0;
-      const bStale = b.memory_status === 'STALE' ? 1 : 0;
-      if (aStale !== bStale) return aStale - bStale;
-      return b.score - a.score || b.hit_count - a.hit_count;
-    });
+    return hits
+      .sort((a, b) => {
+        const aStale = a.memory_status === 'STALE' ? 1 : 0;
+        const bStale = b.memory_status === 'STALE' ? 1 : 0;
+        if (aStale !== bStale) return aStale - bStale;
+        return b.score - a.score || b.hit_count - a.hit_count;
+      })
+      .slice(0, limit);
   }
 
   private searchFallbackBm25(
