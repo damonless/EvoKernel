@@ -13,11 +13,13 @@ export interface InitResult {
   updatedFiles: string[];
   mcpConfigFiles: string[];
   stealthExcluded?: string[];
+  linkedSharedEvoDir?: string;
 }
 
 export interface InitOptions {
   targets?: string[];
   stealth?: boolean;
+  linkEvoFrom?: string;
 }
 
 const HARNESS_RULE_TARGETS: Record<string, string> = {
@@ -220,6 +222,30 @@ export function runInit(
     : ['claude', 'agents', 'gemini', 'cursor'];
   const stealth = Boolean(opts.stealth);
 
+  let linkedSharedEvoDir: string | undefined;
+  if (opts.linkEvoFrom && opts.linkEvoFrom.trim()) {
+    const candidate = path.resolve(workspaceRoot, opts.linkEvoFrom.trim());
+    const targetEvo =
+      path.basename(candidate) === '.evo' ? candidate : path.join(candidate, '.evo');
+    const masterStorage = new EvoStorage(path.dirname(targetEvo), targetEvo);
+    masterStorage.ensureInitialized();
+    linkedSharedEvoDir = targetEvo;
+
+    const localEvoDir = path.join(workspaceRoot, '.evo');
+    fs.mkdirSync(localEvoDir, { recursive: true });
+    const localConfigPath = path.join(localEvoDir, 'config.json');
+    let localCfg: Record<string, unknown> = {};
+    if (fs.existsSync(localConfigPath)) {
+      try {
+        localCfg = JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
+      } catch {
+        localCfg = {};
+      }
+    }
+    localCfg.sharedEvoDir = targetEvo;
+    fs.writeFileSync(localConfigPath, JSON.stringify(localCfg, null, 2) + '\n', 'utf8');
+  }
+
   const storage = new EvoStorage(workspaceRoot);
   const config = storage.ensureInitialized();
   const telemetry = new EvoTelemetry(storage);
@@ -268,10 +294,12 @@ export function runInit(
     mcpConfigFiles.push('.cursor/mcp.json');
   }
 
-  // Always exclude .evo/.cache/ in .git/info/exclude if .git exists; in --stealth mode, exclude all EvoKernel artifacts locally
+  // Always exclude .evo/.cache/ in .git/info/exclude if .git exists; in --stealth or --link mode, exclude local .evo/
   const excludeCandidates = stealth
     ? ['.evo/', '.mcp.json', '.cursor/', ...updatedFiles]
-    : ['.evo/.cache/'];
+    : linkedSharedEvoDir
+      ? ['.evo/', '.evo/.cache/']
+      : ['.evo/.cache/'];
   const stealthExcluded = ensureGitInfoExclude(workspaceRoot, excludeCandidates);
 
   return {
@@ -279,6 +307,7 @@ export function runInit(
     updatedFiles,
     mcpConfigFiles,
     stealthExcluded,
+    linkedSharedEvoDir,
   };
 }
 

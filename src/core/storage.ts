@@ -115,13 +115,34 @@ export class EvoStorage {
   public readonly configPath: string;
   public readonly coreInvariantsPath: string;
 
+  public static resolveEffectiveEvoDir(rootDir: string, localEvoDir: string): string {
+    const localConfigPath = path.join(localEvoDir, 'config.json');
+    if (fs.existsSync(localConfigPath)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
+        if (raw && typeof raw.sharedEvoDir === 'string' && raw.sharedEvoDir.trim()) {
+          const candidate = path.resolve(rootDir, raw.sharedEvoDir.trim());
+          const targetEvo =
+            path.basename(candidate) === '.evo' ? candidate : path.join(candidate, '.evo');
+          if (fs.existsSync(targetEvo)) {
+            return targetEvo;
+          }
+        }
+      } catch {
+        // Ignore malformed local config and fall back to localEvoDir
+      }
+    }
+    return localEvoDir;
+  }
+
   constructor(workspaceRoot: string, customEvoDir?: string) {
     this.rootDir = path.resolve(workspaceRoot);
+    const defaultLocalEvo = path.join(this.rootDir, '.evo');
     this.evoDir = customEvoDir
       ? path.resolve(customEvoDir)
       : process.env.EVO_DATA_DIR
         ? path.resolve(process.env.EVO_DATA_DIR)
-        : path.join(this.rootDir, '.evo');
+        : EvoStorage.resolveEffectiveEvoDir(this.rootDir, defaultLocalEvo);
     this.rulesDir = path.join(this.evoDir, 'rules');
     this.skillsDir = path.join(this.evoDir, 'skills');
     this.toolsDir = path.join(this.evoDir, 'tools');
