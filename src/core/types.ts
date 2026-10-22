@@ -129,6 +129,7 @@ export interface EvoTool extends EvoToolManifest {
 }
 
 export interface ProposalPayload {
+  workspace?: string;
   kind: EvoKind;
   id: string;
   title: string;
@@ -179,6 +180,7 @@ export interface SearchHit {
   hit_count: number;
   success_rate: string;
   score: number;
+  tier?: 'LOCAL' | 'GLOBAL';
   memory_status?: 'VERIFIED' | 'STALE';
   memory_badge?: string;
 }
@@ -194,12 +196,14 @@ export interface GatekeeperResult {
   error_code?:
     | 'ERR_INVALID_SCHEMA'
     | 'ERR_SECURITY_VIOLATION'
+    | 'ERR_GLOBAL_MEMORY_FORBIDDEN'
     | 'ERR_SYNTAX_CHECK'
     | 'ERR_SANDBOX_SELF_TEST'
     | 'ERR_SYMBOL_NOT_FOUND'
     | 'ERR_DUPLICATE_CAPABILITY'
     | 'ERR_BUDGET_EXCEEDED';
   message: string;
+  warning?: string;
   conflicting_ids?: string[];
   low_value_candidates?: Array<{
     id: string;

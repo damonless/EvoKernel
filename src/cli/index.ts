@@ -215,11 +215,21 @@ export function runCli(argv: string[]): void {
       const telemetry = new EvoTelemetry(storage);
       if (event === 'mark-recovery' || event === 'post-tool') {
         telemetry.setSessionFlag('pending_evolution', 'true');
+        const lastId = telemetry.getSessionFlag('last_crystallized_id');
+        if (lastId) {
+          telemetry.setSessionFlag('dirty_crystallized_id', lastId);
+        }
       } else if (event === 'stop') {
         const pending = telemetry.getSessionFlag('pending_evolution');
         if (pending === 'true') {
           console.log(
             '[EvoKernel Hook Reminder] Detected bug recovery or temporary script creation in this session without capability crystallization. Consider calling `evo_propose` to distill a reusable Memory, Rule, Skill, or Micro-Tool.'
+          );
+        }
+        const dirtyId = telemetry.getSessionFlag('dirty_crystallized_id');
+        if (dirtyId) {
+          console.log(
+            `[EvoKernel Anti-Poisoning Alert] Code was modified after capability '${dirtyId}' was crystallized in this session. Verify that '${dirtyId}' still matches the final code or update it via evo_propose.`
           );
         }
       }

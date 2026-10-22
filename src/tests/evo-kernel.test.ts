@@ -13,6 +13,7 @@ import {
   ensureGlobalFallbackSeeded,
   parseTargetsArg,
   resolveWorkspaceRoot,
+  runCli,
 } from '../cli/index.js';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
@@ -846,6 +847,253 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       dispatcher.close();
       fs.rmSync(defaultWs, { recursive: true, force: true });
       fs.rmSync(uninitializedDir, { recursive: true, force: true });
+    }
+  });
+
+  test('17. Issue #8 (Modules 1 & 2): Mandatory workspace schema, Anti-Write-Through Isolation, Two-Tier Lookup & scope_glob Language Filter', () => {
+    const globalWs = createTempWorkspace();
+    const uninitClone = createTempWorkspace();
+    const cFirmwareWs = createTempWorkspace();
+    const prevGlobalEnv = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = globalWs;
+
+    const dispatcher = new EvoMcpDispatcher(globalWs);
+    try {
+      // 1. All 5 tools require 'workspace' in inputSchema.required
+      for (const tool of META_MCP_TOOLS) {
+        assert.ok(
+          (tool.inputSchema.required as readonly string[]).includes('workspace'),
+          `${tool.name} must require 'workspace'`
+        );
+      }
+
+      // 2. Seed a global tool, global skill, and a C# rule into globalWs
+      const globalToolRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'tool',
+        id: 'cwd-echo-tool',
+        title: 'Workspace CWD Echo Tool',
+        l0_summary: 'Outputs process.cwd() to verify active workspace execution directory.',
+        runtime: 'node',
+        script_code:
+          'if (process.env.EVO_SELF_TEST === "1") process.exit(0); console.log(JSON.stringify({ cwd: process.cwd() }));',
+      });
+      assert.equal(Boolean(globalToolRes.isError), false);
+
+      const csRuleRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'rule',
+        id: 'csharp-bms-framer-rule',
+        title: 'C# BMS Frame Timeout Guard',
+        l0_summary: 'Verify C# BMS protocol frame timeout and buffer isolation.',
+        scope_glob: '**/*.cs',
+        content: 'Do not clear shared buffer on single parser CRC mismatch.',
+      });
+      assert.equal(Boolean(csRuleRes.isError), false);
+
+      // 3. Block global memory proposals (ERR_GLOBAL_MEMORY_FORBIDDEN)
+      const globalMemRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'memory',
+        id: 'illegal-global-memory',
+        title: 'Illegal Global Memory',
+        l0_summary: 'Should be rejected in global fallback tree.',
+        symptom: 'Error',
+        root_cause: 'Cause',
+        solution: 'Fix',
+        target_symbols: ['foo'],
+      });
+      assert.equal(globalMemRes.isError, true);
+      assert.match(globalMemRes.content[0].text, /ERR_GLOBAL_MEMORY_FORBIDDEN/);
+
+      // 4. Write operation in uninitialized git clone NEVER writes to globalWs; creates Stealth .evo locally
+      fs.mkdirSync(path.join(uninitClone, '.git', 'info'), { recursive: true });
+      const cloneRuleRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: uninitClone,
+        kind: 'rule',
+        id: 'clone-local-rule',
+        title: 'Clone Local Private Rule',
+        l0_summary: 'Private rule for uninitialized clone must stay in clone.',
+        content: 'Keep private rule inside uninitClone/.evo.',
+      });
+      assert.equal(Boolean(cloneRuleRes.isError), false);
+      assert.equal(fs.existsSync(path.join(uninitClone, '.evo')), true);
+      const globalStorage = new EvoStorage(globalWs);
+      assert.equal(globalStorage.getRule('clone-local-rule'), null);
+      const excludeText = fs.readFileSync(path.join(uninitClone, '.git', 'info', 'exclude'), 'utf8');
+      assert.match(excludeText, /\.evo\//);
+
+      // 5. Pure C firmware workspace filters out '**/*.cs' rule, but can inspect & run global tool with cwd = cFirmwareWs
+      fs.mkdirSync(path.join(cFirmwareWs, '.evo'), { recursive: true });
+      fs.writeFileSync(path.join(cFirmwareWs, 'main.c'), 'int main(void) { return 0; }\n', 'utf8');
+
+      const cRuleRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: cFirmwareWs,
+        kind: 'rule',
+        id: 'c-bms-timeout-rule',
+        title: 'C Firmware BMS Frame Timeout Guard',
+        l0_summary: 'Verify C firmware BMS protocol frame timeout counter.',
+        scope_glob: '**/*.{c,h}',
+        content: 'Check frame timeout counter in C ISR.',
+      });
+      assert.equal(Boolean(cRuleRes.isError), false);
+
+      const searchC = dispatcher.handleToolCall('evo_search', {
+        workspace: cFirmwareWs,
+        query: 'BMS frame timeout',
+      });
+      assert.match(searchC.content[0].text, /c-bms-timeout-rule/);
+      assert.doesNotMatch(
+        searchC.content[0].text,
+        /csharp-bms-framer-rule/,
+        'C# rule (**/*.cs) must be filtered out in pure C workspace'
+      );
+
+      // Two-tier evo_run executes global tool with cwd = cFirmwareWs
+      const runGlobalInLocal = dispatcher.handleToolCall('evo_run', {
+        workspace: cFirmwareWs,
+        tool_id: 'cwd-echo-tool',
+      });
+      assert.equal(Boolean(runGlobalInLocal.isError), false);
+      assert.ok(
+        runGlobalInLocal.content[0].text
+          .toLowerCase()
+          .includes(path.resolve(cFirmwareWs).replace(/\\/g, '\\\\').toLowerCase())
+      );
+    } finally {
+      dispatcher.close();
+      if (prevGlobalEnv === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobalEnv;
+      fs.rmSync(globalWs, { recursive: true, force: true });
+      fs.rmSync(uninitClone, { recursive: true, force: true });
+      fs.rmSync(cFirmwareWs, { recursive: true, force: true });
+    }
+  });
+
+  test('18. Issue #8 (Modules 3, 4, 5, 6): Atomic evo_compact, Default core:false, Anti-Poisoning Hook, Alias Normalization & CJK 2-gram / C Comment Grounding', () => {
+    const ws = createTempWorkspace();
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      // Module 4 & 5: Default core is false, and 'body' alias works for rule 'content'
+      const r1 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'bus-ripple-deadzone-guard',
+        title: '母线纹波与死区偏置控制护栏',
+        l0_summary: '离网母线大纹波工况下必须确保维持死区偏置在目标点下方防止积分泄漏。',
+        body: '当慢速积分器将系统拉向稳态目标点时，维持死区必须置于目标点单侧。',
+      } as unknown as Record<string, unknown>);
+      assert.equal(Boolean(r1.isError), false);
+      const storage = new EvoStorage(ws);
+      const savedR1 = storage.getRule('bus-ripple-deadzone-guard');
+      assert.ok(savedR1);
+      assert.equal(savedR1.core, false, 'Rule must default to core: false when omitted');
+      const originalCreatedAt = savedR1.created_at;
+
+      // Module 5: 'level: "L1"' alias works in evo_inspect
+      const inspectL1 = dispatcher.handleToolCall('evo_inspect', {
+        workspace: ws,
+        id: 'bus-ripple-deadzone-guard',
+        level: 'L1',
+      });
+      assert.match(inspectL1.content[0].text, /\[RULE L1\]/);
+
+      // Module 6.1: Unspaced CJK compound query matches via 2-gram tokenization
+      const cjkSearch = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: '母线纹波死区',
+      });
+      assert.match(cjkSearch.content[0].text, /bus-ripple-deadzone-guard/);
+
+      // Module 3.2: Same-ID update archives prior version and preserves created_at
+      const r1Update = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'bus-ripple-deadzone-guard',
+        title: '母线纹波与死区偏置控制护栏 v2',
+        l0_summary: '离网母线大纹波工况下必须确保维持死区偏置在目标点下方防止积分泄漏。',
+        content: '更新后的规则正文：包含多环路极值工况正交校核。',
+      });
+      assert.equal(Boolean(r1Update.isError), false);
+      assert.equal(storage.getRule('bus-ripple-deadzone-guard')?.created_at, originalCreatedAt);
+      assert.ok(storage.listArchivedCount() >= 1);
+
+      // Add second rule to test atomic evo_compact
+      dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'second-rule-for-compact',
+        title: 'Second Rule For Atomic Compact Test',
+        l0_summary: 'Second rule to verify atomic rollback on invalid compact.',
+        content: 'Second rule body.',
+      });
+
+      // Module 3.1: Atomic evo_compact — invalid merged_proposal (oversized l0_summary) must NOT delete target_ids!
+      const failedCompact = dispatcher.handleToolCall('evo_compact', {
+        workspace: ws,
+        target_ids: ['bus-ripple-deadzone-guard', 'second-rule-for-compact'],
+        reason: 'Test atomic failure',
+        merged_proposal: {
+          kind: 'rule',
+          id: 'merged-invalid-rule',
+          title: 'Invalid Merged Rule',
+          l0_summary: 'x'.repeat(180), // > 140 limit -> fails Gate 1
+          content: 'Merged content',
+        },
+      });
+      assert.equal(failedCompact.isError, true);
+      assert.ok(
+        storage.getRule('bus-ripple-deadzone-guard') !== null,
+        'Original rule 1 must remain intact when evo_compact precheck fails'
+      );
+      assert.ok(
+        storage.getRule('second-rule-for-compact') !== null,
+        'Original rule 2 must remain intact when evo_compact precheck fails'
+      );
+
+      // Module 6.2 & 6.3: C function with ';' in end-of-line comment + Windows user path in memory.symptom
+      const cFile = path.join(ws, 'mode_switch.c');
+      fs.writeFileSync(
+        cFile,
+        [
+          'void sTaskModeSwitch(void) // handles mode switch; called every 10ms',
+          '{',
+          '  int mode = 1;',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const memRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        id: 'mode-switch-semicolon-comment-case',
+        title: 'Mode Switch Semicolon Comment Case',
+        l0_summary: 'Verifies C declaration with semicolon in comment and path redaction.',
+        symptom: 'Crash in C:\\Users\\Administrator\\Project\\mode_switch.c at line 2',
+        root_cause: 'sTaskModeSwitch transition race condition',
+        solution: 'Guard mode transition in sTaskModeSwitch',
+        target_symbols: ['mode_switch.c#sTaskModeSwitch'],
+      });
+      assert.equal(Boolean(memRes.isError), false, memRes.content[0]?.text);
+      const savedMem = storage.getMemory('mode-switch-semicolon-comment-case');
+      assert.ok(savedMem);
+      assert.match(savedMem.symptom, /<WORKSPACE>\/Project\\mode_switch\.c/);
+
+      // Module 4.2: Mid-session code mutation after crystallization triggers Anti-Poisoning Alert in hook
+      runCli(['node', 'evo', 'hook', 'post-tool', '--workspace', ws]);
+      const logs: string[] = [];
+      const origLog = console.log;
+      console.log = (...args: unknown[]) => logs.push(args.join(' '));
+      try {
+        runCli(['node', 'evo', 'hook', 'stop', '--workspace', ws]);
+      } finally {
+        console.log = origLog;
+      }
+      assert.match(logs.join('\n'), /\[EvoKernel Anti-Poisoning Alert\].*mode-switch-semicolon-comment-case/);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
     }
   });
 });

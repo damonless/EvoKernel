@@ -1,11 +1,18 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import type { EvoKind, ProposalPayload } from '../core/types.js';
-import { EvoStorage, findNearestEvoWorkspace, sanitizeId } from '../core/storage.js';
+import type { EvoKind, ProposalPayload, SearchHit } from '../core/types.js';
+import {
+  EvoStorage,
+  findNearestEvoWorkspace,
+  isPluginOrExtensionInstallDir,
+  sanitizeId,
+} from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper } from '../core/gatekeeper.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
-import { syncManagedRuleBlocks } from '../cli/init.js';
+import { ensureGitInfoExclude, findGitRoot, syncManagedRuleBlocks } from '../cli/init.js';
 
 const WORKSPACE_PARAM_SCHEMA = {
   type: 'string',
@@ -36,7 +43,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['query'],
+      required: ['query', 'workspace'],
     },
   },
   {
@@ -57,7 +64,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['id'],
+      required: ['id', 'workspace'],
     },
   },
   {
@@ -77,7 +84,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['tool_id'],
+      required: ['tool_id', 'workspace'],
     },
   },
   {
@@ -169,7 +176,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['kind', 'id', 'title', 'l0_summary'],
+      required: ['kind', 'id', 'title', 'l0_summary', 'workspace'],
     },
   },
   {
@@ -194,7 +201,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['target_ids', 'merged_proposal', 'reason'],
+      required: ['target_ids', 'merged_proposal', 'reason', 'workspace'],
     },
   },
 ] as const;
@@ -209,6 +216,7 @@ interface WorkspaceContext {
 export class EvoMcpDispatcher {
   private readonly defaultRoot: string;
   private readonly contexts = new Map<string, WorkspaceContext>();
+  private activeWorkspaceDir: string;
   private storage: EvoStorage;
   private telemetry: EvoTelemetry;
   private gatekeeper: EvoGatekeeper;
@@ -216,6 +224,7 @@ export class EvoMcpDispatcher {
 
   constructor(workspaceRoot: string, onCoreRulesChanged?: () => void) {
     this.defaultRoot = path.resolve(workspaceRoot);
+    this.activeWorkspaceDir = this.defaultRoot;
     this.onCoreRulesChanged = onCoreRulesChanged;
     const initialCtx = this.getOrCreateContext(this.defaultRoot);
     this.storage = initialCtx.storage;
@@ -237,14 +246,72 @@ export class EvoMcpDispatcher {
     return ctx;
   }
 
-  private bindActiveContext(args: Record<string, unknown>): WorkspaceContext {
+  private getGlobalFallbackContexts(): WorkspaceContext[] {
+    const fallbacks: WorkspaceContext[] = [];
+    const activeRoot = path.resolve(this.storage.rootDir);
+
+    if (this.defaultRoot !== activeRoot && fs.existsSync(path.join(this.defaultRoot, '.evo'))) {
+      fallbacks.push(this.getOrCreateContext(this.defaultRoot));
+    }
+
+    const envGlobal = process.env.EVO_GLOBAL_DIR
+      ? path.resolve(process.env.EVO_GLOBAL_DIR)
+      : !process.env.NODE_TEST_CONTEXT
+        ? path.join(os.homedir(), '.evo', 'global')
+        : null;
+
+    if (
+      envGlobal &&
+      envGlobal !== activeRoot &&
+      envGlobal !== this.defaultRoot &&
+      fs.existsSync(path.join(envGlobal, '.evo'))
+    ) {
+      fallbacks.push(this.getOrCreateContext(envGlobal));
+    }
+
+    return fallbacks;
+  }
+
+  private bindActiveContext(toolName: string, args: Record<string, unknown>): WorkspaceContext {
     const rawWs = args.workspace ?? args.workspace_path;
     let targetRoot = this.defaultRoot;
+    this.activeWorkspaceDir = this.defaultRoot;
+
     if (typeof rawWs === 'string' && rawWs.trim()) {
       const candidate = path.resolve(rawWs.trim());
-      const nearestEvo = findNearestEvoWorkspace(candidate);
-      targetRoot = nearestEvo || this.defaultRoot;
+      if (isPluginOrExtensionInstallDir(candidate)) {
+        // Explicit global fallback dir or plugin install dir binds to defaultRoot (or candidate if ~/.evo/global)
+        const norm = candidate.replace(/\\/g, '/').toLowerCase();
+        if (
+          norm.endsWith('/.evo/global') ||
+          (process.env.EVO_GLOBAL_DIR &&
+            path.resolve(process.env.EVO_GLOBAL_DIR).toLowerCase() === candidate.toLowerCase())
+        ) {
+          targetRoot = candidate;
+          this.activeWorkspaceDir = candidate;
+        }
+      } else {
+        this.activeWorkspaceDir = candidate;
+        const nearestEvo = findNearestEvoWorkspace(candidate);
+        if (nearestEvo) {
+          targetRoot = nearestEvo;
+        } else if (toolName === 'evo_propose' || toolName === 'evo_compact') {
+          // Module 1.2: Never fall back to ~/.evo/global on write operations!
+          // Resolve nearest Git root (or candidate) and auto-initialize local Stealth .evo/
+          const localRoot = findGitRoot(candidate) || candidate;
+          fs.mkdirSync(localRoot, { recursive: true });
+          const localStorage = new EvoStorage(localRoot);
+          localStorage.ensureInitialized();
+          ensureGitInfoExclude(localRoot, ['.evo/']);
+          targetRoot = localRoot;
+        } else {
+          // Read/exec operations (evo_search, evo_inspect, evo_run): do not create .evo/ in uninitialized folders,
+          // but preserve this.activeWorkspaceDir = candidate for evo_run cwd & scope_glob filtering!
+          targetRoot = this.defaultRoot;
+        }
+      }
     }
+
     const ctx = this.getOrCreateContext(targetRoot);
     this.storage = ctx.storage;
     this.telemetry = ctx.telemetry;
@@ -257,7 +324,7 @@ export class EvoMcpDispatcher {
     args: Record<string, unknown> = {}
   ): { isError?: boolean; content: Array<{ type: 'text'; text: string }> } {
     try {
-      this.bindActiveContext(args);
+      this.bindActiveContext(name, args);
       switch (name) {
         case 'evo_search':
           return this.handleSearch(args);
@@ -289,7 +356,38 @@ export class EvoMcpDispatcher {
     const kind = (args.kind ? String(args.kind) : 'all') as EvoKind | 'all';
     const limit = Number(args.limit || 8);
 
-    const hits = this.telemetry.search(query, kind, limit);
+    const localHits = this.telemetry
+      .search(query, kind, limit, this.activeWorkspaceDir)
+      .map((h) => ({ ...h, tier: 'LOCAL' as const }));
+
+    const mergedHits: SearchHit[] = [...localHits];
+    const seenIds = new Set<string>(localHits.map((h) => h.id));
+
+    if (kind !== 'memory') {
+      for (const gCtx of this.getGlobalFallbackContexts()) {
+        const globalKind = kind === 'all' ? 'all' : kind;
+        const gHits = gCtx.telemetry.search(query, globalKind, limit, this.activeWorkspaceDir);
+        for (const gh of gHits) {
+          if (gh.kind === 'memory' || seenIds.has(gh.id)) continue;
+          seenIds.add(gh.id);
+          mergedHits.push({
+            ...gh,
+            score: gh.score * 0.85,
+            tier: 'GLOBAL',
+          });
+        }
+      }
+    }
+
+    const hits = mergedHits
+      .sort((a, b) => {
+        const aStale = a.memory_status === 'STALE' ? 1 : 0;
+        const bStale = b.memory_status === 'STALE' ? 1 : 0;
+        if (aStale !== bStale) return aStale - bStale;
+        return b.score - a.score || b.hit_count - a.hit_count;
+      })
+      .slice(0, limit);
+
     const { totalTokens } = this.storage.getCoreRulesTokenUsage();
     const maxTokens = this.storage.getConfig().maxCoreRuleTokens;
 
@@ -309,7 +407,8 @@ export class EvoMcpDispatcher {
         const icon = h.memory_status === 'VERIFIED' ? '✅' : '⚠️';
         return `• [MEMORY] ${icon} ${h.memory_badge} ${h.id} — ${h.l0_summary} (anchors: ${h.scope_glob} | hits: ${h.hit_count})`;
       }
-      return `• [${h.kind.toUpperCase()}] ${h.id} — ${h.l0_summary} (scope: ${h.scope_glob} | hits: ${h.hit_count} | pass: ${h.success_rate})`;
+      const tierBadge = h.tier === 'GLOBAL' ? ' [GLOBAL]' : '';
+      return `• [${h.kind.toUpperCase()}]${tierBadge} ${h.id} — ${h.l0_summary} (scope: ${h.scope_glob} | hits: ${h.hit_count} | pass: ${h.success_rate})`;
     });
 
     return {
@@ -329,11 +428,22 @@ export class EvoMcpDispatcher {
 
   private handleInspect(args: Record<string, unknown>) {
     const id = sanitizeId(String(args.id || ''));
-    const tier = String(args.tier || 'L2').toUpperCase();
+    const tier = String(args.tier ?? args.level ?? args.depth ?? 'L2').toUpperCase();
 
-    const rule = this.storage.getRule(id);
+    let rule = this.storage.getRule(id);
+    let activeTelemetry = this.telemetry;
+    if (!rule) {
+      for (const gCtx of this.getGlobalFallbackContexts()) {
+        const gRule = gCtx.storage.getRule(id);
+        if (gRule) {
+          rule = gRule;
+          activeTelemetry = gCtx.telemetry;
+          break;
+        }
+      }
+    }
     if (rule) {
-      this.telemetry.recordUsage(id, true, 250);
+      activeTelemetry.recordUsage(id, true, 250);
       const body =
         tier === 'L1'
           ? `[RULE L1] ${rule.id} (${rule.scope_glob})\nL0: ${rule.l0_summary}\nTokens: ${rule.tokens}`
@@ -341,9 +451,20 @@ export class EvoMcpDispatcher {
       return { content: [{ type: 'text' as const, text: body }] };
     }
 
-    const skill = this.storage.getSkill(id);
+    let skill = this.storage.getSkill(id);
+    activeTelemetry = this.telemetry;
+    if (!skill) {
+      for (const gCtx of this.getGlobalFallbackContexts()) {
+        const gSkill = gCtx.storage.getSkill(id);
+        if (gSkill) {
+          skill = gSkill;
+          activeTelemetry = gCtx.telemetry;
+          break;
+        }
+      }
+    }
     if (skill) {
-      this.telemetry.recordUsage(id, true, 400);
+      activeTelemetry.recordUsage(id, true, 400);
       const body =
         tier === 'L1'
           ? `[SKILL L1] ${skill.id} — ${skill.title}\nL0: ${skill.l0_summary}\nTags: ${skill.tags.join(', ')}\n\n## L1 Contract\n${skill.l1_contract}`
@@ -351,9 +472,20 @@ export class EvoMcpDispatcher {
       return { content: [{ type: 'text' as const, text: body }] };
     }
 
-    const tool = this.storage.getTool(id);
+    let tool = this.storage.getTool(id);
+    activeTelemetry = this.telemetry;
+    if (!tool) {
+      for (const gCtx of this.getGlobalFallbackContexts()) {
+        const gTool = gCtx.storage.getTool(id);
+        if (gTool) {
+          tool = gTool;
+          activeTelemetry = gCtx.telemetry;
+          break;
+        }
+      }
+    }
     if (tool) {
-      this.telemetry.recordUsage(id, true, 300);
+      activeTelemetry.recordUsage(id, true, 300);
       const body =
         tier === 'L1'
           ? `[TOOL L1] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}`
@@ -448,7 +580,18 @@ export class EvoMcpDispatcher {
       unknown
     >;
 
-    const tool = this.storage.getTool(toolId);
+    let tool = this.storage.getTool(toolId);
+    let activeTelemetry = this.telemetry;
+    if (!tool) {
+      for (const gCtx of this.getGlobalFallbackContexts()) {
+        const gTool = gCtx.storage.getTool(toolId);
+        if (gTool) {
+          tool = gTool;
+          activeTelemetry = gCtx.telemetry;
+          break;
+        }
+      }
+    }
     if (!tool) {
       return {
         isError: true,
@@ -461,14 +604,19 @@ export class EvoMcpDispatcher {
       };
     }
 
+    const execCwd =
+      this.activeWorkspaceDir && fs.existsSync(this.activeWorkspaceDir)
+        ? this.activeWorkspaceDir
+        : this.storage.rootDir;
+
     const res = executeSandboxedScript(tool.runtime, tool.script_path, toolArgs, {
-      cwd: this.storage.rootDir,
+      cwd: execCwd,
       timeoutMs: tool.timeout_ms,
       selfTest: false,
     });
 
     const success = res.exitCode === 0;
-    this.telemetry.recordUsage(toolId, success, success ? 850 : 0);
+    activeTelemetry.recordUsage(toolId, success, success ? 850 : 0);
 
     const output = [
       `[evo_run: ${tool.id} (${tool.runtime}) | exit=${res.exitCode} | ${res.durationMs}ms]`,
@@ -527,6 +675,38 @@ export class EvoMcpDispatcher {
           {
             type: 'text' as const,
             text: 'evo_compact requires at least 2 target_ids and a valid merged_proposal object.',
+          },
+        ],
+      };
+    }
+
+    // Module 3.1: Atomic pre-check before archiving or deleting any target_ids
+    const precheck = this.gatekeeper.evaluateAndCommit(
+      {
+        ...mergedProposal,
+        origin: 'compacted',
+      },
+      {
+        dryRun: true,
+        excludeIdsFromBudgetAndSim: targetIds,
+      }
+    );
+
+    if (!precheck.passed) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                compacted_ids: [],
+                reason,
+                result: precheck,
+              },
+              null,
+              2
+            ),
           },
         ],
       };
