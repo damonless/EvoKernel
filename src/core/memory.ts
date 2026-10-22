@@ -256,9 +256,20 @@ export function parseSymbolTarget(rawSpec: string): ParsedSymbolTarget {
   };
 }
 
+const VENDOR_DIRS = new Set([
+  'drivers',
+  'middlewares',
+  'cmsis',
+  'third_party',
+  'third-party',
+  'vendor',
+  'external',
+  'lib',
+]);
+
 export function collectWorkspaceSourceFiles(
   workspaceRoot: string,
-  maxFiles = 600
+  maxFiles = 2500
 ): string[] {
   const root = path.resolve(workspaceRoot);
   const results: string[] = [];
@@ -271,6 +282,13 @@ export function collectWorkspaceSourceFiles(
     } catch {
       return;
     }
+
+    entries.sort((a, b) => {
+      const aVendor = a.isDirectory() && VENDOR_DIRS.has(a.name.toLowerCase()) ? 1 : 0;
+      const bVendor = b.isDirectory() && VENDOR_DIRS.has(b.name.toLowerCase()) ? 1 : 0;
+      if (aVendor !== bVendor) return aVendor - bVendor;
+      return a.name.localeCompare(b.name);
+    });
 
     for (const entry of entries) {
       if (results.length >= maxFiles) break;
@@ -407,13 +425,14 @@ function findSymbolDeclarationInLines(
   const scanRange = (start: number, end: number): DeclarationMatch | null => {
     for (let i = start; i <= end && i < lines.length; i++) {
       const line = lines[i];
-      const trimmed = line.trim();
+      const cleanLine = line.replace(/\/\/.*$/, '').replace(/\/\*.*?\*\//g, '');
+      const trimmed = cleanLine.trim();
       if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
         continue;
       }
 
       for (const pat of patterns) {
-        if (pat.regex.test(line)) {
+        if (pat.regex.test(cleanLine)) {
           if (
             (pat.kind === 'method' || pat.kind === 'function') &&
             CONTROL_KEYWORDS.has(symbolName)
@@ -425,10 +444,10 @@ function findSymbolDeclarationInLines(
           if (pat.kind === 'method' || pat.kind === 'function') {
             const hasModifierOrKeyword =
               /\b(?:public|private|protected|static|async|function|def|fn|func|void|int|char|bool|float|double|uint\d+_t|int\d+_t|size_t|long|short)\b/.test(
-                line
+                cleanLine
               );
             const opensBraceSoon =
-              line.includes('{') ||
+              cleanLine.includes('{') ||
               (i + 1 < lines.length && lines[i + 1].includes('{')) ||
               (i + 2 < lines.length && lines[i + 2].includes('{')) ||
               (i + 3 < lines.length && lines[i + 3].includes('{'));

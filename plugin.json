@@ -1,8 +1,6 @@
 {
   "name": "evo-kernel",
+  "displayName": "EvoKernel",
   "version": "0.1.0",
-  "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory for AI Coding Agents",
-  "mcpServers": "./mcp_config.json",
-  "rules": "./rules",
-  "skills": "./skills"
+  "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory for AI Coding Agents"
 }

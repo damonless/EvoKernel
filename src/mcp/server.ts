@@ -1,6 +1,5 @@
 import * as readline from 'node:readline';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from './handlers.js';
-import { syncManagedRuleBlocks } from '../cli/init.js';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -10,13 +9,7 @@ interface JsonRpcRequest {
 }
 
 export function startMcpStdioServer(workspaceRoot: string): void {
-  const dispatcher = new EvoMcpDispatcher(workspaceRoot, () => {
-    try {
-      syncManagedRuleBlocks(workspaceRoot);
-    } catch {
-      // Ignore host file sync errors inside stdio server
-    }
-  });
+  const dispatcher = new EvoMcpDispatcher(workspaceRoot);
 
   const rl = readline.createInterface({
     input: process.stdin,
