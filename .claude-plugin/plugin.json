@@ -1,0 +1,14 @@
+{
+  "name": "evo-kernel",
+  "version": "0.1.0",
+  "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory for AI Coding Agents",
+  "author": {
+    "name": "EvoKernel Contributors"
+  },
+  "mcpServers": {
+    "evo-kernel": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/cli/index.js", "mcp"]
+    }
+  }
+}

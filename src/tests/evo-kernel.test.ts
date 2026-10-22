@@ -798,7 +798,119 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('16. Issue #7: evo_search returns empty on zero-match queries and never creates .evo/ in uninitialized folders', () => {
+  test('16. Issue #5 & #8 (Module 7.4 & Module 8): Multi-Host Native Plugin Manifests, Antigravity hooks.json & antigravity_hook.mjs', () => {
+    const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+    const fakeGlobalDir = createTempWorkspace();
+    const fakePluginInstallRoot = createTempWorkspace();
+    try {
+      // 1. Verify Antigravity plugin.json contains ONLY allowed schema keys (Module 7.4)
+      const agyPlugin = JSON.parse(fs.readFileSync(path.join(repoRoot, 'plugin.json'), 'utf8'));
+      assert.equal(agyPlugin.name, 'evo-kernel');
+      assert.equal(agyPlugin.displayName, 'EvoKernel');
+      assert.equal(agyPlugin.mcpServers, undefined, 'plugin.json must not contain non-standard mcpServers key');
+      assert.equal(agyPlugin.rules, undefined, 'plugin.json must not contain non-standard rules key');
+      assert.equal(agyPlugin.skills, undefined, 'plugin.json must not contain non-standard skills key');
+
+      const agyMcp = JSON.parse(fs.readFileSync(path.join(repoRoot, 'mcp_config.json'), 'utf8'));
+      assert.ok(agyMcp.mcpServers['evo-kernel']);
+      assert.ok(fs.existsSync(path.join(repoRoot, 'rules', 'AGENTS.md')));
+      assert.ok(fs.existsSync(path.join(repoRoot, 'skills', 'bug-to-guardrail-sop', 'SKILL.md')));
+
+      // 1b. Verify Antigravity hooks.json & scripts/antigravity_hook.mjs (Module 8)
+      const agyHooks = JSON.parse(fs.readFileSync(path.join(repoRoot, 'hooks.json'), 'utf8'));
+      assert.ok(Array.isArray(agyHooks['evo-evolution-reminder'].PreInvocation));
+      assert.equal(agyHooks['evo-evolution-reminder'].PreInvocation[0].type, 'command');
+      assert.ok(Array.isArray(agyHooks['evo-evolution-reminder'].Stop));
+
+      const mockTranscript = path.join(fakeGlobalDir, 'transcript.jsonl');
+      fs.writeFileSync(
+        mockTranscript,
+        [
+          JSON.stringify({
+            step_index: 1,
+            type: 'USER_INPUT',
+            source: 'USER_EXPLICIT',
+            content: '不对，这里漏了边界检查，还是有乱码问题！',
+          }),
+        ].join('\n') + '\n',
+        'utf8'
+      );
+
+      const hookRun = spawnSync(
+        process.execPath,
+        [path.join(repoRoot, 'scripts', 'antigravity_hook.mjs'), 'PreInvocation'],
+        {
+          cwd: repoRoot,
+          input: JSON.stringify({
+            conversationId: `test-conv-${Date.now()}`,
+            transcriptPath: mockTranscript,
+            workspacePaths: [repoRoot],
+          }),
+          encoding: 'utf8',
+        }
+      );
+      assert.equal(hookRun.status, 0);
+      const hookOut = JSON.parse(hookRun.stdout.trim());
+      assert.ok(Array.isArray(hookOut.injectSteps));
+      assert.match(hookOut.injectSteps[0].ephemeralMessage, /\[EvoKernel 自演进提醒\]/);
+
+      // Non-existent transcript must exit 0 with '{}'
+      const safeHookRun = spawnSync(
+        process.execPath,
+        [path.join(repoRoot, 'scripts', 'antigravity_hook.mjs'), 'PreInvocation'],
+        {
+          cwd: repoRoot,
+          input: JSON.stringify({
+            conversationId: 'missing-conv',
+            transcriptPath: path.join(fakeGlobalDir, 'nonexistent.jsonl'),
+          }),
+          encoding: 'utf8',
+        }
+      );
+      assert.equal(safeHookRun.status, 0);
+      assert.equal(safeHookRun.stdout.trim(), '{}');
+
+      // 2. Verify Claude Code .claude-plugin/plugin.json
+      const claudePlugin = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, '.claude-plugin', 'plugin.json'), 'utf8')
+      );
+      assert.equal(claudePlugin.name, 'evo-kernel');
+      assert.match(
+        claudePlugin.mcpServers['evo-kernel'].args[0],
+        /\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\/index\.js/
+      );
+
+      // 3. Verify Gemini CLI gemini-extension.json
+      const geminiExt = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, 'gemini-extension.json'), 'utf8')
+      );
+      assert.equal(geminiExt.name, 'evo-kernel');
+      assert.equal(geminiExt.contextFileName, 'GEMINI.md');
+      assert.match(
+        geminiExt.mcpServers['evo-kernel'].args[0],
+        /\$\{extensionPath\}\/dist\/cli\/index\.js/
+      );
+
+      // 4. Verify templates/seed-evo seeds global fallback even when plugin .evo is absent
+      fs.cpSync(
+        path.join(repoRoot, 'templates', 'seed-evo'),
+        path.join(fakePluginInstallRoot, 'templates', 'seed-evo'),
+        { recursive: true }
+      );
+      ensureGlobalFallbackSeeded(fakeGlobalDir, fakePluginInstallRoot);
+      const seededStorage = new EvoStorage(fakeGlobalDir);
+      assert.ok(seededStorage.getRule('gatekeeper-self-test-invariant') !== null);
+      assert.ok(seededStorage.getRule('esm-typescript-imports') !== null);
+      assert.ok(seededStorage.getSkill('bug-to-guardrail-sop') !== null);
+      assert.ok(seededStorage.getTool('workspace-metrics-scanner') !== null);
+      assert.equal(seededStorage.listMemories().length, 0);
+    } finally {
+      fs.rmSync(fakeGlobalDir, { recursive: true, force: true });
+      fs.rmSync(fakePluginInstallRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('17. Issue #7: evo_search returns empty on zero-match queries and never creates .evo/ in uninitialized folders', () => {
     const defaultWs = createTempWorkspace();
     const uninitializedDir = createTempWorkspace();
     const dispatcher = new EvoMcpDispatcher(defaultWs);
@@ -1185,6 +1297,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 });
+
 
 
 
