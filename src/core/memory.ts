@@ -410,14 +410,14 @@ function findSymbolDeclarationInLines(
     {
       kind: 'method',
       regex: new RegExp(
-        `^\\s*(?:(?:public|private|protected|static|readonly|async|override|virtual|inline)\\s+)*${esc}\\s*(?:<[^>]*>)?\\s*\\([^;]*$`
+        `^\\s*(?:(?:public|private|protected|static|readonly|async|override|virtual|inline)\\s+)*${esc}\\s*(?:<[^>]*>)?\\s*\\([^;{]*(?:\\{.*)?$`
       ),
     },
     // C / C++ function definition: ReturnType SymbolName(args...)
     {
       kind: 'function',
       regex: new RegExp(
-        `^\\s*(?:(?:static|inline|extern|const|unsigned|signed|volatile|struct|enum)\\s+)*[A-Za-z_][A-Za-z0-9_:*&<>\\s]*\\b${esc}\\s*\\([^;]*$`
+        `^\\s*(?:(?:static|inline|extern|const|unsigned|signed|volatile|struct|enum)\\s+)*[A-Za-z_][A-Za-z0-9_:*&<>\\s]*\\b${esc}\\s*\\([^;{]*(?:\\{.*)?$`
       ),
     },
   ];

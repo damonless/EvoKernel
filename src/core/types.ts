@@ -78,6 +78,7 @@ export interface EvoConfig {
   duplicateBm25Threshold: number;
   sandboxTimeoutMs: number;
   enabledHarnesses: string[];
+  sharedEvoDir?: string;
 }
 
 export interface EvoRule {

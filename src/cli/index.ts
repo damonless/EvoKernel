@@ -134,6 +134,18 @@ export function parseTargetsArg(args: string[], workspaceRoot: string): string[]
   return undefined;
 }
 
+export function parseLinkArg(args: string[]): string | undefined {
+  const eqArg = args.find((a) => a.startsWith('--link='));
+  if (eqArg) {
+    return eqArg.slice('--link='.length).trim() || undefined;
+  }
+  const idx = args.indexOf('--link');
+  if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
+    return args[idx + 1].trim();
+  }
+  return undefined;
+}
+
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   const cmd = (args[0] || 'help').toLowerCase();
@@ -149,14 +161,18 @@ export function runCli(argv: string[]): void {
     case 'init': {
       const stealth = args.includes('--stealth');
       const targets = parseTargetsArg(args, workspaceRoot);
-      const res = runInit(workspaceRoot, { stealth, targets });
+      const linkEvoFrom = parseLinkArg(args);
+      const res = runInit(workspaceRoot, { stealth, targets, linkEvoFrom });
       console.log('🧬 EvoKernel initialized successfully!');
       console.log(`  ├─ Harnesses wired : ${res.initializedHarnesses.join(', ')}`);
       console.log(`  ├─ Rule seeds      : ${res.updatedFiles.join(', ')}`);
       console.log(`  ├─ MCP gateways    : ${res.mcpConfigFiles.join(', ')}`);
+      if (res.linkedSharedEvoDir) {
+        console.log(`  ├─ Shared .evo     : ${res.linkedSharedEvoDir}`);
+      }
       console.log(
         `  └─ Git Exclude     : ${
-          stealth
+          stealth || res.linkedSharedEvoDir
             ? `Stealth mode active (.git/info/exclude -> ${res.stealthExcluded?.join(', ') || 'already excluded'})`
             : 'Standard mode (.evo/.cache/ excluded locally)'
         }`

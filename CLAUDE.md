@@ -12,11 +12,12 @@ You are connected to **EvoKernel** (`evo-kernel` MCP + `.evo/` capability & memo
 - When inspecting >5 files, validating schemas, or running project diagnostics, prefer executing a verified Micro-Tool via `evo_run(tool_id, args, workspace)` instead of dumping raw file contents into the context window.
 
 ## 3. Mandatory Experience Crystallization (`evo_propose` & `evo_compact`)
-Whenever ANY of the following occurs in this session, you MUST call `evo_propose(..., workspace)` (explicitly passing `workspace`) before finishing your final response:
+Whenever ANY of the following occurs in this session, you MUST call `evo_propose(..., workspace)` (explicitly passing `workspace`) after the fix is verified and before finishing your final response:
 - **Episodic Troubleshooting Case (`memory`)**: You diagnosed a non-trivial bug symptom to concrete code symbols — crystallize the case (`symptom`, `root_cause`, `solution`, and `target_symbols`) so EvoKernel binds AST structural fingerprints for instant future recall.
-- **Bug Recovery Invariant (`rule`)**: You discovered an architectural pitfall or branch macro constraint — distill the prevention rule (`l0_summary`, `scope_glob`, and actionable guardrails).
-- **User Correction (`rule` / `skill`)**: The user corrected an assumption, architectural bias, or workflow step — codify it immediately so the mistake is never repeated.
+- **Bug Recovery Invariant (`rule`)**: You discovered an architectural pitfall or branch macro constraint — distill the prevention rule (`l0_summary`, `scope_glob`, `core: false` by default, and actionable guardrails).
+- **User Correction (`rule` / `skill`)**: The user corrected an assumption, architectural bias, or workflow step — codify it immediately as a `rule` or `skill` (using `supersedes_id` when upgrading an existing entry; NEVER stop at `kind: "memory"` when a general engineering methodology was corrected).
 - **Reusable Script (`tool`)**: You wrote a temporary script (>15 lines) to analyze, transform, or verify code — register it as a parameterized Micro-Tool (`run.{mjs|py|sh|ps1}`) with a deterministic `--self-test` verification path.
+- **Visible Evolution Receipt**: Whenever you call `evo_propose` or `evo_compact`, append a single visible receipt line at the end of your response: `🧬 EvoKernel 演进回执：[<kind>] <id>（<新增/更新摘要>）`.
 
 > **Gatekeeper Notice**: `evo_propose` enforces Static Security, Sandbox `--self-test` / Live AST Symbol Grounding, BM25 Deduplication, and a strict **1,500-token core rule budget** (Episodic `memory` entries consume 0 core budget tokens). If `ERR_BUDGET_EXCEEDED` or `ERR_DUPLICATE` is returned, use `evo_compact` to merge or archive stale entries first.
 

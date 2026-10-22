@@ -1096,6 +1096,94 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test('19. Issue #8 (Modules 9 & 10): Anti-Lazy-Memory Upgrade Candidates, Evolution Receipt Seed & Shared .evo Across Sibling Clones (--link)', () => {
+    const masterClone = createTempWorkspace();
+    const siblingClone = createTempWorkspace();
+    const dispatcher = new EvoMcpDispatcher(masterClone);
+
+    try {
+      // 1. Initialize masterClone and link siblingClone to masterClone/.evo via runInit({ linkEvoFrom })
+      fs.mkdirSync(path.join(masterClone, '.git', 'info'), { recursive: true });
+      fs.mkdirSync(path.join(siblingClone, '.git', 'info'), { recursive: true });
+
+      runInit(masterClone, { stealth: true, targets: ['agents'] });
+      const linkRes = runInit(siblingClone, {
+        stealth: true,
+        targets: ['agents'],
+        linkEvoFrom: masterClone,
+      });
+
+      assert.equal(linkRes.linkedSharedEvoDir, path.join(masterClone, '.evo'));
+      const agentsText = fs.readFileSync(path.join(siblingClone, 'AGENTS.md'), 'utf8');
+      assert.match(agentsText, /🧬 EvoKernel 演进回执/);
+
+      const siblingStorage = new EvoStorage(siblingClone);
+      assert.equal(siblingStorage.rootDir, path.resolve(siblingClone));
+      assert.equal(siblingStorage.evoDir, path.join(masterClone, '.evo'));
+
+      // 2. Propose a scoped rule in masterClone; verify it is immediately visible when searching from siblingClone
+      const scopedRuleRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: masterClone,
+        kind: 'rule',
+        id: 'shared-clone-loop-guard',
+        title: 'Shared Clone Control Loop Guard',
+        l0_summary: 'Verify multi-loop priority arbitration across sibling worktrees.',
+        scope_glob: '**/*.c',
+        core: false,
+        content: 'Check loop priority before updating setpoint.',
+      });
+      assert.equal(Boolean(scopedRuleRes.isError), false);
+
+      const searchFromSibling = dispatcher.handleToolCall('evo_search', {
+        workspace: siblingClone,
+        query: 'multi-loop priority arbitration',
+      });
+      assert.match(searchFromSibling.content[0].text, /shared-clone-loop-guard/);
+
+      // 3. Create a C source file ONLY in siblingClone and propose an Episodic Memory from siblingClone:
+      //    - AST symbol grounding verifies against siblingClone.rootDir
+      //    - Memory is stored in masterClone/.evo/memories/
+      //    - Response includes METHODOLOGY AUDIT warning and scoped_rule_upgrade_candidates (Module 9)
+      fs.writeFileSync(
+        path.join(siblingClone, 'ctrl_loop.c'),
+        'void vCtrlLoopStep(int err) { if (err > 0) return; }\n',
+        'utf8'
+      );
+
+      const memFromSibling = dispatcher.handleToolCall('evo_propose', {
+        workspace: siblingClone,
+        kind: 'memory',
+        id: 'sibling-ctrl-loop-case',
+        title: 'Sibling Clone Control Loop Case',
+        l0_summary: 'Verifies AST grounding against sibling rootDir and shared .evo storage.',
+        symptom: 'Control loop saturation in sibling worktree.',
+        root_cause: 'vCtrlLoopStep early return on positive error.',
+        solution: 'Clamp error before early return.',
+        target_symbols: ['ctrl_loop.c#vCtrlLoopStep'],
+      });
+      assert.equal(Boolean(memFromSibling.isError), false, memFromSibling.content[0]?.text);
+
+      const parsedMemRes = JSON.parse(memFromSibling.content[0].text);
+      assert.match(parsedMemRes.warning, /METHODOLOGY AUDIT/);
+      assert.ok(
+        Array.isArray(parsedMemRes.diagnostics.scoped_rule_upgrade_candidates) &&
+          parsedMemRes.diagnostics.scoped_rule_upgrade_candidates.some(
+            (c: { id: string }) => c.id === 'shared-clone-loop-guard'
+          ),
+        'memory proposal response must surface existing scoped rules as upgrade candidates'
+      );
+      assert.equal(
+        fs.existsSync(path.join(masterClone, '.evo', 'memories', 'sibling-ctrl-loop-case.md')),
+        true,
+        'Memory proposed in linked sibling clone must be saved into master shared .evo/memories/'
+      );
+    } finally {
+      dispatcher.close();
+      fs.rmSync(masterClone, { recursive: true, force: true });
+      fs.rmSync(siblingClone, { recursive: true, force: true });
+    }
+  });
 });
 
 

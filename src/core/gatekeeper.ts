@@ -573,15 +573,39 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
 
+      const upgradeCandidates = [
+        ...this.storage
+          .listRules()
+          .filter((r) => !r.core)
+          .map((r) => ({
+            id: r.id,
+            kind: 'rule' as const,
+            scope_glob: r.scope_glob,
+            l0_summary: r.l0_summary,
+          })),
+        ...this.storage.listSkills().map((s) => ({
+          id: s.id,
+          kind: 'skill' as const,
+          l0_summary: s.l0_summary,
+        })),
+      ].slice(0, 6);
+
+      const methodologyWarning =
+        upgradeCandidates.length > 0
+          ? `METHODOLOGY AUDIT: If this session also involved a user correction or reusable cross-module methodology improvement, do NOT stop at kind: 'memory'. Upgrade the relevant rule/skill (${upgradeCandidates.map((c) => `${c.id} [${c.kind}]`).join(', ')}) via evo_propose with supersedes_id.`
+          : `METHODOLOGY AUDIT: If this session also involved a user correction or reusable cross-module methodology improvement, do NOT stop at kind: 'memory' — also crystallize or upgrade a scoped rule/skill.`;
+
       return {
         passed: true,
         message: `Episodic Memory '${cleanId}' passed AST Symbol Grounding (${targetSymbols.length} symbol(s) fingerprinted @ commit ${currentCommit}) and is crystallized at .evo/memories/${cleanId}.md (0 core budget tokens used).`,
+        warning: methodologyWarning,
         diagnostics: {
           id: cleanId,
           kind: 'memory',
           created_commit: currentCommit,
           target_symbols: targetSymbols,
           ast_fingerprints: extractedMemoryFingerprints,
+          scoped_rule_upgrade_candidates: upgradeCandidates,
         },
       };
     }
