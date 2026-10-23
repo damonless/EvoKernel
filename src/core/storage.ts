@@ -52,15 +52,20 @@ export function getScopeBucketKey(scopeGlob: string): string {
   return 'global';
 }
 
+const IDE_PLUGIN_DIR_REGEX =
+  /\/(?:\.(?:gemini|claude|cursor|vscode|vscode-server|windsurf|antigravity|roo|cline)\/(?:[^/]+\/)*(?:plugins|extensions|mcp)|\.claude-plugin|\.evo\/global|(?:appdata\/(?:roaming|local)|library\/application\s+support|\.config|\.local\/share)\/(?:[^/]+\/)*(?:plugins|extensions))(?:\/|$)/i;
+
 export function isPluginOrExtensionInstallDir(dirPath: string): boolean {
   const norm = path.resolve(dirPath).replace(/\\/g, '/').toLowerCase();
-  return (
-    norm.includes('/plugins/') ||
-    norm.includes('/.claude-plugin') ||
-    norm.includes('/extensions/') ||
-    norm.includes('/.gemini/antigravity/mcp/') ||
-    norm.endsWith('/.evo/global')
-  );
+  if (
+    norm.endsWith('/.evo/global') ||
+    (process.env.EVO_GLOBAL_DIR &&
+      (norm === path.resolve(process.env.EVO_GLOBAL_DIR).replace(/\\/g, '/').toLowerCase() ||
+        norm.startsWith(path.resolve(process.env.EVO_GLOBAL_DIR).replace(/\\/g, '/').toLowerCase() + '/')))
+  ) {
+    return true;
+  }
+  return IDE_PLUGIN_DIR_REGEX.test(norm);
 }
 
 function safeRealpath(p: string): string {
@@ -610,9 +615,10 @@ export class EvoStorage {
 }
 
 export function parseFrontmatter(raw: string): { meta: Record<string, unknown>; body: string } {
-  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  const sanitized = raw.replace(/^\uFEFF/, '');
+  const match = sanitized.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) {
-    return { meta: {}, body: raw };
+    return { meta: {}, body: sanitized };
   }
   const yamlBlock = match[1];
   const body = match[2];

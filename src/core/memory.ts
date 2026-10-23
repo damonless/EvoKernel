@@ -86,7 +86,18 @@ export function normalizeCodeStructure(code: string, ext = '.ts'): string {
     .trim();
 }
 
-function stripCStyleComments(input: string): string {
+function canPrecedeRegexLiteral(out: string): boolean {
+  const trimmed = out.trimEnd();
+  if (!trimmed) return true;
+  if (trimmed.endsWith('++') || trimmed.endsWith('--')) return false;
+  const lastChar = trimmed[trimmed.length - 1];
+  if ('=(:[{,;!&|?^~<>+-*%'.includes(lastChar)) return true;
+  return /(?:^|[^\w$])(return|case|throw|yield|await|typeof|delete|void|default|do|else|in|instanceof|of)$/.test(
+    trimmed
+  );
+}
+
+export function stripCStyleComments(input: string): string {
   let out = '';
   let i = 0;
   const len = input.length;
@@ -147,6 +158,48 @@ function stripCStyleComments(input: string): string {
       while (i + 1 < len && !(input[i] === '*' && input[i + 1] === '/')) i++;
       i += 2;
       out += ' ';
+      continue;
+    }
+
+    // Check JavaScript/TypeScript regular expression literal
+    if (ch === '/' && canPrecedeRegexLiteral(out)) {
+      out += ch;
+      i++;
+      let inCharClass = false;
+      while (i < len) {
+        const rCh = input[i];
+        if (rCh === '\\' && i + 1 < len) {
+          out += rCh + input[i + 1];
+          i += 2;
+          continue;
+        }
+        if (rCh === '[') {
+          inCharClass = true;
+          out += rCh;
+          i++;
+          continue;
+        }
+        if (rCh === ']' && inCharClass) {
+          inCharClass = false;
+          out += rCh;
+          i++;
+          continue;
+        }
+        if (rCh === '/' && !inCharClass) {
+          out += rCh;
+          i++;
+          while (i < len && /[a-z]/i.test(input[i])) {
+            out += input[i];
+            i++;
+          }
+          break;
+        }
+        if (rCh === '\n') {
+          break;
+        }
+        out += rCh;
+        i++;
+      }
       continue;
     }
 
@@ -549,13 +602,21 @@ export function extractSymbolFingerprint(
   // Case 1: Specific file hint provided
   const candidateFiles: string[] = [];
   if (parsed.fileHint) {
-    const fullHint = path.resolve(root, parsed.fileHint);
+    const cleanHint = parsed.fileHint.replace(/^[/\\]+/, '');
+    const directHint = path.resolve(root, cleanHint);
+    const fullHint =
+      fs.existsSync(directHint) && fs.statSync(directHint).isFile()
+        ? directHint
+        : fs.existsSync(parsed.fileHint) && fs.statSync(parsed.fileHint).isFile()
+          ? path.resolve(parsed.fileHint)
+          : directHint;
+
     if (fs.existsSync(fullHint) && fs.statSync(fullHint).isFile()) {
       candidateFiles.push(fullHint);
     } else {
       // Try matching by suffix in workspace
       const allFiles = collectWorkspaceSourceFiles(root);
-      const normHint = parsed.fileHint.replace(/^\/+/, '').toLowerCase();
+      const normHint = cleanHint.replace(/\\/g, '/').toLowerCase();
       for (const f of allFiles) {
         const rel = path.relative(root, f).replace(/\\/g, '/').toLowerCase();
         if (rel === normHint || rel.endsWith(`/${normHint}`)) {
@@ -575,12 +636,13 @@ export function extractSymbolFingerprint(
     return {
       symbol: parsed.raw,
       file_path: relPath,
+      file: relPath,
       kind: 'file',
       start_line: 1,
       end_line: lines.length,
       signature: `file ${relPath} (${lines.length} lines)`,
       ast_hash: computeAstHash(rawContent, ext),
-    };
+    } as unknown as SymbolFingerprint;
   }
 
   // Case 2: Search symbol in candidateFiles first, then fallback to workspace files if not found
@@ -613,12 +675,13 @@ export function extractSymbolFingerprint(
       return {
         symbol: parsed.raw,
         file_path: relPath,
+        file: relPath,
         kind: decl.kind,
         start_line: decl.lineIndex + 1,
         end_line: endIdx + 1,
         signature: decl.signature,
         ast_hash: computeAstHash(blockCode, ext),
-      };
+      } as unknown as SymbolFingerprint;
     }
     return null;
   };

@@ -4,7 +4,7 @@
       "command": "node",
       "args": [
         "-e",
-        "const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),url=require('node:url');const c=[path.resolve('dist/cli/index.js'),path.join(os.homedir(),'.gemini','config','plugins','evo-kernel','dist','cli','index.js'),path.join(os.homedir(),'.gemini','extensions','evo-kernel','dist','cli','index.js')].find(p=>fs.existsSync(p));process.argv=[process.argv[0],c,'mcp'];import(url.pathToFileURL(c).href);"
+        "const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),url=require('node:url');const c=[path.resolve('dist/cli/index.js'),path.join(os.homedir(),'.gemini','config','plugins','evo-kernel','dist','cli','index.js'),path.join(os.homedir(),'.gemini','extensions','evo-kernel','dist','cli','index.js')].find(p=>fs.existsSync(p));if(!c){console.error('[EvoKernel MCP] Error: dist/cli/index.js not found. Please build the project first (node ./scripts/build.mjs).');process.exit(1);}process.argv=[process.argv[0],c,'mcp'];import(url.pathToFileURL(c).href);"
       ]
     }
   }

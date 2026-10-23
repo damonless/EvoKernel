@@ -18,7 +18,7 @@
     "build": "node ./scripts/build.mjs",
     "start": "node ./dist/cli/index.js",
     "mcp": "node ./dist/cli/index.js mcp",
-    "test": "node ./scripts/build.mjs && node --test ./dist/tests/evo-kernel.test.js"
+    "test": "node ./scripts/test.mjs"
   },
   "keywords": [
     "ai-agents",

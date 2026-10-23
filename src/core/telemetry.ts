@@ -7,9 +7,9 @@ import { verifyMemoryFreshness } from './memory.js';
 
 export function extractCjkBigrams(text: string): string[] {
   const bigrams = new Set<string>();
-  const matches = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
+  const matches = text.match(/[\u4e00-\u9fff]+/g) || [];
   for (const seq of matches) {
-    if (seq.length === 2) {
+    if (seq.length === 1) {
       bigrams.add(seq);
     } else {
       for (let i = 0; i <= seq.length - 2; i++) {
@@ -285,102 +285,140 @@ export class EvoTelemetry {
     const tools = this.storage.listTools();
     const memories = this.storage.listMemories();
 
-    this.db.exec('DELETE FROM capability_fts_fallback;');
-    const insertFallback = this.db.prepare(
-      'INSERT INTO capability_fts_fallback (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
-    );
+    const activeIds = new Set<string>();
+    for (const r of rules) activeIds.add(r.id);
+    for (const s of skills) activeIds.add(s.id);
+    for (const t of tools) activeIds.add(t.id);
+    for (const m of memories) activeIds.add(m.id);
 
-    let insertFts: ReturnType<DatabaseSync['prepare']> | null = null;
-    if (this.fts5Enabled) {
-      try {
-        this.db.exec('DELETE FROM capability_fts;');
-        insertFts = this.db.prepare(
-          'INSERT INTO capability_fts (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
-        );
-      } catch {
-        this.fts5Enabled = false;
-        insertFts = null;
-      }
-    }
+    const activeMemoryIds = new Set<string>(memories.map((m) => m.id));
 
-    const upsertTelemetry = this.db.prepare(`
-      INSERT INTO telemetry (id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, tokens_saved, last_used_at, created_at)
-      VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        kind = excluded.kind,
-        title = excluded.title,
-        l0_summary = excluded.l0_summary,
-        scope_glob = excluded.scope_glob
-    `);
-
-    const upsertEpisodic = this.db.prepare(`
-      INSERT INTO episodic_memories (
-        id, title, l0_summary, created_commit, symptom_text, root_cause, solution_summary,
-        target_symbols, ast_fingerprints, hit_count, is_active, last_verified_at, created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        title = excluded.title,
-        l0_summary = excluded.l0_summary,
-        created_commit = excluded.created_commit,
-        symptom_text = excluded.symptom_text,
-        root_cause = excluded.root_cause,
-        solution_summary = excluded.solution_summary,
-        target_symbols = excluded.target_symbols,
-        ast_fingerprints = excluded.ast_fingerprints
-    `);
-
-    const now = new Date().toISOString();
-
-    for (const r of rules) {
-      const cjkKw = extractCjkBigrams(`${r.title} ${r.l0_summary} ${r.content}`).join(' ');
-      const kw = `${r.scope_glob} ${cjkKw}`.trim();
-      insertFallback.run(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
-      insertFts?.run(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
-      upsertTelemetry.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, now, r.created_at);
-    }
-
-    for (const s of skills) {
-      const bodyText = `${s.l1_contract}\n${s.l2_sop}`;
-      const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary} ${s.l1_contract} ${s.l2_sop}`).join(' ');
-      const kw = `${s.tags.join(' ')} ${cjkKw}`.trim();
-      insertFallback.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
-      insertFts?.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
-      upsertTelemetry.run(s.id, 'skill', s.title, s.l0_summary, '**/*', now, s.created_at);
-    }
-
-    for (const t of tools) {
-      const schemaText = JSON.stringify(t.input_schema);
-      const cjkKw = extractCjkBigrams(`${t.title} ${t.l0_summary}`).join(' ');
-      const kw = `${t.runtime} ${cjkKw}`.trim();
-      insertFallback.run(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
-      insertFts?.run(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
-      upsertTelemetry.run(t.id, 'tool', t.title, t.l0_summary, '**/*', now, t.created_at);
-    }
-
-    for (const m of memories) {
-      const cjkKw = extractCjkBigrams(
-        `${m.title} ${m.l0_summary} ${m.symptom} ${m.root_cause} ${m.solution}`
-      ).join(' ');
-      const keywords = [...m.target_symbols, ...m.tags, m.created_commit, cjkKw].filter(Boolean).join(' ');
-      const bodyText = `${m.symptom}\n${m.root_cause}\n${m.solution}`;
-      const scopeDisplay = m.target_symbols.slice(0, 3).join(', ') || '**/*';
-      insertFallback.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
-      insertFts?.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
-      upsertTelemetry.run(m.id, 'memory', m.title, m.l0_summary, scopeDisplay, now, m.created_at);
-      upsertEpisodic.run(
-        m.id,
-        m.title,
-        m.l0_summary,
-        m.created_commit,
-        m.symptom,
-        m.root_cause,
-        m.solution,
-        JSON.stringify(m.target_symbols),
-        JSON.stringify(m.ast_fingerprints),
-        now,
-        m.created_at
+    this.db.exec('BEGIN IMMEDIATE;');
+    try {
+      this.db.exec('DELETE FROM capability_fts_fallback;');
+      const insertFallback = this.db.prepare(
+        'INSERT INTO capability_fts_fallback (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
       );
+
+      let insertFts: ReturnType<DatabaseSync['prepare']> | null = null;
+      if (this.fts5Enabled) {
+        try {
+          this.db.exec('DELETE FROM capability_fts;');
+          insertFts = this.db.prepare(
+            'INSERT INTO capability_fts (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
+          );
+        } catch {
+          this.fts5Enabled = false;
+          insertFts = null;
+        }
+      }
+
+      // Purge zombie/archived records from telemetry table
+      const existingTelemetry = this.db.prepare('SELECT id FROM telemetry').all() as Array<{ id: string }>;
+      const deleteTelemetry = this.db.prepare('DELETE FROM telemetry WHERE id = ?');
+      for (const row of existingTelemetry) {
+        if (!activeIds.has(row.id)) {
+          deleteTelemetry.run(row.id);
+        }
+      }
+
+      // Purge zombie/archived records from episodic_memories table
+      const existingEpisodic = this.db.prepare('SELECT id FROM episodic_memories').all() as Array<{ id: string }>;
+      const deleteEpisodic = this.db.prepare('DELETE FROM episodic_memories WHERE id = ?');
+      for (const row of existingEpisodic) {
+        if (!activeMemoryIds.has(row.id)) {
+          deleteEpisodic.run(row.id);
+        }
+      }
+
+      const upsertTelemetry = this.db.prepare(`
+        INSERT INTO telemetry (id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, tokens_saved, last_used_at, created_at)
+        VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          kind = excluded.kind,
+          title = excluded.title,
+          l0_summary = excluded.l0_summary,
+          scope_glob = excluded.scope_glob
+      `);
+
+      const upsertEpisodic = this.db.prepare(`
+        INSERT INTO episodic_memories (
+          id, title, l0_summary, created_commit, symptom_text, root_cause, solution_summary,
+          target_symbols, ast_fingerprints, hit_count, is_active, last_verified_at, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          l0_summary = excluded.l0_summary,
+          created_commit = excluded.created_commit,
+          symptom_text = excluded.symptom_text,
+          root_cause = excluded.root_cause,
+          solution_summary = excluded.solution_summary,
+          target_symbols = excluded.target_symbols,
+          ast_fingerprints = excluded.ast_fingerprints
+      `);
+
+      const now = new Date().toISOString();
+
+      for (const r of rules) {
+        const cjkKw = extractCjkBigrams(`${r.title} ${r.l0_summary} ${r.content}`).join(' ');
+        const kw = `${r.scope_glob} ${cjkKw}`.trim();
+        insertFallback.run(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
+        insertFts?.run(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
+        upsertTelemetry.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, now, r.created_at);
+      }
+
+      for (const s of skills) {
+        const bodyText = `${s.l1_contract}\n${s.l2_sop}`;
+        const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary} ${s.l1_contract} ${s.l2_sop}`).join(' ');
+        const kw = `${s.tags.join(' ')} ${cjkKw}`.trim();
+        insertFallback.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
+        insertFts?.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
+        upsertTelemetry.run(s.id, 'skill', s.title, s.l0_summary, '**/*', now, s.created_at);
+      }
+
+      for (const t of tools) {
+        const schemaText = JSON.stringify(t.input_schema);
+        const cjkKw = extractCjkBigrams(`${t.title} ${t.l0_summary}`).join(' ');
+        const kw = `${t.runtime} ${cjkKw}`.trim();
+        insertFallback.run(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
+        insertFts?.run(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
+        upsertTelemetry.run(t.id, 'tool', t.title, t.l0_summary, '**/*', now, t.created_at);
+      }
+
+      for (const m of memories) {
+        const cjkKw = extractCjkBigrams(
+          `${m.title} ${m.l0_summary} ${m.symptom} ${m.root_cause} ${m.solution}`
+        ).join(' ');
+        const keywords = [...m.target_symbols, ...m.tags, m.created_commit, cjkKw].filter(Boolean).join(' ');
+        const bodyText = `${m.symptom}\n${m.root_cause}\n${m.solution}`;
+        const scopeDisplay = m.target_symbols.slice(0, 3).join(', ') || '**/*';
+        insertFallback.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
+        insertFts?.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
+        upsertTelemetry.run(m.id, 'memory', m.title, m.l0_summary, scopeDisplay, now, m.created_at);
+        upsertEpisodic.run(
+          m.id,
+          m.title,
+          m.l0_summary,
+          m.created_commit,
+          m.symptom,
+          m.root_cause,
+          m.solution,
+          JSON.stringify(m.target_symbols),
+          JSON.stringify(m.ast_fingerprints),
+          now,
+          m.created_at
+        );
+      }
+
+      this.db.exec('COMMIT;');
+    } catch (err) {
+      try {
+        this.db.exec('ROLLBACK;');
+      } catch {
+        // ignore rollback errors if already aborted
+      }
+      throw err;
     }
   }
 
@@ -435,12 +473,16 @@ export class EvoTelemetry {
     }
 
     if (tokens.length === 0) {
-      const fallbackSql =
-        kind === 'all'
-          ? `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry ORDER BY hit_count DESC, created_at DESC LIMIT ?`
-          : `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry WHERE kind = ? ORDER BY hit_count DESC, created_at DESC LIMIT ?`;
-      const stmt = this.db.prepare(fallbackSql);
-      rows = (kind === 'all' ? stmt.all(fetchLimit) : stmt.all(kind, fetchLimit)) as Array<Record<string, unknown>>;
+      if (!query.trim()) {
+        const fallbackSql =
+          kind === 'all'
+            ? `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry ORDER BY hit_count DESC, created_at DESC LIMIT ?`
+            : `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry WHERE kind = ? ORDER BY hit_count DESC, created_at DESC LIMIT ?`;
+        const stmt = this.db.prepare(fallbackSql);
+        rows = (kind === 'all' ? stmt.all(fetchLimit) : stmt.all(kind, fetchLimit)) as Array<Record<string, unknown>>;
+      } else {
+        rows = [];
+      }
     }
 
     const wsForScope = activeWorkspaceRoot || this.storage.rootDir;
@@ -559,7 +601,73 @@ export class EvoTelemetry {
       kind === 'all' ? this.db.prepare(sql).all() : this.db.prepare(sql).all(kind)
     ) as Array<Record<string, unknown>>;
 
-    const lowerTokens = tokens.map((t) => t.toLowerCase());
+    if (candidates.length === 0 || tokens.length === 0) {
+      return [];
+    }
+
+    const lowerTokens = Array.from(new Set(tokens.map((t) => t.toLowerCase())));
+    const N = candidates.length;
+
+    // 1. Calculate Document Frequency (DF) for each token to compute IDF
+    const dfMap = new Map<string, number>();
+    for (const tok of lowerTokens) {
+      let df = 0;
+      for (const row of candidates) {
+        const idStr = String(row.id || '').toLowerCase();
+        const titleStr = String(row.title || '').toLowerCase();
+        const l0Str = String(row.l0_summary || '').toLowerCase();
+        const kwStr = String(row.keywords || '').toLowerCase();
+        const bodyStr = String(row.body || '').toLowerCase();
+
+        if (
+          idStr.includes(tok) ||
+          titleStr.includes(tok) ||
+          l0Str.includes(tok) ||
+          kwStr.includes(tok) ||
+          bodyStr.includes(tok)
+        ) {
+          df++;
+        }
+      }
+      dfMap.set(tok, df);
+    }
+
+    // 2. Compute document lengths for Okapi BM25 length normalization
+    const k1 = 1.2;
+    const b = 0.75;
+    const fieldWeights = {
+      id: 3.0,
+      title: 3.0,
+      keywords: 2.5,
+      l0_summary: 2.0,
+      body: 1.0,
+    };
+
+    let totalDocLen = 0;
+    const docLengths = new Map<unknown, number>();
+    for (const row of candidates) {
+      const len =
+        String(row.id || '').length * 0.5 +
+        String(row.title || '').length +
+        String(row.l0_summary || '').length +
+        String(row.keywords || '').length +
+        String(row.body || '').length * 0.2;
+      docLengths.set(row, len);
+      totalDocLen += len;
+    }
+    const avgDocLen = Math.max(1, totalDocLen / N);
+
+    const countOccurrences = (text: string, term: string): number => {
+      if (!text || !term) return 0;
+      let count = 0;
+      let pos = 0;
+      while ((pos = text.indexOf(term, pos)) !== -1) {
+        count++;
+        pos += term.length;
+      }
+      return count;
+    };
+
     const scored: Array<Record<string, unknown> & { _score: number }> = [];
 
     for (const row of candidates) {
@@ -569,20 +677,44 @@ export class EvoTelemetry {
       const kwStr = String(row.keywords || '').toLowerCase();
       const bodyStr = String(row.body || '').toLowerCase();
 
-      let score = 0;
+      const docLen = docLengths.get(row) || avgDocLen;
+      const lenNorm = 1 - b + b * (docLen / avgDocLen);
+
+      let totalScore = 0;
+
       for (const tok of lowerTokens) {
-        if (idStr.includes(tok)) score += 3.0;
-        if (titleStr.includes(tok)) score += 2.5;
-        if (kwStr.includes(tok)) score += 2.0;
-        if (l0Str.includes(tok)) score += 1.8;
-        if (bodyStr.includes(tok)) score += 1.0;
+        const df = dfMap.get(tok) || 0;
+        if (df === 0) continue;
+
+        // Smoothed Okapi BM25 IDF: ln(1 + (N - df + 0.5) / (df + 0.5)) + 0.5
+        const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5)) + 0.5;
+
+        // Weighted Term Frequency across fields
+        const tfId = countOccurrences(idStr, tok);
+        const tfTitle = countOccurrences(titleStr, tok);
+        const tfKw = countOccurrences(kwStr, tok);
+        const tfL0 = countOccurrences(l0Str, tok);
+        const tfBody = countOccurrences(bodyStr, tok);
+
+        const weightedTf =
+          fieldWeights.id * tfId +
+          fieldWeights.title * tfTitle +
+          fieldWeights.keywords * tfKw +
+          fieldWeights.l0_summary * tfL0 +
+          fieldWeights.body * tfBody;
+
+        if (weightedTf > 0) {
+          // BM25 TF saturation formula
+          const tfScore = (weightedTf * (k1 + 1)) / (weightedTf + k1 * lenNorm);
+          totalScore += idf * tfScore;
+        }
       }
 
-      if (score > 0) {
+      if (totalScore > 0) {
         scored.push({
           ...row,
-          rank: -score,
-          _score: score,
+          rank: -totalScore,
+          _score: totalScore,
         });
       }
     }
@@ -689,7 +821,7 @@ export class EvoTelemetry {
 
 function tokenizeForSimilarity(text: string): Set<string> {
   const normalized = text.toLowerCase();
-  const words = normalized.match(/[a-z0-9_]{2,}|[\u4e00-\u9fa5]{1,2}/g) || [];
+  const words = normalized.match(/[a-z0-9_-]{2,}|[\u4e00-\u9fff]{1,2}/g) || [];
   const stopWords = new Set(['the', 'and', 'for', 'with', 'when', 'use', 'rule', 'skill', 'tool', 'from', 'that', 'this']);
   return new Set(words.filter((w) => !stopWords.has(w)));
 }

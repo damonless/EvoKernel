@@ -71,7 +71,7 @@ function stripCaseAnchorLines(text: string): string {
 export function detectDomainNumbersInRule(text: string): string[] {
   const found = new Set<string>();
   const patterns = [
-    /\b\d+(?:\.\d+)?\s*(?:k?V|mV|mA|A|k?W|k?VA|Hz|kHz|MHz|Ohm|degC|℃|%SOC)\b/g,
+    /(?<!\b(?:[Ss]tep|[Rr]ule|[Oo]ption|[Ii]tem|[Ss]ection|[Pp]art|[Pp]hase)\s*)\b\d+(?:\.\d+)?(?:A\b|\s*(?:k?V|mV|mA|kA|Amps?|Amperes?|k?W|k?VA|Hz|kHz|MHz|Ohm|degC|℃|%SOC)\b)/g,
     /\[[-+]?\d+(?:\.\d+)?\s*[A-Za-z%]*\s*,\s*[-+]?\d+(?:\.\d+)?\s*[A-Za-z%]*[)\]]/g,
     /\b(?:w|dw|u8|u16|u32|s16|s32|i16|i32|b|f|cb|st|en)[A-Z][A-Za-z0-9_]*\s*(?:==|!=|>=|<=|>|<|=)\s*[-+]?\d+(?:\.\d+)?\b/g,
   ];

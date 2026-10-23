@@ -83,19 +83,85 @@ export function checkScriptSyntax(
   }
 }
 
+export function sanitizeSandboxEnv(rawEnv: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  const sensitivePattern = /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i;
+  const allowedExact = new Set([
+    'PATH',
+    'TMP',
+    'TEMP',
+    'SYSTEMROOT',
+    'SYSTEMDRIVE',
+    'HOME',
+    'USERPROFILE',
+  ]);
+  const allowedPrefixes = ['EVO_', 'NODE_'];
+
+  for (const [key, val] of Object.entries(rawEnv)) {
+    if (val === undefined) continue;
+    const upper = key.toUpperCase();
+    if (sensitivePattern.test(upper)) {
+      continue;
+    }
+    const isAllowedExact = allowedExact.has(upper);
+    const isAllowedPrefix = allowedPrefixes.some((p) => upper.startsWith(p));
+    if (isAllowedExact || isAllowedPrefix) {
+      sanitized[key] = val;
+    }
+  }
+  return sanitized;
+}
+
 export function executeSandboxedScript(
-  runtime: ScriptRuntime,
-  scriptPath: string,
-  args: Record<string, unknown> = {},
-  options: {
+  runtimeOrScriptPath: ScriptRuntime | string,
+  scriptPathOrArgs?: string | Record<string, unknown> | unknown[],
+  argsOrOptions?: Record<string, unknown> | unknown[] | {
     cwd?: string;
+    workspaceRoot?: string;
     timeoutMs?: number;
     selfTest?: boolean;
-  } = {}
+    env?: NodeJS.ProcessEnv;
+  },
+  maybeOptions?: {
+    cwd?: string;
+    workspaceRoot?: string;
+    timeoutMs?: number;
+    selfTest?: boolean;
+    env?: NodeJS.ProcessEnv;
+  }
 ): SandboxExecutionResult {
+  const knownRuntimes: ScriptRuntime[] = ['node', 'python', 'powershell', 'bash'];
+  let runtime: ScriptRuntime;
+  let scriptPath: string;
+  let args: Record<string, unknown> | unknown[];
+  let options: {
+    cwd?: string;
+    workspaceRoot?: string;
+    timeoutMs?: number;
+    selfTest?: boolean;
+    env?: NodeJS.ProcessEnv;
+  };
+
+  if (knownRuntimes.includes(runtimeOrScriptPath as ScriptRuntime)) {
+    runtime = runtimeOrScriptPath as ScriptRuntime;
+    scriptPath = String(scriptPathOrArgs ?? '');
+    args = (argsOrOptions as Record<string, unknown> | unknown[]) ?? {};
+    options = maybeOptions ?? {};
+  } else {
+    scriptPath = String(runtimeOrScriptPath);
+    const ext = path.extname(scriptPath).toLowerCase();
+    if (ext === '.py') runtime = 'python';
+    else if (ext === '.ps1') runtime = 'powershell';
+    else if (ext === '.sh') runtime = 'bash';
+    else runtime = 'node';
+
+    args = (scriptPathOrArgs as Record<string, unknown> | unknown[]) ?? {};
+    options = (argsOrOptions as typeof options) ?? {};
+  }
+
   const start = Date.now();
   const timeoutMs = options.timeoutMs ?? 5000;
-  const cwd = options.cwd ?? process.cwd();
+  const cwd = options.cwd ?? options.workspaceRoot ?? process.cwd();
   const serializedArgs = JSON.stringify(args);
 
   const cliArgs: string[] = [];
@@ -126,12 +192,14 @@ export function executeSandboxedScript(
       break;
   }
 
+  const sanitizedEnv = sanitizeSandboxEnv(options.env ?? process.env);
+
   const res = spawnSync(cmd, cmdArgs, {
     cwd,
     encoding: 'utf8',
     timeout: timeoutMs,
     env: {
-      ...process.env,
+      ...sanitizedEnv,
       EVO_ARGS: serializedArgs,
       EVO_SELF_TEST: options.selfTest ? '1' : '0',
       EVO_WORKSPACE: cwd,

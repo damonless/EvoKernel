@@ -15,8 +15,11 @@ import {
   resolveWorkspaceRoot,
   runCli,
 } from '../cli/index.js';
-import { EvoStorage } from '../core/storage.js';
+import { EvoStorage, isPluginOrExtensionInstallDir, parseFrontmatter } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
+import { executeSandboxedScript, sanitizeSandboxEnv } from '../core/sandbox.js';
+import { extractSymbolFingerprint, stripCStyleComments, normalizeCodeStructure } from '../core/memory.js';
+import { detectDomainNumbersInRule } from '../core/gatekeeper.js';
 
 function createTempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-test-ws-'));
@@ -1766,6 +1769,479 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(projectA, { recursive: true, force: true });
       fs.rmSync(projectB, { recursive: true, force: true });
       fs.rmSync(isolatedGlobal, { recursive: true, force: true });
+    }
+  });
+
+  test('23. Regression SEC-1: Sandbox environment sanitization blocks secrets and credential leakage', () => {
+    const ws = createTempWorkspace();
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      // 1. Verify sanitizeSandboxEnv unit logic
+      const rawMockEnv = {
+        OPENAI_API_KEY: 'sk-proj-test1234',
+        ANTHROPIC_API_KEY: 'sk-ant-test5678',
+        GITHUB_TOKEN: 'ghp_secret999',
+        AWS_SECRET_ACCESS_KEY: 'aws_secret',
+        DATABASE_PASSWORD: 'super_password',
+        SSH_AUTH_SOCK: '/tmp/ssh.sock',
+        NODE_AUTH_TOKEN: 'npm_token',
+        NODE_ENV: 'test',
+        PATH: process.env.PATH,
+        USERPROFILE: process.env.USERPROFILE,
+        TEMP: process.env.TEMP,
+        TMP: process.env.TMP,
+        SYSTEMROOT: process.env.SYSTEMROOT,
+        EVO_TEST_ALLOWED: 'allowed_value',
+      };
+      const sanitized = sanitizeSandboxEnv(rawMockEnv);
+      assert.equal(sanitized.OPENAI_API_KEY, undefined);
+      assert.equal(sanitized.ANTHROPIC_API_KEY, undefined);
+      assert.equal(sanitized.GITHUB_TOKEN, undefined);
+      assert.equal(sanitized.AWS_SECRET_ACCESS_KEY, undefined);
+      assert.equal(sanitized.DATABASE_PASSWORD, undefined);
+      assert.equal(sanitized.SSH_AUTH_SOCK, undefined);
+      assert.equal(sanitized.NODE_AUTH_TOKEN, undefined);
+      assert.equal(sanitized.NODE_ENV, 'test');
+      assert.equal(sanitized.EVO_TEST_ALLOWED, 'allowed_value');
+
+      // 2. Verify subprocess execution isolation
+      const toolScript = path.join(ws, 'leak_test.mjs');
+      fs.writeFileSync(
+        toolScript,
+        `
+        const isSelfTest = process.env.EVO_SELF_TEST === '1' || process.argv.includes('--self-test');
+        if (isSelfTest) process.exit(0);
+        console.log(JSON.stringify({
+          anthropic: process.env.ANTHROPIC_API_KEY,
+          github: process.env.GITHUB_TOKEN,
+          evoArgs: process.env.EVO_ARGS ? JSON.parse(process.env.EVO_ARGS) : null,
+          nodeEnv: process.env.NODE_ENV,
+          hasPath: Boolean(process.env.PATH || process.env.Path),
+          hasEvoWorkspace: Boolean(process.env.EVO_WORKSPACE)
+        }));
+        `,
+        'utf8'
+      );
+
+      const res = executeSandboxedScript(
+        'node',
+        toolScript,
+        { ping: 'pong' },
+        {
+          cwd: ws,
+          env: {
+            ...process.env,
+            ANTHROPIC_API_KEY: 'sk-ant-real-secret',
+            GITHUB_TOKEN: 'ghp_super_secret',
+            NODE_ENV: 'sandbox_test',
+          },
+        }
+      );
+
+      assert.equal(res.exitCode, 0, res.stderr);
+      const parsed = JSON.parse(res.stdout);
+      assert.equal(parsed.anthropic, undefined);
+      assert.equal(parsed.github, undefined);
+      assert.equal(parsed.evoArgs.ping, 'pong');
+      assert.equal(parsed.nodeEnv, 'sandbox_test');
+      assert.equal(parsed.hasPath, true);
+      assert.equal(parsed.hasEvoWorkspace, true);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('24. Regression LOGIC-1: syncFromDisk wraps FTS clear and capability re-indexing in an atomic transaction', () => {
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    const telemetry = new EvoTelemetry(storage);
+    try {
+      storage.saveRule({
+        id: 'tx-test-rule',
+        title: 'Transaction Test Rule',
+        l0_summary: 'Rule for verifying atomic transaction indexing.',
+        core: false,
+        priority: 10,
+        scope_glob: '**/*.ts',
+        content: 'Transaction test rule content.',
+        tokens: 30,
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      telemetry.syncFromDisk();
+      const hitsBefore = telemetry.search('Transaction Test Rule', 'rule');
+      assert.ok(hitsBefore.some((h) => h.id === 'tx-test-rule'));
+
+      telemetry.syncFromDisk();
+      const hitsAfter = telemetry.search('Transaction Test Rule', 'rule');
+      assert.ok(hitsAfter.some((h) => h.id === 'tx-test-rule'));
+    } finally {
+      telemetry.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('25. Regression LOGIC-2: syncFromDisk purges deleted and archived capabilities from telemetry and episodic_memories', () => {
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    const telemetry = new EvoTelemetry(storage);
+    try {
+      // 1. Propose and save a rule and a memory
+      storage.saveRule({
+        id: 'zombie-candidate-rule',
+        title: 'Zombie Candidate Rule',
+        l0_summary: 'Rule that will be archived to test zombie record purging.',
+        core: false,
+        priority: 10,
+        scope_glob: '**/*.ts',
+        content: 'Rule to be archived.',
+        tokens: 30,
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      storage.saveMemory({
+        id: 'zombie-candidate-memory',
+        title: 'Zombie Candidate Memory',
+        l0_summary: 'Memory that will be deleted to test zombie purging.',
+        created_commit: 'abcdef1',
+        symptom: 'Memory to be deleted',
+        root_cause: 'Root cause',
+        solution: 'Solution',
+        target_symbols: ['test.ts#foo'],
+        ast_fingerprints: {},
+        tags: ['test'],
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      telemetry.syncFromDisk();
+
+      const telMapBefore = telemetry.getTelemetryMap();
+      assert.ok(telMapBefore.has('zombie-candidate-rule'));
+      assert.ok(telMapBefore.has('zombie-candidate-memory'));
+      const zeroTokenBefore = telemetry.search('', 'all');
+      assert.ok(zeroTokenBefore.some((h) => h.id === 'zombie-candidate-rule'));
+      assert.ok(zeroTokenBefore.some((h) => h.id === 'zombie-candidate-memory'));
+
+      // 2. Archive rule and memory (removes active files from disk)
+      storage.archiveCapability('zombie-candidate-rule', 'rule', 'Archival test');
+      storage.archiveCapability('zombie-candidate-memory', 'memory', 'Archival test');
+
+      // 3. Trigger syncFromDisk()
+      telemetry.syncFromDisk();
+
+      // 4. Verify zombie capabilities are completely purged from telemetry table
+      const telMapAfter = telemetry.getTelemetryMap();
+      assert.equal(telMapAfter.has('zombie-candidate-rule'), false, 'Archived rule must be purged from telemetry table');
+      assert.equal(telMapAfter.has('zombie-candidate-memory'), false, 'Archived memory must be purged from telemetry table');
+
+      // 5. Zero-token search must NOT return archived/deleted capabilities
+      const zeroTokenAfter = telemetry.search('', 'all');
+      assert.equal(zeroTokenAfter.some((h) => h.id === 'zombie-candidate-rule'), false);
+      assert.equal(zeroTokenAfter.some((h) => h.id === 'zombie-candidate-memory'), false);
+
+      // 6. Punctuation-only search must return 0 hits
+      const punctHits = telemetry.search('???', 'all');
+      assert.equal(punctHits.length, 0, 'Punctuation-only search must return 0 hits');
+
+      // 7. findSimilarCapabilities must not match purged capabilities
+      const simHits = telemetry.findSimilarCapabilities('Zombie Candidate Rule', 'Rule that will be archived', 'rule');
+      assert.equal(simHits.some((h) => h.id === 'zombie-candidate-rule'), false);
+    } finally {
+      telemetry.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('26. Regression PATH-1: isPluginOrExtensionInstallDir does not trigger on ordinary project directories named plugins or extensions', () => {
+    const projectPaths = [
+      'C:\\Users\\Developer\\projects\\my-monorepo\\packages\\plugins\\auth',
+      'C:\\Users\\Developer\\projects\\frontend\\src\\plugins\\i18n',
+      '/home/user/workspace/app/extensions/renderer',
+      '/home/user/repo/plugins/payment-gateway',
+      'D:\\Source\\project\\extensions\\theme',
+    ];
+
+    for (const p of projectPaths) {
+      assert.equal(
+        isPluginOrExtensionInstallDir(p),
+        false,
+        `Project path "${p}" must NOT be classified as an IDE plugin installation dir`
+      );
+    }
+
+    const idePaths = [
+      'C:\\Users\\Administrator\\.gemini\\config\\plugins\\evo-kernel',
+      'C:\\Users\\Administrator\\.gemini\\extensions\\evo-kernel',
+      'C:\\Users\\Administrator\\.gemini\\antigravity\\mcp\\evo-kernel',
+      'C:\\Users\\User\\.vscode\\extensions\\my-extension-0.1.0',
+      'C:\\Users\\User\\.cursor\\extensions\\my-extension-0.1.0',
+      '/home/user/.evo/global',
+      'C:\\Users\\User\\.claude-plugin\\evo-kernel',
+    ];
+
+    for (const p of idePaths) {
+      assert.equal(
+        isPluginOrExtensionInstallDir(p),
+        true,
+        `IDE installation path "${p}" MUST be classified as an IDE plugin/extension install dir`
+      );
+    }
+  });
+
+  test('27. Regression PATH-2: extractSymbolFingerprint strips leading slashes in fileHint on Windows', () => {
+    const ws = createTempWorkspace();
+    try {
+      const srcDir = path.join(ws, 'src', 'core');
+      fs.mkdirSync(srcDir, { recursive: true });
+      const targetFile = path.join(srcDir, 'calc.ts');
+      fs.writeFileSync(
+        targetFile,
+        'export function addValues(a: number, b: number): number { return a + b; }\n',
+        'utf8'
+      );
+
+      // 1. Test with leading forward slash: /src/core/calc.ts#addValues
+      const fpForward = extractSymbolFingerprint(ws, '/src/core/calc.ts#addValues');
+      assert.ok(fpForward, 'Should resolve symbol target with leading forward slash');
+      assert.equal(fpForward.file_path, 'src/core/calc.ts');
+      assert.match(fpForward.symbol, /addValues/);
+
+      // 2. Test with leading backslash: \src\core\calc.ts#addValues
+      const fpBackslash = extractSymbolFingerprint(ws, '\\src\\core\\calc.ts#addValues');
+      assert.ok(fpBackslash, 'Should resolve symbol target with leading backslash');
+      assert.equal(fpBackslash.file_path, 'src/core/calc.ts');
+      assert.match(fpBackslash.symbol, /addValues/);
+
+      // 3. Test relative path without leading slash
+      const fpRelative = extractSymbolFingerprint(ws, 'src/core/calc.ts#addValues');
+      assert.ok(fpRelative, 'Relative path should resolve correctly');
+      assert.equal(fpForward.ast_hash, fpRelative.ast_hash);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('28. Regression LOGIC-3: parseFrontmatter handles UTF-8 BOM without losing metadata', () => {
+    const rawWithBom = '\uFEFF---\nid: "bom-rule-test"\ntitle: "BOM Rule Test"\nl0_summary: "Verifies UTF-8 BOM handling."\ncore: true\n---\nRule body text after frontmatter.';
+    const parsed = parseFrontmatter(rawWithBom);
+
+    assert.equal(parsed.meta.id, 'bom-rule-test');
+    assert.equal(parsed.meta.title, 'BOM Rule Test');
+    assert.equal(parsed.meta.l0_summary, 'Verifies UTF-8 BOM handling.');
+    assert.equal(parsed.meta.core, true);
+    assert.equal(parsed.body.trim(), 'Rule body text after frontmatter.');
+
+    const rawWithBomCrlf = '\uFEFF---\r\nid: "bom-crlf-test"\r\ntitle: "CRLF BOM Test"\r\n---\r\nBody text.\r\n';
+    const parsedCrlf = parseFrontmatter(rawWithBomCrlf);
+    assert.equal(parsedCrlf.meta.id, 'bom-crlf-test');
+    assert.equal(parsedCrlf.body.trim(), 'Body text.');
+  });
+
+  test('29. Regression LOGIC-4: stripCStyleComments preserves regex literals containing slashes without corrupting code', () => {
+    // 1. Direct stripCStyleComments verification
+    const codeWithRegex = 'const url = /https?:\\/\\/[a-z0-9]/g; // keep this\nconst div = a / b; /* comment */';
+    const strippedCode = stripCStyleComments(codeWithRegex);
+    assert.strictEqual(
+      strippedCode,
+      'const url = /https?:\\/\\/[a-z0-9]/g;  \nconst div = a / b;  '
+    );
+    assert.strictEqual(
+      normalizeCodeStructure('const re = /\\/\\*/; // comment\nreturn re;'),
+      'const re=/\\/\\*/;return re;'
+    );
+
+    // 2. Integration with extractSymbolFingerprint
+    const ws = createTempWorkspace();
+    try {
+      const srcDir = path.join(ws, 'src');
+      fs.mkdirSync(srcDir, { recursive: true });
+      const codeFile = path.join(srcDir, 'regex_test.ts');
+      fs.writeFileSync(
+        codeFile,
+        [
+          'export function parseUrl(raw: string): string {',
+          '  const urlRegex = /https?:\\/\\/[a-z0-9_.-]+\\//i; // trailing comment',
+          '  const match = raw.match(urlRegex);',
+          '  const commentPattern = /\\/\\*[\\s\\S]*?\\*\\//g;',
+          '  return match ? match[0] : "";',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const fp = extractSymbolFingerprint(ws, 'src/regex_test.ts#parseUrl');
+      assert.ok(fp, 'AST fingerprint extraction must succeed for function containing regex literals');
+      assert.match(fp.symbol, /parseUrl/);
+      assert.ok(fp.ast_hash.length > 0);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('30. Regression LOGIC-5: detectDomainNumbersInRule does not false-match English letter A in numbered lists', () => {
+    const safeTexts = [
+      'Rule 1 A: verify input format. Rule 2 A: check schema validation.',
+      'Option 1 A vs Option 2 A architecture trade-offs.',
+      'Step 1 A: initialize storage. Step 2 A: sync telemetry tables.',
+      'Section 1 A discusses requirements; Section 2 A discusses implementation.',
+      'Step 1 A and Step 2 A and Option 1 A are valid.',
+    ];
+
+    for (const text of safeTexts) {
+      const matches = detectDomainNumbersInRule(text);
+      assert.deepEqual(
+        matches,
+        [],
+        `English text "${text}" must NOT trigger domain number detection`
+      );
+    }
+
+    const domainTexts = [
+      'Maintain bus voltage below 800V and current under 35 A with 50Hz ripple.',
+      'Phase current limit: 12.5mA continuous, 25A peak.',
+      'When current exceeds 10A, clamp voltage to 24V.',
+      'When current exceeds 10 Amps or 500mA.',
+    ];
+
+    for (const text of domainTexts) {
+      const matches = detectDomainNumbersInRule(text);
+      assert.ok(
+        matches.length > 0,
+        `Real domain text "${text}" MUST trigger domain number detection`
+      );
+    }
+    assert.deepEqual(detectDomainNumbersInRule('When current exceeds 10A, clamp voltage to 24V.'), ['10A', '24V']);
+    assert.deepEqual(detectDomainNumbersInRule('When current exceeds 10 Amps or 500mA.'), ['10 Amps', '500mA']);
+  });
+
+  test('31. Regression PARITY-1: JS fallback search implements weighted BM25 with term frequency, multi-term ranking & CJK support', () => {
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    const telemetry = new EvoTelemetry(storage, { forceFts5Fallback: true });
+    try {
+      storage.saveRule({
+        id: 'low-tf-rule',
+        title: 'UART DMA Ring Buffer Invariant',
+        l0_summary: 'Configure DMA buffer on UART channel once.',
+        core: false,
+        priority: 10,
+        scope_glob: '**/*.c',
+        content: 'Brief content mentioning buffer.',
+        tokens: 30,
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      storage.saveRule({
+        id: 'high-tf-rule',
+        title: 'DMA Buffer Optimization Guide',
+        l0_summary: 'Advanced DMA buffer memory layout and buffer alignment.',
+        core: false,
+        priority: 10,
+        scope_glob: '**/*.c',
+        content: 'Buffer DMA buffer buffer buffer buffer alignment buffer management buffer.',
+        tokens: 30,
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      storage.saveRule({
+        id: 'multi-term-rule',
+        title: 'UART DMA Ring Buffer Alignment and Cache Invalidation',
+        l0_summary: 'Comprehensive guide covering UART DMA ring buffer cache flush.',
+        core: false,
+        priority: 10,
+        scope_glob: '**/*.c',
+        content: 'UART DMA ring buffer operations with cache maintenance.',
+        tokens: 30,
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      storage.saveRule({
+        id: 'cjk-firmware-rule',
+        title: '逆变器固件状态机守卫',
+        l0_summary: '固件状态机异常状态转移防死锁规约。',
+        core: false,
+        priority: 10,
+        scope_glob: '**/*.c',
+        content: '逆变器控制环路固件状态机在异常时安全停机。',
+        tokens: 30,
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      telemetry.syncFromDisk();
+
+      // Verification 1: Term frequency ranking (high-tf-rule should score higher than low-tf-rule for query "buffer")
+      const tfHits = telemetry.search('buffer', 'rule');
+      const highTfHit = tfHits.find((h) => h.id === 'high-tf-rule');
+      const lowTfHit = tfHits.find((h) => h.id === 'low-tf-rule');
+      assert.ok(highTfHit && lowTfHit);
+      assert.ok(
+        highTfHit.score > lowTfHit.score,
+        `High TF hit score (${highTfHit.score}) must exceed Low TF hit score (${lowTfHit.score})`
+      );
+
+      // Verification 2: Multi-term query matching title and summary
+      const multiHits = telemetry.search('UART DMA ring buffer', 'rule');
+      assert.ok(multiHits.length > 0);
+      assert.equal(multiHits[0].id, 'multi-term-rule', 'Multi-term match must rank top');
+
+      // Verification 3: CJK Bigram and single-character query
+      const cjkBigramHits = telemetry.search('逆变器', 'rule');
+      assert.ok(cjkBigramHits.some((h) => h.id === 'cjk-firmware-rule'), 'CJK bigram query must find capability');
+
+      const cjkSingleHits = telemetry.search('逆', 'rule');
+      assert.ok(cjkSingleHits.some((h) => h.id === 'cjk-firmware-rule'), 'CJK single character query must find capability');
+
+      // Verification 4: Fallback score scale alignment (score must be positive, rank must be negative)
+      for (const hit of tfHits) {
+        assert.ok(hit.score > 0, `Search hit score (${hit.score}) must be positive`);
+      }
+    } finally {
+      telemetry.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('32. Regression LOGIC-6: mcp_config.json startup script exits cleanly with code 1 when dist/ is unbuilt', () => {
+    const emptyWs = createTempWorkspace();
+    const mcpConfigPath = path.resolve(process.cwd(), 'mcp_config.json');
+    const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+    const nodeArgs = mcpConfig.mcpServers['evo-kernel'].args;
+
+    try {
+      const res = spawnSync(process.execPath, nodeArgs, {
+        cwd: emptyWs,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+
+      assert.equal(res.status, 1, `Process should exit with code 1, got status ${res.status}`);
+      assert.doesNotMatch(
+        res.stderr,
+        /TypeError: The "path" argument must be of type string/,
+        'Startup script must NOT throw uncaught TypeError'
+      );
+      assert.match(
+        res.stderr,
+        /\[EvoKernel MCP\] Error: dist\/cli\/index\.js not found/,
+        'Startup script must log friendly error message to stderr'
+      );
+    } finally {
+      fs.rmSync(emptyWs, { recursive: true, force: true });
     }
   });
 });
