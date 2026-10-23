@@ -60,6 +60,11 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   for (const relPath of candidateRuleFiles) {
     const fullPath = path.join(workspaceRoot, relPath);
     if (fs.existsSync(fullPath)) {
+      try {
+        if (!fs.statSync(fullPath).isFile()) continue;
+      } catch {
+        continue;
+      }
       const current = fs.readFileSync(fullPath, 'utf8');
       if (current.includes(META_RULE_MARKER_START)) {
         const next = upsertMarkerBlock(current, block);
@@ -72,11 +77,13 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   const opencodePath = path.join(workspaceRoot, 'opencode.json');
   if (fs.existsSync(opencodePath)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(opencodePath, 'utf8'));
-      if (typeof parsed.instructions === 'string' && parsed.instructions.includes(META_RULE_MARKER_START)) {
-        parsed.instructions = upsertMarkerBlock(parsed.instructions, block);
-        fs.writeFileSync(opencodePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
-        updated.push('opencode.json');
+      if (fs.statSync(opencodePath).isFile()) {
+        const parsed = JSON.parse(fs.readFileSync(opencodePath, 'utf8'));
+        if (typeof parsed.instructions === 'string' && parsed.instructions.includes(META_RULE_MARKER_START)) {
+          parsed.instructions = upsertMarkerBlock(parsed.instructions, block);
+          fs.writeFileSync(opencodePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+          updated.push('opencode.json');
+        }
       }
     } catch {
       // Ignore malformed JSON

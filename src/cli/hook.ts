@@ -158,14 +158,18 @@ function getGitFiles(workspaceRoot: string, stagedOnly: boolean): string[] {
       stdio: ['pipe', 'pipe', 'ignore'],
     });
     if (stagedOnly) {
-      return out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      return out
+        .split(/\r?\n/)
+        .map((l) => l.trim().replace(/^"|"$/g, ''))
+        .filter(Boolean);
     }
     const files: string[] = [];
     for (const line of out.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const parts = trimmed.split(/\s+/);
-      const filePath = parts[parts.length - 1];
+      if (line.length <= 3) continue;
+      let filePath = line.slice(3).trim();
+      if (filePath.startsWith('"') && filePath.endsWith('"')) {
+        filePath = filePath.slice(1, -1);
+      }
       if (filePath) files.push(filePath);
     }
     return files;

@@ -3,6 +3,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   handlePostTool,
   handlePreCommit,
@@ -14,7 +15,7 @@ import {
 } from '../cli/hook.js';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { removeGitInfoExclude, runInit, runUninstall } from '../cli/init.js';
+import { removeGitInfoExclude, runInit, runUninstall, syncManagedRuleBlocks } from '../cli/init.js';
 import {
   ALL_HARNESS_ADAPTERS,
   parseHarnessTargets,
@@ -259,5 +260,76 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     } finally {
       console.warn = origWarn;
     }
+  });
+
+  test('11. M4 Hardening: getGitFiles preserves whitespace in file paths and filters internal teamwork paths', () => {
+    // Initialize git repo in ws
+    spawnSync('git', ['init'], { cwd: ws });
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws });
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: ws });
+
+    // Initial commit with baseline files
+    const compDir = path.join(ws, 'src', 'my component');
+    fs.mkdirSync(compDir, { recursive: true });
+    fs.writeFileSync(path.join(compDir, 'App.tsx'), 'export const App = () => null;\n');
+
+    const teamworkDir = path.join(ws, '.agents', 'teamwork');
+    fs.mkdirSync(teamworkDir, { recursive: true });
+    fs.writeFileSync(path.join(teamworkDir, 'keep.md'), '# Notes\n');
+
+    spawnSync('git', ['add', '.'], { cwd: ws });
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: ws });
+
+    // 1. Modify a tracked source file with space in directory and name
+    fs.writeFileSync(path.join(compDir, 'App.tsx'), 'export const App = () => 123;\n');
+
+    // 2. Create an internal teamwork file with space
+    const taskDir = path.join(teamworkDir, 'task 1');
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(path.join(taskDir, 'note.md'), '# Notes\n');
+
+    // Run handleStop - it inspects getGitFiles(workspaceRoot, false)
+    const stopRes = handleStop(ws, {}, {});
+    assert.equal(stopRes.success, true);
+    assert.equal(stopRes.exitCode, 0);
+    // User work was detected on App.tsx, but teamwork internal file should NOT be mentioned
+    assert.equal(stopRes.crystallizationSuggested, true);
+    assert.match(stopRes.output, /App\.tsx/);
+    assert.equal(stopRes.output.includes('task 1'), false);
+
+    // 3. Stage the file with spaces and run handlePreCommit
+    spawnSync('git', ['add', 'src/my component/App.tsx'], { cwd: ws });
+    const preRes = handlePreCommit(ws, {}, {});
+    // Pre-commit should pass without crashing
+    assert.equal(preRes.success, true);
+    assert.equal(preRes.exitCode, 0);
+  });
+
+  test('12. M4 Hardening: syncManagedRuleBlocks handles directory named after rule file without EISDIR crash', () => {
+    // Create a directory sharing a candidate rule name
+    const dirRule = path.join(ws, 'CLAUDE.md');
+    fs.mkdirSync(dirRule, { recursive: true });
+
+    // Create a directory sharing opencode.json
+    const dirOpencode = path.join(ws, 'opencode.json');
+    fs.mkdirSync(dirOpencode, { recursive: true });
+
+    // Create a legitimate AGENTS.md rule file with marker
+    const agentsPath = path.join(ws, 'AGENTS.md');
+    fs.writeFileSync(
+      agentsPath,
+      '# My Project Rules\n\n<!-- EVO:START -->\nold block\n<!-- EVO:END -->\n'
+    );
+
+    // Call syncManagedRuleBlocks - should not throw EISDIR
+    const updated = syncManagedRuleBlocks(ws);
+    assert.ok(updated.includes('AGENTS.md'));
+    assert.equal(updated.includes('CLAUDE.md'), false);
+    assert.equal(updated.includes('opencode.json'), false);
+
+    // Content of AGENTS.md was updated
+    const agentsContent = fs.readFileSync(agentsPath, 'utf8');
+    assert.match(agentsContent, /<!-- EVO:START -->/);
+    assert.notEqual(agentsContent.includes('old block'), true);
   });
 });

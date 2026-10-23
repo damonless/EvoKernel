@@ -10,6 +10,7 @@ import {
   generateStackSeedRules,
   runBootstrap,
 } from '../cli/bootstrap.js';
+import { runAudit } from '../cli/audit.js';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper } from '../core/gatekeeper.js';
@@ -288,6 +289,95 @@ describe('EvoKernel Bootstrap Cold-Start Expansion Suite (Milestone 3)', () => {
       // Second bootstrap should report duplicates/skips cleanly without throwing
       const secondSummary = runBootstrap(ws, { maxCommits: 20 });
       assert.ok(secondSummary.skippedOrDuplicate.length > 0);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('18. M4 Hardening: detectProjectStacks recurses up to depth 3 for nested monorepo packages', () => {
+    const ws = createTempWorkspace();
+    try {
+      // Depth 2: packages/client/package.json
+      const pkgDir = path.join(ws, 'packages', 'client');
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name: 'client-pkg' }));
+
+      // Depth 2: services/backend/Cargo.toml
+      const rustDir = path.join(ws, 'services', 'backend');
+      fs.mkdirSync(rustDir, { recursive: true });
+      fs.writeFileSync(path.join(rustDir, 'Cargo.toml'), '[package]\nname = "backend"\n');
+
+      // Depth 3: apps/core/gateway/go.mod
+      const goDir = path.join(ws, 'apps', 'core', 'gateway');
+      fs.mkdirSync(goDir, { recursive: true });
+      fs.writeFileSync(path.join(goDir, 'go.mod'), 'module example.com/gateway\n\ngo 1.22\n');
+
+      // Depth > 3: deep/level/one/two/pyproject.toml (should NOT be detected)
+      const deepPyDir = path.join(ws, 'deep', 'level', 'one', 'two');
+      fs.mkdirSync(deepPyDir, { recursive: true });
+      fs.writeFileSync(path.join(deepPyDir, 'pyproject.toml'), '[project]\nname = "deep_py"\n');
+
+      const stacks = detectProjectStacks(ws);
+      const stackKeys = stacks.map((s) => s.stack);
+
+      assert.ok(stackKeys.includes('typescript_javascript'));
+      assert.ok(stackKeys.includes('rust'));
+      assert.ok(stackKeys.includes('go'));
+      assert.equal(stackKeys.includes('python'), false); // depth 4 was ignored
+
+      const tsStack = stacks.find((s) => s.stack === 'typescript_javascript');
+      assert.ok(tsStack?.indicatorFiles.includes('packages/client/package.json'));
+
+      const rustStack = stacks.find((s) => s.stack === 'rust');
+      assert.ok(rustStack?.indicatorFiles.includes('services/backend/Cargo.toml'));
+
+      const goStack = stacks.find((s) => s.stack === 'go');
+      assert.ok(goStack?.indicatorFiles.includes('apps/core/gateway/go.mod'));
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('19. M4 Hardening: detectProjectStacks detects tsconfig.json in subdirectories alongside package.json', () => {
+    const ws = createTempWorkspace();
+    try {
+      // Monorepo package with tsconfig.json in subfolder, without typescript dependency in package.json
+      const appDir = path.join(ws, 'packages', 'web-app');
+      fs.mkdirSync(appDir, { recursive: true });
+      fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({ name: 'web-app' }));
+      fs.writeFileSync(path.join(appDir, 'tsconfig.json'), '{\n  "compilerOptions": {}\n}\n');
+
+      const stacks = detectProjectStacks(ws);
+      assert.equal(stacks.length, 1);
+      assert.equal(stacks[0].stack, 'typescript_javascript');
+      assert.equal(stacks[0].details?.hasTs, true);
+      assert.equal(stacks[0].name, 'TypeScript');
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('20. M4 Hardening: runAudit handles directory named after candidate rule file without EISDIR', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // Create directories that share names with candidate rules
+      fs.mkdirSync(path.join(ws, 'CLAUDE.md'), { recursive: true });
+      fs.mkdirSync(path.join(ws, 'GEMINI.md'), { recursive: true });
+
+      // Create a valid AGENTS.md rule file
+      fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# Project Invariants\n\nRule body here.\n');
+
+      const report = runAudit(ws, { includeGlobal: false });
+      assert.ok(report);
+      assert.equal(report.healthy, true);
+
+      // Verify the directory was not treated as a rule file
+      assert.equal(report.files.some((f) => f.displayPath === 'CLAUDE.md'), false);
+      assert.equal(report.files.some((f) => f.displayPath === 'GEMINI.md'), false);
+      assert.ok(report.files.some((f) => f.displayPath === 'AGENTS.md'));
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

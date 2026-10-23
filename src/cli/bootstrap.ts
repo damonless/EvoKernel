@@ -69,38 +69,58 @@ export function detectProjectStacks(workspaceRoot: string): DetectedStack[] {
   function findIndicators(candidates: string[]): string[] {
     const found: string[] = [];
     for (const f of candidates) {
-      if (fs.existsSync(path.join(workspaceRoot, f))) {
-        found.push(f);
+      const full = path.join(workspaceRoot, f);
+      try {
+        if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+          found.push(f);
+        }
+      } catch {
+        // ignore
       }
     }
     if (found.length > 0) return found;
 
-    try {
-      const entries = fs.readdirSync(workspaceRoot, { withFileTypes: true });
-      const ignoreDirs = new Set([
-        'node_modules',
-        '.git',
-        'dist',
-        '.evo',
-        '.codegraph',
-        '.cache',
-        'target',
-        'build',
-        'tmp',
-      ]);
-      for (const entry of entries) {
-        if (entry.isDirectory() && !ignoreDirs.has(entry.name)) {
-          for (const f of candidates) {
-            const sub = path.join(entry.name, f);
-            if (fs.existsSync(path.join(workspaceRoot, sub))) {
-              found.push(sub.replace(/\\/g, '/'));
+    const ignoreDirs = new Set([
+      'node_modules',
+      '.git',
+      'dist',
+      '.evo',
+      '.codegraph',
+      '.cache',
+      'target',
+      'build',
+      'tmp',
+    ]);
+
+    function searchDir(currentDir: string, currentDepth: number) {
+      if (currentDepth > 3) return;
+      try {
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory() && !ignoreDirs.has(entry.name)) {
+            const subDir = path.join(currentDir, entry.name);
+            for (const f of candidates) {
+              const candidatePath = path.join(subDir, f);
+              try {
+                if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
+                  const rel = path.relative(workspaceRoot, candidatePath).replace(/\\/g, '/');
+                  if (!found.includes(rel)) {
+                    found.push(rel);
+                  }
+                }
+              } catch {
+                // ignore
+              }
             }
+            searchDir(subDir, currentDepth + 1);
           }
         }
+      } catch {
+        // ignore directory access errors
       }
-    } catch {
-      // ignore directory access errors
     }
+
+    searchDir(workspaceRoot, 1);
     return found;
   }
 
@@ -151,19 +171,41 @@ export function detectProjectStacks(workspaceRoot: string): DetectedStack[] {
   if (tsJsFiles.length > 0) {
     let isEsm = false;
     let hasTs = fs.existsSync(path.join(workspaceRoot, 'tsconfig.json'));
-    try {
-      const primaryPkgPath = path.join(workspaceRoot, tsJsFiles[0]);
-      if (fs.existsSync(primaryPkgPath)) {
-        const pkg = JSON.parse(fs.readFileSync(primaryPkgPath, 'utf8')) as Record<string, unknown>;
-        const deps = {
-          ...((pkg.dependencies as Record<string, string>) || {}),
-          ...((pkg.devDependencies as Record<string, string>) || {}),
-        };
-        if (pkg.type === 'module') isEsm = true;
-        if (deps.typescript) hasTs = true;
+    if (!hasTs) {
+      for (const f of tsJsFiles) {
+        const dir = path.dirname(path.join(workspaceRoot, f));
+        const candidateTs = path.join(dir, 'tsconfig.json');
+        try {
+          if (fs.existsSync(candidateTs) && fs.statSync(candidateTs).isFile()) {
+            hasTs = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
       }
-    } catch {
-      // ignore parse error
+    }
+    if (!hasTs) {
+      const tsIndicators = findIndicators(['tsconfig.json']);
+      if (tsIndicators.length > 0) {
+        hasTs = true;
+      }
+    }
+    for (const f of tsJsFiles) {
+      try {
+        const primaryPkgPath = path.join(workspaceRoot, f);
+        if (fs.existsSync(primaryPkgPath) && fs.statSync(primaryPkgPath).isFile()) {
+          const pkg = JSON.parse(fs.readFileSync(primaryPkgPath, 'utf8')) as Record<string, unknown>;
+          const deps = {
+            ...((pkg.dependencies as Record<string, string>) || {}),
+            ...((pkg.devDependencies as Record<string, string>) || {}),
+          };
+          if (pkg.type === 'module') isEsm = true;
+          if (deps.typescript) hasTs = true;
+        }
+      } catch {
+        // ignore parse error
+      }
     }
     detected.push({
       stack: 'typescript_javascript',

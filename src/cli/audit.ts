@@ -165,6 +165,11 @@ function discoverAuditableFiles(
   const addFile = (scope: 'workspace' | 'global', kind: 'rule' | 'skill', fullPath: string, baseDir: string) => {
     const resolved = path.resolve(fullPath);
     if (seen.has(resolved) || !fs.existsSync(resolved)) return;
+    try {
+      if (!fs.statSync(resolved).isFile()) return;
+    } catch {
+      return;
+    }
     seen.add(resolved);
     const rel = path.relative(baseDir, resolved).replace(/\\/g, '/');
     const prefix = scope === 'global' ? '~/' : '';
@@ -296,6 +301,11 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   const fileContents = new Map<string, { meta: AuditedFileMetric; raw: string; tokens: Set<string> }>();
 
   for (const entry of entries) {
+    try {
+      if (!fs.statSync(entry.fullPath).isFile()) continue;
+    } catch {
+      continue;
+    }
     const raw = fs.readFileSync(entry.fullPath, 'utf8');
     const tokens = estimateTokens(raw);
     const overBudget = tokens > tokenBudgetLimit;
