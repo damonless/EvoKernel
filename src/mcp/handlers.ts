@@ -13,6 +13,7 @@ import { EvoGatekeeper } from '../core/gatekeeper.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
 import { ensureGitInfoExclude, findGitRoot, syncManagedRuleBlocks } from '../cli/init.js';
+import { McpProxyManager, parseExternalToolId } from './proxy.js';
 
 const WORKSPACE_PARAM_SCHEMA = {
   type: 'string',
@@ -225,16 +226,22 @@ export class EvoMcpDispatcher {
   private storage: EvoStorage;
   private telemetry: EvoTelemetry;
   private gatekeeper: EvoGatekeeper;
+  private proxyManager: McpProxyManager;
   private readonly onCoreRulesChanged?: () => void;
 
   constructor(workspaceRoot: string, onCoreRulesChanged?: () => void) {
     this.defaultRoot = path.resolve(workspaceRoot);
     this.activeWorkspaceDir = this.defaultRoot;
     this.onCoreRulesChanged = onCoreRulesChanged;
+    this.proxyManager = new McpProxyManager(this.defaultRoot);
     const initialCtx = this.getOrCreateContext(this.defaultRoot);
     this.storage = initialCtx.storage;
     this.telemetry = initialCtx.telemetry;
     this.gatekeeper = initialCtx.gatekeeper;
+  }
+
+  public getProxyManager(): McpProxyManager {
+    return this.proxyManager;
   }
 
   private getOrCreateContext(targetRoot: string): WorkspaceContext {
@@ -337,7 +344,9 @@ export class EvoMcpDispatcher {
   public handleToolCall(
     name: string,
     args: Record<string, unknown> = {}
-  ): { isError?: boolean; content: Array<{ type: 'text'; text: string }> } {
+  ):
+    | { isError?: boolean; content: Array<{ type: 'text'; text: string }> }
+    | Promise<{ isError?: boolean; content: Array<{ type: 'text'; text: string }> }> {
     try {
       const rawWs = args.workspace ?? args.workspace_path;
       if (
@@ -607,6 +616,19 @@ export class EvoMcpDispatcher {
       return { content: [{ type: 'text' as const, text: l2Body }] };
     }
 
+    const parsedExt = parseExternalToolId(id);
+    if (parsedExt) {
+      const extTool = this.storage.getExternalTool(id);
+      if (extTool) {
+        this.telemetry.recordUsage(id, true, 300);
+        const body =
+          tier === 'L1'
+            ? `[EXTERNAL TOOL L1] ${extTool.id} (server: ${extTool.serverName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}`
+            : `[EXTERNAL TOOL L2] ${extTool.id} (server: ${extTool.serverName}, tool: ${extTool.originalName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}\n\nExecution:\nRouted via downstream MCP server '${extTool.serverName}' using stdio JSON-RPC.\nCall via: evo_run("${extTool.id}", args)`;
+        return { content: [{ type: 'text' as const, text: body }] };
+      }
+    }
+
     return {
       isError: true,
       content: [{ type: 'text' as const, text: `Capability '${id}' not found in .evo/.` }],
@@ -614,11 +636,40 @@ export class EvoMcpDispatcher {
   }
 
   private handleRun(args: Record<string, unknown>) {
-    const toolId = sanitizeId(String(args.tool_id || ''));
+    const rawToolId = String(args.tool_id || '');
+    const toolId = sanitizeId(rawToolId);
     const toolArgs = (args.args && typeof args.args === 'object' ? args.args : {}) as Record<
       string,
       unknown
     >;
+
+    const parsedExt = parseExternalToolId(toolId);
+    if (parsedExt) {
+      const config = this.storage.getConfig();
+      const serverConfig = config.externalServers?.[parsedExt.serverName];
+      if (!serverConfig || serverConfig.disabled) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text' as const,
+              text: `Downstream MCP server '${parsedExt.serverName}' is not configured or is disabled in .evo/config.json.`,
+            },
+          ],
+        };
+      }
+      return this.proxyManager
+        .callTool(parsedExt.serverName, parsedExt.originalToolName, toolArgs, serverConfig)
+        .then((res) => {
+          this.telemetry.recordUsage(toolId, !res.isError, res.isError ? 0 : 850);
+          const header = `[evo_run: ${toolId} (proxy: ${parsedExt.serverName}/${parsedExt.originalToolName}) | exit=${res.isError ? 1 : 0} | ${res.durationMs}ms]`;
+          const formattedText = res.content.map((c) => c.text).join('\n\n');
+          return {
+            isError: res.isError,
+            content: [{ type: 'text' as const, text: `${header}\n\n${formattedText}` }],
+          };
+        });
+    }
 
     let tool = this.storage.getTool(toolId);
     let activeTelemetry = this.telemetry;
@@ -856,6 +907,11 @@ export class EvoMcpDispatcher {
   }
 
   public close(): void {
+    try {
+      this.proxyManager.close();
+    } catch {
+      // ignore
+    }
     for (const ctx of this.contexts.values()) {
       try {
         ctx.telemetry.close();

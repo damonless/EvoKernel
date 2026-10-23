@@ -3,9 +3,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseInitTargets, runInit, runUninstall } from './init.js';
-import { runBootstrap } from './bootstrap.js';
+import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from './visualizer.js';
+import { parseHookEvent, parseHookPayloadArg, runHook } from './hook.js';
 import { startMcpStdioServer } from '../mcp/server.js';
 import {
   EvoStorage,
@@ -26,14 +27,16 @@ Commands:
   init [--stealth] [--targets <list|auto>]
                       Detect and wire L0 Meta-Rule Seed + Single Meta-MCP
                       (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
-  bootstrap           Cold-start 10s repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories
+  bootstrap [--max-commits <N>]
+                      Cold-start repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories (default: 50, up to 500)
   memory [verify]     Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
   audit [--global]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
   refactor [--apply]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
   tree                Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/)
   stats               Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings
   mcp                 Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
-  hook <event>        Lifecycle hook handler (post-tool | stop) for anti-forgetting evolution enforcement
+  hook <event> [--event <name>]
+                      Universal lifecycle hook router (post-tool | stop | pre-commit) for anti-forgetting evolution enforcement and git pre-commit audit
   doctor              Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and sandbox self-tests
   uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
 `);
@@ -181,9 +184,13 @@ export function runCli(argv: string[]): void {
     }
 
     case 'bootstrap': {
-      console.log('🔍 Scanning repository structure, build configs, and git fix history...');
-      const summary = runBootstrap(workspaceRoot);
+      const maxCommits = parseMaxCommitsArg(args);
+      console.log(`🔍 Scanning repository structure, build configs, and git fix history (maxCommits: ${maxCommits})...`);
+      const summary = runBootstrap(workspaceRoot, { maxCommits });
       console.log('✅ Cold-start gene extraction complete (all capabilities passed 4-stage Gatekeeper):');
+      if (summary.detectedStacks && summary.detectedStacks.length > 0) {
+        console.log(`  ├─ 📦 Detected Stacks     : ${summary.detectedStacks.join(', ')}`);
+      }
       console.log(`  ├─ 🛡️  Rules evolved       : ${summary.rulesCreated.join(', ') || '(none)'}`);
       console.log(`  ├─ ⚡ Skills evolved      : ${summary.skillsCreated.join(', ') || '(none)'}`);
       console.log(`  ├─ 🔧 Micro-Tools evolved : ${summary.toolsCreated.join(', ') || '(none)'}`);
@@ -226,30 +233,18 @@ export function runCli(argv: string[]): void {
     }
 
     case 'hook': {
-      const event = (args[1] || 'stop').toLowerCase();
-      const storage = new EvoStorage(workspaceRoot);
-      const telemetry = new EvoTelemetry(storage);
-      if (event === 'mark-recovery' || event === 'post-tool') {
-        telemetry.setSessionFlag('pending_evolution', 'true');
-        const lastId = telemetry.getSessionFlag('last_crystallized_id');
-        if (lastId) {
-          telemetry.setSessionFlag('dirty_crystallized_id', lastId);
-        }
-      } else if (event === 'stop') {
-        const pending = telemetry.getSessionFlag('pending_evolution');
-        if (pending === 'true') {
-          console.log(
-            '[EvoKernel Hook Reminder] Detected bug recovery or temporary script creation in this session without capability crystallization. Consider calling `evo_propose` to distill a reusable Memory, Rule, Skill, or Micro-Tool.'
-          );
-        }
-        const dirtyId = telemetry.getSessionFlag('dirty_crystallized_id');
-        if (dirtyId) {
-          console.log(
-            `[EvoKernel Anti-Poisoning Alert] Code was modified after capability '${dirtyId}' was crystallized in this session. Verify that '${dirtyId}' still matches the final code or update it via evo_propose.`
-          );
-        }
+      const event = parseHookEvent(args);
+      const payload = parseHookPayloadArg(args);
+      const result = runHook(event, {
+        workspaceRoot,
+        payload,
+      });
+      if (result.output) {
+        console.log(result.output);
       }
-      telemetry.close();
+      if (result.exitCode !== 0) {
+        process.exit(result.exitCode);
+      }
       break;
     }
 

@@ -386,6 +386,19 @@ export class EvoTelemetry {
         upsertTelemetry.run(t.id, 'tool', t.title, t.l0_summary, '**/*', now, t.created_at);
       }
 
+      // Index external tools into telemetry and FTS
+      const externalTools = this.storage.listExternalTools();
+      for (const et of externalTools) {
+        activeIds.add(et.id);
+        const schemaText = JSON.stringify(et.inputSchema);
+        const cjkKw = extractCjkBigrams(`${et.title} ${et.description}`).join(' ');
+        const kw = `external proxy mcp ${et.serverName} ${et.originalName} ${cjkKw}`.trim();
+        const l0 = (et.description || `External MCP tool from ${et.serverName}`).slice(0, 140);
+        insertFallback.run(et.id, 'tool', et.title, l0, kw, schemaText);
+        insertFts?.run(et.id, 'tool', et.title, l0, kw, schemaText);
+        upsertTelemetry.run(et.id, 'tool', et.title, l0, '**/*', now, et.cachedAt);
+      }
+
       for (const m of memories) {
         const cjkKw = extractCjkBigrams(
           `${m.title} ${m.l0_summary} ${m.symptom} ${m.root_cause} ${m.solution}`

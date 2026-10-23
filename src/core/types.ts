@@ -71,6 +71,25 @@ export interface MemoryVerificationReport {
   topology_anchors: TopologyAnchor[];
 }
 
+export interface ExternalMcpServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  disabled?: boolean;
+  timeoutMs?: number;
+}
+
+export interface ExternalToolDefinition {
+  id: string; // e.g. "ext__sqlite__read_query"
+  serverName: string;
+  originalName: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  cachedAt: string;
+}
+
 export interface EvoConfig {
   version: string;
   maxCoreRuleTokens: number;
@@ -81,6 +100,7 @@ export interface EvoConfig {
   sandboxTimeoutMs: number;
   enabledHarnesses: string[];
   sharedEvoDir?: string;
+  externalServers?: Record<string, ExternalMcpServerConfig>;
 }
 
 export interface EvoRule {

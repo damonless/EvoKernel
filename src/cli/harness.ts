@@ -179,14 +179,24 @@ export function removeMcpJson(filePath: string): boolean {
 // Zero-Dependency TOML Config Utilities (.codex/config.toml)
 // ============================================================================
 
-export function upsertCodexToml(filePath: string, workspaceRoot: string): void {
+export function upsertCodexToml(
+  filePath: string,
+  workspaceRootOrCommand: string,
+  customArgs?: string[]
+): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
-  const useLocalDist = fs.existsSync(localDistEntry);
-  const command = useLocalDist ? 'node' : 'npx';
-  const args = useLocalDist
-    ? ['./dist/cli/index.js', 'mcp']
-    : ['-y', 'evo-kernel', 'mcp'];
+  let command: string;
+  let args: string[];
+
+  if (Array.isArray(customArgs)) {
+    command = workspaceRootOrCommand;
+    args = customArgs;
+  } else {
+    const localDistEntry = path.join(workspaceRootOrCommand, 'dist', 'cli', 'index.js');
+    const useLocalDist = fs.existsSync(localDistEntry);
+    command = useLocalDist ? 'node' : 'npx';
+    args = useLocalDist ? ['./dist/cli/index.js', 'mcp'] : ['-y', 'evo-kernel', 'mcp'];
+  }
 
   let existing = '';
   if (fs.existsSync(filePath)) {
@@ -200,7 +210,8 @@ export function upsertCodexToml(filePath: string, workspaceRoot: string): void {
   const sectionHeader = '[mcp_servers.evo-kernel]';
   const sectionBody = `${sectionHeader}\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\n`;
 
-  const sectionRegex = /^[ \t]*\[mcp_servers\.evo-kernel\][ \t]*(?:\r?\n(?!^[ \t]*\[)[^\r\n]*)*(?:\r?\n)?/m;
+  const sectionRegex =
+    /^[ \t]*\[mcp_servers\.evo-kernel\][ \t]*(?:#[^\r\n]*)?(?:\r?\n(?![ \t]*(?:\[|#[^\r\n]*\r?\n[ \t]*\[))[^\r\n]*)*(?:\r?\n)?/m;
 
   let updated = '';
   if (sectionRegex.test(existing)) {
@@ -218,7 +229,8 @@ export function removeCodexToml(filePath: string): boolean {
   if (!fs.existsSync(filePath)) return false;
   try {
     const existing = fs.readFileSync(filePath, 'utf8');
-    const sectionRegex = /^[ \t]*\[mcp_servers\.evo-kernel\][ \t]*(?:\r?\n(?!^[ \t]*\[)[^\r\n]*)*(?:\r?\n)?/m;
+    const sectionRegex =
+      /^[ \t]*\[mcp_servers\.evo-kernel\][ \t]*(?:#[^\r\n]*)?(?:\r?\n(?![ \t]*(?:\[|#[^\r\n]*\r?\n[ \t]*\[))[^\r\n]*)*(?:\r?\n)?/m;
     if (!sectionRegex.test(existing)) return false;
 
     const cleaned = existing.replace(sectionRegex, '').trim();
@@ -511,7 +523,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   id = 'claude';
   name = 'Claude Code';
   ruleFiles = ['CLAUDE.md'];
-  mcpFiles = ['.mcp.json'];
+  mcpFiles = ['.mcp.json', '.claude/settings.json'];
   dirs = ['.claude'];
 
   detectWorkspace(ws: string): boolean {
@@ -1172,12 +1184,25 @@ export function parseHarnessTargets(
   }
 
   const normalized = new Set<string>();
+  const unknownTokens: string[] = [];
   for (const token of tokens) {
     const mapped = normalizeTargetToken(token);
     if (mapped) {
       normalized.add(mapped);
+    } else {
+      unknownTokens.push(token);
     }
   }
 
-  return normalized.size > 0 ? Array.from(normalized) : allTargets;
+  if (unknownTokens.length > 0) {
+    console.warn(
+      `[EvoKernel Warning] Unknown harness target(s) ignored: ${unknownTokens.join(', ')}. Valid targets are: ${allTargets.join(', ')}`
+    );
+  }
+
+  if (normalized.size > 0) {
+    return Array.from(normalized);
+  }
+
+  return detectCascadedTargets(workspaceRoot, env, homeDir);
 }

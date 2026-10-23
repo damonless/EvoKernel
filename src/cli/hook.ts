@@ -1,0 +1,438 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { execSync } from 'node:child_process';
+import { EvoStorage } from '../core/storage.js';
+import { EvoTelemetry } from '../core/telemetry.js';
+import { renderAuditReport, runAudit } from './audit.js';
+
+export type HookEvent = 'post-tool' | 'stop' | 'pre-commit' | 'mark-recovery';
+
+export interface HookOptions {
+  workspaceRoot?: string;
+  event?: HookEvent | string;
+  payload?: Record<string, unknown> | string;
+  stdinData?: string;
+  toolName?: string;
+  targetFile?: string;
+  dryRun?: boolean;
+}
+
+export interface HookResult {
+  event: HookEvent;
+  success: boolean;
+  exitCode: number;
+  output: string;
+  recalledRules?: string[];
+  crystallizationSuggested?: boolean;
+  dirtyRuleId?: string;
+  auditPassed?: boolean;
+  errors?: string[];
+}
+
+const EDIT_TOOL_NAMES = new Set([
+  'edit_file',
+  'write_file',
+  'write_to_file',
+  'replace_file_content',
+  'multi_replace_file_content',
+  'patch',
+  'execute_command',
+  'run_command',
+  'bash',
+]);
+
+const FORBIDDEN_STAGED_PATTERNS = [
+  /\.evo\/\.cache\//,
+  /\.evo\/telemetry\.db(?:-wal|-shm)?$/,
+];
+
+export function matchesScopeGlob(filePath: string, scopeGlob: string): boolean {
+  if (!scopeGlob || scopeGlob === '*' || scopeGlob === '**/*') return true;
+  const normalizedFile = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const normalizedGlob = scopeGlob.replace(/\\/g, '/').replace(/^\/+/, '');
+
+  let pattern = normalizedGlob.replace(/\{([^}]+)\}/g, (_match, group) => {
+    const parts = group.split(',').map((p: string) => p.trim());
+    return `__BRACE_OPEN__${parts.join('__BRACE_OR__')}__BRACE_CLOSE__`;
+  });
+
+  let regexStr = pattern
+    .replace(/[.+^$()|[\]\\]/g, '\\$&')
+    .replace(/\*\*\//g, '__GLOBSTAR_SLASH__')
+    .replace(/\*\*/g, '__GLOBSTAR__')
+    .replace(/\*/g, '__STAR__')
+    .replace(/\?/g, '__QUESTION__');
+
+  regexStr = regexStr
+    .replace(/__GLOBSTAR_SLASH__/g, '(?:.*\\/)?')
+    .replace(/__GLOBSTAR__/g, '.*')
+    .replace(/__STAR__/g, '[^\\/]*')
+    .replace(/__QUESTION__/g, '[^\\/]')
+    .replace(/__BRACE_OPEN__/g, '(?:')
+    .replace(/__BRACE_OR__/g, '|')
+    .replace(/__BRACE_CLOSE__/g, ')');
+
+  const regex = new RegExp(`^${regexStr}$`, 'i');
+  return regex.test(normalizedFile);
+}
+
+export function parseHookEvent(args: string[]): HookEvent {
+  const eqArg = args.find((a) => a.startsWith('--event='));
+  if (eqArg) {
+    return normalizeHookEvent(eqArg.slice('--event='.length));
+  }
+  const idx = args.indexOf('--event');
+  if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
+    return normalizeHookEvent(args[idx + 1]);
+  }
+  if (args[1] && !args[1].startsWith('-')) {
+    return normalizeHookEvent(args[1]);
+  }
+  return 'stop';
+}
+
+export function normalizeHookEvent(raw: string): HookEvent {
+  const clean = (raw || '').trim().toLowerCase().replace(/_/g, '-');
+  if (clean === 'post-tool' || clean === 'posttool') return 'post-tool';
+  if (clean === 'stop') return 'stop';
+  if (clean === 'pre-commit' || clean === 'precommit') return 'pre-commit';
+  if (clean === 'mark-recovery' || clean === 'recovery') return 'mark-recovery';
+  return 'stop';
+}
+
+export function parseHookPayloadArg(args: string[]): Record<string, unknown> | undefined {
+  const eqArg = args.find((a) => a.startsWith('--payload='));
+  if (eqArg) {
+    try {
+      return JSON.parse(eqArg.slice('--payload='.length)) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+  }
+  const idx = args.indexOf('--payload');
+  if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
+    try {
+      return JSON.parse(args[idx + 1]) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+  }
+  const toolIdx = args.indexOf('--tool');
+  const fileIdx = args.indexOf('--file');
+  if (toolIdx !== -1 || fileIdx !== -1) {
+    const p: Record<string, unknown> = {};
+    if (toolIdx !== -1 && args[toolIdx + 1]) p.tool_name = args[toolIdx + 1];
+    if (fileIdx !== -1 && args[fileIdx + 1]) p.path = args[fileIdx + 1];
+    return p;
+  }
+  return undefined;
+}
+
+function resolvePayload(options: HookOptions): Record<string, unknown> {
+  if (options.payload && typeof options.payload === 'object') {
+    return options.payload;
+  }
+  if (typeof options.payload === 'string') {
+    try {
+      return JSON.parse(options.payload) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  if (typeof options.stdinData === 'string') {
+    try {
+      return JSON.parse(options.stdinData) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function getGitFiles(workspaceRoot: string, stagedOnly: boolean): string[] {
+  try {
+    const cmd = stagedOnly ? 'git diff --cached --name-only' : 'git status --porcelain';
+    const out = execSync(cmd, {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    if (stagedOnly) {
+      return out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    }
+    const files: string[] = [];
+    for (const line of out.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+/);
+      const filePath = parts[parts.length - 1];
+      if (filePath) files.push(filePath);
+    }
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+export function handlePostTool(
+  workspaceRoot: string,
+  payload: Record<string, unknown>,
+  options: HookOptions
+): HookResult {
+  const toolName = String(
+    payload.tool_name ||
+    payload.tool ||
+    payload.name ||
+    payload.ToolName ||
+    options.toolName ||
+    ''
+  ).toLowerCase();
+
+  const toolInput = (payload.tool_input || payload.input || payload.Arguments || payload.args || {}) as Record<string, unknown>;
+  const rawPath = String(
+    toolInput.path ||
+    toolInput.Path ||
+    toolInput.file ||
+    toolInput.filePath ||
+    toolInput.TargetFile ||
+    toolInput.target_file ||
+    payload.path ||
+    payload.file ||
+    options.targetFile ||
+    ''
+  );
+
+  const storage = new EvoStorage(workspaceRoot);
+  const telemetry = new EvoTelemetry(storage);
+
+  let output = '';
+  const recalledRuleIds: string[] = [];
+
+  const isEvoPropose =
+    toolName.includes('evo_propose') ||
+    toolName.includes('evo_compact');
+
+  if (isEvoPropose) {
+    const innerArgs = (toolInput.Arguments || toolInput.args || toolInput) as Record<string, unknown>;
+    const proposedId = String(innerArgs.id || 'capability');
+    telemetry.setSessionFlag('last_crystallized_id', proposedId);
+    telemetry.setSessionFlag('pending_evolution', 'false');
+    telemetry.setSessionFlag('unproposed_edit_count', '0');
+    telemetry.setSessionFlag('dirty_crystallized_id', '');
+    output = `[EvoKernel Post-Tool] Capability '${proposedId}' registered. Session evolution debt cleared.`;
+  } else {
+    const isMutation = EDIT_TOOL_NAMES.has(toolName) || Boolean(rawPath) || (!toolName && !rawPath);
+    if (isMutation) {
+      const normPath = rawPath.replace(/\\/g, '/');
+      const isInternalMeta =
+        Boolean(rawPath) &&
+        (normPath.includes('/.evo/') ||
+          normPath.includes('/.agents/teamwork/') ||
+          normPath.includes('/.gemini/antigravity/'));
+
+      if (!isInternalMeta) {
+        telemetry.setSessionFlag('pending_evolution', 'true');
+        const currentCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
+        telemetry.setSessionFlag('unproposed_edit_count', String(currentCount + 1));
+
+        const lastCrystallized = telemetry.getSessionFlag('last_crystallized_id');
+        if (lastCrystallized) {
+          telemetry.setSessionFlag('dirty_crystallized_id', lastCrystallized);
+        }
+      }
+
+      if (rawPath) {
+        const relPath = path.isAbsolute(rawPath)
+          ? path.relative(workspaceRoot, rawPath).replace(/\\/g, '/')
+          : normPath;
+
+        const rules = storage.listRules();
+        for (const rule of rules) {
+          if (rule.scope_glob && matchesScopeGlob(relPath, rule.scope_glob)) {
+            recalledRuleIds.push(rule.id);
+          }
+        }
+
+        if (recalledRuleIds.length > 0) {
+          const matchedDetails = recalledRuleIds
+            .map((id) => {
+              const r = storage.getRule(id);
+              return r
+                ? `  ├─ 🛡️  [${r.id}] ${r.title ? `${r.title} — ` : ''}${r.l0_summary}`
+                : `  ├─ 🛡️  [${id}]`;
+            })
+            .join('\n');
+          output = `[EvoKernel Post-Tool Active Rule Guardrail] Target '${relPath}' matched active invariant(s):\n${matchedDetails}`;
+        }
+      }
+    }
+  }
+
+  telemetry.close();
+
+  return {
+    event: 'post-tool',
+    success: true,
+    exitCode: 0,
+    output,
+    recalledRules: recalledRuleIds,
+  };
+}
+
+export function handleStop(
+  workspaceRoot: string,
+  payload: Record<string, unknown>,
+  _options: HookOptions
+): HookResult {
+  const storage = new EvoStorage(workspaceRoot);
+  const telemetry = new EvoTelemetry(storage);
+
+  const pending = telemetry.getSessionFlag('pending_evolution') === 'true';
+  const dirtyId = telemetry.getSessionFlag('dirty_crystallized_id');
+  const editCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
+
+  const modifiedFiles = getGitFiles(workspaceRoot, false).filter((f) => {
+    const norm = f.replace(/\\/g, '/');
+    return (
+      !norm.startsWith('.evo/') &&
+      !norm.startsWith('.agents/teamwork/') &&
+      !norm.startsWith('.git/')
+    );
+  });
+
+  const hasUncrystallizedEdits = pending || editCount > 0 || modifiedFiles.length > 0;
+  const messages: string[] = [];
+
+  if (dirtyId) {
+    messages.push(
+      `⚠️  [EvoKernel Anti-Poisoning Alert] Source code was modified after capability '${dirtyId}' was crystallized in this session. Verify that '${dirtyId}' still matches final code or update it via evo_propose.`
+    );
+  }
+
+  if (hasUncrystallizedEdits) {
+    const editSummary = modifiedFiles.length > 0
+      ? `(${modifiedFiles.slice(0, 3).join(', ')}${modifiedFiles.length > 3 ? ` +${modifiedFiles.length - 3} more` : ''})`
+      : `(${editCount} mutation steps recorded)`;
+
+    messages.push(
+      `💡 [EvoKernel Hook Reminder] Session work detected without capability crystallization ${editSummary}:\n` +
+      `  ├─ 🧠 Bug Fix / Defect Pattern : evo_propose(kind: "memory", symptom: "...", root_cause: "...", solution: "...", target_symbols: [...])\n` +
+      `  ├─ 🛡️  Architectural Invariant  : evo_propose(kind: "rule", l0_summary: "...", scope_glob: "...") [zero magic numbers]\n` +
+      `  └─ 🔧 Reusable Micro-Tool     : evo_propose(kind: "tool", ...) [--self-test verified]\n` +
+      `  Output receipt in response: 🧬 EvoKernel 演进回执：[<kind>] <id>（<新增/更新摘要>）`
+    );
+  }
+
+  telemetry.close();
+
+  let finalOutput = messages.join('\n\n');
+  if (payload.transcriptPath || payload.transcript_path) {
+    const allowPayload = JSON.stringify({ decision: 'allow' });
+    finalOutput = finalOutput ? `${finalOutput}\n${allowPayload}` : allowPayload;
+  }
+
+  return {
+    event: 'stop',
+    success: true,
+    exitCode: 0,
+    output: finalOutput,
+    crystallizationSuggested: hasUncrystallizedEdits,
+    dirtyRuleId: dirtyId || undefined,
+  };
+}
+
+export function handlePreCommit(
+  workspaceRoot: string,
+  _payload: Record<string, unknown>,
+  _options: HookOptions
+): HookResult {
+  const stagedFiles = getGitFiles(workspaceRoot, true);
+  const forbiddenStaged = stagedFiles.filter((file) => {
+    const norm = file.replace(/\\/g, '/');
+    return FORBIDDEN_STAGED_PATTERNS.some((pat) => pat.test(norm));
+  });
+
+  if (forbiddenStaged.length > 0) {
+    const err =
+      `❌ [EvoKernel Pre-Commit Hook] COMMIT BLOCKED: Forbidden internal cache or telemetry database file staged:\n` +
+      forbiddenStaged.map((f) => `  - ${f}`).join('\n') +
+      `\nRun \`git reset HEAD <file>\` and ensure it is excluded via \`evo init --stealth\`.`;
+    return {
+      event: 'pre-commit',
+      success: false,
+      exitCode: 1,
+      output: err,
+      errors: forbiddenStaged,
+    };
+  }
+
+  const report = runAudit(workspaceRoot, { includeGlobal: false });
+  if (!report.healthy) {
+    const rendered = renderAuditReport(report);
+    const err =
+      `${rendered}\n\n` +
+      `❌ [EvoKernel Pre-Commit Hook] COMMIT BLOCKED: Audit detected invariant violations.\n` +
+      `Resolve rule budget violations (>1500 tokens), domain leaks, or redundancies before committing.`;
+    return {
+      event: 'pre-commit',
+      success: false,
+      exitCode: 1,
+      output: err,
+      auditPassed: false,
+    };
+  }
+
+  return {
+    event: 'pre-commit',
+    success: true,
+    exitCode: 0,
+    output: `✅ [EvoKernel Pre-Commit Hook] All checks passed (healthy token budget, zero domain leaks, clean git staging). Commit allowed.`,
+    auditPassed: true,
+  };
+}
+
+export function runHook(rawEvent: string, options: HookOptions = {}): HookResult {
+  const ws = path.resolve(options.workspaceRoot || process.cwd());
+  const event = normalizeHookEvent(rawEvent || options.event || 'stop');
+  const payload = resolvePayload(options);
+
+  try {
+    switch (event) {
+      case 'post-tool':
+        return handlePostTool(ws, payload, options);
+      case 'stop':
+        return handleStop(ws, payload, options);
+      case 'pre-commit':
+        return handlePreCommit(ws, payload, options);
+      case 'mark-recovery': {
+        const storage = new EvoStorage(ws);
+        const telemetry = new EvoTelemetry(storage);
+        telemetry.setSessionFlag('pending_evolution', 'true');
+        telemetry.close();
+        return {
+          event: 'mark-recovery',
+          success: true,
+          exitCode: 0,
+          output: '[EvoKernel Hook] Recovery marked.',
+        };
+      }
+      default:
+        return handleStop(ws, payload, options);
+    }
+  } catch (error) {
+    if (event === 'pre-commit') {
+      return {
+        event,
+        success: false,
+        exitCode: 1,
+        output: `[EvoKernel Hook Error] ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return {
+      event,
+      success: true,
+      exitCode: 0,
+      output: '',
+    };
+  }
+}

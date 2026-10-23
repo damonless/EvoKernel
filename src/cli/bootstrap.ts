@@ -9,15 +9,366 @@ import { syncManagedRuleBlocks } from './init.js';
 import { EVO_RULE_ARCHITECT_PROPOSAL } from './audit.js';
 import type { ProposalPayload } from '../core/types.js';
 
+export interface BootstrapOptions {
+  maxCommits?: number;
+}
+
+export type SupportedStack =
+  | 'rust'
+  | 'go'
+  | 'python'
+  | 'java_kotlin'
+  | 'typescript_javascript'
+  | 'c_cpp';
+
+export interface DetectedStack {
+  stack: SupportedStack;
+  name: string;
+  indicatorFiles: string[];
+  details?: {
+    isEsm?: boolean;
+    hasTs?: boolean;
+    hasKotlin?: boolean;
+    [key: string]: unknown;
+  };
+}
+
 export interface BootstrapSummary {
   rulesCreated: string[];
   skillsCreated: string[];
   toolsCreated: string[];
   memoriesCreated: string[];
   skippedOrDuplicate: string[];
+  detectedStacks: string[];
 }
 
-export function runBootstrap(workspaceRoot: string): BootstrapSummary {
+export function parseMaxCommitsArg(args: string[]): number {
+  const eqArg = args.find((a) => a.startsWith('--max-commits='));
+  if (eqArg) {
+    const val = parseInt(eqArg.slice('--max-commits='.length), 10);
+    if (!Number.isNaN(val)) {
+      return Math.min(Math.max(val, 1), 500);
+    }
+  }
+  const idx = args.indexOf('--max-commits');
+  if (idx !== -1 && args[idx + 1]) {
+    const nextArg = args[idx + 1];
+    if (!nextArg.startsWith('-') || /^-\d+$/.test(nextArg)) {
+      const val = parseInt(nextArg, 10);
+      if (!Number.isNaN(val)) {
+        return Math.min(Math.max(val, 1), 500);
+      }
+    }
+  }
+  return 50;
+}
+
+export function detectProjectStacks(workspaceRoot: string): DetectedStack[] {
+  const detected: DetectedStack[] = [];
+
+  function findIndicators(candidates: string[]): string[] {
+    const found: string[] = [];
+    for (const f of candidates) {
+      if (fs.existsSync(path.join(workspaceRoot, f))) {
+        found.push(f);
+      }
+    }
+    if (found.length > 0) return found;
+
+    try {
+      const entries = fs.readdirSync(workspaceRoot, { withFileTypes: true });
+      const ignoreDirs = new Set([
+        'node_modules',
+        '.git',
+        'dist',
+        '.evo',
+        '.codegraph',
+        '.cache',
+        'target',
+        'build',
+        'tmp',
+      ]);
+      for (const entry of entries) {
+        if (entry.isDirectory() && !ignoreDirs.has(entry.name)) {
+          for (const f of candidates) {
+            const sub = path.join(entry.name, f);
+            if (fs.existsSync(path.join(workspaceRoot, sub))) {
+              found.push(sub.replace(/\\/g, '/'));
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore directory access errors
+    }
+    return found;
+  }
+
+  // 1. Rust: Cargo.toml
+  const rustFiles = findIndicators(['Cargo.toml']);
+  if (rustFiles.length > 0) {
+    detected.push({
+      stack: 'rust',
+      name: 'Rust',
+      indicatorFiles: rustFiles,
+    });
+  }
+
+  // 2. Go: go.mod
+  const goFiles = findIndicators(['go.mod']);
+  if (goFiles.length > 0) {
+    detected.push({
+      stack: 'go',
+      name: 'Go',
+      indicatorFiles: goFiles,
+    });
+  }
+
+  // 3. Python: pyproject.toml, requirements.txt, Pipfile
+  const pyFiles = findIndicators(['pyproject.toml', 'requirements.txt', 'Pipfile']);
+  if (pyFiles.length > 0) {
+    detected.push({
+      stack: 'python',
+      name: 'Python',
+      indicatorFiles: pyFiles,
+    });
+  }
+
+  // 4. Java / Kotlin: pom.xml, build.gradle, build.gradle.kts
+  const jvmFiles = findIndicators(['pom.xml', 'build.gradle', 'build.gradle.kts']);
+  if (jvmFiles.length > 0) {
+    const hasKotlin = jvmFiles.some((f) => f.endsWith('.kts'));
+    detected.push({
+      stack: 'java_kotlin',
+      name: hasKotlin ? 'Kotlin/Java' : 'Java',
+      indicatorFiles: jvmFiles,
+      details: { hasKotlin },
+    });
+  }
+
+  // 5. TypeScript / JavaScript: package.json
+  const tsJsFiles = findIndicators(['package.json']);
+  if (tsJsFiles.length > 0) {
+    let isEsm = false;
+    let hasTs = fs.existsSync(path.join(workspaceRoot, 'tsconfig.json'));
+    try {
+      const primaryPkgPath = path.join(workspaceRoot, tsJsFiles[0]);
+      if (fs.existsSync(primaryPkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(primaryPkgPath, 'utf8')) as Record<string, unknown>;
+        const deps = {
+          ...((pkg.dependencies as Record<string, string>) || {}),
+          ...((pkg.devDependencies as Record<string, string>) || {}),
+        };
+        if (pkg.type === 'module') isEsm = true;
+        if (deps.typescript) hasTs = true;
+      }
+    } catch {
+      // ignore parse error
+    }
+    detected.push({
+      stack: 'typescript_javascript',
+      name: hasTs ? (isEsm ? 'TypeScript (NodeNext ESM)' : 'TypeScript') : 'JavaScript',
+      indicatorFiles: tsJsFiles,
+      details: { isEsm, hasTs },
+    });
+  }
+
+  // 6. C / C++: CMakeLists.txt, Makefile
+  const cCppFiles = findIndicators(['CMakeLists.txt', 'Makefile']);
+  if (cCppFiles.length > 0) {
+    detected.push({
+      stack: 'c_cpp',
+      name: 'C/C++',
+      indicatorFiles: cCppFiles,
+    });
+  }
+
+  return detected;
+}
+
+export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload[] {
+  const proposals: ProposalPayload[] = [];
+
+  for (const item of stacks) {
+    switch (item.stack) {
+      case 'rust': {
+        proposals.push({
+          kind: 'rule',
+          id: 'rust-borrow-memory-safety',
+          title: 'Rust Ownership, Borrow Checker & Unsafe Invariants',
+          l0_summary: 'Enforce borrow checker ownership, avoid unsafe blocks unless audited, and prevent lifetime ambiguities in Rust modules.',
+          scope_glob: 'src/**/*.rs',
+          core: true,
+          priority: 85,
+          origin: 'bootstrap',
+          transfer_scenarios: [
+            'Systems programming modules with concurrent data access',
+            'Foreign function interface boundary layers and unsafe wrappers',
+          ],
+          content: [
+            '1. Respect ownership and borrowing: prefer borrowing (&T or &mut T) over cloning data unless ownership transfer is strictly required.',
+            '2. Avoid unsafe code blocks whenever possible; if unsafe is strictly necessary, encapsulate it inside a safe abstraction and document safety invariants.',
+            '3. Handle errors idiomatically using Result and the ? operator; never call unwrap or expect directly in production library code.',
+            '4. Ensure deterministic resource cleanup using the Drop trait and maintain explicit lifetimes where reference ambiguity may occur.',
+          ].join('\n'),
+        });
+        break;
+      }
+
+      case 'go': {
+        proposals.push({
+          kind: 'rule',
+          id: 'go-goroutine-leak-prevention',
+          title: 'Go Goroutine Leak & Concurrency Invariants',
+          l0_summary: 'Prevent goroutine and context leaks, enforce explicit channel closure, and ensure proper error wrapping across Go packages.',
+          scope_glob: '**/*.go',
+          core: true,
+          priority: 85,
+          origin: 'bootstrap',
+          transfer_scenarios: [
+            'Concurrent microservices processing stream pipelines',
+            'Background workers and worker pools with cancellation contexts',
+          ],
+          content: [
+            '1. Always bind goroutine lifecycles to a parent context to guarantee termination on shutdown or cancellation.',
+            '2. Ensure channels have a single dedicated owner responsible for closing them; never write to a closed channel.',
+            '3. Avoid goroutine leaks by ensuring all channel reads and select statements have non-blocking timeout or cancellation branches.',
+            '4. Wrap errors with contextual information using fmt.Errorf with %w for error chain inspection.',
+          ].join('\n'),
+        });
+        break;
+      }
+
+      case 'python': {
+        proposals.push({
+          kind: 'rule',
+          id: 'python-type-hints-async-invariants',
+          title: 'Python Type Hints & Async Resource Invariants',
+          l0_summary: 'Enforce type hints and runtime validation, prevent unhandled async cancellation, and ensure deterministic resource cleanup.',
+          scope_glob: '**/*.py',
+          core: true,
+          priority: 85,
+          origin: 'bootstrap',
+          transfer_scenarios: [
+            'AsyncIO web frameworks and background task runners',
+            'Data processing pipelines and microservice API clients',
+          ],
+          content: [
+            '1. Annotate all public function signatures and class methods with explicit type hints using typing or collections.abc.',
+            '2. Manage asynchronous task lifecycles explicitly; avoid unawaited coroutines and guard against CancelledError in cleanup paths.',
+            '3. Always utilize context managers (with or async with) for file I/O, database sessions, and network connections to guarantee resource release.',
+            '4. Catch specific exceptions rather than bare except clauses; preserve exception chains with raise ... from err.',
+          ].join('\n'),
+        });
+        break;
+      }
+
+      case 'typescript_javascript': {
+        const isEsm = item.details?.isEsm;
+        const hasTs = item.details?.hasTs;
+
+        if (isEsm && hasTs) {
+          proposals.push({
+            kind: 'rule',
+            id: 'esm-typescript-imports',
+            title: 'NodeNext ESM TypeScript Import Invariant',
+            l0_summary: 'Always use explicit .js extensions on relative imports and import type for types in ESM TypeScript.',
+            scope_glob: 'src/**/*.ts',
+            core: true,
+            priority: 85,
+            origin: 'bootstrap',
+            transfer_scenarios: [
+              'Node.js ESM backend microservices and CLI tools',
+              'Monorepo workspace packages consuming TypeScript libraries',
+            ],
+            content: [
+              '1. Use explicit `.js` file extensions in relative module imports (e.g., `import { EvoStorage } from "./storage.js"`).',
+              '2. Always use `import type { ... }` when importing TypeScript interfaces or type aliases so native Node type-stripping (`node:module.stripTypeScriptTypes`) never fails at runtime.',
+              '3. Prefer built-in Node.js modules (`node:fs`, `node:path`, `node:sqlite`, `node:test`) over third-party npm packages to preserve zero-dependency security.',
+            ].join('\n'),
+          });
+        } else {
+          proposals.push({
+            kind: 'rule',
+            id: 'js-ts-clean-invariants',
+            title: 'JavaScript & TypeScript Clean Architecture Invariants',
+            l0_summary: 'Enforce strict type safety, avoid any types, and ensure deterministic resource cleanup across JavaScript and TypeScript modules.',
+            scope_glob: '**/*.{ts,js,mjs}',
+            core: true,
+            priority: 85,
+            origin: 'bootstrap',
+            transfer_scenarios: [
+              'JavaScript and TypeScript frontend application components',
+              'Backend service utility libraries and shared modules',
+            ],
+            content: [
+              '1. Enforce strict typing and validation: avoid any types in favor of unknown with type guards or strong interfaces.',
+              '2. Prefer const over let, enforce strict equality (===), and keep functions pure where state mutation is unnecessary.',
+              '3. Manage asynchronous flows with async and await; handle promise rejections deterministically with typed error handling.',
+              '4. Prefer built-in platform APIs and standard runtime utilities over heavy third-party dependencies.',
+            ].join('\n'),
+          });
+        }
+        break;
+      }
+
+      case 'java_kotlin': {
+        proposals.push({
+          kind: 'rule',
+          id: 'java-resource-null-safety',
+          title: 'Java & Kotlin Resource Lifecycle and Null Safety Invariants',
+          l0_summary: 'Enforce try-with-resources lifecycle management, prevent NullPointerExceptions via nullability annotations, and avoid raw types.',
+          scope_glob: 'src/**/*.{java,kt}',
+          core: true,
+          priority: 85,
+          origin: 'bootstrap',
+          transfer_scenarios: [
+            'Backend enterprise service request handling pipelines',
+            'Database access layers and external resource streaming',
+          ],
+          content: [
+            '1. Always use try-with-resources for any AutoCloseable or Closeable instances to prevent connection and descriptor leaks.',
+            '2. Enforce explicit nullability contracts: use nullability annotations in Java, and leverage Kotlin null-safe operators.',
+            '3. Avoid raw generic types; always provide explicit type parameters for collections and generic classes.',
+            '4. Prefer immutable collections and data objects where state mutation is not strictly required.',
+          ].join('\n'),
+        });
+        break;
+      }
+
+      case 'c_cpp': {
+        proposals.push({
+          kind: 'rule',
+          id: 'cpp-raii-memory-safety',
+          title: 'C & C++ RAII Resource Management and Pointer Safety Invariants',
+          l0_summary: 'Enforce RAII resource management, prefer smart pointers over raw owning pointers, and validate pointer bounds and arithmetic.',
+          scope_glob: 'src/**/*.{c,h,cpp,hpp}',
+          core: true,
+          priority: 85,
+          origin: 'bootstrap',
+          transfer_scenarios: [
+            'Low-level device drivers and systems libraries',
+            'High-performance native engines and computational modules',
+          ],
+          content: [
+            '1. Enforce RAII: tie resource allocation (memory, file handles, mutexes) strictly to object lifetimes via smart pointers and lock guards.',
+            '2. Avoid owning raw pointers; use raw pointers or references solely as non-owning observers.',
+            '3. Prevent buffer overflows and out-of-bounds access by validating indices and using sized container abstractions.',
+            '4. Initialize all primitive variables and pointers at declaration; never leave dangling or uninitialized pointers.',
+          ].join('\n'),
+        });
+        break;
+      }
+    }
+  }
+
+  return proposals;
+}
+
+export function runBootstrap(
+  workspaceRoot: string,
+  options?: BootstrapOptions
+): BootstrapSummary {
   const storage = new EvoStorage(workspaceRoot);
   storage.ensureInitialized();
   const telemetry = new EvoTelemetry(storage);
@@ -29,49 +380,23 @@ export function runBootstrap(workspaceRoot: string): BootstrapSummary {
     toolsCreated: [],
     memoriesCreated: [],
     skippedOrDuplicate: [],
+    detectedStacks: [],
   };
 
   const proposals: ProposalPayload[] = [];
+  const maxCommits = options?.maxCommits ?? 50;
 
-  // 1. Inspect package.json / project stack to evolve stack-specific rules & tools
-  const pkgPath = path.join(workspaceRoot, 'package.json');
-  if (fs.existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as Record<string, unknown>;
-      const deps = {
-        ...((pkg.dependencies as Record<string, string>) || {}),
-        ...((pkg.devDependencies as Record<string, string>) || {}),
-      };
-      const isEsm = pkg.type === 'module';
-      const hasTs = Boolean(deps.typescript || fs.existsSync(path.join(workspaceRoot, 'tsconfig.json')));
-
-      if (isEsm && hasTs) {
-        proposals.push({
-          kind: 'rule',
-          id: 'esm-typescript-imports',
-          title: 'NodeNext ESM TypeScript Import Invariant',
-          l0_summary: 'Always use explicit .js extensions on relative imports and import type for types in ESM TypeScript.',
-          scope_glob: 'src/**/*.ts',
-          core: true,
-          priority: 85,
-          origin: 'bootstrap',
-          content: [
-            '1. Use explicit `.js` file extensions in relative module imports (e.g., `import { EvoStorage } from "./storage.js"`).',
-            '2. Always use `import type { ... }` when importing TypeScript interfaces or type aliases so native Node type-stripping (`node:module.stripTypeScriptTypes`) never fails at runtime.',
-            '3. Prefer built-in Node.js modules (`node:fs`, `node:path`, `node:sqlite`, `node:test`) over third-party npm packages to preserve zero-dependency security.',
-          ].join('\n'),
-        });
-      }
-    } catch {
-      // ignore package.json parse error
-    }
-  }
+  // 1. Detect multi-language stacks and synthesize stack-specific seed rules
+  const detectedStacks = detectProjectStacks(workspaceRoot);
+  summary.detectedStacks = detectedStacks.map((s) => s.name);
+  const stackRules = generateStackSeedRules(detectedStacks);
+  proposals.push(...stackRules);
 
   // 2. Mine recent git fix/revert history if git repo has commits
   const gitRes = spawnSync(
     'git',
-    ['log', '-n', '30', '--grep=fix\\|bug\\|revert\\|hotfix', '-i', '--oneline'],
-    { cwd: workspaceRoot, encoding: 'utf8', timeout: 3000 }
+    ['log', '-n', String(maxCommits), '--grep=fix\\|bug\\|revert\\|hotfix', '-i', '--oneline'],
+    { cwd: workspaceRoot, encoding: 'utf8', timeout: 5000 }
   );
   const fixCommits =
     gitRes.status === 0 && gitRes.stdout
@@ -90,6 +415,10 @@ export function runBootstrap(workspaceRoot: string): BootstrapSummary {
     core: true,
     priority: 90,
     origin: 'bootstrap',
+    transfer_scenarios: [
+      'Micro-Tool sandbox verification and safe execution pipelines',
+      'Dynamic script registration and gatekeeper validation gates',
+    ],
     content: [
       'When proposing a new Micro-Tool via `evo_propose(kind: "tool")`:',
       '- The script MUST check `process.env.EVO_SELF_TEST === "1"` or `process.argv.includes("--self-test")` and run a side-effect-free verification check exiting with code `0`.',
@@ -101,7 +430,11 @@ export function runBootstrap(workspaceRoot: string): BootstrapSummary {
   });
 
   // 2b. Mine top git fix commits into AST-anchored Episodic Memories (.evo/memories/)
-  for (const commitLine of fixCommits.slice(0, 2)) {
+  const memoryCommitLimit = Math.min(
+    fixCommits.length,
+    Math.max(2, Math.min(10, Math.floor(maxCommits / 10)))
+  );
+  for (const commitLine of fixCommits.slice(0, memoryCommitLimit)) {
     const spaceIdx = commitLine.indexOf(' ');
     if (spaceIdx === -1) continue;
     const sha = commitLine.slice(0, spaceIdx).trim();
@@ -122,7 +455,7 @@ export function runBootstrap(workspaceRoot: string): BootstrapSummary {
         if (!f || f.startsWith('.evo/')) return false;
         const ext = path.extname(f).toLowerCase();
         return (
-          ['.ts', '.js', '.mjs', '.c', '.h', '.cpp', '.py', '.go', '.rs'].includes(ext) &&
+          ['.ts', '.js', '.mjs', '.c', '.h', '.cpp', '.py', '.go', '.rs', '.java', '.kt'].includes(ext) &&
           fs.existsSync(path.join(workspaceRoot, f))
         );
       })
@@ -280,6 +613,17 @@ console.log(JSON.stringify({ recent_hotspots: topFiles }, null, 2));
   });
 
   for (const prop of proposals) {
+    const alreadyExists =
+      (prop.kind === 'rule' && Boolean(storage.getRule(prop.id))) ||
+      (prop.kind === 'skill' && Boolean(storage.getSkill(prop.id))) ||
+      (prop.kind === 'tool' && Boolean(storage.getTool(prop.id))) ||
+      (prop.kind === 'memory' && Boolean(storage.getMemory(prop.id)));
+
+    if (alreadyExists) {
+      summary.skippedOrDuplicate.push(`${prop.id} (already_exists)`);
+      continue;
+    }
+
     const res = gatekeeper.evaluateAndCommit(prop);
     if (res.passed) {
       if (prop.kind === 'rule') summary.rulesCreated.push(prop.id);

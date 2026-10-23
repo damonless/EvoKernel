@@ -155,14 +155,15 @@ export function ensureGitInfoExclude(workspaceRoot: string, patterns: string[]):
 
   const expandedPatterns: string[] = [];
   for (const pat of patterns) {
-    if (!expandedPatterns.includes(pat)) {
-      expandedPatterns.push(pat);
-    }
     if (relPrefix && !relPrefix.startsWith('..')) {
       const cleanPat = pat.replace(/^\/+/, '');
       const prefixed = `/${relPrefix}/${cleanPat}`;
       if (!expandedPatterns.includes(prefixed)) {
         expandedPatterns.push(prefixed);
+      }
+    } else {
+      if (!expandedPatterns.includes(pat)) {
+        expandedPatterns.push(pat);
       }
     }
   }
@@ -205,27 +206,51 @@ export function removeGitInfoExclude(workspaceRoot: string, patterns?: string[])
     .replace(/^\/+|\/+$/g, '');
 
   const patternSet = new Set<string>();
-  if (patterns) {
-    for (const pat of patterns) {
+  const targetPatterns = patterns && patterns.length > 0
+    ? patterns
+    : [
+        '.evo/',
+        '.evo/.cache/',
+        ...Object.values(ALL_HARNESS_ADAPTERS).flatMap((a) => [
+          ...a.ruleFiles,
+          ...a.mcpFiles,
+          ...a.dirs.map((d) => (d.endsWith('/') ? d : `${d}/`)),
+        ]),
+      ];
+
+  for (const pat of targetPatterns) {
+    const clean = pat.replace(/^\/+/, '');
+    if (relPrefix && !relPrefix.startsWith('..')) {
+      patternSet.add(`/${relPrefix}/${clean}`);
+      patternSet.add(`${relPrefix}/${clean}`);
+    } else {
       patternSet.add(pat);
-      const clean = pat.replace(/^\/+/, '');
       patternSet.add(clean);
       patternSet.add(`/${clean}`);
-      if (relPrefix && !relPrefix.startsWith('..')) {
-        patternSet.add(`/${relPrefix}/${clean}`);
-        patternSet.add(`${relPrefix}/${clean}`);
-      }
     }
   }
 
   const kept: string[] = [];
   const removed: string[] = [];
   let inEvoBlock = false;
+  let currentBlockLines: string[] = [];
+
+  const flushBlock = (blockLines: string[], out: string[]) => {
+    const nonComment = blockLines.filter((l) => !l.trim().startsWith('#') && l.trim().length > 0);
+    if (nonComment.length > 0) {
+      out.push(...blockLines);
+    }
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.startsWith('# EvoKernel Stealth Mode')) {
+      if (inEvoBlock) {
+        flushBlock(currentBlockLines, kept);
+        currentBlockLines = [];
+      }
       inEvoBlock = true;
+      currentBlockLines.push(line);
       continue;
     }
     if (inEvoBlock) {
@@ -234,13 +259,17 @@ export function removeGitInfoExclude(workspaceRoot: string, patterns?: string[])
       }
       if (trimmed.startsWith('#')) {
         inEvoBlock = false;
+        flushBlock(currentBlockLines, kept);
+        currentBlockLines = [];
         kept.push(line);
         continue;
       }
-      if (!patterns || patternSet.has(trimmed) || trimmed.includes('.evo') || trimmed.includes('.mcp.json')) {
+      if (patternSet.has(trimmed)) {
         removed.push(trimmed);
         continue;
       }
+      currentBlockLines.push(line);
+      continue;
     }
 
     if (patternSet.has(trimmed)) {
@@ -249,6 +278,10 @@ export function removeGitInfoExclude(workspaceRoot: string, patterns?: string[])
     }
 
     kept.push(line);
+  }
+
+  if (inEvoBlock) {
+    flushBlock(currentBlockLines, kept);
   }
 
   const newContent = kept.join('\n').trim();
@@ -346,7 +379,10 @@ export function runInit(
   };
 }
 
-export function runUninstall(workspaceRoot: string): { cleanedFiles: string[] } {
+export function runUninstall(
+  workspaceRoot: string,
+  options?: { patterns?: string[] }
+): { cleanedFiles: string[] } {
   const cleanedFilesList: string[] = [];
   const dirsToPrune: string[] = [
     '.cursor/rules',
@@ -370,7 +406,19 @@ export function runUninstall(workspaceRoot: string): { cleanedFiles: string[] } 
   }
 
   pruneEmptyDirs(workspaceRoot, dirsToPrune);
-  removeGitInfoExclude(workspaceRoot);
+
+  const patternsToRemove = options?.patterns && options.patterns.length > 0
+    ? options.patterns
+    : [
+        '.evo/',
+        '.evo/.cache/',
+        ...Object.values(ALL_HARNESS_ADAPTERS).flatMap((a) => [
+          ...a.ruleFiles,
+          ...a.mcpFiles,
+          ...a.dirs.map((d) => (d.endsWith('/') ? d : `${d}/`)),
+        ]),
+      ];
+  removeGitInfoExclude(workspaceRoot, patternsToRemove);
 
   return { cleanedFiles: Array.from(new Set(cleanedFilesList)) };
 }

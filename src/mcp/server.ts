@@ -32,7 +32,7 @@ export function startMcpStdioServer(workspaceRoot: string): void {
     process.stdout.write(`${payload}\n`);
   };
 
-  rl.on('line', (line) => {
+  rl.on('line', async (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
 
@@ -79,7 +79,7 @@ export function startMcpStdioServer(workspaceRoot: string): void {
       case 'tools/call': {
         const toolName = String(params?.name || '');
         const toolArgs = (params?.arguments || {}) as Record<string, unknown>;
-        const callResult = dispatcher.handleToolCall(toolName, toolArgs);
+        const callResult = await dispatcher.handleToolCall(toolName, toolArgs);
         sendResponse(id, callResult);
         break;
       }

@@ -19,6 +19,9 @@ if (buildRes.status !== 0) {
 const testFiles = [
   path.join(rootDir, 'dist', 'tests', 'evo-kernel.test.js'),
   path.join(rootDir, 'dist', 'tests', 'multi-harness.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'hook.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'bootstrap.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'mcp-proxy.test.js'),
 ].filter((f) => fs.existsSync(f));
 
 const testArgs = [

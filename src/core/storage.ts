@@ -9,6 +9,7 @@ import type {
   EvoSkill,
   EvoTool,
   EvoToolManifest,
+  ExternalToolDefinition,
   ScriptRuntime,
   SymbolFingerprint,
 } from './types.js';
@@ -474,6 +475,33 @@ export class EvoStorage {
       }
     }
     return tools.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  // ==================== EXTERNAL MCP TOOLS ====================
+
+  public getExternalToolsCachePath(): string {
+    return path.join(this.cacheDir, 'external_tools.json');
+  }
+
+  public listExternalTools(): ExternalToolDefinition[] {
+    const cacheFile = this.getExternalToolsCachePath();
+    if (!fs.existsSync(cacheFile)) return [];
+    try {
+      const content = fs.readFileSync(cacheFile, 'utf8');
+      return JSON.parse(content) as ExternalToolDefinition[];
+    } catch {
+      return [];
+    }
+  }
+
+  public saveExternalTools(tools: ExternalToolDefinition[]): void {
+    fs.mkdirSync(this.cacheDir, { recursive: true });
+    fs.writeFileSync(this.getExternalToolsCachePath(), JSON.stringify(tools, null, 2), 'utf8');
+  }
+
+  public getExternalTool(id: string): ExternalToolDefinition | null {
+    const all = this.listExternalTools();
+    return all.find((t) => t.id === id) || null;
   }
 
   // ==================== EPISODIC MEMORIES ====================
