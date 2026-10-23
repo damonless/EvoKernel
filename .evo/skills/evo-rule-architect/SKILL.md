@@ -5,7 +5,7 @@ l0_summary: "Audits bloated CLAUDE.md/GEMINI.md/AGENTS.md and coupled skills, de
 tags: ["architecture","refactoring","rules","skills","context-hygiene","audit"]
 origin: "bootstrap"
 created_at: "2026-10-15T17:23:29.100Z"
-updated_at: "2026-10-21T15:14:01.589Z"
+updated_at: "2026-10-21T15:16:27.268Z"
 ---
 
 ## L1 Contract

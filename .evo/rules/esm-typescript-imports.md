@@ -8,7 +8,7 @@ priority: 85
 tokens: 154
 origin: "bootstrap"
 created_at: "2026-10-14T16:00:40.634Z"
-updated_at: "2026-10-21T15:14:00.816Z"
+updated_at: "2026-10-21T15:16:26.473Z"
 ---
 
 1. Use explicit `.js` file extensions in relative module imports (e.g., `import { EvoStorage } from "./storage.js"`).

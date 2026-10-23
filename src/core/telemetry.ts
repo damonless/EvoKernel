@@ -7,7 +7,7 @@ import { verifyMemoryFreshness } from './memory.js';
 
 export function extractCjkBigrams(text: string): string[] {
   const bigrams = new Set<string>();
-  const matches = text.match(/[\u4e00-\u9fa5]{2,}/g) || [];
+  const matches = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
   for (const seq of matches) {
     if (seq.length === 2) {
       bigrams.add(seq);
@@ -98,33 +98,60 @@ export function extractExtensionsFromGlob(scopeGlob: string): string[] {
   return Array.from(exts);
 }
 
-export function isScopeCompatibleWithWorkspace(scopeGlob: string, workspaceRoot: string): boolean {
-  const requiredExts = extractExtensionsFromGlob(scopeGlob);
-  if (requiredExts.length === 0) return true;
-  if (!workspaceRoot || !fs.existsSync(workspaceRoot)) return true;
+const DEPRIORITIZED_SCAN_DIRS = new Set([
+  'docs',
+  'doc',
+  'assets',
+  'images',
+  'drivers',
+  'middlewares',
+  'cmsis',
+  'vendor',
+  'third_party',
+  'external',
+  'lib',
+]);
 
+export function collectWorkspaceCodeExtensions(workspaceRoot: string): Set<string> {
   const foundCodeExts = new Set<string>();
-  let scannedFiles = 0;
-  const maxScan = 200;
+  if (!workspaceRoot || !fs.existsSync(workspaceRoot)) return foundCodeExts;
+
+  let scannedCodeFiles = 0;
+  let scannedTotalEntries = 0;
+  const maxCodeFiles = 300;
+  const maxTotalEntries = 2000;
 
   const walk = (dir: string, depth: number) => {
-    if (depth > 4 || scannedFiles >= maxScan) return;
+    if (depth > 4 || scannedCodeFiles >= maxCodeFiles || scannedTotalEntries >= maxTotalEntries) {
+      return;
+    }
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
+
+    entries.sort((a, b) => {
+      if (a.isDirectory() && b.isDirectory()) {
+        const aDep = DEPRIORITIZED_SCAN_DIRS.has(a.name.toLowerCase()) ? 1 : 0;
+        const bDep = DEPRIORITIZED_SCAN_DIRS.has(b.name.toLowerCase()) ? 1 : 0;
+        if (aDep !== bDep) return aDep - bDep;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
     for (const entry of entries) {
-      if (scannedFiles >= maxScan) break;
+      if (scannedCodeFiles >= maxCodeFiles || scannedTotalEntries >= maxTotalEntries) break;
       if (SCOPE_SCAN_IGNORED_DIRS.has(entry.name)) continue;
+      scannedTotalEntries++;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(full, depth + 1);
       } else if (entry.isFile()) {
-        scannedFiles++;
         const ext = path.extname(entry.name).toLowerCase();
         if (CODE_EXTENSIONS_FOR_SCOPE.has(ext)) {
+          scannedCodeFiles++;
           foundCodeExts.add(ext);
         }
       }
@@ -132,6 +159,19 @@ export function isScopeCompatibleWithWorkspace(scopeGlob: string, workspaceRoot:
   };
 
   walk(path.resolve(workspaceRoot), 0);
+  return foundCodeExts;
+}
+
+export function isScopeCompatibleWithWorkspace(
+  scopeGlob: string,
+  workspaceRoot: string,
+  precomputedExts?: Set<string>
+): boolean {
+  const requiredExts = extractExtensionsFromGlob(scopeGlob);
+  if (requiredExts.length === 0) return true;
+  if (!workspaceRoot || !fs.existsSync(workspaceRoot)) return true;
+
+  const foundCodeExts = precomputedExts ?? collectWorkspaceCodeExtensions(workspaceRoot);
   if (foundCodeExts.size === 0) return true;
   return requiredExts.some((ext) => foundCodeExts.has(ext));
 }
@@ -163,6 +203,11 @@ export class EvoTelemetry {
   }
 
   private initSchema(): void {
+    try {
+      this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;');
+    } catch {
+      // ignore pragma errors
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS telemetry (
         id TEXT PRIMARY KEY,
@@ -297,7 +342,7 @@ export class EvoTelemetry {
 
     for (const s of skills) {
       const bodyText = `${s.l1_contract}\n${s.l2_sop}`;
-      const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary}`).join(' ');
+      const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary} ${s.l1_contract} ${s.l2_sop}`).join(' ');
       const kw = `${s.tags.join(' ')} ${cjkKw}`.trim();
       insertFallback.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
       insertFts?.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
@@ -314,7 +359,9 @@ export class EvoTelemetry {
     }
 
     for (const m of memories) {
-      const cjkKw = extractCjkBigrams(`${m.title} ${m.l0_summary} ${m.symptom}`).join(' ');
+      const cjkKw = extractCjkBigrams(
+        `${m.title} ${m.l0_summary} ${m.symptom} ${m.root_cause} ${m.solution}`
+      ).join(' ');
       const keywords = [...m.target_symbols, ...m.tags, m.created_commit, cjkKw].filter(Boolean).join(' ');
       const bodyText = `${m.symptom}\n${m.root_cause}\n${m.solution}`;
       const scopeDisplay = m.target_symbols.slice(0, 3).join(', ') || '**/*';
@@ -397,9 +444,14 @@ export class EvoTelemetry {
     }
 
     const wsForScope = activeWorkspaceRoot || this.storage.rootDir;
+    const workspaceCodeExts = wsForScope ? collectWorkspaceCodeExtensions(wsForScope) : undefined;
     const filteredRows = rows.filter((r) => {
       if (String(r.kind) === 'rule') {
-        return isScopeCompatibleWithWorkspace(String(r.scope_glob || '**/*'), wsForScope);
+        return isScopeCompatibleWithWorkspace(
+          String(r.scope_glob || '**/*'),
+          wsForScope,
+          workspaceCodeExts
+        );
       }
       return true;
     });

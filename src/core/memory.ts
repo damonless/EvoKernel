@@ -425,7 +425,10 @@ function findSymbolDeclarationInLines(
   const scanRange = (start: number, end: number): DeclarationMatch | null => {
     for (let i = start; i <= end && i < lines.length; i++) {
       const line = lines[i];
-      const cleanLine = line.replace(/\/\/.*$/, '').replace(/\/\*.*?\*\//g, '');
+      const cleanLine = line
+        .replace(/\/\/.*$/, '')
+        .replace(/\/\*.*?\*\//g, '')
+        .replace(/\/\*.*$/, '');
       const trimmed = cleanLine.trim();
       if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
         continue;

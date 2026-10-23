@@ -6,8 +6,8 @@
  * - Zero external dependencies; O(1) latency (< 30ms) by reading only the last 64 KB of transcriptPath.
  * - Wrapped in top-level try/catch: never exits non-zero or blocks the host IDE.
  * - Injects an ephemeral evolution reminder via `injectSteps` when user corrections,
- *   multi-file bug fixes (>= 4 file edits without `evo_propose`), or post-crystallization
- *   code mutations are detected in the conversation transcript.
+ *   multi-file bug fixes (>= 4 source file edits without `evo_propose`), or post-crystallization
+ *   source code mutations are detected in the conversation transcript.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -51,7 +51,6 @@ function readTranscriptTailSteps(transcriptPath) {
     fs.readSync(fd, buf, 0, readSize, startOffset);
     const text = buf.toString('utf8');
     const rawLines = text.split(/\r?\n/);
-    // If we started mid-file, discard the potentially truncated first line
     if (startOffset > 0 && rawLines.length > 1) {
       rawLines.shift();
     }
@@ -111,8 +110,11 @@ function main() {
   let latestStepIndex = steps.length;
   let latestUserContent = '';
   let latestUserStepIndex = -1;
+  let seenModelStep = false;
+  let userInputHadPriorModelStep = false;
   let editCountSinceLastPropose = 0;
   let editsAfterPropose = 0;
+  let latestDirtyEditStepIndex = -1;
   let lastProposeId = '';
   let seenPropose = false;
 
@@ -121,12 +123,21 @@ function main() {
     const idx = typeof step.step_index === 'number' ? step.step_index : i;
     latestStepIndex = idx;
 
+    if (step.type === 'PLANNER_RESPONSE' || step.source === 'MODEL') {
+      seenModelStep = true;
+    }
+
     if (step.type === 'USER_INPUT' || step.source === 'USER_EXPLICIT') {
       latestUserContent = String(step.content || '');
       latestUserStepIndex = idx;
+      userInputHadPriorModelStep = seenModelStep;
     }
 
     const toolCalls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
+    if (toolCalls.length > 0) {
+      seenModelStep = true;
+    }
+
     for (const tc of toolCalls) {
       const toolName = String(tc.name || tc.tool_name || tc.ToolName || '');
       const args = tc.arguments || tc.args || tc.Arguments || {};
@@ -142,18 +153,31 @@ function main() {
         seenPropose = true;
         editCountSinceLastPropose = 0;
         editsAfterPropose = 0;
+        latestDirtyEditStepIndex = -1;
         const innerArgs = args.Arguments || args;
         lastProposeId = String(innerArgs?.id || lastProposeId || 'capability');
       } else if (EDIT_TOOL_NAMES.has(toolName)) {
-        editCountSinceLastPropose++;
-        if (seenPropose) {
-          editsAfterPropose++;
+        const targetPath = String(
+          args.Path || args.path || args.TargetFile || args.target_file || ''
+        ).replace(/\\/g, '/');
+        const isIgnoredMetaEdit =
+          targetPath.includes('/.gemini/antigravity/brain/') ||
+          targetPath.includes('/.evo/') ||
+          targetPath.endsWith('/PROJECT_STATE.md');
+
+        if (!isIgnoredMetaEdit) {
+          editCountSinceLastPropose++;
+          if (seenPropose) {
+            editsAfterPropose++;
+            latestDirtyEditStepIndex = idx;
+          }
         }
       }
     }
   }
 
-  const hasUserCorrection = CORRECTION_REGEX.test(latestUserContent);
+  const hasUserCorrection =
+    userInputHadPriorModelStep && CORRECTION_REGEX.test(latestUserContent);
   const hasHeavyUnproposeEdits = editCountSinceLastPropose >= 4;
   const hasDirtyPostProposeEdits = seenPropose && editsAfterPropose > 0;
 
@@ -164,31 +188,47 @@ function main() {
 
   const statePath = path.join(os.tmpdir(), 'evo-agy-hook-state.json');
   const allState = loadHookState(statePath);
-  const convState = allState[conversationId] || { lastRemindedStep: -999, lastCorrectionStep: -1 };
+  const convState = allState[conversationId] || {
+    lastRemindedStep: -999,
+    lastCorrectionStep: -1,
+    lastDirtyRemindedStep: -1,
+  };
 
-  const isNewCorrection = hasUserCorrection && latestUserStepIndex > convState.lastCorrectionStep;
-  const cooldownExpired = latestStepIndex - convState.lastRemindedStep >= COOLDOWN_STEPS;
+  const isNewCorrection =
+    hasUserCorrection && latestUserStepIndex > (convState.lastCorrectionStep ?? -1);
+  const isNewDirtyEdit =
+    hasDirtyPostProposeEdits &&
+    latestDirtyEditStepIndex > (convState.lastDirtyRemindedStep ?? -1);
+  const cooldownExpired =
+    latestStepIndex - (convState.lastRemindedStep ?? -999) >= COOLDOWN_STEPS;
 
-  if (!isNewCorrection && !cooldownExpired && !hasDirtyPostProposeEdits) {
+  if (!isNewCorrection && !isNewDirtyEdit && !(hasHeavyUnproposeEdits && cooldownExpired)) {
     process.stdout.write('{}\n');
     return;
   }
 
   allState[conversationId] = {
     lastRemindedStep: latestStepIndex,
-    lastCorrectionStep: hasUserCorrection ? latestUserStepIndex : convState.lastCorrectionStep,
+    lastCorrectionStep: hasUserCorrection
+      ? latestUserStepIndex
+      : (convState.lastCorrectionStep ?? -1),
+    lastDirtyRemindedStep: hasDirtyPostProposeEdits
+      ? latestDirtyEditStepIndex
+      : (convState.lastDirtyRemindedStep ?? -1),
   };
   saveHookState(statePath, allState);
 
   const reasons = [];
-  if (hasDirtyPostProposeEdits) {
-    reasons.push(`在结晶 '${lastProposeId}' 后又发生了 ${editsAfterPropose} 次代码修改（防脏规则投毒校验）`);
+  if (isNewDirtyEdit) {
+    reasons.push(
+      `在结晶 '${lastProposeId}' 后又发生了 ${editsAfterPropose} 次源码修改（防脏规则投毒校验）`
+    );
   }
-  if (hasUserCorrection) {
+  if (isNewCorrection) {
     reasons.push('检测到用户纠偏/回归反馈信号');
   }
-  if (hasHeavyUnproposeEdits) {
-    reasons.push(`已累计 ${editCountSinceLastPropose} 次文件修改尚未结晶`);
+  if (hasHeavyUnproposeEdits && (cooldownExpired || isNewCorrection || isNewDirtyEdit)) {
+    reasons.push(`已累计 ${editCountSinceLastPropose} 次源码修改尚未结晶`);
   }
 
   const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮修复并验证通过后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论纠偏请用 supersedes_id 升级 rule/skill，单点故障使用 memory），并在回复末尾输出 🧬 EvoKernel 演进回执。`;

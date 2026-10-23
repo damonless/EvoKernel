@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
@@ -78,9 +79,23 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   return updated;
 }
 
+function safeRealpath(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 export function findGitRoot(startDir: string): string | null {
   let current = path.resolve(startDir);
+  const homeReal = safeRealpath(os.homedir()).toLowerCase();
+  const tmpReal = safeRealpath(os.tmpdir()).toLowerCase();
   while (true) {
+    const currentReal = safeRealpath(current).toLowerCase();
+    if (currentReal === homeReal || currentReal === tmpReal) {
+      return null;
+    }
     if (fs.existsSync(path.join(current, '.git'))) {
       return current;
     }

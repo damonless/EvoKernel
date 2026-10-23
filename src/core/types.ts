@@ -74,6 +74,8 @@ export interface MemoryVerificationReport {
 export interface EvoConfig {
   version: string;
   maxCoreRuleTokens: number;
+  maxScopedRulesPerBucket: number;
+  maxTotalScopedRules: number;
   maxL0SummaryChars: number;
   duplicateBm25Threshold: number;
   sandboxTimeoutMs: number;
@@ -92,6 +94,7 @@ export interface EvoRule {
   tokens: number;
   origin: string;
   supersedes_id?: string;
+  transfer_scenarios?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -142,6 +145,7 @@ export interface ProposalPayload {
   core?: boolean;
   priority?: number;
   content?: string;
+  transfer_scenarios?: string[];
   // For skills:
   l1_contract?: string;
   l2_sop?: string;
@@ -190,6 +194,7 @@ export interface GatekeeperResult {
   passed: boolean;
   gate_failed?:
     | 'SCHEMA_SECURITY'
+    | 'ABSTRACTION_GATE'
     | 'SYNTAX_SANDBOX'
     | 'SYMBOL_GROUNDING'
     | 'DUPLICATE_CHECK'
@@ -198,11 +203,17 @@ export interface GatekeeperResult {
     | 'ERR_INVALID_SCHEMA'
     | 'ERR_SECURITY_VIOLATION'
     | 'ERR_GLOBAL_MEMORY_FORBIDDEN'
+    | 'ERR_SCOPE_TOO_NARROW'
+    | 'ERR_POINT_BUG_CASE_LOG'
+    | 'ERR_RULE_CONTAINS_DOMAIN_NUMBERS'
+    | 'ERR_RULE_COUPLED_TO_IDENTIFIERS'
+    | 'ERR_INSUFFICIENT_TRANSFER_SCENARIOS'
     | 'ERR_SYNTAX_CHECK'
     | 'ERR_SANDBOX_SELF_TEST'
     | 'ERR_SYMBOL_NOT_FOUND'
     | 'ERR_DUPLICATE_CAPABILITY'
-    | 'ERR_BUDGET_EXCEEDED';
+    | 'ERR_BUDGET_EXCEEDED'
+    | 'ERR_SCOPED_BUCKET_FULL';
   message: string;
   warning?: string;
   conflicting_ids?: string[];

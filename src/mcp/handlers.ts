@@ -125,7 +125,12 @@ export const META_MCP_TOOLS = [
         },
         content: {
           type: 'string',
-          description: '[For rule] Actionable markdown guardrails and rationale.',
+          description: '[For rule] Actionable markdown guardrails and rationale (code-state SSOT decoupled; use "Case Anchor:" for concrete symbol/threshold examples).',
+        },
+        transfer_scenarios: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '[For rule] At least 2 distinct cross-module/cross-scenario applications proving 1-level-up transferability.',
         },
         l1_contract: {
           type: 'string',
@@ -248,10 +253,16 @@ export class EvoMcpDispatcher {
 
   private getGlobalFallbackContexts(): WorkspaceContext[] {
     const fallbacks: WorkspaceContext[] = [];
-    const activeRoot = path.resolve(this.storage.rootDir);
+    const activeEvoDir = path.resolve(this.storage.evoDir);
+    const candidates: string[] = [];
 
-    if (this.defaultRoot !== activeRoot && fs.existsSync(path.join(this.defaultRoot, '.evo'))) {
-      fallbacks.push(this.getOrCreateContext(this.defaultRoot));
+    const defaultNorm = this.defaultRoot.replace(/\\/g, '/').toLowerCase();
+    if (
+      defaultNorm.endsWith('/.evo/global') ||
+      (process.env.EVO_GLOBAL_DIR &&
+        path.resolve(process.env.EVO_GLOBAL_DIR).toLowerCase() === this.defaultRoot.toLowerCase())
+    ) {
+      candidates.push(this.defaultRoot);
     }
 
     const envGlobal = process.env.EVO_GLOBAL_DIR
@@ -259,14 +270,18 @@ export class EvoMcpDispatcher {
       : !process.env.NODE_TEST_CONTEXT
         ? path.join(os.homedir(), '.evo', 'global')
         : null;
+    if (envGlobal) {
+      candidates.push(envGlobal);
+    }
 
-    if (
-      envGlobal &&
-      envGlobal !== activeRoot &&
-      envGlobal !== this.defaultRoot &&
-      fs.existsSync(path.join(envGlobal, '.evo'))
-    ) {
-      fallbacks.push(this.getOrCreateContext(envGlobal));
+    const seenEvoDirs = new Set<string>([activeEvoDir]);
+    for (const cand of candidates) {
+      if (!fs.existsSync(path.join(cand, '.evo'))) continue;
+      const ctx = this.getOrCreateContext(cand);
+      const candEvoDir = path.resolve(ctx.storage.evoDir);
+      if (seenEvoDirs.has(candEvoDir)) continue;
+      seenEvoDirs.add(candEvoDir);
+      fallbacks.push(ctx);
     }
 
     return fallbacks;
@@ -324,6 +339,31 @@ export class EvoMcpDispatcher {
     args: Record<string, unknown> = {}
   ): { isError?: boolean; content: Array<{ type: 'text'; text: string }> } {
     try {
+      const rawWs = args.workspace ?? args.workspace_path;
+      if (
+        (name === 'evo_propose' || name === 'evo_compact') &&
+        (typeof rawWs !== 'string' || !rawWs.trim())
+      ) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  passed: false,
+                  gate_failed: 'SCHEMA_SECURITY',
+                  error_code: 'ERR_INVALID_SCHEMA',
+                  message:
+                    'Non-empty workspace path is required for evo_propose and evo_compact.',
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
       this.bindActiveContext(name, args);
       switch (name) {
         case 'evo_search':
@@ -664,7 +704,10 @@ export class EvoMcpDispatcher {
   }
 
   private handleCompact(args: Record<string, unknown>) {
-    const targetIds = Array.isArray(args.target_ids) ? args.target_ids.map((id) => sanitizeId(String(id))) : [];
+    const rawTargetIds = Array.isArray(args.target_ids)
+      ? args.target_ids.map((id) => sanitizeId(String(id))).filter(Boolean)
+      : [];
+    const targetIds = Array.from(new Set(rawTargetIds));
     const mergedProposal = args.merged_proposal as ProposalPayload | undefined;
     const reason = String(args.reason || 'Compacted via evo_compact');
 
@@ -674,11 +717,61 @@ export class EvoMcpDispatcher {
         content: [
           {
             type: 'text' as const,
-            text: 'evo_compact requires at least 2 target_ids and a valid merged_proposal object.',
+            text: JSON.stringify(
+              {
+                passed: false,
+                gate_failed: 'SCHEMA_SECURITY',
+                error_code: 'ERR_INVALID_SCHEMA',
+                message:
+                  'evo_compact requires at least 2 distinct target_ids and a valid merged_proposal object.',
+              },
+              null,
+              2
+            ),
           },
         ],
       };
     }
+
+    const existingTargets = targetIds
+      .map((id) => ({
+        id,
+        item:
+          this.storage.getRule(id) ||
+          this.storage.getSkill(id) ||
+          this.storage.getTool(id) ||
+          this.storage.getMemory(id),
+      }))
+      .filter((entry) => entry.item !== null);
+
+    if (existingTargets.length < 2) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                passed: false,
+                gate_failed: 'SCHEMA_SECURITY',
+                error_code: 'ERR_INVALID_SCHEMA',
+                message: `evo_compact requires at least 2 existing capabilities in target_ids (found ${existingTargets.length} existing out of [${targetIds.join(', ')}]).`,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    const mergedCleanId = sanitizeId(mergedProposal.id || '');
+    const existingMergedTarget =
+      this.storage.getRule(mergedCleanId) ||
+      this.storage.getSkill(mergedCleanId) ||
+      this.storage.getTool(mergedCleanId) ||
+      this.storage.getMemory(mergedCleanId);
+    const preservedCreatedAt = existingMergedTarget?.created_at;
 
     // Module 3.1: Atomic pre-check before archiving or deleting any target_ids
     const precheck = this.gatekeeper.evaluateAndCommit(
@@ -689,6 +782,7 @@ export class EvoMcpDispatcher {
       {
         dryRun: true,
         excludeIdsFromBudgetAndSim: targetIds,
+        preservedCreatedAt,
       }
     );
 
@@ -727,10 +821,15 @@ export class EvoMcpDispatcher {
 
     this.telemetry.syncFromDisk();
 
-    const commitRes = this.gatekeeper.evaluateAndCommit({
-      ...mergedProposal,
-      origin: 'compacted',
-    });
+    const commitRes = this.gatekeeper.evaluateAndCommit(
+      {
+        ...mergedProposal,
+        origin: 'compacted',
+      },
+      {
+        preservedCreatedAt,
+      }
+    );
 
     syncManagedRuleBlocks(this.storage.rootDir);
     if (this.onCoreRulesChanged) {

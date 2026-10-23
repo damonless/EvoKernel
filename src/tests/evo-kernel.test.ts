@@ -41,6 +41,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     try {
       // Hardcoded Windows user path
       const badPathRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'hardcoded-path-rule',
         title: 'Bad Path Rule',
@@ -52,6 +53,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Destructive command
       const rmRfRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'destructive-rule',
         title: 'Clean root',
@@ -63,6 +65,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Oversized L0 summary (>140 chars)
       const longL0Res = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'long-l0-rule',
         title: 'Long L0',
@@ -83,6 +86,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     try {
       // Syntax error in Node script
       const syntaxErrRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'tool',
         id: 'broken-syntax-tool',
         title: 'Broken Syntax Tool',
@@ -95,6 +99,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Fails --self-test dry-run (exits with 1)
       const failingTestRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'tool',
         id: 'failing-self-test-tool',
         title: 'Failing Self Test Tool',
@@ -114,6 +119,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         console.log(JSON.stringify({ sum: (args.a || 0) + (args.b || 0) }));
       `;
       const goodToolRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'tool',
         id: 'math-adder-tool',
         title: 'Deterministic Math Adder Micro-Tool',
@@ -125,6 +131,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Run the newly evolved tool immediately via evo_run without restarting
       const runRes = dispatcher.handleToolCall('evo_run', {
+        workspace: ws,
         tool_id: 'math-adder-tool',
         args: { a: 19, b: 23 },
       });
@@ -141,20 +148,24 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     const dispatcher = new EvoMcpDispatcher(ws);
     try {
       const r1 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'codegraph-first-protocol',
         title: 'Always Check CodeGraph Index Before Grepping',
         l0_summary: 'Check .codegraph directory and run codegraph explore before grep or read_file.',
+        core: true,
         content: 'Always verify .codegraph exists and query symbol graph first.',
       });
       assert.equal(Boolean(r1.isError), false);
 
       // Attempt duplicate rule with different ID
       const r2 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'duplicate-codegraph-rule',
         title: 'Check CodeGraph Index Before Grepping Files',
         l0_summary: 'Always check .codegraph directory and run codegraph explore before grep.',
+        core: true,
         content: 'Duplicate content here.',
       });
       assert.equal(r2.isError, true);
@@ -162,11 +173,13 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Upgrade with supersedes_id succeeds
       const r3 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'codegraph-v2-protocol',
         supersedes_id: 'codegraph-first-protocol',
         title: 'Check CodeGraph Index Before Grepping Files v2',
         l0_summary: 'Always check .codegraph directory and run codegraph explore before grep.',
+        core: true,
         content: 'Upgraded v2 protocol with automatic codegraph init -i fallback.',
       });
       assert.equal(Boolean(r3.isError), false);
@@ -187,6 +200,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     const dispatcher = new EvoMcpDispatcher(ws);
     try {
       const p1 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'database-pooling-guard',
         title: 'Database Connection Pooling Invariant',
@@ -197,6 +211,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(Boolean(p1.isError), false);
 
       const p2 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'redis-timeout-guard',
         title: 'Redis Socket Timeout Invariant',
@@ -208,6 +223,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // 3rd core rule exceeds the 120-token budget
       const p3 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'http-retry-backoff-guard',
         title: 'Outbound HTTP Exponential Backoff Invariant',
@@ -220,6 +236,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Compact p1 + p2 into a single concise rule to free budget
       const compactRes = dispatcher.handleToolCall('evo_compact', {
+        workspace: ws,
         target_ids: ['database-pooling-guard', 'redis-timeout-guard'],
         reason: 'Consolidate data-layer connection and timeout invariants to free core budget',
         merged_proposal: {
@@ -481,6 +498,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     try {
       // 1. Hallucinated symbol is rejected by AST Symbol Grounding Gate
       const badSymRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'memory',
         id: 'hallucinated-symbol-case',
         title: 'Hallucinated Symbol Case',
@@ -495,6 +513,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // 2. Real C + TS symbols pass Gatekeeper and bind AST fingerprints with 0 core budget impact
       const validMemRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'memory',
         id: 'bms-can-rx-timeout-glitch',
         title: 'BMS CAN 0x18FF50E5 Timeout Relay Drop',
@@ -556,6 +575,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     const dispatcher = new EvoMcpDispatcher(ws);
     try {
       const propRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'memory',
         id: 'can-isr-watchdog-case',
         title: 'CAN ISR Watchdog Reset Case',
@@ -595,6 +615,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Stage 1 + 2: evo_search should still report VERIFIED!
       const searchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
         query: 'IWDG watchdog BmsCanRxHandler',
         kind: 'memory',
       });
@@ -602,6 +623,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Stage 3: evo_inspect L2 should report VERIFIED, updated line numbers (L11-L17), and caller isr_router.c:3
       const inspectRes = dispatcher.handleToolCall('evo_inspect', {
+        workspace: ws,
         id: 'can-isr-watchdog-case',
         tier: 'L2',
       });
@@ -637,6 +659,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     try {
       // Propose an Episodic Memory anchored to CheckGridVoltage
       dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'memory',
         id: 'grid-voltage-trip-case',
         title: 'Grid Voltage False Trip at 255V',
@@ -649,10 +672,12 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // Also propose an active Rule on the same topic
       dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
         kind: 'rule',
         id: 'grid-voltage-adc-rule',
         title: 'Grid Voltage ADC Filtering Rule',
         l0_summary: 'Always filter grid voltage ADC samples before threshold comparison.',
+        core: true,
         content: 'Apply 4-sample moving average before calling CheckGridVoltage.',
       });
 
@@ -761,6 +786,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'proj-a-can-guard',
         title: 'Project A CAN Bus Guard',
         l0_summary: 'Validate CAN DLC bounds before frame unpacking in Project A.',
+        core: true,
         content: 'Always verify DLC <= 8 before reading payload bytes.',
       });
       assert.equal(propA.isError, undefined, propA.content[0]?.text);
@@ -771,6 +797,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'proj-b-spi-guard',
         title: 'Project B SPI DMA Guard',
         l0_summary: 'Ensure SPI DMA buffer alignment in Project B.',
+        core: true,
         content: 'Align DMA buffers to 32-byte cache lines before transfer.',
       });
       assert.equal(propB.isError, undefined, propB.content[0]?.text);
@@ -827,6 +854,12 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         mockTranscript,
         [
           JSON.stringify({
+            step_index: 0,
+            type: 'PLANNER_RESPONSE',
+            source: 'MODEL',
+            content: '我已经完成了初始修改。',
+          }),
+          JSON.stringify({
             step_index: 1,
             type: 'USER_INPUT',
             source: 'USER_EXPLICIT',
@@ -836,13 +869,14 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         'utf8'
       );
 
+      const convId = `test-conv-${Date.now()}`;
       const hookRun = spawnSync(
         process.execPath,
         [path.join(repoRoot, 'scripts', 'antigravity_hook.mjs'), 'PreInvocation'],
         {
           cwd: repoRoot,
           input: JSON.stringify({
-            conversationId: `test-conv-${Date.now()}`,
+            conversationId: convId,
             transcriptPath: mockTranscript,
             workspacePaths: [repoRoot],
           }),
@@ -853,6 +887,23 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       const hookOut = JSON.parse(hookRun.stdout.trim());
       assert.ok(Array.isArray(hookOut.injectSteps));
       assert.match(hookOut.injectSteps[0].ephemeralMessage, /\[EvoKernel 自演进提醒\]/);
+
+      // Cooldown test: immediate re-run without new dirty edits must respect cooldown ('{}')
+      const cooldownRun = spawnSync(
+        process.execPath,
+        [path.join(repoRoot, 'scripts', 'antigravity_hook.mjs'), 'PreInvocation'],
+        {
+          cwd: repoRoot,
+          input: JSON.stringify({
+            conversationId: convId,
+            transcriptPath: mockTranscript,
+            workspacePaths: [repoRoot],
+          }),
+          encoding: 'utf8',
+        }
+      );
+      assert.equal(cooldownRun.status, 0);
+      assert.equal(cooldownRun.stdout.trim(), '{}');
 
       // Non-existent transcript must exit 0 with '{}'
       const safeHookRun = spawnSync(
@@ -910,23 +961,229 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('17. Issue #7: evo_search returns empty on zero-match queries and never creates .evo/ in uninitialized folders', () => {
+  test('17. Issue #4, #6 & #8 (Module 7.1–7.3): Rule Abstraction, Backtick Identifier Detection, Chinese Case Anchor Section Exemption, Mandatory Transferability, and Scoped Bucket Cap', () => {
+    const ws = createTempWorkspace();
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      // 1. Reject single-file literal scope_glob without wildcards
+      const narrowScopeRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'energy-meter-scaling',
+        title: 'Energy Meter Scaling Guard',
+        l0_summary: 'Verify integer scaling units across metering boundaries.',
+        scope_glob: 'Source/EnergyMeter.c',
+        core: false,
+        content: 'Always verify unit scaling before accumulating energy counters.',
+      });
+      assert.equal(narrowScopeRes.isError, true);
+      assert.match(narrowScopeRes.content[0].text, /ERR_SCOPE_TOO_NARROW/);
+
+      // 2. Reject point-bug case log disguised as a rule
+      const pointBugRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'can-charge-timeout-zero-drop-defect',
+        title: 'CAN Charge Timeout Zero Drop Defect',
+        l0_summary: 'Prevent CAN charge timeout zero drop defect during frame loss.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content: 'Do not drop charge current to zero on single frame timeout.',
+      });
+      assert.equal(pointBugRes.isError, true);
+      assert.match(pointBugRes.content[0].text, /ERR_POINT_BUG_CASE_LOG/);
+
+      // 3. Reject hardcoded domain/physical parameter thresholds in rule body
+      const domainNumRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'bus-voltage-regulation-guard',
+        title: 'Bus Voltage Regulation Guard',
+        l0_summary: 'Maintain bus voltage regulation stability under high load.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'When apparent power exceeds 1500VA, clamp reference at 26.5V within hysteresis [-10V, -5V) and set wBusWeight=32.',
+      });
+      assert.equal(domainNumRes.isError, true);
+      assert.match(domainNumRes.content[0].text, /ERR_RULE_CONTAINS_DOMAIN_NUMBERS/);
+
+      // 4. Reject rules coupled to >= 3 concrete project identifiers/macros (Hungarian C & Backticked C# PascalCase/camelCase)
+      const coupledIdRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'bus-reference-arbitration-guard',
+        title: 'Bus Reference Arbitration Guard',
+        l0_summary: 'Verify multi-source arbitration priority before updating bus reference.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Always arbitrate wBatBusSw, wPvKeepBusRef, and wBusWeight when cbCHG_MODE_LION is active.',
+      });
+      assert.equal(coupledIdRes.isError, true);
+      assert.match(coupledIdRes.content[0].text, /ERR_RULE_COUPLED_TO_IDENTIFIERS/);
+
+      const backtickCsRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'wpf-ui-dispatch-throttling',
+        title: 'WPF UI Thread Dispatch Throttling',
+        l0_summary: 'Prevent UI thread starvation during high-frequency packet reception.',
+        scope_glob: 'Views/**/*.cs',
+        core: false,
+        content:
+          'In high-frequency callbacks, batch collection updates via `RemoveRange` and `BeginInvoke` instead of updating `CanCharge` and `CanDischarge` properties per frame.',
+      });
+      assert.equal(backtickCsRes.isError, true);
+      assert.match(backtickCsRes.content[0].text, /ERR_RULE_COUPLED_TO_IDENTIFIERS/);
+
+      // 5. Reject missing or insufficient transfer_scenarios (< 2 scenarios) on new non-core/scoped rules
+      const missingTransferRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'multi-source-setpoint-arbitration',
+        title: 'Multi-Source Setpoint Arbitration Invariant',
+        l0_summary: 'Verify priority arbitration and hysteresis deadband across all setpoint loops.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Verify priority arbitration across competing control sources before writing target setpoints.\nCase Anchor: wBatBusSw / wPvKeepBusRef @ 1500VA in BusControl.c',
+      });
+      assert.equal(missingTransferRes.isError, true);
+      assert.match(missingTransferRes.content[0].text, /ERR_INSUFFICIENT_TRANSFER_SCENARIOS/);
+
+      const weakTransferRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'multi-source-setpoint-arbitration',
+        title: 'Multi-Source Setpoint Arbitration Invariant',
+        l0_summary: 'Verify priority arbitration and hysteresis deadband across all setpoint loops.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        transfer_scenarios: ['Only applies to bus voltage loop'],
+        content:
+          'Verify priority arbitration across competing control sources before writing target setpoints.\nCase Anchor: wBatBusSw / wPvKeepBusRef @ 1500VA in BusControl.c',
+      });
+      assert.equal(weakTransferRes.isError, true);
+      assert.match(weakTransferRes.content[0].text, /ERR_INSUFFICIENT_TRANSFER_SCENARIOS/);
+
+      // 6. Accept 1-level-up abstracted rule with Chinese '## 典型反例锚点' section exemption and >= 2 transfer_scenarios (Scoped #1)
+      const validScoped1 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'multi-source-setpoint-arbitration',
+        title: 'Multi-Source Setpoint Arbitration Invariant',
+        l0_summary: 'Verify priority arbitration and hysteresis deadband across all setpoint loops.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        transfer_scenarios: [
+          'DC bus voltage reference arbitration between PV MPPT and battery loops',
+          'AC grid charge current limit arbitration between BMS CAN and thermal derating',
+        ],
+        content: [
+          'Verify priority arbitration and hysteresis deadband across competing control sources before writing target setpoints.',
+          '',
+          '## 典型反例锚点 (Case Anchors)',
+          '- 固件案例：`wBatBusSw`、`wPvKeepBusRef` 与 `wBusWeight` 在 1500VA / 26.5V 阈值下发生竞争',
+          '- 上位机案例：`RemoveRange`、`BeginInvoke`、`CanCharge` 与 `CanDischarge` 高频刷新',
+        ].join('\n'),
+      });
+      assert.equal(validScoped1.isError, undefined, validScoped1.content[0]?.text);
+
+      // Add Scoped #2 and Scoped #3 in the same 'source' bucket
+      const validScoped2 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'communication-timeout-hold-guard',
+        title: 'Communication Timeout State Hold Guard',
+        l0_summary: 'Hold last valid control command during transient communication frame loss.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        transfer_scenarios: [
+          'CAN bus BMS current limit hold during transient frame loss',
+          'RS485 meter power feedback hold during packet CRC retry',
+        ],
+        content:
+          'Never zero out actuator limits on a single dropped frame; apply a bounded hold timer before failsafe fallback.',
+      });
+      assert.equal(validScoped2.isError, undefined, validScoped2.content[0]?.text);
+
+      const validScoped3 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'adc-isr-pipeline-budget-guard',
+        title: 'High-Frequency ISR Execution Budget Guard',
+        l0_summary: 'Defer non-critical telemetry formatting outside high-frequency control ISRs.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        transfer_scenarios: [
+          'High-frequency ADC PWM current control loop ISR',
+          'High-speed grid PLL zero-crossing capture ISR',
+        ],
+        content:
+          'Keep high-frequency interrupt handlers strictly bounded to sampling and protection checks; move string/frame formatting to background tasks.',
+      });
+      assert.equal(validScoped3.isError, undefined, validScoped3.content[0]?.text);
+
+      // 7. 4th scoped rule in 'source' bucket without supersedes_id triggers ERR_SCOPED_BUCKET_FULL
+      const overflowScoped4 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'eeprom-wear-leveling-write-guard',
+        title: 'Non-Volatile Memory Write Debounce Guard',
+        l0_summary: 'Debounce and dirty-check configuration parameters before non-volatile writes.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        transfer_scenarios: [
+          'EEPROM calibration parameter write coalescing',
+          'Flash fault log ring-buffer wear leveling',
+        ],
+        content:
+          'Always compare new parameter values against cached shadow state and enforce write coalescing before committing to non-volatile storage.',
+      });
+      assert.equal(overflowScoped4.isError, true);
+      assert.match(overflowScoped4.content[0].text, /ERR_SCOPED_BUCKET_FULL/);
+
+      // 8. Passing supersedes_id allows upgrading within the full bucket
+      const upgradeScoped = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'communication-and-nvm-debounce-guard',
+        supersedes_id: 'communication-timeout-hold-guard',
+        title: 'Boundary I/O Timeout Hold & Write Debounce Guard',
+        l0_summary: 'Apply bounded hold timers on comm loss and dirty-check debounce on NVM writes.',
+        scope_glob: 'Source/**/*.c',
+        core: false,
+        content:
+          'Enforce bounded hold timers on transient communication loss and dirty-check coalescing before non-volatile storage writes.',
+      });
+      assert.equal(upgradeScoped.isError, undefined, upgradeScoped.content[0]?.text);
+    } finally {
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('18. Issue #7: evo_search returns empty on zero-match queries and never creates .evo/ in uninitialized folders', () => {
     const defaultWs = createTempWorkspace();
     const uninitializedDir = createTempWorkspace();
     const dispatcher = new EvoMcpDispatcher(defaultWs);
     try {
       // Seed a domain rule into defaultWs
       const seeded = dispatcher.handleToolCall('evo_propose', {
+        workspace: defaultWs,
         kind: 'rule',
         id: 'pv-charge-cap-feedback-invariant',
         title: 'PV Charge Cap Feedback Invariant',
         l0_summary: 'Verify off-grid PV charge current feedback loop stability.',
+        core: true,
         content: 'Always clamp PV charge current reference before updating PWM duty cycle.',
       });
       assert.equal(seeded.isError, undefined, seeded.content[0]?.text);
 
       // 1. Unrelated query must return zero-match message, NOT dump existing unrelated rules
       const zeroHitRes = dispatcher.handleToolCall('evo_search', {
+        workspace: defaultWs,
         query: 'automation schedule',
       });
       assert.match(
@@ -937,6 +1194,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       // 2. Empty query ("") still returns the Top capability overview
       const emptyQueryRes = dispatcher.handleToolCall('evo_search', {
+        workspace: defaultWs,
         query: '',
       });
       assert.match(emptyQueryRes.content[0].text, /pv-charge-cap-feedback-invariant/);
@@ -962,7 +1220,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('17. Issue #8 (Modules 1 & 2): Mandatory workspace schema, Anti-Write-Through Isolation, Two-Tier Lookup & scope_glob Language Filter', () => {
+  test('19. Issue #8 (Modules 1 & 2): Mandatory workspace schema, Anti-Write-Through Isolation, Two-Tier Lookup & scope_glob Language Filter', () => {
     const globalWs = createTempWorkspace();
     const uninitClone = createTempWorkspace();
     const cFirmwareWs = createTempWorkspace();
@@ -999,6 +1257,10 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         title: 'C# BMS Frame Timeout Guard',
         l0_summary: 'Verify C# BMS protocol frame timeout and buffer isolation.',
         scope_glob: '**/*.cs',
+        transfer_scenarios: [
+          'C# serial port frame parser timeout handling',
+          'WPF background telemetry stream buffer reuse',
+        ],
         content: 'Do not clear shared buffer on single parser CRC mismatch.',
       });
       assert.equal(Boolean(csRuleRes.isError), false);
@@ -1026,6 +1288,10 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'clone-local-rule',
         title: 'Clone Local Private Rule',
         l0_summary: 'Private rule for uninitialized clone must stay in clone.',
+        transfer_scenarios: [
+          'Local clone configuration validation before build',
+          'Submodule path resolution across developer worktrees',
+        ],
         content: 'Keep private rule inside uninitClone/.evo.',
       });
       assert.equal(Boolean(cloneRuleRes.isError), false);
@@ -1046,6 +1312,10 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         title: 'C Firmware BMS Frame Timeout Guard',
         l0_summary: 'Verify C firmware BMS protocol frame timeout counter.',
         scope_glob: '**/*.{c,h}',
+        transfer_scenarios: [
+          'CAN RX interrupt frame timeout counter handling',
+          'UART Modbus RTU slave response watchdog',
+        ],
         content: 'Check frame timeout counter in C ISR.',
       });
       assert.equal(Boolean(cRuleRes.isError), false);
@@ -1082,7 +1352,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('18. Issue #8 (Modules 3, 4, 5, 6): Atomic evo_compact, Default core:false, Anti-Poisoning Hook, Alias Normalization & CJK 2-gram / C Comment Grounding', () => {
+  test('20. Issue #8 (Modules 3, 4, 5, 6): Atomic evo_compact, Default core:false, Anti-Poisoning Hook, Alias Normalization & CJK 2-gram / C Comment Grounding', () => {
     const ws = createTempWorkspace();
     const dispatcher = new EvoMcpDispatcher(ws);
     try {
@@ -1093,6 +1363,10 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'bus-ripple-deadzone-guard',
         title: '母线纹波与死区偏置控制护栏',
         l0_summary: '离网母线大纹波工况下必须确保维持死区偏置在目标点下方防止积分泄漏。',
+        transfer_scenarios: [
+          '离网逆变器大负载下直流母线稳压环死区偏置设计',
+          '储能变流器并离网切换期间电流环抗积分饱和死区设置',
+        ],
         body: '当慢速积分器将系统拉向稳态目标点时，维持死区必须置于目标点单侧。',
       } as unknown as Record<string, unknown>);
       assert.equal(Boolean(r1.isError), false);
@@ -1137,6 +1411,10 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'second-rule-for-compact',
         title: 'Second Rule For Atomic Compact Test',
         l0_summary: 'Second rule to verify atomic rollback on invalid compact.',
+        transfer_scenarios: [
+          'Scenario A for atomic compact verification',
+          'Scenario B for atomic compact verification',
+        ],
         content: 'Second rule body.',
       });
 
@@ -1209,7 +1487,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('19. Issue #8 (Modules 9 & 10): Anti-Lazy-Memory Upgrade Candidates, Evolution Receipt Seed & Shared .evo Across Sibling Clones (--link)', () => {
+  test('21. Issue #8 (Modules 9 & 10): Anti-Lazy-Memory Upgrade Candidates, Evolution Receipt Seed & Shared .evo Across Sibling Clones (--link)', () => {
     const masterClone = createTempWorkspace();
     const siblingClone = createTempWorkspace();
     const dispatcher = new EvoMcpDispatcher(masterClone);
@@ -1243,9 +1521,13 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         l0_summary: 'Verify multi-loop priority arbitration across sibling worktrees.',
         scope_glob: '**/*.c',
         core: false,
+        transfer_scenarios: [
+          'Multi-loop DC bus voltage priority arbitration across inverter worktrees',
+          'Grid-tied current ramp arbitration across parallel firmware clones',
+        ],
         content: 'Check loop priority before updating setpoint.',
       });
-      assert.equal(Boolean(scopedRuleRes.isError), false);
+      assert.equal(Boolean(scopedRuleRes.isError), false, scopedRuleRes.content[0]?.text);
 
       const searchFromSibling = dispatcher.handleToolCall('evo_search', {
         workspace: siblingClone,
@@ -1296,7 +1578,198 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(siblingClone, { recursive: true, force: true });
     }
   });
+
+  test('22. Issue #8 Round 2 Audit Fixes: Blank Workspace Rejection, Cross-Project Leak Prevention, Duplicate/Ghost Compact Guard, Code-Only Scope Scan & Unclosed Multi-Line C Comment', () => {
+    const projectA = createTempWorkspace();
+    const projectB = createTempWorkspace();
+    const isolatedGlobal = createTempWorkspace();
+    const prevGlobalEnv = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = isolatedGlobal;
+
+    const dispatcher = new EvoMcpDispatcher(projectA);
+    try {
+      // 1. Blank/whitespace workspace on evo_propose or evo_compact must be rejected with ERR_INVALID_SCHEMA
+      const blankWsRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: '   ',
+        kind: 'rule',
+        id: 'blank-ws-rule',
+        title: 'Blank Workspace Rule',
+        l0_summary: 'Must fail when workspace is whitespace.',
+        core: true,
+        content: 'Should not be saved.',
+      });
+      assert.equal(blankWsRes.isError, true);
+      assert.match(blankWsRes.content[0].text, /ERR_INVALID_SCHEMA/);
+
+      // 2. Non-global defaultRoot (projectA) must NEVER leak into projectB as [GLOBAL]
+      const projARule = dispatcher.handleToolCall('evo_propose', {
+        workspace: projectA,
+        kind: 'rule',
+        id: 'project-a-private-invariant',
+        title: 'Project A Private Invariant',
+        l0_summary: 'Private invariant inside Project A must never leak into Project B.',
+        core: true,
+        content: 'Strictly isolated to Project A.',
+      });
+      assert.equal(Boolean(projARule.isError), false, projARule.content[0]?.text);
+
+      fs.mkdirSync(path.join(projectB, '.evo'), { recursive: true });
+      const searchInB = dispatcher.handleToolCall('evo_search', {
+        workspace: projectB,
+        query: 'Project A Private Invariant',
+      });
+      assert.doesNotMatch(
+        searchInB.content[0].text,
+        /project-a-private-invariant/,
+        'Non-global defaultRoot (projectA) must never leak into projectB as [GLOBAL]'
+      );
+
+      // 3. evo_compact rejects duplicate/ghost target_ids and preserves created_at on same-ID compaction
+      const rA = dispatcher.handleToolCall('evo_propose', {
+        workspace: projectA,
+        kind: 'rule',
+        id: 'compact-preserve-a',
+        title: 'Serial Framing Buffer Alignment Guard',
+        l0_summary: 'Ensure UART DMA receive buffer alignment before packet decoding.',
+        core: true,
+        content: 'Align DMA ring buffer pointers on cache line boundaries.',
+      });
+      assert.equal(Boolean(rA.isError), false, rA.content[0]?.text);
+      const storageA = new EvoStorage(projectA);
+      const createdAtA = storageA.getRule('compact-preserve-a')!.created_at;
+
+      const rB = dispatcher.handleToolCall('evo_propose', {
+        workspace: projectA,
+        kind: 'rule',
+        id: 'compact-preserve-b',
+        title: 'Watchdog Timer Kick Interval Invariant',
+        l0_summary: 'Refresh hardware watchdog only after all critical control tasks complete.',
+        core: true,
+        content: 'Never kick hardware watchdog inside unconditional timer interrupts.',
+      });
+      assert.equal(Boolean(rB.isError), false, rB.content[0]?.text);
+
+      // Duplicate IDs ['compact-preserve-a', 'compact-preserve-a'] -> < 2 unique IDs -> ERR_INVALID_SCHEMA
+      const dupCompact = dispatcher.handleToolCall('evo_compact', {
+        workspace: projectA,
+        target_ids: ['compact-preserve-a', 'compact-preserve-a'],
+        reason: 'Duplicate target_ids test',
+        merged_proposal: {
+          kind: 'rule',
+          id: 'compact-preserve-a',
+          title: 'Merged Rule',
+          l0_summary: 'Merged summary.',
+          core: true,
+          content: 'Merged content.',
+        },
+      });
+      assert.equal(dupCompact.isError, true);
+      assert.match(dupCompact.content[0].text, /ERR_INVALID_SCHEMA/);
+
+      // Ghost IDs ['ghost-1', 'ghost-2'] -> < 2 existing entries -> ERR_INVALID_SCHEMA
+      const ghostCompact = dispatcher.handleToolCall('evo_compact', {
+        workspace: projectA,
+        target_ids: ['ghost-1', 'ghost-2'],
+        reason: 'Ghost target_ids test',
+        merged_proposal: {
+          kind: 'rule',
+          id: 'ghost-merged-rule',
+          title: 'Ghost Merged Rule',
+          l0_summary: 'Should not bypass evo_propose via ghost compact.',
+          core: true,
+          content: 'Should fail.',
+        },
+      });
+      assert.equal(ghostCompact.isError, true);
+      assert.match(ghostCompact.content[0].text, /ERR_INVALID_SCHEMA/);
+
+      // Valid same-ID compact preserves created_at of 'compact-preserve-a'
+      const validSameIdCompact = dispatcher.handleToolCall('evo_compact', {
+        workspace: projectA,
+        target_ids: ['compact-preserve-a', 'compact-preserve-b'],
+        reason: 'Consolidate A and B into A',
+        merged_proposal: {
+          kind: 'rule',
+          id: 'compact-preserve-a',
+          title: 'Consolidated Rule A',
+          l0_summary: 'Consolidated rule preserving original created_at timestamp.',
+          core: true,
+          content: 'Consolidated rule content.',
+        },
+      });
+      assert.equal(Boolean(validSameIdCompact.isError), false, validSameIdCompact.content[0]?.text);
+      assert.equal(storageA.getRule('compact-preserve-a')?.created_at, createdAtA);
+
+      // 4. Scope scan with 210 .md files in docs/ + 1 .py script + 1 .c file in Source/ still matches **/*.{c,h}
+      const docsDir = path.join(projectB, 'docs');
+      const srcDir = path.join(projectB, 'Source');
+      fs.mkdirSync(docsDir, { recursive: true });
+      fs.mkdirSync(srcDir, { recursive: true });
+      for (let i = 0; i < 210; i++) {
+        fs.writeFileSync(path.join(docsDir, `doc_${i}.md`), `# Doc ${i}\n`, 'utf8');
+      }
+      fs.writeFileSync(path.join(projectB, 'helper.py'), 'print("ok")\n', 'utf8');
+      fs.writeFileSync(
+        path.join(srcDir, 'inverter.c'),
+        [
+          'void vMultiCommentInit(void) /* multi-line comment start; with semicolon',
+          '   continued comment */',
+          '{',
+          '  int x = 0;',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const globalCRule = dispatcher.handleToolCall('evo_propose', {
+        workspace: isolatedGlobal,
+        kind: 'rule',
+        id: 'global-c-firmware-guard',
+        title: 'Global C Firmware Guard',
+        l0_summary: 'Verify C firmware protection logic even in doc-heavy repositories.',
+        scope_glob: '**/*.{c,h}',
+        transfer_scenarios: [
+          'Mixed C firmware and Python tooling repository',
+          'Doc-heavy embedded repository with 200+ markdown files',
+        ],
+        content: 'Verify C protection logic.',
+      });
+      assert.equal(Boolean(globalCRule.isError), false, globalCRule.content[0]?.text);
+
+      const searchDocHeavy = dispatcher.handleToolCall('evo_search', {
+        workspace: projectB,
+        query: 'Global C Firmware Guard',
+      });
+      assert.match(
+        searchDocHeavy.content[0].text,
+        /global-c-firmware-guard/,
+        '**/*.{c,h} rule must NOT be filtered out when repo has 210 .md files + 1 .py + 1 .c file'
+      );
+
+      // 5. C function with unclosed multi-line comment on declaration line passes AST symbol grounding
+      const multiCommentMem = dispatcher.handleToolCall('evo_propose', {
+        workspace: projectB,
+        kind: 'memory',
+        id: 'multi-line-comment-decl-case',
+        title: 'Multi-Line Comment C Declaration Case',
+        l0_summary: 'Verifies C declaration with unclosed /* comment and semicolon on header line.',
+        symptom: 'False semicolon rejection on /* ... ; multi-line comment',
+        root_cause: 'Single-line block comment regex missed unclosed /* at end of declaration line',
+        solution: 'Strip trailing /*.*$ after single-line comment removal',
+        target_symbols: ['Source/inverter.c#vMultiCommentInit'],
+      });
+      assert.equal(Boolean(multiCommentMem.isError), false, multiCommentMem.content[0]?.text);
+    } finally {
+      dispatcher.close();
+      if (prevGlobalEnv === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobalEnv;
+      fs.rmSync(projectA, { recursive: true, force: true });
+      fs.rmSync(projectB, { recursive: true, force: true });
+      fs.rmSync(isolatedGlobal, { recursive: true, force: true });
+    }
+  });
 });
+
 
 
 
