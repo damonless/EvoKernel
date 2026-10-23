@@ -8,6 +8,21 @@ import {
   META_RULE_MARKER_START,
   renderManagedBlock,
 } from '../templates/meta-rule.js';
+import {
+  ALL_HARNESS_ADAPTERS,
+  HARNESS_RULE_TARGETS,
+  detectCascadedTargets,
+  parseHarnessTargets,
+  pruneEmptyDirs,
+  removeMarkerBlock,
+  upsertMarkerBlock,
+} from './harness.js';
+
+export {
+  HARNESS_RULE_TARGETS,
+  removeMarkerBlock,
+  upsertMarkerBlock,
+} from './harness.js';
 
 export interface InitResult {
   initializedHarnesses: string[];
@@ -23,49 +38,26 @@ export interface InitOptions {
   linkEvoFrom?: string;
 }
 
-const HARNESS_RULE_TARGETS: Record<string, string> = {
-  claude: 'CLAUDE.md',
-  agents: 'AGENTS.md',
-  gemini: 'GEMINI.md',
-  cursor: '.cursor/rules/evo-kernel.mdc',
-};
-
-export function upsertMarkerBlock(existingContent: string, managedBlock: string): string {
-  const startIdx = existingContent.indexOf(META_RULE_MARKER_START);
-  const endIdx = existingContent.indexOf(META_RULE_MARKER_END);
-
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const before = existingContent.slice(0, startIdx).trimEnd();
-    const after = existingContent.slice(endIdx + META_RULE_MARKER_END.length).trimStart();
-    return [before, managedBlock.trim(), after].filter(Boolean).join('\n\n') + '\n';
-  }
-
-  if (!existingContent.trim()) {
-    return managedBlock.trim() + '\n';
-  }
-
-  return existingContent.trimEnd() + '\n\n' + managedBlock.trim() + '\n';
-}
-
-export function removeMarkerBlock(existingContent: string): string {
-  const startIdx = existingContent.indexOf(META_RULE_MARKER_START);
-  const endIdx = existingContent.indexOf(META_RULE_MARKER_END);
-  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
-    return existingContent;
-  }
-  const before = existingContent.slice(0, startIdx).trimEnd();
-  const after = existingContent.slice(endIdx + META_RULE_MARKER_END.length).trimStart();
-  const combined = [before, after].filter(Boolean).join('\n\n');
-  return combined ? combined + '\n' : '';
-}
-
 export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   const storage = new EvoStorage(workspaceRoot);
   const digest = storage.rebuildCoreInvariantsDigest();
   const block = renderManagedBlock(digest);
   const updated: string[] = [];
 
-  for (const relPath of Object.values(HARNESS_RULE_TARGETS)) {
+  const candidateRuleFiles = [
+    'CLAUDE.md',
+    'AGENTS.md',
+    'GEMINI.md',
+    '.cursor/rules/evo-kernel.mdc',
+    '.windsurfrules',
+    '.windsurf/rules/evo-kernel.md',
+    '.clinerules',
+    '.roo/rules/evo-kernel.md',
+    '.roorules',
+    '.github/copilot-instructions.md',
+  ];
+
+  for (const relPath of candidateRuleFiles) {
     const fullPath = path.join(workspaceRoot, relPath);
     if (fs.existsSync(fullPath)) {
       const current = fs.readFileSync(fullPath, 'utf8');
@@ -76,6 +68,21 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
       }
     }
   }
+
+  const opencodePath = path.join(workspaceRoot, 'opencode.json');
+  if (fs.existsSync(opencodePath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(opencodePath, 'utf8'));
+      if (typeof parsed.instructions === 'string' && parsed.instructions.includes(META_RULE_MARKER_START)) {
+        parsed.instructions = upsertMarkerBlock(parsed.instructions, block);
+        fs.writeFileSync(opencodePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+        updated.push('opencode.json');
+      }
+    } catch {
+      // Ignore malformed JSON
+    }
+  }
+
   return updated;
 }
 
@@ -107,7 +114,7 @@ export function findGitRoot(startDir: string): string | null {
   }
 }
 
-function resolveGitDir(gitRoot: string): string {
+export function resolveGitDir(gitRoot: string): string {
   const dotGit = path.join(gitRoot, '.git');
   try {
     const stat = fs.statSync(dotGit);
@@ -181,60 +188,92 @@ export function ensureGitInfoExclude(workspaceRoot: string, patterns: string[]):
   return added;
 }
 
+export function removeGitInfoExclude(workspaceRoot: string, patterns?: string[]): string[] {
+  const gitRoot = findGitRoot(workspaceRoot);
+  if (!gitRoot) return [];
+  const gitDir = resolveGitDir(gitRoot);
+  const excludePath = path.join(gitDir, 'info', 'exclude');
+  if (!fs.existsSync(excludePath)) return [];
+
+  const content = fs.readFileSync(excludePath, 'utf8');
+  if (!content.trim()) return [];
+
+  const lines = content.split(/\r?\n/);
+  const relPrefix = path
+    .relative(gitRoot, path.resolve(workspaceRoot))
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+
+  const patternSet = new Set<string>();
+  if (patterns) {
+    for (const pat of patterns) {
+      patternSet.add(pat);
+      const clean = pat.replace(/^\/+/, '');
+      patternSet.add(clean);
+      patternSet.add(`/${clean}`);
+      if (relPrefix && !relPrefix.startsWith('..')) {
+        patternSet.add(`/${relPrefix}/${clean}`);
+        patternSet.add(`${relPrefix}/${clean}`);
+      }
+    }
+  }
+
+  const kept: string[] = [];
+  const removed: string[] = [];
+  let inEvoBlock = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('# EvoKernel Stealth Mode')) {
+      inEvoBlock = true;
+      continue;
+    }
+    if (inEvoBlock) {
+      if (!trimmed) {
+        continue;
+      }
+      if (trimmed.startsWith('#')) {
+        inEvoBlock = false;
+        kept.push(line);
+        continue;
+      }
+      if (!patterns || patternSet.has(trimmed) || trimmed.includes('.evo') || trimmed.includes('.mcp.json')) {
+        removed.push(trimmed);
+        continue;
+      }
+    }
+
+    if (patternSet.has(trimmed)) {
+      removed.push(trimmed);
+      continue;
+    }
+
+    kept.push(line);
+  }
+
+  const newContent = kept.join('\n').trim();
+  fs.writeFileSync(excludePath, newContent ? newContent + '\n' : '', 'utf8');
+  return removed;
+}
+
 export function parseInitTargets(
   rawTargets: string | string[] | undefined,
   workspaceRoot: string
 ): string[] {
-  const allTargets = Object.keys(HARNESS_RULE_TARGETS);
-  if (!rawTargets) {
-    return allTargets;
-  }
-
-  const tokens = (Array.isArray(rawTargets) ? rawTargets.join(',') : rawTargets)
-    .split(/[\s,]+/)
-    .map((t) => t.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (tokens.length === 0 || tokens.includes('all')) {
-    return allTargets;
-  }
-
-  if (tokens.includes('auto')) {
-    const detected = allTargets.filter((target) => {
-      const relPath = HARNESS_RULE_TARGETS[target];
-      if (target === 'cursor') {
-        return (
-          fs.existsSync(path.join(workspaceRoot, relPath)) ||
-          fs.existsSync(path.join(workspaceRoot, '.cursor'))
-        );
-      }
-      return fs.existsSync(path.join(workspaceRoot, relPath));
-    });
-    return detected.length > 0 ? detected : ['agents'];
-  }
-
-  const normalized = new Set<string>();
-  for (const token of tokens) {
-    const clean = token.replace(/\.md$/i, '');
-    if (clean === 'claude') normalized.add('claude');
-    else if (clean === 'agents' || clean === 'agent') normalized.add('agents');
-    else if (clean === 'gemini') normalized.add('gemini');
-    else if (clean === 'cursor' || clean === 'cursorrules' || clean === 'mdc') normalized.add('cursor');
-  }
-
-  return normalized.size > 0 ? Array.from(normalized) : allTargets;
+  return parseHarnessTargets(rawTargets, workspaceRoot);
 }
 
 export function runInit(
   workspaceRoot: string,
-  targetsOrOptions: string[] | InitOptions = ['claude', 'agents', 'gemini', 'cursor']
+  targetsOrOptions?: string[] | InitOptions
 ): InitResult {
   const opts: InitOptions = Array.isArray(targetsOrOptions)
     ? { targets: targetsOrOptions, stealth: false }
-    : targetsOrOptions;
-  const targets = opts.targets
+    : targetsOrOptions || {};
+
+  const targets = opts.targets !== undefined
     ? parseInitTargets(opts.targets, workspaceRoot)
-    : ['claude', 'agents', 'gemini', 'cursor'];
+    : detectCascadedTargets(workspaceRoot);
   const stealth = Boolean(opts.stealth);
 
   let linkedSharedEvoDir: string | undefined;
@@ -269,52 +308,33 @@ export function runInit(
 
   const digest = storage.rebuildCoreInvariantsDigest();
   const managedBlock = renderManagedBlock(digest);
-  const updatedFiles: string[] = [];
+
+  const updatedFilesList: string[] = [];
+  const mcpConfigFilesList: string[] = [];
+  const activeDirs: string[] = [];
 
   for (const target of targets) {
-    const relPath = HARNESS_RULE_TARGETS[target];
-    if (!relPath) continue;
-    const fullPath = path.join(workspaceRoot, relPath);
-    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-
-    let existing = '';
-    if (fs.existsSync(fullPath)) {
-      existing = fs.readFileSync(fullPath, 'utf8');
-    } else if (target === 'cursor') {
-      existing = [
-        '---',
-        'description: EvoKernel Deterministic Self-Evolution Protocol & Core Invariants',
-        'globs: **/*',
-        'alwaysApply: true',
-        '---',
-      ].join('\n');
-    }
-
-    const updated = upsertMarkerBlock(existing, managedBlock);
-    fs.writeFileSync(fullPath, updated, 'utf8');
-    updatedFiles.push(relPath);
+    const adapter = ALL_HARNESS_ADAPTERS[target];
+    if (!adapter) continue;
+    const res = adapter.install(workspaceRoot, managedBlock);
+    updatedFilesList.push(...res.updatedFiles);
+    mcpConfigFilesList.push(...res.mcpConfigFiles);
+    activeDirs.push(...adapter.dirs);
   }
+
+  const updatedFiles = Array.from(new Set(updatedFilesList));
+  const mcpConfigFiles = Array.from(new Set(mcpConfigFilesList));
 
   config.enabledHarnesses = Array.from(new Set([...config.enabledHarnesses, ...targets]));
   storage.saveConfig(config);
 
-  const mcpConfigFiles: string[] = [];
-  const mcpPath = path.join(workspaceRoot, '.mcp.json');
-  upsertMcpJson(mcpPath, workspaceRoot);
-  mcpConfigFiles.push('.mcp.json');
-
-  if (targets.includes('cursor')) {
-    const cursorMcpPath = path.join(workspaceRoot, '.cursor', 'mcp.json');
-    upsertMcpJson(cursorMcpPath, workspaceRoot);
-    mcpConfigFiles.push('.cursor/mcp.json');
-  }
-
-  // Always exclude .evo/.cache/ in .git/info/exclude if .git exists; in --stealth or --link mode, exclude local .evo/
+  const excludeDirs = activeDirs.map((d) => (d.endsWith('/') ? d : `${d}/`));
   const excludeCandidates = stealth
-    ? ['.evo/', '.mcp.json', '.cursor/', ...updatedFiles]
+    ? ['.evo/', ...mcpConfigFiles, ...updatedFiles, ...excludeDirs]
     : linkedSharedEvoDir
       ? ['.evo/', '.evo/.cache/']
       : ['.evo/.cache/'];
+
   const stealthExcluded = ensureGitInfoExclude(workspaceRoot, excludeCandidates);
 
   return {
@@ -326,70 +346,31 @@ export function runInit(
   };
 }
 
-function upsertMcpJson(filePath: string, workspaceRoot: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  let current: Record<string, unknown> = {};
-  if (fs.existsSync(filePath)) {
-    try {
-      current = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, unknown>;
-    } catch {
-      current = {};
-    }
-  }
-
-  const mcpServers =
-    current.mcpServers && typeof current.mcpServers === 'object'
-      ? (current.mcpServers as Record<string, unknown>)
-      : {};
-
-  const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
-  const useLocalDist = fs.existsSync(localDistEntry);
-
-  mcpServers['evo-kernel'] = useLocalDist
-    ? {
-        command: 'node',
-        args: ['./dist/cli/index.js', 'mcp'],
-      }
-    : {
-        command: 'npx',
-        args: ['-y', 'evo-kernel', 'mcp'],
-      };
-
-  current.mcpServers = mcpServers;
-  fs.writeFileSync(filePath, JSON.stringify(current, null, 2) + '\n', 'utf8');
-}
-
 export function runUninstall(workspaceRoot: string): { cleanedFiles: string[] } {
-  const cleanedFiles: string[] = [];
-  for (const relPath of Object.values(HARNESS_RULE_TARGETS)) {
-    const fullPath = path.join(workspaceRoot, relPath);
-    if (!fs.existsSync(fullPath)) continue;
-    const content = fs.readFileSync(fullPath, 'utf8');
-    if (content.includes(META_RULE_MARKER_START)) {
-      const next = removeMarkerBlock(content);
-      if (!next.trim() || relPath.endsWith('evo-kernel.mdc')) {
-        fs.unlinkSync(fullPath);
-      } else {
-        fs.writeFileSync(fullPath, next, 'utf8');
-      }
-      cleanedFiles.push(relPath);
-    }
+  const cleanedFilesList: string[] = [];
+  const dirsToPrune: string[] = [
+    '.cursor/rules',
+    '.cursor',
+    '.roo/rules',
+    '.roo',
+    '.windsurf/rules',
+    '.windsurf',
+    '.codex',
+    '.claude',
+    '.vscode',
+    '.github',
+    '.gemini',
+    '.cline',
+    '.opencode',
+  ];
+
+  for (const adapter of Object.values(ALL_HARNESS_ADAPTERS)) {
+    const cleaned = adapter.uninstall(workspaceRoot);
+    cleanedFilesList.push(...cleaned);
   }
 
-  for (const mcpRel of ['.mcp.json', '.cursor/mcp.json']) {
-    const mcpFull = path.join(workspaceRoot, mcpRel);
-    if (!fs.existsSync(mcpFull)) continue;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(mcpFull, 'utf8')) as Record<string, unknown>;
-      if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
-        delete (parsed.mcpServers as Record<string, unknown>)['evo-kernel'];
-        fs.writeFileSync(mcpFull, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
-        cleanedFiles.push(mcpRel);
-      }
-    } catch {
-      // ignore malformed JSON
-    }
-  }
+  pruneEmptyDirs(workspaceRoot, dirsToPrune);
+  removeGitInfoExclude(workspaceRoot);
 
-  return { cleanedFiles };
+  return { cleanedFiles: Array.from(new Set(cleanedFilesList)) };
 }

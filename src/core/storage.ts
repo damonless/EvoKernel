@@ -53,7 +53,7 @@ export function getScopeBucketKey(scopeGlob: string): string {
 }
 
 const IDE_PLUGIN_DIR_REGEX =
-  /\/(?:\.(?:gemini|claude|cursor|vscode|vscode-server|windsurf|antigravity|roo|cline)\/(?:[^/]+\/)*(?:plugins|extensions|mcp)|\.claude-plugin|\.evo\/global|(?:appdata\/(?:roaming|local)|library\/application\s+support|\.config|\.local\/share)\/(?:[^/]+\/)*(?:plugins|extensions))(?:\/|$)/i;
+  /\/(?:\.(?:gemini|claude|cursor|vscode|vscode-server|windsurf|antigravity|roo|cline|codex|opencode)\/(?:[^/]+\/)*(?:plugins|extensions|mcp)|\.claude-plugin|\.evo\/global|(?:appdata\/(?:roaming|local)|library\/application\s+support|\.config|\.local\/share)\/(?:[^/]+\/)*(?:plugins|extensions))(?:\/|$)/i;
 
 export function isPluginOrExtensionInstallDir(dirPath: string): boolean {
   const norm = path.resolve(dirPath).replace(/\\/g, '/').toLowerCase();

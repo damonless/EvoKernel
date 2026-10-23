@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,9 +16,14 @@ if (buildRes.status !== 0) {
 }
 
 // 2. Run tests (forwarding any CLI arguments)
+const testFiles = [
+  path.join(rootDir, 'dist', 'tests', 'evo-kernel.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'multi-harness.test.js'),
+].filter((f) => fs.existsSync(f));
+
 const testArgs = [
   '--test',
-  path.join(rootDir, 'dist', 'tests', 'evo-kernel.test.js'),
+  ...testFiles,
   ...process.argv.slice(2),
 ];
 

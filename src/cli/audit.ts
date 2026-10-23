@@ -177,11 +177,22 @@ function discoverAuditableFiles(
   };
 
   // 1. Workspace rule files
-  for (const rootRule of ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md', '.cursorrules']) {
+  for (const rootRule of [
+    'CLAUDE.md',
+    'AGENTS.md',
+    'GEMINI.md',
+    '.cursorrules',
+    '.windsurfrules',
+    '.clinerules',
+    '.roorules',
+  ]) {
     addFile('workspace', 'rule', path.join(workspaceRoot, rootRule), workspaceRoot);
   }
   for (const ruleDir of [
     path.join(workspaceRoot, '.cursor', 'rules'),
+    path.join(workspaceRoot, '.windsurf', 'rules'),
+    path.join(workspaceRoot, '.roo', 'rules'),
+    path.join(workspaceRoot, '.github'),
     path.join(workspaceRoot, '.evo', 'rules'),
   ]) {
     for (const f of collectMarkdownFiles(ruleDir, 2)) {
@@ -195,6 +206,8 @@ function discoverAuditableFiles(
     path.join(workspaceRoot, '.agents', 'skills'),
     path.join(workspaceRoot, '.claude', 'skills'),
     path.join(workspaceRoot, '.cursor', 'skills'),
+    path.join(workspaceRoot, '.windsurf', 'skills'),
+    path.join(workspaceRoot, '.roo', 'skills'),
     path.join(workspaceRoot, '.evo', 'skills'),
   ]) {
     for (const f of collectMarkdownFiles(skillDir, 2)) {
@@ -208,6 +221,9 @@ function discoverAuditableFiles(
       path.join(globalHomeDir, '.gemini', 'GEMINI.md'),
       path.join(globalHomeDir, '.claude', 'CLAUDE.md'),
       path.join(globalHomeDir, '.cursorrules'),
+      path.join(globalHomeDir, '.windsurfrules'),
+      path.join(globalHomeDir, '.clinerules'),
+      path.join(globalHomeDir, '.roorules'),
     ];
     for (const cand of globalRuleCandidates) {
       addFile('global', 'rule', cand, globalHomeDir);
@@ -217,6 +233,8 @@ function discoverAuditableFiles(
       path.join(globalHomeDir, '.gemini', 'config', 'rules'),
       path.join(globalHomeDir, '.claude', 'rules'),
       path.join(globalHomeDir, '.cursor', 'rules'),
+      path.join(globalHomeDir, '.windsurf', 'rules'),
+      path.join(globalHomeDir, '.roo', 'rules'),
     ]) {
       for (const f of collectMarkdownFiles(globalRuleDir, 2)) {
         addFile('global', 'rule', f, globalHomeDir);
@@ -227,6 +245,7 @@ function discoverAuditableFiles(
       path.join(globalHomeDir, '.gemini', 'config', 'skills'),
       path.join(globalHomeDir, '.claude', 'skills'),
       path.join(globalHomeDir, '.cursor', 'skills'),
+      path.join(globalHomeDir, '.windsurf', 'skills'),
       path.join(globalHomeDir, '.agents', 'skills'),
     ]) {
       for (const f of collectMarkdownFiles(globalSkillDir, 2)) {
