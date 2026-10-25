@@ -58,7 +58,11 @@ export class McpClientConnection {
       isWin &&
       (/\.(cmd|bat)$/i.test(this.config.command) ||
         /^(?:npx|npm|pnpm|yarn|uvx|bunx)$/i.test(cmdBase));
-    const proc = child_process.spawn(this.config.command, this.config.args || [], {
+    const rawArgs = this.config.args || [];
+    const spawnArgs = isBatch
+      ? rawArgs.map((a) => (/\s/.test(a) && !/^".*"$/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a))
+      : rawArgs;
+    const proc = child_process.spawn(this.config.command, spawnArgs, {
       cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -337,5 +341,6 @@ export class McpProxyManager {
       conn.close();
     }
     this.connections.clear();
+    this.connectionConfigKeys.clear();
   }
 }

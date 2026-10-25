@@ -1474,7 +1474,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.match(savedMem.symptom, /<WORKSPACE>\/Project\\mode_switch\.c/);
 
       // Module 4.2: Mid-session code mutation after crystallization triggers Anti-Poisoning Alert in hook
-      runCli(['node', 'evo', 'hook', 'post-tool', '--workspace', ws]);
+      runCli(['node', 'evo', 'hook', 'post-tool', '--tool', 'edit_file', '--workspace', ws]);
       const logs: string[] = [];
       const origLog = console.log;
       console.log = (...args: unknown[]) => logs.push(args.join(' '));

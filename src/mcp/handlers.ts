@@ -219,6 +219,7 @@ interface WorkspaceContext {
   gatekeeper: EvoGatekeeper;
   proxyManager: McpProxyManager;
   lastExternalServersSignature?: string;
+  syncPromise?: Promise<void>;
 }
 
 export class EvoMcpDispatcher {
@@ -277,20 +278,36 @@ export class EvoMcpDispatcher {
     return ctx.lastExternalServersSignature !== sig;
   }
 
+  private async syncContextExternalTools(c: WorkspaceContext): Promise<void> {
+    if (!this.needsExternalToolsSync(c)) return;
+    if (c.syncPromise) {
+      await c.syncPromise;
+      return;
+    }
+    const servers = c.storage.getConfig().externalServers || {};
+    const sig = JSON.stringify(servers);
+    const activeEntries = Object.entries(servers).filter(([, cfg]) => cfg && !cfg.disabled);
+    c.syncPromise = (async () => {
+      try {
+        const discovered = await c.proxyManager.syncExternalTools(servers);
+        if (discovered.length > 0 || activeEntries.length === 0) {
+          c.lastExternalServersSignature = sig;
+          c.storage.saveExternalTools(discovered);
+          c.telemetry.syncFromDisk();
+        }
+      } catch {
+        // Ignore discovery failure and proceed with cached tools; leave signature unset for retry
+      } finally {
+        c.syncPromise = undefined;
+      }
+    })();
+    await c.syncPromise;
+  }
+
   private async ensureExternalToolsSynced(ctx: WorkspaceContext): Promise<void> {
     const checks = [ctx, ...this.getGlobalFallbackContexts()];
     for (const c of checks) {
-      if (!this.needsExternalToolsSync(c)) continue;
-      const servers = c.storage.getConfig().externalServers || {};
-      const sig = JSON.stringify(servers);
-      c.lastExternalServersSignature = sig;
-      try {
-        const discovered = await c.proxyManager.syncExternalTools(servers);
-        c.storage.saveExternalTools(discovered);
-        c.telemetry.syncFromDisk();
-      } catch {
-        // Ignore discovery failure and proceed with cached tools
-      }
+      await this.syncContextExternalTools(c);
     }
   }
 
@@ -711,10 +728,9 @@ export class EvoMcpDispatcher {
 
     const parsedExt = parseExternalToolId(rawToolId);
     if (parsedExt) {
-      let targetCtx: WorkspaceContext =
-        activeCtx || this.getOrCreateContext(this.activeWorkspaceDir);
+      const initialCtx = activeCtx || this.getOrCreateContext(this.activeWorkspaceDir);
+      let targetCtx: WorkspaceContext = initialCtx;
       let serverConfig = targetCtx.storage.getConfig().externalServers?.[parsedExt.serverName];
-      let cachedExtTool = targetCtx.storage.getExternalTool(rawToolId);
 
       if (!serverConfig || serverConfig.disabled) {
         for (const gCtx of this.getGlobalFallbackContexts()) {
@@ -722,7 +738,6 @@ export class EvoMcpDispatcher {
           if (gCfg && !gCfg.disabled) {
             targetCtx = gCtx;
             serverConfig = gCfg;
-            cachedExtTool = cachedExtTool || gCtx.storage.getExternalTool(rawToolId);
             break;
           }
         }
@@ -740,8 +755,6 @@ export class EvoMcpDispatcher {
         };
       }
 
-      const resolvedToolName = cachedExtTool?.originalName || parsedExt.originalToolName;
-      const canonicalExtId = cachedExtTool?.id || rawToolId;
       const boundTelemetry = targetCtx.telemetry;
       const boundProxy = targetCtx.proxyManager;
       const boundServerConfig = serverConfig;
@@ -750,6 +763,21 @@ export class EvoMcpDispatcher {
         if (this.needsExternalToolsSync(targetCtx)) {
           await this.ensureExternalToolsSynced(targetCtx);
         }
+        let cachedExtTool = targetCtx.storage.getExternalTool(rawToolId);
+        if (!cachedExtTool && targetCtx === initialCtx) {
+          for (const gCtx of this.getGlobalFallbackContexts()) {
+            if (this.needsExternalToolsSync(gCtx)) {
+              await this.ensureExternalToolsSynced(gCtx);
+            }
+            const gCached = gCtx.storage.getExternalTool(rawToolId);
+            if (gCached) {
+              cachedExtTool = gCached;
+              break;
+            }
+          }
+        }
+        const resolvedToolName = cachedExtTool?.originalName || parsedExt.originalToolName;
+        const canonicalExtId = cachedExtTool?.id || rawToolId;
         const res = await boundProxy.callTool(
           parsedExt.serverName,
           resolvedToolName,

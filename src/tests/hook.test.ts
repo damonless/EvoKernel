@@ -392,7 +392,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     });
 
     const stdinPayload = JSON.stringify({
-      tool_name: 'edit_file',
+      tool_name: 'Edit',
       tool_input: { file_path: 'src/mcp/handlers.ts' },
     });
 

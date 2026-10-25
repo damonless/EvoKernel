@@ -354,6 +354,16 @@ rl.on('line', (line) => {
 
     const dispatcher = new EvoMcpDispatcher(ws);
     try {
+      // [MEDIUM-A]: First call in session is evo_run with lowercase ID before any evo_search/evo_inspect
+      const firstRunLower = await dispatcher.handleToolCall('evo_run', {
+        workspace: ws,
+        tool_id: 'ext__github__createpullrequest',
+        args: { title: 'Cold-start lowercase evo_run' },
+      });
+      assert.equal(firstRunLower.isError, false);
+      assert.match(firstRunLower.content[0].text, /ext__github__createPullRequest/);
+      assert.match(firstRunLower.content[0].text, /PR_CREATED_OK:Cold-start lowercase evo_run/);
+
       // Auto-discover via evo_inspect using exact camelCase ID
       const inspectRes = await dispatcher.handleToolCall('evo_inspect', {
         workspace: ws,

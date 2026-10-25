@@ -30,11 +30,18 @@ export interface HookResult {
 }
 
 const EDIT_TOOL_NAMES = new Set([
+  'edit',
+  'multiedit',
+  'write',
+  'notebookedit',
   'edit_file',
   'write_file',
   'write_to_file',
+  'create_file',
   'replace_file_content',
   'multi_replace_file_content',
+  'str_replace_editor',
+  'apply_patch',
   'patch',
   'execute_command',
   'run_command',
@@ -252,7 +259,7 @@ export function handlePostTool(
         normPath.includes('/.agents/teamwork/') ||
         normPath.includes('/.gemini/antigravity/'));
 
-    const isMutation = toolName ? EDIT_TOOL_NAMES.has(toolName) : true;
+    const isMutation = toolName ? EDIT_TOOL_NAMES.has(toolName) : Boolean(rawPath);
     if (isMutation && !isInternalMeta) {
       telemetry.setSessionFlag('pending_evolution', 'true');
       const currentCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
@@ -416,7 +423,7 @@ export function handlePreCommit(
 export function runHook(rawEvent: string, options: HookOptions = {}): HookResult {
   const ws = path.resolve(options.workspaceRoot || process.cwd());
   const event = normalizeHookEvent(rawEvent || options.event || 'stop');
-  const payload = resolvePayload(options);
+  const payload = event === 'post-tool' || event === 'stop' ? resolvePayload(options) : {};
 
   try {
     switch (event) {
