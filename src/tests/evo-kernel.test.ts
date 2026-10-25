@@ -2244,6 +2244,33 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(emptyWs, { recursive: true, force: true });
     }
   });
+
+  test('33. Issue #9 [HIGH-8]: --link (sharedEvoDir) mode isolates subordinate enabledHarnesses and sharedEvoDir from Master .evo/config.json', () => {
+    const masterWs = createTempWorkspace();
+    const subWs = createTempWorkspace();
+    try {
+      runInit(masterWs, { targets: ['claude'] });
+      runInit(subWs, { targets: ['cursor'], linkEvoFrom: masterWs });
+
+      const masterConfigRaw = JSON.parse(
+        fs.readFileSync(path.join(masterWs, '.evo', 'config.json'), 'utf8')
+      );
+      const subLocalConfigRaw = JSON.parse(
+        fs.readFileSync(path.join(subWs, '.evo', 'config.json'), 'utf8')
+      );
+
+      assert.deepEqual(masterConfigRaw.enabledHarnesses, ['claude']);
+      assert.equal(masterConfigRaw.sharedEvoDir, undefined);
+      assert.deepEqual(subLocalConfigRaw.enabledHarnesses, ['cursor']);
+      assert.equal(
+        path.resolve(subLocalConfigRaw.sharedEvoDir).toLowerCase(),
+        path.resolve(masterWs, '.evo').toLowerCase()
+      );
+    } finally {
+      fs.rmSync(masterWs, { recursive: true, force: true });
+      fs.rmSync(subWs, { recursive: true, force: true });
+    }
+  });
 });
 
 
