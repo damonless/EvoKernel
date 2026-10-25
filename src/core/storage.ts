@@ -45,7 +45,7 @@ export function getScopeBucketKey(scopeGlob: string): string {
     }
     return first.toLowerCase();
   }
-  const extMatch = norm.match(/\*(\.[a-zA-Z0-9_]+)$/);
+  const extMatch = norm.match(/\*(\.(?:[a-zA-Z0-9_]+|\{[a-zA-Z0-9_,]+\}))$/);
   if (extMatch) {
     return `ext:${extMatch[1].toLowerCase()}`;
   }
@@ -140,6 +140,9 @@ export function getExtensionForRuntime(runtime: ScriptRuntime): string {
 
 export class EvoStorage {
   public readonly rootDir: string;
+  public readonly localEvoDir: string;
+  public readonly localConfigPath: string;
+  public readonly isLinkedShared: boolean;
   public readonly evoDir: string;
   public readonly rulesDir: string;
   public readonly skillsDir: string;
@@ -173,11 +176,17 @@ export class EvoStorage {
   constructor(workspaceRoot: string, customEvoDir?: string) {
     this.rootDir = path.resolve(workspaceRoot);
     const defaultLocalEvo = path.join(this.rootDir, '.evo');
+    this.localEvoDir = defaultLocalEvo;
+    this.localConfigPath = path.join(defaultLocalEvo, 'config.json');
     this.evoDir = customEvoDir
       ? path.resolve(customEvoDir)
       : process.env.EVO_DATA_DIR
         ? path.resolve(process.env.EVO_DATA_DIR)
         : EvoStorage.resolveEffectiveEvoDir(this.rootDir, defaultLocalEvo);
+    this.isLinkedShared =
+      !customEvoDir &&
+      !process.env.EVO_DATA_DIR &&
+      path.resolve(this.evoDir).toLowerCase() !== path.resolve(defaultLocalEvo).toLowerCase();
     this.rulesDir = path.join(this.evoDir, 'rules');
     this.skillsDir = path.join(this.evoDir, 'skills');
     this.toolsDir = path.join(this.evoDir, 'tools');
@@ -210,20 +219,79 @@ export class EvoStorage {
   }
 
   public getConfig(): EvoConfig {
-    if (!fs.existsSync(this.configPath)) {
-      return { ...DEFAULT_EVO_CONFIG };
+    let base: EvoConfig = { ...DEFAULT_EVO_CONFIG };
+    if (fs.existsSync(this.configPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+        base = { ...base, ...parsed };
+      } catch {
+        // ignore malformed shared/master config
+      }
     }
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
-      return { ...DEFAULT_EVO_CONFIG, ...parsed };
-    } catch {
-      return { ...DEFAULT_EVO_CONFIG };
+    if (this.isLinkedShared) {
+      base.enabledHarnesses = [];
+      if (fs.existsSync(this.localConfigPath)) {
+        try {
+          const localParsed = JSON.parse(fs.readFileSync(this.localConfigPath, 'utf8'));
+          if (typeof localParsed.sharedEvoDir === 'string') {
+            base.sharedEvoDir = localParsed.sharedEvoDir;
+          }
+          if (Array.isArray(localParsed.enabledHarnesses)) {
+            base.enabledHarnesses = localParsed.enabledHarnesses;
+          }
+        } catch {
+          // ignore malformed local config
+        }
+      }
     }
+    return base;
   }
 
   public saveConfig(config: EvoConfig): void {
     fs.mkdirSync(this.evoDir, { recursive: true });
-    fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2), 'utf8');
+    if (this.isLinkedShared) {
+      fs.mkdirSync(this.localEvoDir, { recursive: true });
+      let localCfg: Record<string, unknown> = {};
+      if (fs.existsSync(this.localConfigPath)) {
+        try {
+          localCfg = JSON.parse(fs.readFileSync(this.localConfigPath, 'utf8'));
+        } catch {
+          localCfg = {};
+        }
+      }
+      if (config.sharedEvoDir) {
+        localCfg.sharedEvoDir = config.sharedEvoDir;
+      }
+      if (Array.isArray(config.enabledHarnesses)) {
+        localCfg.enabledHarnesses = config.enabledHarnesses;
+      }
+      fs.writeFileSync(this.localConfigPath, JSON.stringify(localCfg, null, 2) + '\n', 'utf8');
+
+      let masterEnabledHarnesses = DEFAULT_EVO_CONFIG.enabledHarnesses;
+      if (fs.existsSync(this.configPath)) {
+        try {
+          const masterRaw = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+          if (Array.isArray(masterRaw.enabledHarnesses)) {
+            masterEnabledHarnesses = masterRaw.enabledHarnesses;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      const { sharedEvoDir: _omitShared, ...masterSafeConfig } = config;
+      masterSafeConfig.enabledHarnesses = masterEnabledHarnesses;
+      fs.writeFileSync(this.configPath, JSON.stringify(masterSafeConfig, null, 2), 'utf8');
+      return;
+    }
+
+    const { sharedEvoDir, ...rest } = config;
+    const toWrite: EvoConfig =
+      sharedEvoDir &&
+      path.resolve(this.rootDir, sharedEvoDir).toLowerCase() !==
+        path.resolve(this.evoDir).toLowerCase()
+        ? { ...rest, sharedEvoDir }
+        : rest;
+    fs.writeFileSync(this.configPath, JSON.stringify(toWrite, null, 2), 'utf8');
   }
 
   // ==================== RULES ====================
