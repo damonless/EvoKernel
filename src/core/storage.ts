@@ -569,7 +569,11 @@ export class EvoStorage {
 
   public getExternalTool(id: string): ExternalToolDefinition | null {
     const all = this.listExternalTools();
-    return all.find((t) => t.id === id) || null;
+    return (
+      all.find((t) => t.id === id) ||
+      all.find((t) => t.id.toLowerCase() === id.toLowerCase()) ||
+      null
+    );
   }
 
   // ==================== EPISODIC MEMORIES ====================

@@ -100,6 +100,12 @@ export function upsertMdcFile(
 // JSON MCP Config Utilities
 // ============================================================================
 
+function isPluginBootstrapEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  const args = (entry as Record<string, unknown>).args;
+  return Array.isArray(args) && args[0] === '-e';
+}
+
 export function upsertMcpJson(filePath: string, workspaceRoot: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let current: Record<string, unknown> = {};
@@ -115,6 +121,14 @@ export function upsertMcpJson(filePath: string, workspaceRoot: string): void {
     current.mcpServers && typeof current.mcpServers === 'object'
       ? (current.mcpServers as Record<string, unknown>)
       : {};
+
+  // Guard against clobbering the self-bootstrapping plugin manifest in mcp_config.json
+  if (
+    path.basename(filePath) === 'mcp_config.json' &&
+    isPluginBootstrapEntry(mcpServers['evo-kernel'])
+  ) {
+    return;
+  }
 
   const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
   const useLocalDist = fs.existsSync(localDistEntry);
@@ -143,6 +157,12 @@ export function removeMcpJson(filePath: string): boolean {
     if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
       const servers = parsed.mcpServers as Record<string, unknown>;
       if ('evo-kernel' in servers) {
+        if (
+          path.basename(filePath) === 'mcp_config.json' &&
+          isPluginBootstrapEntry(servers['evo-kernel'])
+        ) {
+          return false;
+        }
         delete servers['evo-kernel'];
         modified = true;
       }
@@ -179,6 +199,65 @@ export function removeMcpJson(filePath: string): boolean {
 // Zero-Dependency TOML Config Utilities (.codex/config.toml)
 // ============================================================================
 
+function countTomlBracketDelta(line: string): number {
+  let delta = 0;
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '\\' && inDouble) {
+      i++;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      if (ch === '#') break;
+      if (ch === '[') delta++;
+      else if (ch === ']') delta--;
+    }
+  }
+  return delta;
+}
+
+function locateCodexEvoSection(
+  content: string
+): { startLine: number; endLine: number; lines: string[] } | null {
+  const lines = content.split(/\r?\n/);
+  let startLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^[ \t]*\[mcp_servers\.evo-kernel\][ \t]*(?:#.*)?$/.test(lines[i])) {
+      startLine = i;
+      break;
+    }
+  }
+  if (startLine === -1) return null;
+
+  let bracketDepth = 0;
+  let endLine = lines.length;
+
+  for (let i = startLine + 1; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (bracketDepth === 0 && trimmed.startsWith('[')) {
+      endLine = i;
+      // Backtrack to preserve all contiguous comment lines immediately preceding the next [section]
+      while (endLine > startLine + 1 && lines[endLine - 1].trim().startsWith('#')) {
+        endLine--;
+      }
+      break;
+    }
+    bracketDepth = Math.max(0, bracketDepth + countTomlBracketDelta(lines[i]));
+  }
+
+  return { startLine, endLine, lines };
+}
+
 export function upsertCodexToml(
   filePath: string,
   workspaceRootOrCommand: string,
@@ -210,12 +289,12 @@ export function upsertCodexToml(
   const sectionHeader = '[mcp_servers.evo-kernel]';
   const sectionBody = `${sectionHeader}\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\n`;
 
-  const sectionRegex =
-    /^[ \t]*\[mcp_servers\.evo-kernel\][ \t]*(?:#[^\r\n]*)?(?:\r?\n(?![ \t]*(?:\[|#[^\r\n]*\r?\n[ \t]*\[))[^\r\n]*)*(?:\r?\n)?/m;
-
+  const loc = locateCodexEvoSection(existing);
   let updated = '';
-  if (sectionRegex.test(existing)) {
-    updated = existing.replace(sectionRegex, sectionBody + '\n').trimEnd() + '\n';
+  if (loc) {
+    const before = loc.lines.slice(0, loc.startLine).join('\n').trimEnd();
+    const after = loc.lines.slice(loc.endLine).join('\n').trimStart();
+    updated = [before, sectionBody.trimEnd(), after].filter(Boolean).join('\n\n') + '\n';
   } else if (!existing.trim()) {
     updated = sectionBody;
   } else {
@@ -229,11 +308,12 @@ export function removeCodexToml(filePath: string): boolean {
   if (!fs.existsSync(filePath)) return false;
   try {
     const existing = fs.readFileSync(filePath, 'utf8');
-    const sectionRegex =
-      /^[ \t]*\[mcp_servers\.evo-kernel\][ \t]*(?:#[^\r\n]*)?(?:\r?\n(?![ \t]*(?:\[|#[^\r\n]*\r?\n[ \t]*\[))[^\r\n]*)*(?:\r?\n)?/m;
-    if (!sectionRegex.test(existing)) return false;
+    const loc = locateCodexEvoSection(existing);
+    if (!loc) return false;
 
-    const cleaned = existing.replace(sectionRegex, '').trim();
+    const before = loc.lines.slice(0, loc.startLine).join('\n').trimEnd();
+    const after = loc.lines.slice(loc.endLine).join('\n').trimStart();
+    const cleaned = [before, after].filter(Boolean).join('\n\n').trim();
     if (!cleaned) {
       fs.unlinkSync(filePath);
       return true;
@@ -437,6 +517,7 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
       }
     }
 
+    let instructionsFileRemoved = false;
     if (parsed.instructionsFile) {
       const targetPath = path.join(workspaceRoot, String(parsed.instructionsFile));
       if (fs.existsSync(targetPath)) {
@@ -445,15 +526,22 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
           const next = removeMarkerBlock(c);
           if (!next.trim()) {
             fs.unlinkSync(targetPath);
+            instructionsFileRemoved = true;
           } else {
             fs.writeFileSync(targetPath, next, 'utf8');
           }
           cleaned.push(String(parsed.instructionsFile));
         }
+      } else {
+        instructionsFileRemoved = true;
       }
     }
 
-    if (Object.keys(parsed).length === 1 && parsed.instructionsFile === 'AGENTS.md') {
+    if (
+      instructionsFileRemoved &&
+      Object.keys(parsed).length === 1 &&
+      parsed.instructionsFile === 'AGENTS.md'
+    ) {
       delete parsed.instructionsFile;
       modified = true;
     }
@@ -642,7 +730,7 @@ export class WindsurfAdapter implements HarnessAdapter {
   }
 
   detectEnv(env: Record<string, string | undefined>): boolean {
-    return Boolean(env.WINDSURF_VERSION || env.CODEIUM_API_KEY);
+    return Boolean(env.WINDSURF_PID || env.WINDSURF_VERSION);
   }
 
   detectGlobal(home: string): boolean {
@@ -791,7 +879,7 @@ export class CopilotAdapter implements HarnessAdapter {
   detectWorkspace(ws: string): boolean {
     return (
       fs.existsSync(path.join(ws, '.github', 'copilot-instructions.md')) ||
-      fs.existsSync(path.join(ws, '.vscode'))
+      fs.existsSync(path.join(ws, '.vscode', 'mcp.json'))
     );
   }
 
@@ -849,7 +937,7 @@ export class CodexAdapter implements HarnessAdapter {
   }
 
   detectEnv(env: Record<string, string | undefined>): boolean {
-    return Boolean(env.CODEX_CLI || env.OPENAI_API_KEY);
+    return Boolean(env.CODEX_CLI || env.CODEX_HOME);
   }
 
   detectGlobal(home: string): boolean {
@@ -932,7 +1020,7 @@ export class GeminiAdapter implements HarnessAdapter {
   }
 
   detectEnv(env: Record<string, string | undefined>): boolean {
-    return Boolean(env.GEMINI_CLI_HOME || env.GEMINI_API_KEY);
+    return Boolean(env.GEMINI_CLI || env.GEMINI_CLI_HOME);
   }
 
   detectGlobal(home: string): boolean {
@@ -969,14 +1057,11 @@ export class AntigravityAdapter implements HarnessAdapter {
   id = 'antigravity';
   name = 'Antigravity';
   ruleFiles = ['GEMINI.md'];
-  mcpFiles = ['mcp_config.json', '.mcp.json'];
+  mcpFiles = ['.mcp.json'];
   dirs: string[] = [];
 
   detectWorkspace(ws: string): boolean {
-    return (
-      fs.existsSync(path.join(ws, 'mcp_config.json')) ||
-      fs.existsSync(path.join(ws, 'hooks.json'))
-    );
+    return fs.existsSync(path.join(ws, '.agents'));
   }
 
   detectEnv(env: Record<string, string | undefined>): boolean {
@@ -995,22 +1080,18 @@ export class AntigravityAdapter implements HarnessAdapter {
     }
     fs.writeFileSync(rulePath, upsertMarkerBlock(existing, managedBlock), 'utf8');
 
-    const mcpPath = path.join(ws, 'mcp_config.json');
-    upsertMcpJson(mcpPath, ws);
-
     const rootMcp = path.join(ws, '.mcp.json');
     upsertMcpJson(rootMcp, ws);
 
     return {
       updatedFiles: ['GEMINI.md'],
-      mcpConfigFiles: ['mcp_config.json', '.mcp.json'],
+      mcpConfigFiles: ['.mcp.json'],
     };
   }
 
   uninstall(ws: string): string[] {
     const cleaned: string[] = [];
     if (cleanRuleFile(path.join(ws, 'GEMINI.md'))) cleaned.push('GEMINI.md');
-    if (removeMcpJson(path.join(ws, 'mcp_config.json'))) cleaned.push('mcp_config.json');
     if (removeMcpJson(path.join(ws, '.mcp.json'))) cleaned.push('.mcp.json');
     return cleaned;
   }

@@ -217,6 +217,8 @@ interface WorkspaceContext {
   storage: EvoStorage;
   telemetry: EvoTelemetry;
   gatekeeper: EvoGatekeeper;
+  proxyManager: McpProxyManager;
+  lastExternalServersSignature?: string;
 }
 
 export class EvoMcpDispatcher {
@@ -233,11 +235,11 @@ export class EvoMcpDispatcher {
     this.defaultRoot = path.resolve(workspaceRoot);
     this.activeWorkspaceDir = this.defaultRoot;
     this.onCoreRulesChanged = onCoreRulesChanged;
-    this.proxyManager = new McpProxyManager(this.defaultRoot);
     const initialCtx = this.getOrCreateContext(this.defaultRoot);
     this.storage = initialCtx.storage;
     this.telemetry = initialCtx.telemetry;
     this.gatekeeper = initialCtx.gatekeeper;
+    this.proxyManager = initialCtx.proxyManager;
   }
 
   public getProxyManager(): McpProxyManager {
@@ -253,9 +255,43 @@ export class EvoMcpDispatcher {
     const storage = new EvoStorage(resolved);
     const telemetry = new EvoTelemetry(storage);
     const gatekeeper = new EvoGatekeeper(storage, telemetry);
-    const ctx: WorkspaceContext = { rootDir: resolved, storage, telemetry, gatekeeper };
+    const proxyManager = new McpProxyManager(resolved);
+    const ctx: WorkspaceContext = {
+      rootDir: resolved,
+      storage,
+      telemetry,
+      gatekeeper,
+      proxyManager,
+    };
     this.contexts.set(resolved, ctx);
     return ctx;
+  }
+
+  private needsExternalToolsSync(ctx: WorkspaceContext): boolean {
+    const config = ctx.storage.getConfig();
+    const servers = config.externalServers;
+    if (!servers || typeof servers !== 'object') return false;
+    const activeEntries = Object.entries(servers).filter(([, cfg]) => cfg && !cfg.disabled);
+    if (activeEntries.length === 0) return false;
+    const sig = JSON.stringify(servers);
+    return ctx.lastExternalServersSignature !== sig;
+  }
+
+  private async ensureExternalToolsSynced(ctx: WorkspaceContext): Promise<void> {
+    const checks = [ctx, ...this.getGlobalFallbackContexts()];
+    for (const c of checks) {
+      if (!this.needsExternalToolsSync(c)) continue;
+      const servers = c.storage.getConfig().externalServers || {};
+      const sig = JSON.stringify(servers);
+      c.lastExternalServersSignature = sig;
+      try {
+        const discovered = await c.proxyManager.syncExternalTools(servers);
+        c.storage.saveExternalTools(discovered);
+        c.telemetry.syncFromDisk();
+      } catch {
+        // Ignore discovery failure and proceed with cached tools
+      }
+    }
   }
 
   private getGlobalFallbackContexts(): WorkspaceContext[] {
@@ -338,6 +374,7 @@ export class EvoMcpDispatcher {
     this.storage = ctx.storage;
     this.telemetry = ctx.telemetry;
     this.gatekeeper = ctx.gatekeeper;
+    this.proxyManager = ctx.proxyManager;
     return ctx;
   }
 
@@ -373,14 +410,31 @@ export class EvoMcpDispatcher {
           ],
         };
       }
-      this.bindActiveContext(name, args);
+      const ctx = this.bindActiveContext(name, args);
+      const needsSync =
+        (name === 'evo_search' || name === 'evo_inspect') &&
+        (this.needsExternalToolsSync(ctx) ||
+          this.getGlobalFallbackContexts().some((g) => this.needsExternalToolsSync(g)));
+
       switch (name) {
         case 'evo_search':
+          if (needsSync) {
+            return this.ensureExternalToolsSynced(ctx).then(() => {
+              this.bindActiveContext(name, args);
+              return this.handleSearch(args);
+            });
+          }
           return this.handleSearch(args);
         case 'evo_inspect':
+          if (needsSync) {
+            return this.ensureExternalToolsSynced(ctx).then(() => {
+              this.bindActiveContext(name, args);
+              return this.handleInspect(args);
+            });
+          }
           return this.handleInspect(args);
         case 'evo_run':
-          return this.handleRun(args);
+          return this.handleRun(args, ctx);
         case 'evo_propose':
           return this.handlePropose(args as unknown as ProposalPayload);
         case 'evo_compact':
@@ -476,8 +530,33 @@ export class EvoMcpDispatcher {
   }
 
   private handleInspect(args: Record<string, unknown>) {
-    const id = sanitizeId(String(args.id || ''));
+    const rawId = String(args.id || '').trim();
+    const id = sanitizeId(rawId);
     const tier = String(args.tier ?? args.level ?? args.depth ?? 'L2').toUpperCase();
+
+    const parsedExt = parseExternalToolId(rawId);
+    if (parsedExt) {
+      let extTool = this.storage.getExternalTool(rawId);
+      let extTelemetry = this.telemetry;
+      if (!extTool) {
+        for (const gCtx of this.getGlobalFallbackContexts()) {
+          const gExt = gCtx.storage.getExternalTool(rawId);
+          if (gExt) {
+            extTool = gExt;
+            extTelemetry = gCtx.telemetry;
+            break;
+          }
+        }
+      }
+      if (extTool) {
+        extTelemetry.recordUsage(extTool.id, true, 300);
+        const body =
+          tier === 'L1'
+            ? `[EXTERNAL TOOL L1] ${extTool.id} (server: ${extTool.serverName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}`
+            : `[EXTERNAL TOOL L2] ${extTool.id} (server: ${extTool.serverName}, tool: ${extTool.originalName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}\n\nExecution:\nRouted via downstream MCP server '${extTool.serverName}' using stdio JSON-RPC.\nCall via: evo_run("${extTool.id}", args)`;
+        return { content: [{ type: 'text' as const, text: body }] };
+      }
+    }
 
     let rule = this.storage.getRule(id);
     let activeTelemetry = this.telemetry;
@@ -616,37 +695,39 @@ export class EvoMcpDispatcher {
       return { content: [{ type: 'text' as const, text: l2Body }] };
     }
 
-    const parsedExt = parseExternalToolId(id);
-    if (parsedExt) {
-      const extTool = this.storage.getExternalTool(id);
-      if (extTool) {
-        this.telemetry.recordUsage(id, true, 300);
-        const body =
-          tier === 'L1'
-            ? `[EXTERNAL TOOL L1] ${extTool.id} (server: ${extTool.serverName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}`
-            : `[EXTERNAL TOOL L2] ${extTool.id} (server: ${extTool.serverName}, tool: ${extTool.originalName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}\n\nExecution:\nRouted via downstream MCP server '${extTool.serverName}' using stdio JSON-RPC.\nCall via: evo_run("${extTool.id}", args)`;
-        return { content: [{ type: 'text' as const, text: body }] };
-      }
-    }
-
     return {
       isError: true,
-      content: [{ type: 'text' as const, text: `Capability '${id}' not found in .evo/.` }],
+      content: [{ type: 'text' as const, text: `Capability '${rawId || id}' not found in .evo/.` }],
     };
   }
 
-  private handleRun(args: Record<string, unknown>) {
-    const rawToolId = String(args.tool_id || '');
+  private handleRun(args: Record<string, unknown>, activeCtx?: WorkspaceContext) {
+    const rawToolId = String(args.tool_id || '').trim();
     const toolId = sanitizeId(rawToolId);
     const toolArgs = (args.args && typeof args.args === 'object' ? args.args : {}) as Record<
       string,
       unknown
     >;
 
-    const parsedExt = parseExternalToolId(toolId);
+    const parsedExt = parseExternalToolId(rawToolId);
     if (parsedExt) {
-      const config = this.storage.getConfig();
-      const serverConfig = config.externalServers?.[parsedExt.serverName];
+      let targetCtx: WorkspaceContext =
+        activeCtx || this.getOrCreateContext(this.activeWorkspaceDir);
+      let serverConfig = targetCtx.storage.getConfig().externalServers?.[parsedExt.serverName];
+      let cachedExtTool = targetCtx.storage.getExternalTool(rawToolId);
+
+      if (!serverConfig || serverConfig.disabled) {
+        for (const gCtx of this.getGlobalFallbackContexts()) {
+          const gCfg = gCtx.storage.getConfig().externalServers?.[parsedExt.serverName];
+          if (gCfg && !gCfg.disabled) {
+            targetCtx = gCtx;
+            serverConfig = gCfg;
+            cachedExtTool = cachedExtTool || gCtx.storage.getExternalTool(rawToolId);
+            break;
+          }
+        }
+      }
+
       if (!serverConfig || serverConfig.disabled) {
         return {
           isError: true,
@@ -658,17 +739,37 @@ export class EvoMcpDispatcher {
           ],
         };
       }
-      return this.proxyManager
-        .callTool(parsedExt.serverName, parsedExt.originalToolName, toolArgs, serverConfig)
-        .then((res) => {
-          this.telemetry.recordUsage(toolId, !res.isError, res.isError ? 0 : 850);
-          const header = `[evo_run: ${toolId} (proxy: ${parsedExt.serverName}/${parsedExt.originalToolName}) | exit=${res.isError ? 1 : 0} | ${res.durationMs}ms]`;
-          const formattedText = res.content.map((c) => c.text).join('\n\n');
-          return {
-            isError: res.isError,
-            content: [{ type: 'text' as const, text: `${header}\n\n${formattedText}` }],
-          };
-        });
+
+      const resolvedToolName = cachedExtTool?.originalName || parsedExt.originalToolName;
+      const canonicalExtId = cachedExtTool?.id || rawToolId;
+      const boundTelemetry = targetCtx.telemetry;
+      const boundProxy = targetCtx.proxyManager;
+      const boundServerConfig = serverConfig;
+
+      const executeCall = async () => {
+        if (this.needsExternalToolsSync(targetCtx)) {
+          await this.ensureExternalToolsSynced(targetCtx);
+        }
+        const res = await boundProxy.callTool(
+          parsedExt.serverName,
+          resolvedToolName,
+          toolArgs,
+          boundServerConfig
+        );
+        try {
+          boundTelemetry.recordUsage(canonicalExtId, !res.isError, res.isError ? 0 : 850);
+        } catch {
+          // Ignore telemetry error if DB was closed concurrently
+        }
+        const header = `[evo_run: ${canonicalExtId} (proxy: ${parsedExt.serverName}/${resolvedToolName}) | exit=${res.isError ? 1 : 0} | ${res.durationMs}ms]`;
+        const formattedText = res.content.map((c) => c.text).join('\n\n');
+        return {
+          isError: res.isError,
+          content: [{ type: 'text' as const, text: `${header}\n\n${formattedText}` }],
+        };
+      };
+
+      return executeCall();
     }
 
     let tool = this.storage.getTool(toolId);
@@ -913,6 +1014,11 @@ export class EvoMcpDispatcher {
       // ignore
     }
     for (const ctx of this.contexts.values()) {
+      try {
+        ctx.proxyManager.close();
+      } catch {
+        // ignore
+      }
       try {
         ctx.telemetry.close();
       } catch {

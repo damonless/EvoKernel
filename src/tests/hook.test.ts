@@ -332,4 +332,105 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.match(agentsContent, /<!-- EVO:START -->/);
     assert.notEqual(agentsContent.includes('old block'), true);
   });
+
+  test('13. Issue #9 [CRITICAL-1]: Read-only tools recall scoped rules without setting pending_evolution or dirty_crystallized_id', () => {
+    const storage = new EvoStorage(ws);
+    storage.saveRule({
+      id: 'scoped-read-guard',
+      title: 'Scoped Read Guardrail',
+      l0_summary: 'Active scoped rule recalled even on read-only file inspection.',
+      scope_glob: 'src/**/*.ts',
+      core: false,
+      priority: 85,
+      tokens: 35,
+      origin: 'test',
+      content: 'Rule body',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const telemetry = new EvoTelemetry(storage);
+    telemetry.setSessionFlag('last_crystallized_id', 'clean-verified-rule');
+    telemetry.close();
+
+    // Call handlePostTool with read_file and a target path
+    const res = handlePostTool(
+      ws,
+      {
+        tool_name: 'read_file',
+        tool_input: { path: 'src/core/storage.ts' },
+      },
+      {}
+    );
+
+    assert.equal(res.success, true);
+    assert.ok(res.recalledRules?.includes('scoped-read-guard'));
+    assert.match(res.output, /Scoped Read Guardrail/);
+
+    // Verify neither pending_evolution nor dirty_crystallized_id was set
+    const checkTelem = new EvoTelemetry(storage);
+    assert.notEqual(checkTelem.getSessionFlag('pending_evolution'), 'true');
+    assert.notEqual(checkTelem.getSessionFlag('dirty_crystallized_id'), 'clean-verified-rule');
+    checkTelem.close();
+  });
+
+  test('14. Issue #9 [CRITICAL-2]: CLI hook subprocess reads piped JSON payload from stdin', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const storage = new EvoStorage(ws);
+    storage.saveRule({
+      id: 'stdin-scoped-rule',
+      title: 'Stdin Piped Scoped Rule',
+      l0_summary: 'Recalled via piped JSON payload on fd 0.',
+      scope_glob: 'src/**/*.ts',
+      core: false,
+      priority: 90,
+      tokens: 30,
+      origin: 'test',
+      content: 'Rule body',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const stdinPayload = JSON.stringify({
+      tool_name: 'edit_file',
+      tool_input: { file_path: 'src/mcp/handlers.ts' },
+    });
+
+    const proc = spawnSync(
+      process.execPath,
+      [cliEntry, 'hook', 'post-tool', '--workspace', ws],
+      {
+        input: stdinPayload,
+        encoding: 'utf8',
+        timeout: 5000,
+      }
+    );
+
+    assert.equal(proc.status, 0);
+    assert.match(proc.stdout, /Stdin Piped Scoped Rule/);
+
+    const telemetry = new EvoTelemetry(storage);
+    assert.equal(telemetry.getSessionFlag('pending_evolution'), 'true');
+    telemetry.close();
+  });
+
+  test('15. Issue #9 [MEDIUM-12]: getGitFiles strips old -> new rename arrow prefix in git status --porcelain', () => {
+    spawnSync('git', ['init'], { cwd: ws });
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws });
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: ws });
+
+    fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'src', 'old_name.ts'), 'export const x = 1;\n');
+    spawnSync('git', ['add', '.'], { cwd: ws });
+    spawnSync('git', ['commit', '-m', 'initial'], { cwd: ws });
+
+    // Rename file using git mv
+    spawnSync('git', ['mv', 'src/old_name.ts', 'src/new_name.ts'], { cwd: ws });
+
+    const stopRes = handleStop(ws, {}, {});
+    assert.equal(stopRes.success, true);
+    assert.equal(stopRes.crystallizationSuggested, true);
+    assert.match(stopRes.output, /src\/new_name\.ts/);
+    assert.equal(stopRes.output.includes('->'), false);
+  });
 });

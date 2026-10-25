@@ -291,6 +291,6 @@ export function runCli(argv: string[]): void {
   }
 }
 
-if (!process.env.NODE_TEST_CONTEXT && !process.argv[1]?.endsWith('.test.js')) {
+if (!process.argv[1]?.endsWith('.test.js')) {
   runCli(process.argv);
 }

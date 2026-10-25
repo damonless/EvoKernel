@@ -146,6 +146,20 @@ function resolvePayload(options: HookOptions): Record<string, unknown> {
       return {};
     }
   }
+  if (
+    options.stdinData === undefined &&
+    !process.stdin.isTTY &&
+    !process.argv[1]?.endsWith('.test.js')
+  ) {
+    try {
+      const rawStdin = fs.readFileSync(0, 'utf8').trim();
+      if (rawStdin) {
+        return JSON.parse(rawStdin) as Record<string, unknown>;
+      }
+    } catch {
+      // Ignore empty/unavailable stdin or invalid JSON
+    }
+  }
   return {};
 }
 
@@ -167,6 +181,9 @@ function getGitFiles(workspaceRoot: string, stagedOnly: boolean): string[] {
     for (const line of out.split(/\r?\n/)) {
       if (line.length <= 3) continue;
       let filePath = line.slice(3).trim();
+      if (filePath.includes(' -> ')) {
+        filePath = filePath.split(' -> ').pop()!.trim();
+      }
       if (filePath.startsWith('"') && filePath.endsWith('"')) {
         filePath = filePath.slice(1, -1);
       }
@@ -198,10 +215,13 @@ export function handlePostTool(
     toolInput.Path ||
     toolInput.file ||
     toolInput.filePath ||
+    toolInput.file_path ||
     toolInput.TargetFile ||
     toolInput.target_file ||
     payload.path ||
     payload.file ||
+    payload.filePath ||
+    payload.file_path ||
     options.targetFile ||
     ''
   );
@@ -225,49 +245,47 @@ export function handlePostTool(
     telemetry.setSessionFlag('dirty_crystallized_id', '');
     output = `[EvoKernel Post-Tool] Capability '${proposedId}' registered. Session evolution debt cleared.`;
   } else {
-    const isMutation = EDIT_TOOL_NAMES.has(toolName) || Boolean(rawPath) || (!toolName && !rawPath);
-    if (isMutation) {
-      const normPath = rawPath.replace(/\\/g, '/');
-      const isInternalMeta =
-        Boolean(rawPath) &&
-        (normPath.includes('/.evo/') ||
-          normPath.includes('/.agents/teamwork/') ||
-          normPath.includes('/.gemini/antigravity/'));
+    const normPath = rawPath.replace(/\\/g, '/');
+    const isInternalMeta =
+      Boolean(rawPath) &&
+      (normPath.includes('/.evo/') ||
+        normPath.includes('/.agents/teamwork/') ||
+        normPath.includes('/.gemini/antigravity/'));
 
-      if (!isInternalMeta) {
-        telemetry.setSessionFlag('pending_evolution', 'true');
-        const currentCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
-        telemetry.setSessionFlag('unproposed_edit_count', String(currentCount + 1));
+    const isMutation = toolName ? EDIT_TOOL_NAMES.has(toolName) : true;
+    if (isMutation && !isInternalMeta) {
+      telemetry.setSessionFlag('pending_evolution', 'true');
+      const currentCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
+      telemetry.setSessionFlag('unproposed_edit_count', String(currentCount + 1));
 
-        const lastCrystallized = telemetry.getSessionFlag('last_crystallized_id');
-        if (lastCrystallized) {
-          telemetry.setSessionFlag('dirty_crystallized_id', lastCrystallized);
+      const lastCrystallized = telemetry.getSessionFlag('last_crystallized_id');
+      if (lastCrystallized) {
+        telemetry.setSessionFlag('dirty_crystallized_id', lastCrystallized);
+      }
+    }
+
+    if (rawPath && !isInternalMeta) {
+      const relPath = path.isAbsolute(rawPath)
+        ? path.relative(workspaceRoot, rawPath).replace(/\\/g, '/')
+        : normPath;
+
+      const rules = storage.listRules();
+      for (const rule of rules) {
+        if (rule.scope_glob && matchesScopeGlob(relPath, rule.scope_glob)) {
+          recalledRuleIds.push(rule.id);
         }
       }
 
-      if (rawPath) {
-        const relPath = path.isAbsolute(rawPath)
-          ? path.relative(workspaceRoot, rawPath).replace(/\\/g, '/')
-          : normPath;
-
-        const rules = storage.listRules();
-        for (const rule of rules) {
-          if (rule.scope_glob && matchesScopeGlob(relPath, rule.scope_glob)) {
-            recalledRuleIds.push(rule.id);
-          }
-        }
-
-        if (recalledRuleIds.length > 0) {
-          const matchedDetails = recalledRuleIds
-            .map((id) => {
-              const r = storage.getRule(id);
-              return r
-                ? `  ├─ 🛡️  [${r.id}] ${r.title ? `${r.title} — ` : ''}${r.l0_summary}`
-                : `  ├─ 🛡️  [${id}]`;
-            })
-            .join('\n');
-          output = `[EvoKernel Post-Tool Active Rule Guardrail] Target '${relPath}' matched active invariant(s):\n${matchedDetails}`;
-        }
+      if (recalledRuleIds.length > 0) {
+        const matchedDetails = recalledRuleIds
+          .map((id) => {
+            const r = storage.getRule(id);
+            return r
+              ? `  ├─ 🛡️  [${r.id}] ${r.title ? `${r.title} — ` : ''}${r.l0_summary}`
+              : `  ├─ 🛡️  [${id}]`;
+          })
+          .join('\n');
+        output = `[EvoKernel Post-Tool Active Rule Guardrail] Target '${relPath}' matched active invariant(s):\n${matchedDetails}`;
       }
     }
   }

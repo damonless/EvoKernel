@@ -84,6 +84,20 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
           fs.writeFileSync(opencodePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
           updated.push('opencode.json');
         }
+        if (typeof parsed.instructionsFile === 'string' && parsed.instructionsFile.trim()) {
+          const relCustom = parsed.instructionsFile.trim();
+          if (!updated.includes(relCustom)) {
+            const customFullPath = path.join(workspaceRoot, relCustom);
+            if (fs.existsSync(customFullPath) && fs.statSync(customFullPath).isFile()) {
+              const current = fs.readFileSync(customFullPath, 'utf8');
+              if (current.includes(META_RULE_MARKER_START)) {
+                const next = upsertMarkerBlock(current, block);
+                fs.writeFileSync(customFullPath, next, 'utf8');
+                updated.push(relCustom);
+              }
+            }
+          }
+        }
       }
     } catch {
       // Ignore malformed JSON

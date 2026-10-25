@@ -66,6 +66,18 @@ export function parseMaxCommitsArg(args: string[]): number {
 export function detectProjectStacks(workspaceRoot: string): DetectedStack[] {
   const detected: DetectedStack[] = [];
 
+  const ignoreDirs = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    '.evo',
+    '.codegraph',
+    '.cache',
+    'target',
+    'build',
+    'tmp',
+  ]);
+
   function findIndicators(candidates: string[]): string[] {
     const found: string[] = [];
     for (const f of candidates) {
@@ -79,18 +91,6 @@ export function detectProjectStacks(workspaceRoot: string): DetectedStack[] {
       }
     }
     if (found.length > 0) return found;
-
-    const ignoreDirs = new Set([
-      'node_modules',
-      '.git',
-      'dist',
-      '.evo',
-      '.codegraph',
-      '.cache',
-      'target',
-      'build',
-      'tmp',
-    ]);
 
     function searchDir(currentDir: string, currentDepth: number) {
       if (currentDepth > 3) return;
@@ -122,6 +122,31 @@ export function detectProjectStacks(workspaceRoot: string): DetectedStack[] {
 
     searchDir(workspaceRoot, 1);
     return found;
+  }
+
+  function hasFileWithExtensions(extensions: string[]): boolean {
+    function scan(currentDir: string, currentDepth: number): boolean {
+      if (currentDepth > 3) return false;
+      try {
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isFile()) {
+            const lower = entry.name.toLowerCase();
+            if (extensions.some((ext) => lower.endsWith(ext))) {
+              return true;
+            }
+          } else if (entry.isDirectory() && !ignoreDirs.has(entry.name)) {
+            if (scan(path.join(currentDir, entry.name), currentDepth + 1)) {
+              return true;
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return false;
+    }
+    return scan(workspaceRoot, 0);
   }
 
   // 1. Rust: Cargo.toml
@@ -215,9 +240,14 @@ export function detectProjectStacks(workspaceRoot: string): DetectedStack[] {
     });
   }
 
-  // 6. C / C++: CMakeLists.txt, Makefile
-  const cCppFiles = findIndicators(['CMakeLists.txt', 'Makefile']);
-  if (cCppFiles.length > 0) {
+  // 6. C / C++: CMakeLists.txt, or Makefile accompanied by C/C++ source/header files
+  const cmakeFiles = findIndicators(['CMakeLists.txt']);
+  const makeFiles = findIndicators(['Makefile']);
+  const hasCCppSources =
+    cmakeFiles.length > 0 ||
+    (makeFiles.length > 0 && hasFileWithExtensions(['.c', '.h', '.cpp', '.hpp', '.cc', '.cxx']));
+  if (hasCCppSources) {
+    const cCppFiles = [...cmakeFiles, ...makeFiles.filter((f) => !cmakeFiles.includes(f))];
     detected.push({
       stack: 'c_cpp',
       name: 'C/C++',
@@ -231,7 +261,9 @@ export function detectProjectStacks(workspaceRoot: string): DetectedStack[] {
 export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload[] {
   const proposals: ProposalPayload[] = [];
 
-  for (const item of stacks) {
+  for (let idx = 0; idx < stacks.length; idx++) {
+    const item = stacks[idx];
+    const isPrimaryCore = idx === 0;
     switch (item.stack) {
       case 'rust': {
         proposals.push({
@@ -239,8 +271,8 @@ export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload
           id: 'rust-borrow-memory-safety',
           title: 'Rust Ownership, Borrow Checker & Unsafe Invariants',
           l0_summary: 'Enforce borrow checker ownership, avoid unsafe blocks unless audited, and prevent lifetime ambiguities in Rust modules.',
-          scope_glob: 'src/**/*.rs',
-          core: true,
+          scope_glob: '**/*.rs',
+          core: isPrimaryCore,
           priority: 85,
           origin: 'bootstrap',
           transfer_scenarios: [
@@ -264,7 +296,7 @@ export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload
           title: 'Go Goroutine Leak & Concurrency Invariants',
           l0_summary: 'Prevent goroutine and context leaks, enforce explicit channel closure, and ensure proper error wrapping across Go packages.',
           scope_glob: '**/*.go',
-          core: true,
+          core: isPrimaryCore,
           priority: 85,
           origin: 'bootstrap',
           transfer_scenarios: [
@@ -288,7 +320,7 @@ export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload
           title: 'Python Type Hints & Async Resource Invariants',
           l0_summary: 'Enforce type hints and runtime validation, prevent unhandled async cancellation, and ensure deterministic resource cleanup.',
           scope_glob: '**/*.py',
-          core: true,
+          core: isPrimaryCore,
           priority: 85,
           origin: 'bootstrap',
           transfer_scenarios: [
@@ -315,8 +347,8 @@ export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload
             id: 'esm-typescript-imports',
             title: 'NodeNext ESM TypeScript Import Invariant',
             l0_summary: 'Always use explicit .js extensions on relative imports and import type for types in ESM TypeScript.',
-            scope_glob: 'src/**/*.ts',
-            core: true,
+            scope_glob: '**/*.ts',
+            core: isPrimaryCore,
             priority: 85,
             origin: 'bootstrap',
             transfer_scenarios: [
@@ -336,7 +368,7 @@ export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload
             title: 'JavaScript & TypeScript Clean Architecture Invariants',
             l0_summary: 'Enforce strict type safety, avoid any types, and ensure deterministic resource cleanup across JavaScript and TypeScript modules.',
             scope_glob: '**/*.{ts,js,mjs}',
-            core: true,
+            core: isPrimaryCore,
             priority: 85,
             origin: 'bootstrap',
             transfer_scenarios: [
@@ -360,8 +392,8 @@ export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload
           id: 'java-resource-null-safety',
           title: 'Java & Kotlin Resource Lifecycle and Null Safety Invariants',
           l0_summary: 'Enforce try-with-resources lifecycle management, prevent NullPointerExceptions via nullability annotations, and avoid raw types.',
-          scope_glob: 'src/**/*.{java,kt}',
-          core: true,
+          scope_glob: '**/*.{java,kt}',
+          core: isPrimaryCore,
           priority: 85,
           origin: 'bootstrap',
           transfer_scenarios: [
@@ -384,8 +416,8 @@ export function generateStackSeedRules(stacks: DetectedStack[]): ProposalPayload
           id: 'cpp-raii-memory-safety',
           title: 'C & C++ RAII Resource Management and Pointer Safety Invariants',
           l0_summary: 'Enforce RAII resource management, prefer smart pointers over raw owning pointers, and validate pointer bounds and arithmetic.',
-          scope_glob: 'src/**/*.{c,h,cpp,hpp}',
-          core: true,
+          scope_glob: '**/*.{c,h,cpp,hpp}',
+          core: isPrimaryCore,
           priority: 85,
           origin: 'bootstrap',
           transfer_scenarios: [

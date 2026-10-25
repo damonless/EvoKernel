@@ -79,8 +79,16 @@ export function startMcpStdioServer(workspaceRoot: string): void {
       case 'tools/call': {
         const toolName = String(params?.name || '');
         const toolArgs = (params?.arguments || {}) as Record<string, unknown>;
-        const callResult = await dispatcher.handleToolCall(toolName, toolArgs);
-        sendResponse(id, callResult);
+        try {
+          const callResult = await dispatcher.handleToolCall(toolName, toolArgs);
+          sendResponse(id, callResult);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          sendResponse(id, {
+            isError: true,
+            content: [{ type: 'text', text: `EvoKernel error in ${toolName}: ${msg}` }],
+          });
+        }
         break;
       }
 

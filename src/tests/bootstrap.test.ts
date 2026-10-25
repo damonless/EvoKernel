@@ -382,4 +382,53 @@ describe('EvoKernel Bootstrap Cold-Start Expansion Suite (Milestone 3)', () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test('21. Issue #9 [MEDIUM-11]: detectProjectStacks ignores task-runner Makefile without C/C++ sources and detects Makefile when .c/.h exist', () => {
+    const ws = createTempWorkspace();
+    try {
+      // 1. Go project with task-runner Makefile (no .c/.h/.cpp files)
+      fs.writeFileSync(path.join(ws, 'go.mod'), 'module example.com/service\n');
+      fs.writeFileSync(path.join(ws, 'Makefile'), 'build:\n\tgo build ./...\n');
+
+      const stacksWithoutC = detectProjectStacks(ws);
+      assert.equal(stacksWithoutC.length, 1);
+      assert.equal(stacksWithoutC[0].stack, 'go');
+
+      // 2. Add a C source file -> Makefile now triggers c_cpp detection
+      fs.writeFileSync(path.join(ws, 'native_bridge.c'), 'int bridge(void) { return 0; }\n');
+      const stacksWithC = detectProjectStacks(ws);
+      assert.equal(stacksWithC.some((s) => s.stack === 'c_cpp'), true);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('22. Issue #9 [MEDIUM-10]: generateStackSeedRules uses directory-agnostic scope_globs and sets core: false for secondary stacks in polyglot repos', () => {
+    const polyglotStacks = [
+      { stack: 'rust' as const, name: 'Rust', indicatorFiles: ['Cargo.toml'] },
+      {
+        stack: 'typescript_javascript' as const,
+        name: 'TypeScript',
+        indicatorFiles: ['package.json'],
+        details: { isEsm: true, hasTs: true },
+      },
+      { stack: 'java_kotlin' as const, name: 'Java', indicatorFiles: ['pom.xml'] },
+      { stack: 'c_cpp' as const, name: 'C/C++', indicatorFiles: ['CMakeLists.txt'] },
+    ];
+
+    const rules = generateStackSeedRules(polyglotStacks);
+    assert.equal(rules.length, 4);
+
+    // Primary stack is core: true, secondary stacks are core: false
+    assert.equal(rules[0].core, true);
+    assert.equal(rules[1].core, false);
+    assert.equal(rules[2].core, false);
+    assert.equal(rules[3].core, false);
+
+    // Directory-agnostic globs (not hardcoded to src/**)
+    assert.equal(rules[0].scope_glob, '**/*.rs');
+    assert.equal(rules[1].scope_glob, '**/*.ts');
+    assert.equal(rules[2].scope_glob, '**/*.{java,kt}');
+    assert.equal(rules[3].scope_glob, '**/*.{c,h,cpp,hpp}');
+  });
 });

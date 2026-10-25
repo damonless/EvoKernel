@@ -85,7 +85,6 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
         '.codex/config.toml',
         'opencode.json',
         '.gemini/settings.json',
-        'mcp_config.json',
       ];
       for (const mf of expectedMcpFiles) {
         const full = path.join(ws, mf);
@@ -101,7 +100,6 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
         '.roo/mcp.json',
         '.vscode/mcp.json',
         '.gemini/settings.json',
-        'mcp_config.json',
       ];
       for (const jf of jsonConfigs) {
         const full = path.join(ws, jf);
@@ -585,6 +583,149 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       assert.ok(displayPaths.includes('.clinerules'));
       assert.ok(displayPaths.includes('.github/copilot-instructions.md'));
       assert.equal(auditReport.budgetViolations.length, 0);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('8. Issue #9 [HIGH-7]: Protects plugin mcp_config.json, avoids bare .vscode false positive, and ignores generic LLM API keys in detectEnv', () => {
+    const ws = createTempWorkspace();
+    const fakeHome = createTempWorkspace();
+    try {
+      // 1. Pre-seed self-bootstrapping plugin mcp_config.json
+      const pluginMcpPath = path.join(ws, 'mcp_config.json');
+      const pluginManifest = {
+        mcpServers: {
+          'evo-kernel': {
+            command: 'node',
+            args: ['-e', '/* self-bootstrapping plugin script */'],
+          },
+        },
+      };
+      fs.writeFileSync(pluginMcpPath, JSON.stringify(pluginManifest, null, 2) + '\n', 'utf8');
+
+      // upsertMcpJson and removeMcpJson must not clobber or delete the plugin bootstrap manifest
+      upsertMcpJson(pluginMcpPath, ws);
+      const afterUpsert = JSON.parse(fs.readFileSync(pluginMcpPath, 'utf8'));
+      assert.equal(afterUpsert.mcpServers['evo-kernel'].args[0], '-e');
+
+      assert.equal(removeMcpJson(pluginMcpPath), false);
+      assert.ok(fs.existsSync(pluginMcpPath));
+
+      // Antigravity install/uninstall must use .mcp.json and never clobber mcp_config.json
+      runInit(ws, ['antigravity']);
+      assert.ok(fs.existsSync(path.join(ws, '.mcp.json')));
+      assert.equal(
+        JSON.parse(fs.readFileSync(pluginMcpPath, 'utf8')).mcpServers['evo-kernel'].args[0],
+        '-e'
+      );
+      runUninstall(ws);
+      assert.ok(fs.existsSync(pluginMcpPath));
+
+      // 2. Bare .vscode directory (e.g. settings.json) must not false-trigger copilot detection
+      fs.mkdirSync(path.join(ws, '.vscode'), { recursive: true });
+      fs.writeFileSync(path.join(ws, '.vscode', 'settings.json'), '{}', 'utf8');
+      const detectedBareVscode = detectCascadedTargets(ws, {}, fakeHome);
+      assert.equal(detectedBareVscode.includes('copilot'), false);
+
+      // 3. Generic API keys (OPENAI_API_KEY, GEMINI_API_KEY, CODEIUM_API_KEY) must not false-trigger Stage 2 env detection
+      const detectedGenericKeys = detectCascadedTargets(
+        ws,
+        {
+          OPENAI_API_KEY: 'sk-123',
+          GEMINI_API_KEY: 'AIza-123',
+          CODEIUM_API_KEY: 'cdm-123',
+        },
+        fakeHome
+      );
+      assert.deepEqual(detectedGenericKeys, ['agents']);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('9. Issue #9 [MEDIUM-9]: Codex TOML parser handles multi-line bracketed args and preserves multi-line comments before next section', () => {
+    const ws = createTempWorkspace();
+    try {
+      const tomlPath = path.join(ws, '.codex', 'config.toml');
+      fs.mkdirSync(path.dirname(tomlPath), { recursive: true });
+      const initialToml = [
+        '[model]',
+        'name = "o3"',
+        '',
+        '[mcp_servers.evo-kernel]',
+        'command = "npx"',
+        'args = [',
+        '  "-y",',
+        '  "[scoped]/evo-kernel",',
+        '  "mcp"',
+        ']',
+        '',
+        '# Important comment line 1 for postgres',
+        '# Important comment line 2 for postgres',
+        '[mcp_servers.postgres]',
+        'command = "psql"',
+        '',
+      ].join('\n');
+      fs.writeFileSync(tomlPath, initialToml, 'utf8');
+
+      upsertCodexToml(tomlPath, 'node', ['./dist/cli/index.js', 'mcp']);
+      const afterUpsert = fs.readFileSync(tomlPath, 'utf8');
+
+      assert.equal(afterUpsert.includes('"[scoped]/evo-kernel"'), false);
+      assert.match(afterUpsert, /# Important comment line 1 for postgres/);
+      assert.match(afterUpsert, /# Important comment line 2 for postgres/);
+      assert.match(afterUpsert, /\[mcp_servers\.postgres\]/);
+
+      removeCodexToml(tomlPath);
+      const afterRemove = fs.readFileSync(tomlPath, 'utf8');
+      assert.equal(afterRemove.includes('[mcp_servers.evo-kernel]'), false);
+      assert.match(afterRemove, /# Important comment line 1 for postgres/);
+      assert.match(afterRemove, /# Important comment line 2 for postgres/);
+      assert.match(afterRemove, /\[mcp_servers\.postgres\]/);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('10. Issue #9 [MEDIUM-12]: OpenCode preserves instructionsFile when user AGENTS.md remains and syncs custom instructionsFile', () => {
+    const ws = createTempWorkspace();
+    try {
+      // 1. Pre-existing AGENTS.md with user content
+      fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# User Custom Agent Instructions\nKeep this!\n', 'utf8');
+      runInit(ws, ['opencode']);
+      runUninstall(ws);
+
+      // AGENTS.md still exists with user content, so opencode.json should retain instructionsFile: 'AGENTS.md'
+      assert.ok(fs.existsSync(path.join(ws, 'AGENTS.md')));
+      assert.ok(fs.existsSync(path.join(ws, 'opencode.json')));
+      const parsedOpenCode = JSON.parse(fs.readFileSync(path.join(ws, 'opencode.json'), 'utf8'));
+      assert.equal(parsedOpenCode.instructionsFile, 'AGENTS.md');
+
+      // 2. Custom instructionsFile in opencode.json is synced by syncManagedRuleBlocks
+      fs.writeFileSync(
+        path.join(ws, 'opencode.json'),
+        JSON.stringify({ instructionsFile: 'docs/CUSTOM_AGENT.md' }, null, 2) + '\n',
+        'utf8'
+      );
+      runInit(ws, ['opencode']);
+      assert.ok(fs.existsSync(path.join(ws, 'docs', 'CUSTOM_AGENT.md')));
+
+      const storage = new EvoStorage(ws);
+      storage.saveRule({
+        id: 'custom-opencode-sync-rule',
+        title: 'Custom OpenCode Sync Rule',
+        l0_summary: 'Sync custom instructionsFile in opencode.json.',
+        scope_glob: '**/*',
+        core: true,
+        content: 'Rule body',
+      });
+
+      const synced = syncManagedRuleBlocks(ws);
+      assert.ok(synced.includes('docs/CUSTOM_AGENT.md'));
+      const customContent = fs.readFileSync(path.join(ws, 'docs', 'CUSTOM_AGENT.md'), 'utf8');
+      assert.match(customContent, /custom-opencode-sync-rule/);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

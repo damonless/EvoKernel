@@ -53,7 +53,11 @@ export class McpClientConnection {
     };
 
     const isWin = process.platform === 'win32';
-    const isBatch = isWin && /\.(cmd|bat)$/i.test(this.config.command);
+    const cmdBase = path.basename(this.config.command).toLowerCase();
+    const isBatch =
+      isWin &&
+      (/\.(cmd|bat)$/i.test(this.config.command) ||
+        /^(?:npx|npm|pnpm|yarn|uvx|bunx)$/i.test(cmdBase));
     const proc = child_process.spawn(this.config.command, this.config.args || [], {
       cwd,
       env,
@@ -71,17 +75,19 @@ export class McpClientConnection {
     });
 
     proc.on('error', (err) => {
-      for (const [id, req] of this.pending.entries()) {
+      for (const [, req] of this.pending.entries()) {
         clearTimeout(req.timer);
         req.reject(new Error(`MCP server '${this.serverName}' process error: ${err.message}`));
       }
       this.pending.clear();
       this.initialized = false;
+      this.proc = null;
     });
 
     proc.on('exit', () => {
       this.initialized = false;
-      for (const [id, req] of this.pending.entries()) {
+      this.proc = null;
+      for (const [, req] of this.pending.entries()) {
         clearTimeout(req.timer);
         req.reject(new Error(`MCP server '${this.serverName}' exited unexpectedly`));
       }
@@ -120,18 +126,23 @@ export class McpClientConnection {
       });
     }
 
-    // Perform handshake
-    await this.request('initialize', {
-      protocolVersion: '2024-11-05',
-      capabilities: {},
-      clientInfo: {
-        name: 'evo-kernel-proxy',
-        version: '0.1.0',
-      },
-    });
+    // Perform handshake with cleanup on failure/timeout
+    try {
+      await this.request('initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: {
+          name: 'evo-kernel-proxy',
+          version: '0.1.0',
+        },
+      });
 
-    this.notify('notifications/initialized', {});
-    this.initialized = true;
+      this.notify('notifications/initialized', {});
+      this.initialized = true;
+    } catch (err) {
+      this.close();
+      throw err;
+    }
   }
 
   public notify(method: string, params: Record<string, unknown> = {}): void {
@@ -205,17 +216,27 @@ export class McpClientConnection {
   }
 
   public close(): void {
-    for (const [id, req] of this.pending.entries()) {
+    for (const [, req] of this.pending.entries()) {
       clearTimeout(req.timer);
       req.reject(new Error(`MCP server '${this.serverName}' connection closed`));
     }
     this.pending.clear();
     this.initialized = false;
     if (this.proc) {
+      const pid = this.proc.pid;
       try {
         this.proc.kill();
       } catch {
         // ignore
+      }
+      if (process.platform === 'win32' && pid) {
+        try {
+          child_process.spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+            stdio: 'ignore',
+          });
+        } catch {
+          // ignore
+        }
       }
       this.proc = null;
     }
@@ -224,6 +245,7 @@ export class McpClientConnection {
 
 export class McpProxyManager {
   private readonly connections = new Map<string, McpClientConnection>();
+  private readonly connectionConfigKeys = new Map<string, string>();
   private readonly workspaceRoot: string;
 
   constructor(workspaceRoot: string) {
@@ -231,11 +253,17 @@ export class McpProxyManager {
   }
 
   private getConnection(serverName: string, config: ExternalMcpServerConfig): McpClientConnection {
-    let conn = this.connections.get(serverName);
-    if (!conn) {
-      conn = new McpClientConnection(serverName, config, this.workspaceRoot);
-      this.connections.set(serverName, conn);
+    const configKey = JSON.stringify(config);
+    const existing = this.connections.get(serverName);
+    if (existing && this.connectionConfigKeys.get(serverName) === configKey) {
+      return existing;
     }
+    if (existing) {
+      existing.close();
+    }
+    const conn = new McpClientConnection(serverName, config, this.workspaceRoot);
+    this.connections.set(serverName, conn);
+    this.connectionConfigKeys.set(serverName, configKey);
     return conn;
   }
 
