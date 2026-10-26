@@ -20,18 +20,123 @@ export function extractCjkBigrams(text: string): string[] {
   return Array.from(bigrams);
 }
 
+const BILINGUAL_TECH_SYNONYMS: Record<string, string[]> = {
+  硬件: ['hardware', 'hw', 'pcb', 'schematic', 'component', 'bom'],
+  原理: ['schematic', 'net', 'pin', 'component', 'pcb', 'hw'],
+  理图: ['schematic', 'net', 'pin', 'component', 'pcb'],
+  器件: ['component', 'bom', 'part', 'pcb', 'hw'],
+  元件: ['component', 'bom', 'part', 'pcb'],
+  物料: ['bom', 'component', 'part', 'spec'],
+  端口: ['port', 'connector', 'pin', 'header', 'net', 'hw'],
+  接口: ['port', 'connector', 'pin', 'interface', 'net', 'hw'],
+  接插: ['connector', 'header', 'pin', 'port', 'pcb', 'hw'],
+  插件: ['connector', 'header', 'pin', 'pcb'],
+  试口: ['connector', 'pin', 'header', 'net', 'port', 'hw'],
+  插座: ['connector', 'socket', 'header', 'pin', 'net'],
+  端子: ['terminal', 'connector', 'pin', 'net', 'hw'],
+  电压: ['voltage', 'analog', 'adc', 'net', 'power', 'scaling'],
+  电流: ['current', 'analog', 'adc', 'shunt', 'scaling'],
+  电源: ['power', 'supply', 'rail', 'voltage', 'net', 'hw'],
+  供电: ['power', 'supply', 'rail', 'voltage', 'net'],
+  调试: ['debug', 'test', 'hw', 'port', 'pin'],
+  引脚: ['pin', 'mcu', 'gpio', 'net', 'mapping', 'hw'],
+  管脚: ['pin', 'mcu', 'gpio', 'net', 'mapping', 'hw'],
+  网络: ['net', 'pcb', 'schematic', 'pin'],
+  走线: ['pcb', 'trace', 'net', 'layout'],
+  采样: ['analog', 'adc', 'sampling', 'scaling', 'channel', 'calc'],
+  分压: ['divider', 'analog', 'adc', 'scaling', 'voltage', 'calc'],
+  运放: ['opamp', 'analog', 'adc', 'scaling', 'calc'],
+  换算: ['scaling', 'calc', 'ratio', 'analog', 'adc', 'unit'],
+  比例: ['ratio', 'scaling', 'calc', 'analog'],
+  寄存: ['register', 'firmware', 'mcu'],
+  固件: ['firmware', 'mcu', 'register'],
+  表格: ['excel', 'xlsx', 'xls', 'spreadsheet', 'bom'],
+  工作: ['workbook', 'excel', 'xlsx'],
+  报告: ['report', 'docx', 'word', 'sop', 'qa'],
+  文档: ['document', 'docx', 'word', 'report', 'sop'],
+  hardware: ['hw', 'pcb', 'schematic', 'component', '硬件', '原理', '器件', '引脚'],
+  hw: ['hardware', 'pcb', 'schematic', 'component', 'pin', 'net', '硬件', '器件'],
+  schematic: ['pcb', 'net', 'pin', 'component', 'hardware', '原理', '理图', '网络'],
+  pcb: ['hardware', 'schematic', 'component', 'net', 'pin', '硬件', '走线'],
+  component: ['bom', 'part', 'pcb', 'schematic', '器件', '元件', '物料'],
+  bom: ['component', 'part', 'spec', '物料', '器件'],
+  pin: ['mcu', 'gpio', 'net', 'connector', '引脚', '管脚', '端口'],
+  connector: ['pin', 'header', 'port', 'net', '接插', '端口', '试口', '插座'],
+  voltage: ['analog', 'adc', 'power', 'net', '电压', '电源', '采样', '分压'],
+  current: ['analog', 'adc', 'shunt', '电流', '采样'],
+  analog: ['adc', 'scaling', 'calc', 'voltage', 'current', '采样', '分压', '运放', '换算'],
+  adc: ['analog', 'scaling', 'calc', 'mcu', '采样', '换算', '电压'],
+  power: ['voltage', 'supply', 'rail', 'net', '电源', '供电', '电压'],
+};
+
+const HW_DESIGNATOR_REGEX =
+  /\b(?:CN|J|P|U|UA|IC|R|C|L|Q|D|ZD|LED|RY|RLY|TP|F|SW|K|T|CT|XTAL)\d+[A-Z0-9]*\b/i;
+
+const PHYSICAL_UNIT_REGEX =
+  /[+-]?\d+(?:\.\d+)?\s*(?:V|mV|A|mA|kHz|MHz|ohm|kohm|uF|nF|pF)\b/i;
+
 export function extractQueryTokens(query: string): string[] {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const tokens = new Set<string>();
+  const literalTokens = new Set<string>();
   const asciiMatches = trimmed.match(/[A-Za-z0-9_-]{2,}/g) || [];
   for (const t of asciiMatches) {
-    tokens.add(t);
+    literalTokens.add(t);
   }
   for (const bg of extractCjkBigrams(trimmed)) {
-    tokens.add(bg);
+    literalTokens.add(bg);
   }
-  return Array.from(tokens);
+
+  const expandedTokens = new Set<string>(literalTokens);
+
+  if (HW_DESIGNATOR_REGEX.test(trimmed)) {
+    for (const exp of [
+      'hardware',
+      'component',
+      'designator',
+      'schematic',
+      'pcb',
+      'pin',
+      'net',
+      'bom',
+      'hw',
+      '硬件',
+      '原理',
+      '理图',
+      '器件',
+      '引脚',
+    ]) {
+      expandedTokens.add(exp);
+    }
+  }
+
+  if (PHYSICAL_UNIT_REGEX.test(trimmed)) {
+    for (const exp of [
+      'voltage',
+      'power',
+      'net',
+      'analog',
+      'rail',
+      'hw',
+      '电压',
+      '电源',
+      '网络',
+      '采样',
+    ]) {
+      expandedTokens.add(exp);
+    }
+  }
+
+  for (const lit of literalTokens) {
+    const syns = BILINGUAL_TECH_SYNONYMS[lit] || BILINGUAL_TECH_SYNONYMS[lit.toLowerCase()];
+    if (syns) {
+      for (const s of syns) {
+        expandedTokens.add(s);
+      }
+    }
+  }
+
+  return Array.from(expandedTokens).slice(0, 30);
 }
 
 const CODE_EXTENSIONS_FOR_SCOPE = new Set([
@@ -297,21 +402,42 @@ export class EvoTelemetry {
     try {
       this.db.exec('DELETE FROM capability_fts_fallback;');
       const insertFallback = this.db.prepare(
-        'INSERT INTO capability_fts_fallback (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT OR REPLACE INTO capability_fts_fallback (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
       );
 
       let insertFts: ReturnType<DatabaseSync['prepare']> | null = null;
+      let deleteFtsById: ReturnType<DatabaseSync['prepare']> | null = null;
       if (this.fts5Enabled) {
         try {
           this.db.exec('DELETE FROM capability_fts;');
           insertFts = this.db.prepare(
             'INSERT INTO capability_fts (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
           );
+          deleteFtsById = this.db.prepare('DELETE FROM capability_fts WHERE id = ?');
         } catch {
           this.fts5Enabled = false;
           insertFts = null;
+          deleteFtsById = null;
         }
       }
+      const seenFtsIds = new Set<string>();
+      const upsertFtsRow = (
+        id: string,
+        kind: string,
+        title: string,
+        l0Summary: string,
+        kw: string,
+        body: string
+      ) => {
+        insertFallback.run(id, kind, title, l0Summary, kw, body);
+        if (insertFts) {
+          if (seenFtsIds.has(id)) {
+            deleteFtsById?.run(id);
+          }
+          seenFtsIds.add(id);
+          insertFts.run(id, kind, title, l0Summary, kw, body);
+        }
+      };
 
       // Purge zombie/archived records from telemetry table
       const existingTelemetry = this.db.prepare('SELECT id FROM telemetry').all() as Array<{ id: string }>;
@@ -361,28 +487,44 @@ export class EvoTelemetry {
       const now = new Date().toISOString();
 
       for (const r of rules) {
+        const idTokens = r.id.replace(/[-_]+/g, ' ');
         const cjkKw = extractCjkBigrams(`${r.title} ${r.l0_summary} ${r.content}`).join(' ');
-        const kw = `${r.scope_glob} ${cjkKw}`.trim();
-        insertFallback.run(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
-        insertFts?.run(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
+        const kw = `${idTokens} ${r.scope_glob} ${cjkKw}`.trim();
+        upsertFtsRow(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
         upsertTelemetry.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, now, r.created_at);
       }
 
       for (const s of skills) {
+        const idTokens = s.id.replace(/[-_]+/g, ' ');
         const bodyText = `${s.l1_contract}\n${s.l2_sop}`;
         const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary} ${s.l1_contract} ${s.l2_sop}`).join(' ');
-        const kw = `${s.tags.join(' ')} ${cjkKw}`.trim();
-        insertFallback.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
-        insertFts?.run(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
+        const kw = `${idTokens} ${s.tags.join(' ')} ${cjkKw}`.trim();
+        upsertFtsRow(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
         upsertTelemetry.run(s.id, 'skill', s.title, s.l0_summary, '**/*', now, s.created_at);
       }
 
       for (const t of tools) {
+        const idTokens = t.id.replace(/[-_]+/g, ' ');
+        const tagsText = Array.isArray(t.tags) ? t.tags.join(' ') : '';
+        const propsObj =
+          t.input_schema &&
+          typeof t.input_schema === 'object' &&
+          t.input_schema.properties &&
+          typeof t.input_schema.properties === 'object'
+            ? (t.input_schema.properties as Record<string, Record<string, unknown>>)
+            : {};
+        const schemaPropsText = Object.entries(propsObj)
+          .map(
+            ([k, v]) =>
+              `${k} ${k.replace(/[-_]+/g, ' ')} ${typeof v?.description === 'string' ? v.description : ''}`
+          )
+          .join(' ');
         const schemaText = JSON.stringify(t.input_schema);
-        const cjkKw = extractCjkBigrams(`${t.title} ${t.l0_summary}`).join(' ');
-        const kw = `${t.runtime} ${cjkKw}`.trim();
-        insertFallback.run(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
-        insertFts?.run(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
+        const cjkKw = extractCjkBigrams(
+          `${t.title} ${t.l0_summary} ${tagsText} ${schemaPropsText}`
+        ).join(' ');
+        const kw = `${idTokens} ${t.runtime} ${tagsText} ${schemaPropsText} ${cjkKw}`.trim();
+        upsertFtsRow(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
         upsertTelemetry.run(t.id, 'tool', t.title, t.l0_summary, '**/*', now, t.created_at);
       }
 
@@ -390,24 +532,26 @@ export class EvoTelemetry {
       const externalTools = this.storage.listExternalTools();
       for (const et of externalTools) {
         activeIds.add(et.id);
+        const idTokens = et.id.replace(/[-_]+/g, ' ');
         const schemaText = JSON.stringify(et.inputSchema);
         const cjkKw = extractCjkBigrams(`${et.title} ${et.description}`).join(' ');
-        const kw = `external proxy mcp ${et.serverName} ${et.originalName} ${cjkKw}`.trim();
+        const kw = `${idTokens} external proxy mcp ${et.serverName} ${et.originalName} ${cjkKw}`.trim();
         const l0 = (et.description || `External MCP tool from ${et.serverName}`).slice(0, 140);
-        insertFallback.run(et.id, 'tool', et.title, l0, kw, schemaText);
-        insertFts?.run(et.id, 'tool', et.title, l0, kw, schemaText);
+        upsertFtsRow(et.id, 'tool', et.title, l0, kw, schemaText);
         upsertTelemetry.run(et.id, 'tool', et.title, l0, '**/*', now, et.cachedAt);
       }
 
       for (const m of memories) {
+        const idTokens = m.id.replace(/[-_]+/g, ' ');
         const cjkKw = extractCjkBigrams(
           `${m.title} ${m.l0_summary} ${m.symptom} ${m.root_cause} ${m.solution}`
         ).join(' ');
-        const keywords = [...m.target_symbols, ...m.tags, m.created_commit, cjkKw].filter(Boolean).join(' ');
+        const keywords = [idTokens, ...m.target_symbols, ...m.tags, m.created_commit, cjkKw]
+          .filter(Boolean)
+          .join(' ');
         const bodyText = `${m.symptom}\n${m.root_cause}\n${m.solution}`;
         const scopeDisplay = m.target_symbols.slice(0, 3).join(', ') || '**/*';
-        insertFallback.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
-        insertFts?.run(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
+        upsertFtsRow(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
         upsertTelemetry.run(m.id, 'memory', m.title, m.l0_summary, scopeDisplay, now, m.created_at);
         upsertEpisodic.run(
           m.id,

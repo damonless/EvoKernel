@@ -348,19 +348,29 @@ export class EvoStorage {
 
   public listRules(): EvoRule[] {
     if (!fs.existsSync(this.rulesDir)) return [];
-    const results: EvoRule[] = [];
+    const byId = new Map<string, EvoRule>();
     const scanDir = (dir: string) => {
       if (!fs.existsSync(dir)) return;
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'core-invariants.md') {
           const parsed = this.parseRuleFile(path.join(dir, entry.name));
-          if (parsed) results.push(parsed);
+          if (!parsed) continue;
+          const existing = byId.get(parsed.id);
+          if (!existing) {
+            byId.set(parsed.id, parsed);
+          } else {
+            const existingTime = Date.parse(existing.updated_at) || 0;
+            const parsedTime = Date.parse(parsed.updated_at) || 0;
+            if (parsedTime >= existingTime) {
+              byId.set(parsed.id, parsed);
+            }
+          }
         }
       }
     };
     scanDir(this.rulesDir);
     scanDir(path.join(this.rulesDir, 'scoped'));
-    return results.sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
+    return Array.from(byId.values()).sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
   }
 
   private parseRuleFile(filePath: string): EvoRule | null {

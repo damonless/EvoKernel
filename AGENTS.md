@@ -4,22 +4,22 @@
 You are connected to **EvoKernel** (`evo-kernel` MCP + `.evo/` capability & memory tree). Follow these 3 invariants strictly:
 
 ## 1. Two-Stage Cascaded Recall (`evo_search` -> `evo_inspect`)
-- Before debugging recurring build/test failures, analyzing error logs/packets, or modifying unfamiliar modules, call `evo_search(query, workspace)` with error symptoms, keywords, or symbol names and your active `workspace` root path.
-- `evo_search` searches **Rules, Skills, Micro-Tools, and Episodic Memories (`memory`)** with live **AST Anti-Drift verification** (`[VERIFIED]` vs `[STALE]`). Call `evo_inspect(id, tier, workspace)` on relevant hits to load SOPs or Stage 3 **Topology Penetration Anchors** (live `file:line`, signatures, and callers).
-- Skip `evo_search` during non-project general chat or built-in host slash-command wizards (e.g., `/automation`, `/schedule`) when no code workspace is involved.
+- Before debugging build/test failures, analyzing logs/packets, or modifying unfamiliar modules, call `evo_search(query, workspace)` with error symptoms, keywords, or symbol names and your active `workspace` root path.
+- `evo_search` searches **Rules, Skills, Micro-Tools, and Episodic Memories (`memory`)** with live **AST Anti-Drift verification** (`[VERIFIED]` vs `[STALE]`). Call `evo_inspect(id, tier, workspace)` on hits to load SOPs or Stage 3 **Topology Penetration Anchors** (live `file:line`, signatures, callers).
+- Skip `evo_search` during general chat or host slash-command wizards (`/automation`, `/schedule`) when no code workspace is involved.
 
 ## 2. Think in Code via Micro-Tools (`evo_run`)
-- When inspecting >5 files, validating schemas, or running project diagnostics, prefer executing a verified Micro-Tool via `evo_run(tool_id, args, workspace)` instead of dumping raw file contents into the context window.
+- When inspecting >5 files, validating schemas, or running project diagnostics, prefer executing a verified Micro-Tool via `evo_run(tool_id, args, workspace)` instead of dumping raw file contents into context.
 
 ## 3. Mandatory Experience Crystallization (`evo_propose` & `evo_compact`)
 Whenever ANY of the following occurs in this session, you MUST call `evo_propose(..., workspace)` (explicitly passing `workspace`) after the fix is verified and before finishing your final response:
-- **Episodic Troubleshooting Case (`memory`)**: You diagnosed a specific bug symptom, concrete code symbol, or threshold defect — crystallize it as `kind: "memory"` (`symptom`, `root_cause`, `solution`, and `target_symbols`) so EvoKernel binds AST structural fingerprints at **0 core token cost**.
-- **1-Level-Up Architectural Guardrail (`rule`)**: You discovered a cross-module methodology or class-of-bug prevention invariant — distill it as `kind: "rule"` (`l0_summary`, wildcard `scope_glob`, `core: false` by default, and `transfer_scenarios`). **SSOT Exclusion Principle**: Source code is the Single Source of Truth for concrete variable names, macros, and physical thresholds; NEVER copy magic numbers or >=3 concrete identifiers into a rule body (place concrete examples in `kind: "memory"` or a `Case Anchor:` line / `## 典型反例锚点` section).
-- **User Correction (`rule` / `skill`)**: The user corrected an assumption, architectural bias, or workflow step — codify it immediately as a `rule` or `skill` (using `supersedes_id` when upgrading an existing entry; NEVER stop at `kind: "memory"` when a general engineering methodology was corrected).
-- **Reusable Script (`tool`)**: You wrote a temporary script (>15 lines) to analyze, transform, or verify code — register it as a parameterized Micro-Tool (`run.{mjs|py|sh|ps1}`) with a deterministic `--self-test` verification path.
-- **Visible Evolution Receipt**: Whenever you call `evo_propose` or `evo_compact`, append a single visible receipt line at the end of your response: `🧬 EvoKernel 演进回执：[<kind>] <id>（<新增/更新摘要>）`.
+- **Episodic Troubleshooting Case (`memory`)**: Diagnosed a specific bug symptom, code symbol, or threshold defect — crystallize as `kind: "memory"` (`symptom`, `root_cause`, `solution`, `target_symbols`) with AST fingerprints at **0 core token cost**.
+- **1-Level-Up Architectural Guardrail (`rule`)**: Discovered a cross-module methodology or class-of-bug invariant — distill as `kind: "rule"` (`l0_summary`, wildcard `scope_glob`, `core: false` by default, `transfer_scenarios`). **SSOT Exclusion Principle**: Source code is the Single Source of Truth for concrete variable names, macros, and physical thresholds; NEVER copy magic numbers or >=3 concrete identifiers into a rule body (place concrete examples in `kind: "memory"` or a `Case Anchor:` / `## 典型反例锚点` section).
+- **User Correction / Deliverable Feedback (`rule` / `skill`)**: The user corrected an assumption, architectural bias, workflow step, or engineering deliverable format/granularity (e.g., `.xls`/`.xlsx`/`.docx` modification records, QA reports, or toolchain quirks like `openpyxl`/`docx`/COM/encoding) — codify immediately as a `rule` or `skill` (use `supersedes_id` to upgrade existing entries; NEVER stop at `kind: "memory"` when a general methodology or deliverable SOP was corrected).
+- **Reusable Script (`tool`)**: Wrote a temporary script (>15 lines, including `/scratch/` scripts) to analyze, transform, verify code, or generate/inspect engineering deliverables (`.xls`/`.xlsx`/`.docx`/reports) — register as a Micro-Tool (`run.{mjs|py|sh|ps1}`) with a deterministic `--self-test` path.
+- **Visible Evolution Receipt**: Whenever you call `evo_propose` or `evo_compact`, append at the end of your response: `🧬 EvoKernel 演进回执：[<kind>] <id>（<新增/更新摘要>）`.
 
-> **Gatekeeper Notice**: `evo_propose` enforces Static Security, Lexical De-Symbolization & 1-Level-Up Abstraction, Sandbox `--self-test` / Live AST Symbol Grounding, BM25 Deduplication, Scoped Bucket Quotas (max 3/bucket), and a strict **1,500-token core rule budget**. If `ERR_BUDGET_EXCEEDED`, `ERR_SCOPED_BUCKET_FULL`, or `ERR_DUPLICATE` is returned, use `evo_compact` to merge or archive existing entries first.
+> **Gatekeeper Notice**: `evo_propose` enforces Static Security, Lexical De-Symbolization, Sandbox `--self-test` / AST Grounding, BM25 Deduplication, Scoped Bucket Quotas (max 3/bucket), and a **1,500-token core rule budget**. On `ERR_BUDGET_EXCEEDED`, `ERR_SCOPED_BUCKET_FULL`, or `ERR_DUPLICATE`, call `evo_compact` first.
 
 ## 4. Evolved Core Invariants (Auto-Managed by EvoKernel)
 - **[gatekeeper-self-test-invariant]** (`.evo/tools/**/*`): Every evolved Micro-Tool script must handle --self-test or EVO_SELF_TEST=1 and exit 0 deterministically.
@@ -30,4 +30,9 @@ Whenever ANY of the following occurs in this session, you MUST call `evo_propose
   1. Use explicit `.js` file extensions in relative module imports (e.g., `import { EvoStorage } from "./storage.js"`).
   2. Always use `import type { ... }` when importing TypeScript interfaces or type aliases so native Node type-stripping (`node:module.stripTypeScriptTypes`) never fails at runtime.
   3. Prefer built-in Node.js modules (`node:fs`, `node:path`, `node:sqlite`, `node:test`) over third-party npm packages to preserve zero-dependency security.
+
+### 5. 已注册受控微工具目录 (Registered Micro-Tools via `evo_run`)
+- `[tool] agy-config-auditor`: Audits host rule token budgets, Gate 1.5 rule compliance, memory AST symbols, and local/global split-brain divergence.
+- `[tool] git-hotspot-analyzer`: Identifies top 10 most frequently modified files in recent git history to pinpoint fragile modules.
+- `[tool] workspace-metrics-scanner`: Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.
 <!-- EVO:END -->

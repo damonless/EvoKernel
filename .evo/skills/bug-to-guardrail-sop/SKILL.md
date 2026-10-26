@@ -1,7 +1,7 @@
 ---
 id: bug-to-guardrail-sop
 title: "Closed-Loop Bug to 1-Level-Up Guardrail & Cognitive Memory SOP"
-l0_summary: "Route concrete bugs to Episodic Memory and abstract reusable methodologies 1-level-up into SSOT-decoupled Rules or Micro-Tools with orthogonal clause preservation."
+l0_summary: "Route concrete bugs to Episodic Memory and abstract reusable methodologies 1-level-up into SSOT-decoupled Rules or Tools."
 tags: ["debugging","evolution","guardrail","memory","abstraction","ssot","clause-preservation"]
 origin: "evolved"
 created_at: "2026-10-14T16:00:40.696Z"

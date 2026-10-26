@@ -38,10 +38,17 @@ export interface InitOptions {
   linkEvoFrom?: string;
 }
 
+export function formatToolsCatalogMarkdown(storage: EvoStorage): string {
+  const tools = storage.listTools();
+  if (tools.length === 0) return '';
+  return tools.map((t) => `- \`[tool] ${t.id}\`: ${t.l0_summary}`).join('\n');
+}
+
 export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   const storage = new EvoStorage(workspaceRoot);
   const digest = storage.rebuildCoreInvariantsDigest();
-  const block = renderManagedBlock(digest);
+  const toolsCatalog = formatToolsCatalogMarkdown(storage);
+  const block = renderManagedBlock(digest, toolsCatalog);
   const updated: string[] = [];
 
   const candidateRuleFiles = [
@@ -361,7 +368,8 @@ export function runInit(
   telemetry.close();
 
   const digest = storage.rebuildCoreInvariantsDigest();
-  const managedBlock = renderManagedBlock(digest);
+  const toolsCatalog = formatToolsCatalogMarkdown(storage);
+  const managedBlock = renderManagedBlock(digest, toolsCatalog);
 
   const updatedFilesList: string[] = [];
   const mcpConfigFilesList: string[] = [];
@@ -419,6 +427,8 @@ export function runUninstall(
     '.gemini',
     '.cline',
     '.opencode',
+    '.agents/scripts',
+    '.agents',
   ];
 
   for (const adapter of Object.values(ALL_HARNESS_ADAPTERS)) {

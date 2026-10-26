@@ -42,7 +42,11 @@ Commands:
 `);
 }
 
-function copyDirNonOverwriting(srcDir: string, destDir: string): void {
+function copyDirNonOverwriting(
+  srcDir: string,
+  destDir: string,
+  syncUpdatedSeeds: boolean = false
+): void {
   if (!fs.existsSync(srcDir)) return;
   fs.mkdirSync(destDir, { recursive: true });
   for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
@@ -50,9 +54,17 @@ function copyDirNonOverwriting(srcDir: string, destDir: string): void {
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
     if (entry.isDirectory()) {
-      copyDirNonOverwriting(srcPath, destPath);
-    } else if (entry.isFile() && !fs.existsSync(destPath)) {
-      fs.copyFileSync(srcPath, destPath);
+      copyDirNonOverwriting(srcPath, destPath, syncUpdatedSeeds);
+    } else if (entry.isFile()) {
+      if (!fs.existsSync(destPath)) {
+        fs.copyFileSync(srcPath, destPath);
+      } else if (syncUpdatedSeeds) {
+        const srcContent = fs.readFileSync(srcPath, 'utf8').replace(/\r?\n/g, '\n');
+        const destContent = fs.readFileSync(destPath, 'utf8').replace(/\r?\n/g, '\n');
+        if (srcContent !== destContent) {
+          fs.copyFileSync(srcPath, destPath);
+        }
+      }
     }
   }
 }
@@ -75,13 +87,16 @@ export function ensureGlobalFallbackSeeded(
   storage.ensureInitialized();
 
   const templateSeedDir = path.join(installRoot, 'templates', 'seed-evo');
-  const seedEvoDir = fs.existsSync(templateSeedDir)
-    ? templateSeedDir
-    : path.join(installRoot, '.evo');
+  const hasTemplateSeed = fs.existsSync(templateSeedDir);
+  const seedEvoDir = hasTemplateSeed ? templateSeedDir : path.join(installRoot, '.evo');
 
   if (fs.existsSync(seedEvoDir) && path.resolve(seedEvoDir) !== path.resolve(storage.evoDir)) {
     for (const sub of ['rules', 'skills', 'tools']) {
-      copyDirNonOverwriting(path.join(seedEvoDir, sub), path.join(storage.evoDir, sub));
+      copyDirNonOverwriting(
+        path.join(seedEvoDir, sub),
+        path.join(storage.evoDir, sub),
+        hasTemplateSeed
+      );
     }
     storage.rebuildCoreInvariantsDigest();
   }
@@ -152,6 +167,10 @@ export function parseLinkArg(args: string[]): string | undefined {
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   const cmd = (args[0] || 'help').toLowerCase();
+  const globalDir = resolveGlobalFallbackDir();
+  if (fs.existsSync(path.join(globalDir, '.evo'))) {
+    ensureGlobalFallbackSeeded(globalDir);
+  }
   const isLocalMutationCmd = ['init', 'bootstrap', 'audit', 'refactor', 'uninstall'].includes(cmd);
   const workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
 

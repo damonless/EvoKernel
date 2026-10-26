@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { EvoKind, ProposalPayload, SearchHit } from '../core/types.js';
+import type { EvoKind, EvoRule, ProposalPayload, SearchHit } from '../core/types.js';
 import {
   EvoStorage,
   findNearestEvoWorkspace,
@@ -144,7 +144,7 @@ export const META_MCP_TOOLS = [
         tags: {
           type: 'array',
           items: { type: 'string' },
-          description: '[For skill / memory] Searchable domain tags.',
+          description: '[For skill / tool / memory] Searchable domain tags.',
         },
         runtime: {
           type: 'string',
@@ -510,13 +510,19 @@ export class EvoMcpDispatcher {
 
     const { totalTokens } = this.storage.getCoreRulesTokenUsage();
     const maxTokens = this.storage.getConfig().maxCoreRuleTokens;
+    const wsTools = (kind === 'all' || kind === 'tool') ? this.storage.listTools() : [];
+    const hasToolHit = hits.some((h) => h.kind === 'tool');
+    const toolFooter =
+      wsTools.length > 0 && !hasToolHit
+        ? `\n💡 Available workspace tools (call via evo_run): ${wsTools.map((t) => t.id).join(', ')}`
+        : '';
 
     if (hits.length === 0) {
       return {
         content: [
           {
             type: 'text' as const,
-            text: `No evolved capabilities matched query "${query}". Core Rule Budget: ${totalTokens}/${maxTokens} tokens.`,
+            text: `No evolved capabilities matched query "${query}". Core Rule Budget: ${totalTokens}/${maxTokens} tokens.${toolFooter}`,
           },
         ],
       };
@@ -539,7 +545,7 @@ export class EvoMcpDispatcher {
             `Found ${hits.length} capability(s) [Core Budget: ${totalTokens}/${maxTokens} tokens]:`,
             ...lines,
             '',
-            'Tip: Call evo_inspect(id, "L1"|"L2") for details/topology anchors or evo_run(tool_id, args) to execute a TOOL.',
+            `Tip: Call evo_inspect(id, "L1"|"L2") for details/topology anchors or evo_run(tool_id, args) to execute a TOOL.${toolFooter}`,
           ].join('\n'),
         },
       ],
@@ -866,9 +872,9 @@ export class EvoMcpDispatcher {
       };
     }
 
-    if (proposal.kind === 'rule') {
+    if (proposal.kind === 'rule' || proposal.kind === 'tool') {
       syncManagedRuleBlocks(this.storage.rootDir);
-      if (this.onCoreRulesChanged) {
+      if (proposal.kind === 'rule' && this.onCoreRulesChanged) {
         this.onCoreRulesChanged();
       }
     }
@@ -953,6 +959,18 @@ export class EvoMcpDispatcher {
       this.storage.getMemory(mergedCleanId);
     const preservedCreatedAt = existingMergedTarget?.created_at;
 
+    const existingRuleTargets: EvoRule[] = targetIds
+      .map((id) => this.storage.getRule(id))
+      .filter((r): r is EvoRule => r !== null);
+    const inheritedTransferScenarios = Array.from(
+      new Set(
+        existingRuleTargets
+          .flatMap((r) => r.transfer_scenarios || [])
+          .map((s) => String(s).trim())
+          .filter(Boolean)
+      )
+    );
+
     // Module 3.1: Atomic pre-check before archiving or deleting any target_ids
     const precheck = this.gatekeeper.evaluateAndCommit(
       {
@@ -963,6 +981,9 @@ export class EvoMcpDispatcher {
         dryRun: true,
         excludeIdsFromBudgetAndSim: targetIds,
         preservedCreatedAt,
+        inheritedTransferScenarios:
+          inheritedTransferScenarios.length > 0 ? inheritedTransferScenarios : undefined,
+        supersededRules: existingRuleTargets.length > 0 ? existingRuleTargets : undefined,
       }
     );
 
@@ -1008,6 +1029,9 @@ export class EvoMcpDispatcher {
       },
       {
         preservedCreatedAt,
+        inheritedTransferScenarios:
+          inheritedTransferScenarios.length > 0 ? inheritedTransferScenarios : undefined,
+        supersededRules: existingRuleTargets.length > 0 ? existingRuleTargets : undefined,
       }
     );
 

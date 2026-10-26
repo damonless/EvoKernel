@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
-import { findGitRoot, runInit, runUninstall } from '../cli/init.js';
+import { findGitRoot, runInit, runUninstall, syncManagedRuleBlocks } from '../cli/init.js';
 import { runBootstrap } from '../cli/bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from '../cli/audit.js';
 import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from '../cli/visualizer.js';
@@ -16,10 +16,15 @@ import {
   runCli,
 } from '../cli/index.js';
 import { EvoStorage, isPluginOrExtensionInstallDir, parseFrontmatter } from '../core/storage.js';
-import { EvoTelemetry } from '../core/telemetry.js';
+import { EvoTelemetry, extractQueryTokens } from '../core/telemetry.js';
 import { executeSandboxedScript, sanitizeSandboxEnv } from '../core/sandbox.js';
 import { extractSymbolFingerprint, stripCStyleComments, normalizeCodeStructure } from '../core/memory.js';
-import { EvoGatekeeper, detectDomainNumbersInRule } from '../core/gatekeeper.js';
+import {
+  EvoGatekeeper,
+  compareRuleClauses,
+  detectDomainNumbersInRule,
+  extractActionableClauses,
+} from '../core/gatekeeper.js';
 
 function createTempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-test-ws-'));
@@ -2540,7 +2545,366 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test('37. Issue #10 [CRITICAL-1, CRITICAL-2, MEDIUM-7]: agy-config-auditor excludes core-invariants.md from Split-Brain, checks backticks & comment-stripped symbols, and ensureGlobalFallbackSeeded syncs updated seeds', () => {
+    const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+    const fakeGlobalDir = createTempWorkspace();
+    const ws = createTempWorkspace();
+    try {
+      // 1. Seed fakeGlobalDir via ensureGlobalFallbackSeeded, then corrupt a seed file and add an extra global core rule
+      const staleSkillDir = path.join(fakeGlobalDir, '.evo', 'skills', 'bug-to-guardrail-sop');
+      fs.mkdirSync(staleSkillDir, { recursive: true });
+      fs.writeFileSync(path.join(staleSkillDir, 'SKILL.md'), '---\nid: bug-to-guardrail-sop\n---\nstale body\n', 'utf8');
+
+      ensureGlobalFallbackSeeded(fakeGlobalDir, repoRoot);
+
+      // Verify CRITICAL-2: stale seed file in ~/.evo/global was automatically updated to match templates/seed-evo
+      const syncedSkill = fs.readFileSync(path.join(staleSkillDir, 'SKILL.md'), 'utf8');
+      assert.match(syncedSkill, /Pre-Upgrade Inspection Requirement/);
+
+      // Add an extra global core rule in fakeGlobalDir so its core-invariants.md differs from EvoKernel's local core-invariants.md
+      const globalStorage = new EvoStorage(fakeGlobalDir);
+      globalStorage.saveRule({
+        id: 'extra-global-only-core-rule',
+        title: 'Extra Global Only Core Rule',
+        l0_summary: 'Exists only in ~/.evo/global to make core-invariants.md differ.',
+        scope_glob: '**/*',
+        core: true,
+        priority: 80,
+        content: '1. Global invariant that makes core-invariants.md diverge from local workspace.',
+        tokens: 25,
+        origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      globalStorage.rebuildCoreInvariantsDigest();
+
+      // 2. Run agy-config-auditor/run.mjs (without --self-test) against repoRoot with EVO_GLOBAL_DIR=fakeGlobalDir
+      const auditorScript = path.join(repoRoot, '.evo', 'tools', 'agy-config-auditor', 'run.mjs');
+      const auditRun = spawnSync(process.execPath, [auditorScript], {
+        cwd: repoRoot,
+        env: { ...process.env, EVO_WORKSPACE: repoRoot, EVO_GLOBAL_DIR: fakeGlobalDir },
+        encoding: 'utf8',
+      });
+      assert.equal(auditRun.status, 0, `agy-config-auditor should exit 0: ${auditRun.stdout}`);
+      const auditJson = JSON.parse(auditRun.stdout.trim());
+      assert.equal(auditJson.ok, true);
+      assert.equal(auditJson.status, 'HEALTHY');
+      assert.equal(auditJson.summary.split_brain_conflicts, 0);
+
+      // 3. Verify MEDIUM-7 & CRITICAL-1: agy-config-auditor fails (even with --self-test) when a workspace has a dead symbol only present in a comment or >=3 backtick identifiers
+      const wsStorage = new EvoStorage(ws);
+      wsStorage.ensureInitialized();
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'mod.ts'),
+        '// deadCommentSymbol was removed in refactor\nexport function liveSymbol() {}\n',
+        'utf8'
+      );
+      wsStorage.saveMemory({
+        id: 'comment-only-mem',
+        title: 'Memory Referencing Dead Comment Symbol',
+        l0_summary: 'Tests comment stripping in agy-config-auditor Audit 3.',
+        symptom: 'Symptom',
+        root_cause: 'Cause',
+        solution: 'Solution',
+        target_symbols: ['src/mod.ts#deadCommentSymbol'],
+        tags: [],
+        ast_fingerprints: [],
+        created_commit: 'HEAD',
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      wsStorage.saveRule({
+        id: 'backtick-coupled-rule',
+        title: 'Backtick Coupled Rule',
+        l0_summary: 'Coupled to three backtick identifiers.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        priority: 50,
+        content: 'Always check `alphaFunc()` and `beta_value` and `gammaObj.prop` before returning.',
+        tokens: 30,
+        origin: 'evolved',
+        transfer_scenarios: ['Scenario one validation', 'Scenario two validation'],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const badRun = spawnSync(process.execPath, [auditorScript, '--self-test'], {
+        cwd: ws,
+        env: { ...process.env, EVO_WORKSPACE: ws, EVO_GLOBAL_DIR: fakeGlobalDir },
+        encoding: 'utf8',
+      });
+      assert.equal(badRun.status, 1, 'agy-config-auditor --self-test must fail on unhealthy workspace');
+      const badJson = JSON.parse(badRun.stdout.trim());
+      assert.equal(badJson.ok, false);
+      assert.equal(badJson.summary.broken_memory_symbols, 1);
+      assert.equal(badJson.summary.gate1_5_violations, 1);
+    } finally {
+      fs.rmSync(fakeGlobalDir, { recursive: true, force: true });
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('38. Issue #10 [HIGH-3, HIGH-4, HIGH-5, MEDIUM-6]: Gatekeeper transfer_scenarios inheritance, evo_compact Gate 1.5 + Clause Diff preservation, CJK 2-gram clause diff, and evo refactor Gate 1.5 remediation', () => {
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    storage.ensureInitialized();
+    const telemetry = new EvoTelemetry(storage);
+    const gatekeeper = new EvoGatekeeper(storage, telemetry);
+    const dispatcher = new EvoMcpDispatcher(ws);
+
+    try {
+      // 1. HIGH-3: Upgrade existing scoped rule via supersedes_id without passing transfer_scenarios -> inherits existing transfer_scenarios and passes evo audit
+      const createRes = gatekeeper.evaluateAndCommit({
+        kind: 'rule',
+        id: 'scoped-inherit-rule',
+        title: 'Scoped Inherit Rule',
+        l0_summary: 'Initial scoped rule with transfer scenarios.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: [
+          '1. 在处理异步状态流转时，必须先校验前置条件与超时边界。',
+          '2. 在释放底层连接池资源前，必须确保所有挂起事务已回滚。',
+        ].join('\n'),
+        transfer_scenarios: [
+          'Async state machine timeout handling across services',
+          'Database connection pool teardown and transaction rollback',
+        ],
+      });
+      assert.equal(createRes.passed, true);
+
+      // Upgrade with a minor Chinese wording tweak in clause 1 and no transfer_scenarios passed
+      const upgradeRes = gatekeeper.evaluateAndCommit({
+        kind: 'rule',
+        id: 'scoped-inherit-rule',
+        supersedes_id: 'scoped-inherit-rule',
+        title: 'Scoped Inherit Rule v2',
+        l0_summary: 'Upgraded scoped rule inheriting transfer scenarios.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: [
+          '1. 在处理异步状态流转时，必须优先校验前置条件与超时边界。',
+          '2. 在释放底层连接池资源前，必须确保所有挂起事务已回滚。',
+          '## 典型反例锚点',
+          '- Case Anchor: `src/db/pool.ts`',
+        ].join('\n'),
+      });
+      assert.equal(upgradeRes.passed, true);
+      // HIGH-5: Minor Chinese edit + Case Anchor section must NOT trigger false-positive ORTHOGONAL CLAUSE WARNING
+      assert.equal(upgradeRes.warning, undefined, 'Minor CJK edit and Case Anchor must not trigger false clause loss warning');
+      const savedUpgraded = storage.getRule('scoped-inherit-rule');
+      assert.ok(savedUpgraded);
+      assert.equal(savedUpgraded.transfer_scenarios?.length, 2, 'Must inherit transfer_scenarios from superseded rule');
+      assert.equal(runAudit(ws).gateViolations.length, 0, 'Upgraded rule must pass Gate 1.5 in evo audit');
+
+      // 2. HIGH-4: evo_compact enforces Gate 1.5, inherits transfer_scenarios, and preserves Clause Diff warning when dropping a clause
+      gatekeeper.evaluateAndCommit({
+        kind: 'rule',
+        id: 'compact-part-two',
+        title: 'Compact Part Two',
+        l0_summary: 'Second scoped rule to compact.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: '1. 对外暴露的接口响应必须经过结构化Schema脱敏校验。',
+        transfer_scenarios: [
+          'API gateway response sanitization',
+          'Webhook payload schema validation',
+        ],
+      });
+
+      // Attempt compact with single-file literal scope_glob -> must be blocked by Gate 1.5
+      const badCompact = dispatcher.handleToolCall('evo_compact', {
+        workspace: ws,
+        action: 'merge',
+        target_ids: ['scoped-inherit-rule', 'compact-part-two'],
+        merged_proposal: {
+          kind: 'rule',
+          id: 'compacted-scoped-guard',
+          title: 'Compacted Scoped Guard',
+          l0_summary: 'Merged guard with invalid literal scope.',
+          scope_glob: 'src/index.ts',
+          core: false,
+          content: '1. 在处理异步状态流转时，必须优先校验前置条件与超时边界。',
+        },
+      });
+      assert.equal(badCompact.isError, true);
+      assert.match(badCompact.content[0].text, /ERR_SCOPE_TOO_NARROW/);
+
+      // Valid compact that drops clause 2 -> succeeds, inherits transfer_scenarios, and surfaces [ORTHOGONAL CLAUSE WARNING]
+      const validCompact = dispatcher.handleToolCall('evo_compact', {
+        workspace: ws,
+        action: 'merge',
+        target_ids: ['scoped-inherit-rule', 'compact-part-two'],
+        merged_proposal: {
+          kind: 'rule',
+          id: 'compacted-scoped-guard',
+          title: 'Compacted Scoped Guard',
+          l0_summary: 'Merged guard preserving clause 1 and part two.',
+          scope_glob: 'src/**/*.ts',
+          core: false,
+          content: [
+            '1. 在处理异步状态流转时，必须优先校验前置条件与超时边界。',
+            '2. 对外暴露的接口响应必须经过结构化Schema脱敏校验。',
+          ].join('\n'),
+        },
+      });
+      assert.ok(!validCompact.isError);
+      assert.match(validCompact.content[0].text, /\[ORTHOGONAL CLAUSE WARNING\]/);
+      assert.equal(runAudit(ws).gateViolations.length, 0);
+
+      // 3. MEDIUM-6: evo refactor --apply repairs legacy scoped rules missing transfer_scenarios or having narrow scope_glob
+      storage.saveRule({
+        id: 'legacy-unmigrated-scoped',
+        title: 'Legacy Unmigrated Scoped Rule',
+        l0_summary: 'Saved before transfer_scenarios was required.',
+        scope_glob: 'src/app.ts',
+        core: false,
+        priority: 50,
+        content: '1. Always validate configuration schema before starting server.',
+        tokens: 20,
+        origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      assert.equal(runAudit(ws).healthy, false);
+      const refactorRes = runRefactor(ws, { apply: true });
+      assert.ok(refactorRes.appliedChanges.some((c) => c.includes('legacy-unmigrated-scoped')));
+      assert.equal(runAudit(ws).healthy, true);
+    } finally {
+      telemetry.close();
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('39. Issue #12 [SEARCH-CROSS-LANG-1, TOOL-INDEX-2, META-RULE-TOOL-CATALOG-3, TELEMETRY-FALLBACK-PK-4]: Cross-language & hardware designator token expansion, tool tags/ID/schema indexing, L0 tool catalog in managed blocks, and duplicate rule ID deduplication', () => {
+    const ws = createTempWorkspace();
+    const fakeGlobal = createTempWorkspace();
+    const prevGlobal = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = fakeGlobal;
+    runInit(ws, ['agents', 'antigravity', 'claude']);
+    const dispatcher = new EvoMcpDispatcher(ws);
+
+    try {
+      // 1. Propose an English hardware micro-tool with tags and input_schema properties (TOOL-INDEX-2)
+      const toolRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'tool',
+        id: '3ku-hw-query',
+        title: '3KU Hardware Schematic & BOM Query Tool',
+        l0_summary: 'Queries 3KU components, nets, PCB placements, BOM specs, and MCU pin mappings.',
+        runtime: 'node',
+        tags: ['hardware', 'schematic', 'pcb', 'connector', 'pinout'],
+        script_code: 'if (process.argv.includes("--self-test") || process.env.EVO_SELF_TEST === "1") process.exit(0); console.log("ok");',
+        input_schema: {
+          type: 'object',
+          properties: {
+            designator: { type: 'string', description: 'Component reference designator such as CN3008 or U12' },
+            net_name: { type: 'string', description: 'Electrical rail or voltage net name' },
+          },
+        },
+        self_test_args: {},
+      });
+      assert.equal(toolRes.isError, undefined, `Tool proposal failed: ${toolRes.content[0].text}`);
+
+      // Verify tags persisted in manifest.json
+      const storage = new EvoStorage(ws);
+      const savedTool = storage.getTool('3ku-hw-query');
+      assert.ok(savedTool);
+      assert.deepEqual(savedTool.tags, ['hardware', 'schematic', 'pcb', 'connector', 'pinout']);
+
+      // 2. Verify META-RULE-TOOL-CATALOG-3: AGENTS.md, GEMINI.md, CLAUDE.md contain Section 5 with `[tool] 3ku-hw-query`
+      for (const rf of ['AGENTS.md', 'GEMINI.md', 'CLAUDE.md']) {
+        const content = fs.readFileSync(path.join(ws, rf), 'utf8');
+        assert.match(content, /### 5\. 已注册受控微工具目录/);
+        assert.match(content, /`\[tool\] 3ku-hw-query`: Queries 3KU components/);
+      }
+
+      // 3. Verify SEARCH-CROSS-LANG-1: Chinese query with PCB designator and voltage unit matches the English hardware tool
+      const searchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: 'CN3008 12V 调试电源 电源测试口 电压',
+      });
+      assert.equal(searchRes.isError, undefined);
+      assert.match(searchRes.content[0].text, /\[TOOL\] 3ku-hw-query/);
+
+      // 4. Verify handleSearch appends available workspace tools hint when no tool appears in hits
+      const zeroHitSearch = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: 'nonexistent_xyz_token_9999',
+      });
+      assert.match(
+        zeroHitSearch.content[0].text,
+        /💡 Available workspace tools \(call via evo_run\): 3ku-hw-query/
+      );
+
+      // 5. Verify TELEMETRY-FALLBACK-PK-4: Duplicate rule IDs in both .evo/rules/ and .evo/rules/scoped/ do not crash syncFromDisk or FTS fallback
+      const coreRulePath = path.join(ws, '.evo', 'rules', 'dup-rule-id.md');
+      const scopedRulePath = path.join(ws, '.evo', 'rules', 'scoped', 'dup-rule-id.md');
+      fs.mkdirSync(path.dirname(scopedRulePath), { recursive: true });
+      fs.writeFileSync(
+        coreRulePath,
+        [
+          '---',
+          'id: dup-rule-id',
+          'title: Older Core Copy',
+          'l0_summary: Older core copy.',
+          'scope_glob: "**/*"',
+          'core: true',
+          'priority: 50',
+          'tokens: 20',
+          'origin: evolved',
+          'created_at: "2026-01-01T00:00:00.000Z"',
+          'updated_at: "2026-01-01T00:00:00.000Z"',
+          '---',
+          '',
+          '1. Older rule content.',
+        ].join('\n'),
+        'utf8'
+      );
+      fs.writeFileSync(
+        scopedRulePath,
+        [
+          '---',
+          'id: dup-rule-id',
+          'title: Newer Scoped Copy',
+          'l0_summary: Newer scoped copy.',
+          'scope_glob: "**/*"',
+          'core: false',
+          'priority: 50',
+          'tokens: 20',
+          'origin: evolved',
+          'created_at: "2026-01-01T00:00:00.000Z"',
+          'updated_at: "2026-06-01T00:00:00.000Z"',
+          '---',
+          '',
+          '1. Newer rule content.',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const dedupRules = storage.listRules().filter((r) => r.id === 'dup-rule-id');
+      assert.equal(dedupRules.length, 1, 'listRules must deduplicate rules with the same ID');
+      assert.equal(dedupRules[0].title, 'Newer Scoped Copy', 'listRules must prefer newer updated_at timestamp');
+
+      const dupSearchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: 'Newer Scoped Copy',
+      });
+      assert.equal(dupSearchRes.isError, undefined);
+      assert.match(dupSearchRes.content[0].text, /dup-rule-id/);
+    } finally {
+      if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobal;
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(fakeGlobal, { recursive: true, force: true });
+    }
+  });
 });
+
 
 
 

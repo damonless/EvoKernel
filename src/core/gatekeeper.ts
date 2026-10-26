@@ -282,14 +282,46 @@ export function auditRuleGate1_5(rule: EvoRule): Gate1_5Violation[] {
 
 export function extractActionableClauses(text: string): string[] {
   if (!text) return [];
-  const lines = text.split(/\r?\n/);
+  const cleaned = stripCaseAnchorLines(text);
+  const lines = cleaned.split(/\r?\n/);
   const clauses: string[] = [];
   let currentClause: string[] = [];
 
   const isClauseStart = (line: string): boolean => {
-    return /^\s*(?:\d+\.|[-*]|#{1,4})\s+/.test(line);
+    return /^\s*(?:(?:\(\d+\)|\d+[.)])|[-*+]|#{1,4})\s+/.test(line);
   };
 
+  const hasStructuredMarkers = lines.some((l) => isClauseStart(l));
+
+  if (hasStructuredMarkers) {
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        if (currentClause.length > 0) {
+          clauses.push(currentClause.join(' ').trim());
+          currentClause = [];
+        }
+        continue;
+      }
+
+      if (isClauseStart(rawLine)) {
+        if (currentClause.length > 0) {
+          clauses.push(currentClause.join(' ').trim());
+          currentClause = [];
+        }
+        currentClause.push(line);
+      } else if (currentClause.length > 0) {
+        currentClause.push(line);
+      }
+    }
+
+    if (currentClause.length > 0) {
+      clauses.push(currentClause.join(' ').trim());
+    }
+    return clauses;
+  }
+
+  // Fallback for plain paragraph rules without list/heading markers
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) {
@@ -299,20 +331,20 @@ export function extractActionableClauses(text: string): string[] {
       }
       continue;
     }
-
-    if (isClauseStart(rawLine)) {
-      if (currentClause.length > 0) {
-        clauses.push(currentClause.join(' ').trim());
-        currentClause = [];
-      }
-      currentClause.push(line);
-    } else if (currentClause.length > 0) {
-      currentClause.push(line);
-    }
+    currentClause.push(line);
   }
-
   if (currentClause.length > 0) {
     clauses.push(currentClause.join(' ').trim());
+  }
+
+  if (clauses.length === 1) {
+    const splitSentences = clauses[0]
+      .split(/(?<=[.!?。；;])\s+|(?<=[。；])/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 6);
+    if (splitSentences.length > 1) {
+      return splitSentences;
+    }
   }
 
   return clauses;
@@ -338,10 +370,24 @@ export function normalizeClauseText(clause: string): string {
 
 export function tokenizeClauseText(clause: string): Set<string> {
   const stripped = normalizeClauseText(clause);
-  const words = stripped.match(/[a-z0-9_]+|[\u4e00-\u9fa5]+/g) || [];
-  return new Set(
-    words.filter((w) => !CLAUSE_STOP_WORDS.has(w) && !/^\d+$/.test(w))
-  );
+  const tokens = new Set<string>();
+  const asciiWords = stripped.match(/[a-z0-9_]+/g) || [];
+  for (const w of asciiWords) {
+    if (!CLAUSE_STOP_WORDS.has(w) && !/^\d+$/.test(w)) {
+      tokens.add(w);
+    }
+  }
+  const cjkRuns = stripped.match(/[\u4e00-\u9fff]+/g) || [];
+  for (const run of cjkRuns) {
+    if (run.length === 1) {
+      tokens.add(run);
+    } else {
+      for (let i = 0; i <= run.length - 2; i++) {
+        tokens.add(run.slice(i, i + 2));
+      }
+    }
+  }
+  return tokens;
 }
 
 export function calculateClauseSimilarity(
@@ -461,6 +507,8 @@ export interface EvaluateOptions {
   dryRun?: boolean;
   excludeIdsFromBudgetAndSim?: string[];
   preservedCreatedAt?: string;
+  inheritedTransferScenarios?: string[];
+  supersededRules?: EvoRule[];
 }
 
 export class EvoGatekeeper {
@@ -580,10 +628,7 @@ export class EvoGatekeeper {
     // =========================================================================
     // GATE 1.5: RULE ABSTRACTION & LEXICAL DE-SYMBOLIZATION GATE (FOR RULES)
     // =========================================================================
-    if (
-      rawProposal.kind === 'rule' &&
-      rawProposal.origin !== 'compacted'
-    ) {
+    if (rawProposal.kind === 'rule') {
       const scopeGlob = (rawProposal.scope_glob || '**/*').trim();
       const isCoreRule = Boolean(rawProposal.core ?? false);
       const bodyForLexicalAudit = stripCaseAnchorLines(
@@ -645,18 +690,26 @@ export class EvoGatekeeper {
         };
       }
 
-      // 5. Require transfer_scenarios for new non-core/scoped rules or when explicitly provided (Issue #6 Layer 2 & Module 7.2)
+      // 5. Require transfer_scenarios for non-core/scoped rules or when explicitly provided (Issue #6 Layer 2 & Module 7.2)
       const existingRuleForTransfer = this.storage.getRule(cleanId);
+      const supersededRuleForTransfer = rawProposal.supersedes_id
+        ? this.storage.getRule(sanitizeId(rawProposal.supersedes_id))
+        : null;
+      const inheritedTransferScenarios =
+        existingRuleForTransfer?.transfer_scenarios ||
+        supersededRuleForTransfer?.transfer_scenarios ||
+        options?.inheritedTransferScenarios;
+      const effectiveTransferScenarios =
+        rawProposal.transfer_scenarios !== undefined
+          ? rawProposal.transfer_scenarios
+          : inheritedTransferScenarios;
       const requireTransferScenarios =
-        rawProposal.transfer_scenarios !== undefined ||
-        ((!isCoreRule || scopeGlob !== '**/*') &&
-          !rawProposal.supersedes_id &&
-          !existingRuleForTransfer);
+        !isCoreRule || rawProposal.transfer_scenarios !== undefined;
       if (requireTransferScenarios) {
-        const validScenarios = Array.isArray(rawProposal.transfer_scenarios)
+        const validScenarios = Array.isArray(effectiveTransferScenarios)
           ? Array.from(
               new Set(
-                rawProposal.transfer_scenarios
+                effectiveTransferScenarios
                   .map((s) => String(s).trim())
                   .filter((s) => s.length >= 8)
               )
@@ -900,24 +953,43 @@ export class EvoGatekeeper {
       const supersededTargetId = rawProposal.supersedes_id
         ? sanitizeId(rawProposal.supersedes_id)
         : (this.storage.getRule(cleanId) ? cleanId : undefined);
+      const supersededRuleFromStorage = supersededTargetId
+        ? this.storage.getRule(supersededTargetId)
+        : undefined;
 
-      if (supersededTargetId) {
-        const supersededRule = this.storage.getRule(supersededTargetId);
-        if (supersededRule) {
-          const oldClauses = extractActionableClauses(supersededRule.content);
-          const newClauses = extractActionableClauses(content);
-          const { removed, preserved, added } = compareRuleClauses(oldClauses, newClauses);
-          supersededComparison = {
-            superseded_id: supersededTargetId,
-            clause_count_before: oldClauses.length,
-            clause_count_after: newClauses.length,
-            removed_clauses: removed,
-            preserved_clauses: preserved,
-            added_clauses: added,
-          };
-          if (removed.length > 0) {
-            clauseWarning = `⚠️ [ORTHOGONAL CLAUSE WARNING] Upgrading '${supersededTargetId}' discarded ${removed.length} clause(s) from the superseded rule:\n${removed.map((c, i) => `  ${i + 1}. ${c.slice(0, 100)}${c.length > 100 ? '...' : ''}`).join('\n')}\nEnsure orthogonal invariants are not inadvertently discarded.`;
-          }
+      if (options?.supersededRules && options.supersededRules.length > 0) {
+        const oldClauses: string[] = [];
+        for (const r of options.supersededRules) {
+          oldClauses.push(...extractActionableClauses(r.content));
+        }
+        const newClauses = extractActionableClauses(content);
+        const { removed, preserved, added } = compareRuleClauses(oldClauses, newClauses);
+        const combinedId = options.supersededRules.map((r) => r.id).join(', ');
+        supersededComparison = {
+          superseded_id: combinedId,
+          clause_count_before: oldClauses.length,
+          clause_count_after: newClauses.length,
+          removed_clauses: removed,
+          preserved_clauses: preserved,
+          added_clauses: added,
+        };
+        if (removed.length > 0) {
+          clauseWarning = `⚠️ [ORTHOGONAL CLAUSE WARNING] Upgrading '${combinedId}' discarded ${removed.length} clause(s) from the superseded rule(s):\n${removed.map((c, i) => `  ${i + 1}. ${c.slice(0, 100)}${c.length > 100 ? '...' : ''}`).join('\n')}\nEnsure orthogonal invariants are not inadvertently discarded.`;
+        }
+      } else if (supersededTargetId && supersededRuleFromStorage) {
+        const oldClauses = extractActionableClauses(supersededRuleFromStorage.content);
+        const newClauses = extractActionableClauses(content);
+        const { removed, preserved, added } = compareRuleClauses(oldClauses, newClauses);
+        supersededComparison = {
+          superseded_id: supersededTargetId,
+          clause_count_before: oldClauses.length,
+          clause_count_after: newClauses.length,
+          removed_clauses: removed,
+          preserved_clauses: preserved,
+          added_clauses: added,
+        };
+        if (removed.length > 0) {
+          clauseWarning = `⚠️ [ORTHOGONAL CLAUSE WARNING] Upgrading '${supersededTargetId}' discarded ${removed.length} clause(s) from the superseded rule:\n${removed.map((c, i) => `  ${i + 1}. ${c.slice(0, 100)}${c.length > 100 ? '...' : ''}`).join('\n')}\nEnsure orthogonal invariants are not inadvertently discarded.`;
         }
       }
 
@@ -945,6 +1017,13 @@ export class EvoGatekeeper {
 
       const existing = this.storage.getRule(cleanId);
       const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
+      const inheritedTransferScenarios =
+        rawProposal.transfer_scenarios !== undefined
+          ? rawProposal.transfer_scenarios.map((s) => String(s).trim()).filter(Boolean)
+          : (existing?.transfer_scenarios ||
+             supersededRuleFromStorage?.transfer_scenarios ||
+             options?.inheritedTransferScenarios);
+
       if (existing) {
         this.storage.archiveCapability(cleanId, 'rule', 'Updated by same-ID proposal');
       }
@@ -967,8 +1046,8 @@ export class EvoGatekeeper {
         tokens: newRuleTokens,
         origin: rawProposal.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
-        transfer_scenarios: Array.isArray(rawProposal.transfer_scenarios)
-          ? rawProposal.transfer_scenarios.map((s) => String(s).trim()).filter(Boolean)
+        transfer_scenarios: inheritedTransferScenarios && inheritedTransferScenarios.length > 0
+          ? inheritedTransferScenarios
           : undefined,
         created_at: preservedCreatedAt,
         updated_at: now,
@@ -1075,6 +1154,9 @@ export class EvoGatekeeper {
 
       const existing = this.storage.getTool(cleanId);
       const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
+      const toolTags = Array.isArray(rawProposal.tags)
+        ? rawProposal.tags.map((t) => String(t).trim()).filter(Boolean)
+        : (existing?.tags || []);
       if (existing) {
         this.storage.archiveCapability(cleanId, 'tool', 'Updated by same-ID proposal');
       }
@@ -1095,6 +1177,7 @@ export class EvoGatekeeper {
         input_schema: rawProposal.input_schema || { type: 'object', properties: {} },
         self_test_args: rawProposal.self_test_args || {},
         timeout_ms: rawProposal.timeout_ms || config.sandboxTimeoutMs,
+        tags: toolTags.length > 0 ? toolTags : undefined,
         origin: rawProposal.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
         created_at: preservedCreatedAt,

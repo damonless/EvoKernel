@@ -141,6 +141,7 @@ export interface EvoToolManifest {
   input_schema: Record<string, unknown>;
   self_test_args: Record<string, unknown>;
   timeout_ms: number;
+  tags?: string[];
   origin: string;
   supersedes_id?: string;
   created_at: string;

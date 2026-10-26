@@ -1053,12 +1053,94 @@ export class GeminiAdapter implements HarnessAdapter {
   }
 }
 
+export function upsertAntigravityHooks(ws: string): string[] {
+  const updated: string[] = [];
+  const srcScript = path.resolve(import.meta.dirname, '..', '..', 'scripts', 'antigravity_hook.mjs');
+  const destScriptDir = path.join(ws, '.agents', 'scripts');
+  const destScript = path.join(destScriptDir, 'antigravity_hook.mjs');
+  fs.mkdirSync(destScriptDir, { recursive: true });
+  if (fs.existsSync(srcScript)) {
+    fs.copyFileSync(srcScript, destScript);
+    updated.push('.agents/scripts/antigravity_hook.mjs');
+  }
+
+  const hooksPath = path.join(ws, '.agents', 'hooks.json');
+  let hooksObj: Record<string, unknown> = {};
+  if (fs.existsSync(hooksPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        hooksObj = parsed as Record<string, unknown>;
+      }
+    } catch {
+      hooksObj = {};
+    }
+  }
+
+  const makeHookCmd = (event: 'PreInvocation' | 'Stop') =>
+    `node -e "const fs=require('node:fs'),path=require('node:path'),url=require('node:url'),p=[path.resolve('scripts/antigravity_hook.mjs'),path.resolve('.agents/scripts/antigravity_hook.mjs')].find(f=>fs.existsSync(f));if(p){process.argv=[process.argv[0],p,'${event}'];import(url.pathToFileURL(p).href);}else{process.stdout.write('{}\\n');}"`;
+
+  hooksObj['evo-evolution-reminder'] = {
+    PreInvocation: [
+      {
+        type: 'command',
+        command: makeHookCmd('PreInvocation'),
+        timeout: 5,
+      },
+    ],
+    Stop: [
+      {
+        type: 'command',
+        command: makeHookCmd('Stop'),
+        timeout: 5,
+      },
+    ],
+  };
+
+  fs.writeFileSync(hooksPath, JSON.stringify(hooksObj, null, 2) + '\n', 'utf8');
+  updated.push('.agents/hooks.json');
+  return updated;
+}
+
+export function removeAntigravityHooks(ws: string): string[] {
+  const cleaned: string[] = [];
+  const destScript = path.join(ws, '.agents', 'scripts', 'antigravity_hook.mjs');
+  if (fs.existsSync(destScript)) {
+    try {
+      fs.unlinkSync(destScript);
+      cleaned.push('.agents/scripts/antigravity_hook.mjs');
+    } catch {
+      // Ignore unlink error
+    }
+  }
+
+  const hooksPath = path.join(ws, '.agents', 'hooks.json');
+  if (fs.existsSync(hooksPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'evo-evolution-reminder' in parsed) {
+        delete (parsed as Record<string, unknown>)['evo-evolution-reminder'];
+        if (Object.keys(parsed).length === 0) {
+          fs.unlinkSync(hooksPath);
+        } else {
+          fs.writeFileSync(hooksPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+        }
+        cleaned.push('.agents/hooks.json');
+      }
+    } catch {
+      // Ignore malformed JSON
+    }
+  }
+
+  return cleaned;
+}
+
 export class AntigravityAdapter implements HarnessAdapter {
   id = 'antigravity';
   name = 'Antigravity';
-  ruleFiles = ['GEMINI.md'];
+  ruleFiles = ['GEMINI.md', '.agents/hooks.json', '.agents/scripts/antigravity_hook.mjs'];
   mcpFiles = ['.mcp.json'];
-  dirs: string[] = [];
+  dirs: string[] = ['.agents/scripts', '.agents'];
 
   detectWorkspace(ws: string): boolean {
     return fs.existsSync(path.join(ws, '.agents'));
@@ -1083,8 +1165,10 @@ export class AntigravityAdapter implements HarnessAdapter {
     const rootMcp = path.join(ws, '.mcp.json');
     upsertMcpJson(rootMcp, ws);
 
+    const hookFiles = upsertAntigravityHooks(ws);
+
     return {
-      updatedFiles: ['GEMINI.md'],
+      updatedFiles: ['GEMINI.md', ...hookFiles],
       mcpConfigFiles: ['.mcp.json'],
     };
   }
@@ -1093,6 +1177,8 @@ export class AntigravityAdapter implements HarnessAdapter {
     const cleaned: string[] = [];
     if (cleanRuleFile(path.join(ws, 'GEMINI.md'))) cleaned.push('GEMINI.md');
     if (removeMcpJson(path.join(ws, '.mcp.json'))) cleaned.push('.mcp.json');
+    cleaned.push(...removeAntigravityHooks(ws));
+    pruneEmptyDirs(ws, this.dirs);
     return cleaned;
   }
 }

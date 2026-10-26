@@ -730,4 +730,55 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test('11. Issue #11 [HARNESS-AGY-1]: AntigravityAdapter installs and uninstalls .agents/hooks.json and .agents/scripts/antigravity_hook.mjs cleanly', () => {
+    const ws = createTempWorkspace();
+    try {
+      const res = runInit(ws, ['antigravity']);
+      assert.ok(res.initializedHarnesses.includes('antigravity'));
+      assert.ok(fs.existsSync(path.join(ws, 'GEMINI.md')));
+      assert.ok(fs.existsSync(path.join(ws, '.mcp.json')));
+      assert.ok(fs.existsSync(path.join(ws, '.agents', 'hooks.json')));
+      assert.ok(fs.existsSync(path.join(ws, '.agents', 'scripts', 'antigravity_hook.mjs')));
+
+      const hooksJson = JSON.parse(
+        fs.readFileSync(path.join(ws, '.agents', 'hooks.json'), 'utf8')
+      );
+      assert.ok(hooksJson['evo-evolution-reminder']);
+      assert.ok(Array.isArray(hooksJson['evo-evolution-reminder'].PreInvocation));
+      assert.ok(Array.isArray(hooksJson['evo-evolution-reminder'].Stop));
+      assert.match(
+        hooksJson['evo-evolution-reminder'].PreInvocation[0].command,
+        /antigravity_hook\.mjs/
+      );
+
+      // Verify non-destructive merge when sibling hook exists in .agents/hooks.json
+      hooksJson['custom-user-hook'] = { PreInvocation: [{ type: 'command', command: 'echo ok' }] };
+      fs.writeFileSync(
+        path.join(ws, '.agents', 'hooks.json'),
+        JSON.stringify(hooksJson, null, 2) + '\n',
+        'utf8'
+      );
+
+      runUninstall(ws);
+      assert.equal(fs.existsSync(path.join(ws, '.agents', 'scripts', 'antigravity_hook.mjs')), false);
+      // Since custom-user-hook was present, .agents/hooks.json should remain with only custom-user-hook
+      assert.ok(fs.existsSync(path.join(ws, '.agents', 'hooks.json')));
+      const remainingHooks = JSON.parse(
+        fs.readFileSync(path.join(ws, '.agents', 'hooks.json'), 'utf8')
+      );
+      assert.equal(remainingHooks['evo-evolution-reminder'], undefined);
+      assert.ok(remainingHooks['custom-user-hook']);
+
+      // Re-init and clean uninstall without custom hook removes .agents completely
+      fs.unlinkSync(path.join(ws, '.agents', 'hooks.json'));
+      runInit(ws, ['antigravity']);
+      runUninstall(ws);
+      assert.equal(fs.existsSync(path.join(ws, '.agents', 'hooks.json')), false);
+      assert.equal(fs.existsSync(path.join(ws, '.agents')), false);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 });
+

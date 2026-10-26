@@ -587,23 +587,59 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
 
   const globalRuleLeaks = audit.domainLeaks.filter((l) => l.scope === 'global' && l.kind === 'rule');
   const globalSkillLeaks = audit.domainLeaks.filter((l) => l.scope === 'global' && l.kind === 'skill');
+  const globalGateViolations = audit.gateViolations.filter((g) => g.scope === 'global');
+  const localGateViolations = audit.gateViolations.filter((g) => g.scope === 'workspace');
   const localLeaksAndBloat = [
     ...audit.domainLeaks.filter((l) => l.scope === 'workspace').map((l) => l.displayPath),
     ...audit.budgetViolations.filter((b) => b.scope === 'workspace').map((b) => b.displayPath),
+    ...localGateViolations.map((g) => g.displayPath),
   ];
   const uniqueLocalTargets = Array.from(new Set(localLeaksAndBloat));
+
+  const stage1Targets = Array.from(
+    new Set([
+      ...globalRuleLeaks.map((l) => l.displayPath),
+      ...globalGateViolations.map((g) => g.displayPath),
+    ])
+  );
+  const stage1Actions = [
+    ...globalRuleLeaks.map(
+      (l) =>
+        `Strip [${l.matchedIndicators.join(', ')}] from ${l.displayPath}; retain only EvoKernel L0 Seed + Epistemic Protocol + Concise Style.`
+    ),
+    ...globalGateViolations.map(
+      (g) =>
+        `Remediate Gate 1.5 violation(s) [${g.violations.map((v) => v.code).join(', ')}] in ${g.displayPath} (rule: ${g.ruleId}).`
+    ),
+  ];
+
+  const stage3Actions = [
+    ...audit.domainLeaks
+      .filter((l) => l.scope === 'workspace')
+      .map(
+        (l) =>
+          `Extract domain-specific sections from ${l.displayPath} into .evo/rules/scoped/ (core: false) and wire L0 routing seed.`
+      ),
+    ...audit.budgetViolations
+      .filter((b) => b.scope === 'workspace')
+      .map(
+        (b) =>
+          `Split or compact ${b.displayPath} (${b.tokens}/${b.budgetLimit} tokens) into .evo/rules/scoped/ (core: false).`
+      ),
+    ...localGateViolations.map(
+      (g) =>
+        `Remediate Gate 1.5 violation(s) [${g.violations.map((v) => v.code).join(', ')}] in ${g.displayPath} (rule: ${g.ruleId}).`
+    ),
+  ];
 
   const stages: RefactorStageAction[] = [
     {
       stage: 1,
       title: '全局提纯 (Global Rule Purification)',
-      targets: globalRuleLeaks.map((l) => l.displayPath),
+      targets: stage1Targets,
       actions:
-        globalRuleLeaks.length > 0
-          ? globalRuleLeaks.map(
-              (l) =>
-                `Strip [${l.matchedIndicators.join(', ')}] from ${l.displayPath}; retain only EvoKernel L0 Seed + Epistemic Protocol + Concise Style.`
-            )
+        stage1Actions.length > 0
+          ? stage1Actions
           : ['Global rules are already domain-clean (no action needed).'],
     },
     {
@@ -623,11 +659,8 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
       title: '局部下沉与 Scoped 拆分 (Local Demotion & Scoped Splitting)',
       targets: uniqueLocalTargets,
       actions:
-        uniqueLocalTargets.length > 0
-          ? uniqueLocalTargets.map(
-              (t) =>
-                `Extract domain-specific sections from ${t} into .evo/rules/scoped/ (core: false) and wire L0 routing seed.`
-            )
+        stage3Actions.length > 0
+          ? Array.from(new Set(stage3Actions))
           : ['Local rules are within the 1,500-token budget and properly scoped.'],
     },
     {
@@ -673,6 +706,10 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
         content: stripped,
         tokens: estimateTokens(stripped),
         origin: 'refactor',
+        transfer_scenarios: [
+          `Cross-module verification for files matching ${leak.suggestedScopeGlob}`,
+          `Architectural boundary and state transition checks across ${baseSlug} workflows`,
+        ],
         created_at: now,
         updated_at: now,
       });
@@ -690,6 +727,43 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
       appliedChanges.push(
         `Extracted ${leak.displayPath} -> .evo/rules/scoped/${scopedId}.md (scope: ${leak.suggestedScopeGlob})`
       );
+    }
+
+    for (const gv of localGateViolations) {
+      const existingRule = storage.getRule(gv.ruleId);
+      if (!existingRule) continue;
+      let modified = false;
+      const updatedRule = { ...existingRule };
+
+      if (gv.violations.some((v) => v.code === 'ERR_SCOPE_TOO_NARROW')) {
+        const ext = path.posix.extname(updatedRule.scope_glob.replace(/\\/g, '/'));
+        const dir = path.posix.dirname(updatedRule.scope_glob.replace(/\\/g, '/'));
+        updatedRule.scope_glob =
+          dir && dir !== '.' ? `${dir}/**/*${ext || ''}` : `**/*${ext || ''}`;
+        modified = true;
+      }
+
+      if (gv.violations.some((v) => v.code === 'ERR_INSUFFICIENT_TRANSFER_SCENARIOS')) {
+        const existingScenarios = Array.isArray(updatedRule.transfer_scenarios)
+          ? updatedRule.transfer_scenarios.filter((s) => String(s).trim().length >= 8)
+          : [];
+        const defaults = [
+          `Cross-module verification for files matching ${updatedRule.scope_glob}`,
+          `Subsystem boundary and regression checks for ${updatedRule.id}`,
+        ];
+        updatedRule.transfer_scenarios = Array.from(
+          new Set([...existingScenarios, ...defaults])
+        ).slice(0, Math.max(2, existingScenarios.length));
+        modified = true;
+      }
+
+      if (modified) {
+        updatedRule.updated_at = now;
+        storage.saveRule(updatedRule);
+        appliedChanges.push(
+          `Remediated Gate 1.5 metadata on rule '${updatedRule.id}' (${gv.displayPath})`
+        );
+      }
     }
   }
 

@@ -433,4 +433,149 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.match(stopRes.output, /src\/new_name\.ts/);
     assert.equal(stopRes.output.includes('->'), false);
   });
+
+  test('16. Issue #11 [AGY-HOOK-1..3]: Antigravity hook preserves pending correction across multi-step PreInvocations until Stop, unquotes double-JSON args, and detects deliverable feedback & scratch script error recovery', () => {
+    const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
+    const transcriptFile = path.join(ws, 'transcript.jsonl');
+    const convId = `issue11-conv-${Date.now()}`;
+
+    const writeSteps = (steps: unknown[]) => {
+      fs.writeFileSync(
+        transcriptFile,
+        steps.map((s) => JSON.stringify(s)).join('\n') + '\n',
+        'utf8'
+      );
+    };
+
+    const runAgyHook = (event: 'PreInvocation' | 'Stop') => {
+      const proc = spawnSync(process.execPath, [hookScript, event], {
+        cwd: ws,
+        input: JSON.stringify({
+          conversationId: convId,
+          transcriptPath: transcriptFile,
+          workspacePaths: [ws],
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(proc.status, 0);
+      return JSON.parse(proc.stdout.trim());
+    };
+
+    // 1. User gives deliverable granularity/format feedback ("怎么回事", "稍微精简些", "不要冲突或者重复")
+    const baseSteps: unknown[] = [
+      {
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        source: 'MODEL',
+        content: 'Initial Excel report generated.',
+      },
+      {
+        step_index: 2,
+        type: 'USER_INPUT',
+        source: 'USER_EXPLICIT',
+        content:
+          'excel中的版本显示只有一半怎么回事？软件修改记录里面可以稍微精简些，自测报告中的 6.Test Method 与下面测试项的内容不要冲突或者重复',
+      },
+    ];
+    writeSteps(baseSteps);
+
+    // First PreInvocation (step 2): injects reminder
+    const pre1 = runAgyHook('PreInvocation');
+    assert.ok(Array.isArray(pre1.injectSteps), 'First PreInvocation should inject reminder');
+    assert.match(pre1.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
+
+    // 2. Agent writes a scratch script (with double-JSON-quoted Windows path) and runs a failing command then a succeeding command
+    baseSteps.push(
+      {
+        step_index: 3,
+        type: 'GENERIC',
+        source: 'MODEL',
+        tool_calls: [
+          {
+            name: '"write_to_file"',
+            args: {
+              TargetFile:
+                '"C:\\\\Users\\\\Administrator\\\\.gemini\\\\antigravity\\\\brain\\\\conv123\\\\scratch\\\\update_xlsx.py"',
+            },
+          },
+        ],
+      },
+      {
+        step_index: 4,
+        type: 'GENERIC',
+        source: 'MODEL',
+        tool_calls: [
+          {
+            name: '"run_command"',
+            args: {
+              CommandLine: '"python scratch/update_xlsx.py 软体自测报告.xlsx"',
+            },
+            status: 'ERROR',
+            output: 'Traceback (most recent call last):\nValueError: invalid format\nCommand exited with code 1',
+          },
+        ],
+      },
+      {
+        step_index: 5,
+        type: 'GENERIC',
+        source: 'MODEL',
+        tool_calls: [
+          {
+            name: '"run_command"',
+            args: {
+              CommandLine: '"python scratch/update_xlsx.py 软体自测报告.xlsx"',
+            },
+            status: 'COMPLETED',
+            output: 'Successfully updated workbook.\nCommand exited with code 0',
+          },
+        ],
+      }
+    );
+    writeSteps(baseSteps);
+
+    // Final PreInvocation before responding to user (step 5): MUST STILL inject reminder because Stop has not occurred and evo_propose was not called!
+    const preFinal = runAgyHook('PreInvocation');
+    assert.ok(
+      Array.isArray(preFinal.injectSteps),
+      'Final PreInvocation after multi-step tool work must still inject reminder'
+    );
+    assert.match(preFinal.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
+    assert.match(preFinal.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
+    assert.match(preFinal.injectSteps[0].ephemeralMessage, /已编写 1 个临时分析\/交付物生成脚本尚未结晶/);
+
+    // 3. Stop event clears the correction state for this turn
+    const stopOut = runAgyHook('Stop');
+    assert.equal(stopOut.decision, 'allow');
+
+    // Next turn step without new correction or new error recovery should not re-trigger the cleared correction
+    baseSteps.push({
+      step_index: 6,
+      type: 'PLANNER_RESPONSE',
+      source: 'MODEL',
+      content: 'Done.',
+    });
+    writeSteps(baseSteps);
+    const afterStop = runAgyHook('PreInvocation');
+    assert.deepEqual(afterStop, {});
+
+    // 4. Double-JSON-quoted call_mcp_tool evo_propose resets all counters
+    baseSteps.push({
+      step_index: 7,
+      type: 'GENERIC',
+      source: 'MODEL',
+      tool_calls: [
+        {
+          name: '"call_mcp_tool"',
+          args: {
+            ToolName: '"evo_propose"',
+            Arguments: '"{\\"id\\":\\"excel-qa-report-sop\\",\\"kind\\":\\"skill\\"}"',
+          },
+        },
+      ],
+    });
+    writeSteps(baseSteps);
+    const afterPropose = runAgyHook('PreInvocation');
+    assert.deepEqual(afterPropose, {});
+  });
 });
+

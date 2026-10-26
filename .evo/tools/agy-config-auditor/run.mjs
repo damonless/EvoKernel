@@ -165,6 +165,8 @@ function detectCoupledIdentifiersInRule(text) {
     /\b(?:w|dw|u8|u16|u32|s16|s32|i16|i32|f|cb|st|en|g_|s_)[A-Z][A-Za-z0-9_]{2,}\b/g;
   const boolHungarianRegex = /\bb[A-Z][a-z]+[A-Z][A-Za-z0-9_]*\b/g;
   const macroRegex = /\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}\b/g;
+  const backtickCallRegex = /`([A-Za-z_][A-Za-z0-9_.]*\(\))`/g;
+  const backtickIdentRegex = /`([A-Za-z_][A-Za-z0-9_.]{2,})`/g;
 
   for (const m of text.matchAll(hungarianRegex)) {
     found.add(m[0]);
@@ -176,11 +178,35 @@ function detectCoupledIdentifiersInRule(text) {
     const token = m[0];
     if (
       !ALLOWED_META_IDENTIFIERS.has(token) &&
-      !token.startsWith('ERR_') &&
-      !token.startsWith('HTTP_') &&
-      !token.startsWith('GATE_')
+      !/^(?:EVO_|ERR_|NODE_|AST_|MCP_|CLI_|L0_|L1_|L2_|SSOT_|SOP_|BM25_|FTS5_|JSON_|UTF_|SQLITE_|HTTP_|GATE_)/.test(
+        token
+      )
     ) {
       found.add(token);
+    }
+  }
+  for (const m of text.matchAll(backtickCallRegex)) {
+    const callExpr = m[1];
+    if (!/^(?:evo_|codegraph|import\.|process\.|fs\.|path\.|os\.)/i.test(callExpr)) {
+      found.add(callExpr);
+    }
+  }
+  for (const m of text.matchAll(backtickIdentRegex)) {
+    const ident = m[1];
+    if (
+      ALLOWED_META_IDENTIFIERS.has(ident) ||
+      /^(?:evo_|codegraph|import\.|process\.|fs\.|path\.|os\.)/i.test(ident) ||
+      /\.(?:c|h|cpp|hpp|cs|ts|tsx|js|jsx|mjs|cjs|py|sh|ps1|json|md|mdc|yml|yaml|toml|sql|txt|html|css)$/i.test(
+        ident
+      )
+    ) {
+      continue;
+    }
+    const isCamelOrPascal = /[a-z0-9][A-Z]/.test(ident);
+    const isSnakeCase = /^[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+$/.test(ident);
+    const isDottedMember = /^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_.]*$/.test(ident);
+    if (isCamelOrPascal || isSnakeCase || isDottedMember) {
+      found.add(ident);
     }
   }
   return Array.from(found);
@@ -322,6 +348,14 @@ const memoriesDir = path.join(root, '.evo', 'memories');
 const memoryAuditResults = [];
 const brokenSymbols = [];
 
+function stripCodeComments(code) {
+  if (!code) return '';
+  return code.replace(
+    /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/.*$/gm,
+    (match) => (match.startsWith('/') ? ' ' : match)
+  );
+}
+
 function checkSymbolInWorkspace(rawSpec) {
   const spec = rawSpec.trim();
   const hashIdx = spec.indexOf('#');
@@ -335,7 +369,7 @@ function checkSymbolInWorkspace(rawSpec) {
   if (fileHint) {
     const fullHint = path.resolve(root, fileHint);
     if (fs.existsSync(fullHint) && fs.statSync(fullHint).isFile()) {
-      const content = fs.readFileSync(fullHint, 'utf8');
+      const content = stripCodeComments(fs.readFileSync(fullHint, 'utf8'));
       if (content.includes(symbolName)) {
         return { exists: true, file: fileHint };
       }
@@ -358,7 +392,7 @@ function checkSymbolInWorkspace(rawSpec) {
           }
         } else if (ent.isFile() && /\.(?:ts|js|mjs|cjs|c|h|cpp|py)$/i.test(ent.name)) {
           try {
-            const code = fs.readFileSync(entPath, 'utf8');
+            const code = stripCodeComments(fs.readFileSync(entPath, 'utf8'));
             if (code.includes(symbolName)) {
               return { exists: true, file: path.relative(root, entPath).replace(/\\/g, '/') };
             }
@@ -442,7 +476,7 @@ if (fs.existsSync(globalEvoDir)) {
     const checkDir = (locSub, globSub) => {
       if (!fs.existsSync(locSub) || !fs.existsSync(globSub)) return;
       for (const ent of fs.readdirSync(locSub, { withFileTypes: true })) {
-        if (ent.isFile() && ent.name.endsWith('.md')) {
+        if (ent.isFile() && ent.name.endsWith('.md') && ent.name !== 'core-invariants.md') {
           const locFile = path.join(locSub, ent.name);
           const globFile = path.join(globSub, ent.name);
           if (fs.existsSync(globFile)) {
@@ -487,7 +521,7 @@ if (fs.existsSync(globalEvoDir)) {
   const globalToolsDir = path.join(globalEvoDir, 'tools');
   if (fs.existsSync(localToolsDir) && fs.existsSync(globalToolsDir)) {
     for (const ent of fs.readdirSync(localToolsDir, { withFileTypes: true })) {
-      if (ent.isDirectory() && ent.name !== 'agy-config-auditor') {
+      if (ent.isDirectory()) {
         const locScript = path.join(localToolsDir, ent.name, 'run.mjs');
         const globScript = path.join(globalToolsDir, ent.name, 'run.mjs');
         if (fs.existsSync(locScript) && fs.existsSync(globScript)) {
@@ -520,10 +554,23 @@ const totalViolations =
 const overallStatus = totalViolations === 0 ? 'HEALTHY' : 'UNHEALTHY';
 
 if (isSelfTest) {
+  const coupledCheck = detectCoupledIdentifiersInRule(
+    'Always update `fooBar()` and `my_var` and `obj.prop` before calling.'
+  );
+  const strippedCheck = stripCodeComments(
+    '// LegacyDeadFn was removed\n/* AnotherDeadSym */\nexport function activeFn() {}\n'
+  );
+  const selfTestAssertionsPassed =
+    coupledCheck.length >= 3 &&
+    !strippedCheck.includes('LegacyDeadFn') &&
+    !strippedCheck.includes('AnotherDeadSym') &&
+    strippedCheck.includes('activeFn');
+  const ok = selfTestAssertionsPassed && totalViolations === 0;
   const result = {
-    ok: true,
-    status: 'HEALTHY',
-    self_test: 'agy-config-auditor passed',
+    ok,
+    status: ok ? 'HEALTHY' : 'UNHEALTHY',
+    self_test: ok ? 'agy-config-auditor passed' : 'agy-config-auditor failed',
+    self_test_assertions: selfTestAssertionsPassed,
     workspace: path.basename(root),
     audits: {
       token_budgets: {
@@ -551,7 +598,7 @@ if (isSelfTest) {
     },
   };
   console.log(JSON.stringify(result, null, 2));
-  process.exit(0);
+  process.exit(ok ? 0 : 1);
 }
 
 const finalReport = {
