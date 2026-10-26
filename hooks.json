@@ -3,14 +3,14 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "node \"./scripts/antigravity_hook.mjs\" PreInvocation",
+        "command": "node -e \"const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),url=require('node:url'),p=[path.resolve('scripts/antigravity_hook.mjs'),path.resolve('.agents/scripts/antigravity_hook.mjs'),path.join(os.homedir(),'.gemini','config','plugins','evo-kernel','scripts','antigravity_hook.mjs'),path.join(os.homedir(),'.gemini','extensions','evo-kernel','scripts','antigravity_hook.mjs')].find(f=>fs.existsSync(f));if(p){process.argv=[process.argv[0],p,'PreInvocation'];import(url.pathToFileURL(p).href);}else{process.stdout.write('{}\\n');}\"",
         "timeout": 5
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "node \"./scripts/antigravity_hook.mjs\" Stop",
+        "command": "node -e \"const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),url=require('node:url'),p=[path.resolve('scripts/antigravity_hook.mjs'),path.resolve('.agents/scripts/antigravity_hook.mjs'),path.join(os.homedir(),'.gemini','config','plugins','evo-kernel','scripts','antigravity_hook.mjs'),path.join(os.homedir(),'.gemini','extensions','evo-kernel','scripts','antigravity_hook.mjs')].find(f=>fs.existsSync(f));if(p){process.argv=[process.argv[0],p,'Stop'];import(url.pathToFileURL(p).href);}else{process.stdout.write('{}\\n');}\"",
         "timeout": 5
       }
     ]

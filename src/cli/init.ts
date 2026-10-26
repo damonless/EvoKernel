@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { EvoStorage } from '../core/storage.js';
+import { EvoStorage, estimateTokens } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import {
   META_RULE_MARKER_END,
@@ -38,16 +38,67 @@ export interface InitOptions {
   linkEvoFrom?: string;
 }
 
-export function formatToolsCatalogMarkdown(storage: EvoStorage): string {
+export function formatToolsCatalogMarkdown(storage: EvoStorage, coreDigest: string = ''): string {
   const tools = storage.listTools();
   if (tools.length === 0) return '';
-  return tools.map((t) => `- \`[tool] ${t.id}\`: ${t.l0_summary}`).join('\n');
+  const maxHostFileBudget = storage.getConfig().maxCoreRuleTokens || 1500;
+  const maxManagedBlockTokens = Math.max(400, maxHostFileBudget - 50);
+
+  const detailedLines: string[] = [];
+  const remainingIds: string[] = [];
+
+  for (let i = 0; i < tools.length; i++) {
+    const t = tools[i];
+    const line = `- \`[tool] ${t.id}\`: ${t.l0_summary}`;
+    const candidateLines = [
+      ...detailedLines,
+      line,
+      ...(i < tools.length - 1
+        ? [
+            `- Additional tools via \`evo_run\`: ${tools
+              .slice(i + 1)
+              .map((x) => `\`${x.id}\``)
+              .join(', ')}`,
+          ]
+        : []),
+    ];
+    const candidateBlock = renderManagedBlock(coreDigest, candidateLines.join('\n'));
+    if (detailedLines.length < 6 && estimateTokens(candidateBlock) <= maxManagedBlockTokens) {
+      detailedLines.push(line);
+    } else {
+      remainingIds.push(t.id);
+    }
+  }
+
+  if (remainingIds.length > 0) {
+    const overflowIds = [...remainingIds];
+    while (overflowIds.length > 0) {
+      const suffix =
+        overflowIds.length < remainingIds.length
+          ? ` (+${remainingIds.length - overflowIds.length} more via evo_search)`
+          : '';
+      const overflowLine = `- Additional tools via \`evo_run\`: ${overflowIds
+        .map((id) => `\`${id}\``)
+        .join(', ')}${suffix}`;
+      const candidateBlock = renderManagedBlock(
+        coreDigest,
+        [...detailedLines, overflowLine].join('\n')
+      );
+      if (estimateTokens(candidateBlock) <= maxManagedBlockTokens || overflowIds.length === 1) {
+        detailedLines.push(overflowLine);
+        break;
+      }
+      overflowIds.pop();
+    }
+  }
+
+  return detailedLines.join('\n');
 }
 
 export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   const storage = new EvoStorage(workspaceRoot);
   const digest = storage.rebuildCoreInvariantsDigest();
-  const toolsCatalog = formatToolsCatalogMarkdown(storage);
+  const toolsCatalog = formatToolsCatalogMarkdown(storage, digest);
   const block = renderManagedBlock(digest, toolsCatalog);
   const updated: string[] = [];
 
@@ -368,7 +419,7 @@ export function runInit(
   telemetry.close();
 
   const digest = storage.rebuildCoreInvariantsDigest();
-  const toolsCatalog = formatToolsCatalogMarkdown(storage);
+  const toolsCatalog = formatToolsCatalogMarkdown(storage, digest);
   const managedBlock = renderManagedBlock(digest, toolsCatalog);
 
   const updatedFilesList: string[] = [];

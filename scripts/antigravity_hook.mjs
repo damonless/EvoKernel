@@ -153,8 +153,10 @@ function main() {
   if (event === 'Stop') {
     const allState = loadHookState(statePath);
     if (allState[conversationId]) {
-      allState[conversationId].clearedCorrectionStep =
-        allState[conversationId].lastCorrectionStep ?? -1;
+      const cs = allState[conversationId];
+      cs.clearedCorrectionStep = cs.lastCorrectionStep ?? -1;
+      cs.clearedDirtyEditStep = cs.lastDirtyEditStep ?? -1;
+      cs.clearedErrorRecoveryStep = cs.lastErrorRecoveryStep ?? -1;
       saveHookState(statePath, allState);
     }
     process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
@@ -168,6 +170,17 @@ function main() {
     process.stdout.write('{}\n');
     return;
   }
+
+  const allState = loadHookState(statePath);
+  const convState = allState[conversationId] || {
+    lastRemindedStep: -999,
+    lastCorrectionStep: -1,
+    clearedCorrectionStep: -1,
+    lastDirtyEditStep: -1,
+    clearedDirtyEditStep: -1,
+    lastErrorRecoveryStep: -1,
+    clearedErrorRecoveryStep: -1,
+  };
 
   let latestStepIndex = steps.length;
   let latestUserContent = '';
@@ -186,6 +199,11 @@ function main() {
   let lastProposeStepIndex = -1;
   let seenPropose = false;
   let toolWorkStepsAfterUserCorrection = 0;
+
+  const persistedPendingCorrectionStep =
+    (convState.lastCorrectionStep ?? -1) > (convState.clearedCorrectionStep ?? -1)
+      ? (convState.lastCorrectionStep ?? -1)
+      : -1;
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
@@ -207,6 +225,9 @@ function main() {
     if (toolCalls.length > 0) {
       seenModelStep = true;
     }
+
+    const activeUserTurnStep =
+      latestUserStepIndex >= 0 ? latestUserStepIndex : persistedPendingCorrectionStep;
 
     for (const tc of toolCalls) {
       const toolName = normalizeTranscriptString(tc.name || tc.tool_name || tc.ToolName || '');
@@ -234,85 +255,82 @@ function main() {
         const innerArgs = parseTranscriptObject(args.Arguments || args);
         lastProposeId =
           normalizeTranscriptString(innerArgs?.id) || lastProposeId || 'capability';
-      } else if (EDIT_TOOL_NAMES.has(toolName)) {
-        const targetPath = normalizePath(
-          args.Path || args.path || args.TargetFile || args.target_file || args.AbsolutePath || ''
-        );
-        const isIgnoredMetaEdit =
-          targetPath.includes('/.gemini/antigravity/brain/') ||
-          targetPath.includes('/.evo/') ||
-          targetPath.endsWith('/PROJECT_STATE.md');
-
-        const isScratchScript =
-          (targetPath.includes('/.gemini/antigravity/scratch/') ||
-            targetPath.includes('/scratch/')) &&
-          /\.(?:py|mjs|cjs|js|ts|ps1|sh)$/i.test(targetPath);
-
-        if (isScratchScript) {
-          scratchScriptCountSinceLastPropose++;
-        }
-
-        if (!isIgnoredMetaEdit) {
-          editCountSinceLastPropose++;
-          if (latestUserStepIndex >= 0 && idx > latestUserStepIndex) {
-            toolWorkStepsAfterUserCorrection++;
-          }
-          if (seenPropose) {
-            editsAfterPropose++;
-            latestDirtyEditStepIndex = idx;
-          }
-        }
-      } else if (toolName === 'run_command') {
-        const cmdLine = normalizeTranscriptString(
-          args.CommandLine || args.command_line || args.command || ''
-        );
-        const cmdOutput = normalizeTranscriptString(
-          tc.output || tc.result || step.output || ''
-        );
-        const isCmdError =
-          tc.status === 'ERROR' || CMD_ERROR_OUTPUT_REGEX.test(cmdOutput);
-        const isCmdSuccess =
-          !isCmdError &&
-          (tc.status === 'COMPLETED' ||
-            cmdOutput.includes('Command exited with code 0') ||
-            cmdOutput.length > 0);
-
-        if (isCmdError) {
-          hadCommandErrorSinceLastPropose = true;
-        } else if (hadCommandErrorSinceLastPropose && isCmdSuccess) {
-          hasCommandErrorRecovery = true;
-          latestErrorRecoveryStepIndex = idx;
-        }
-
-        if (DELIVERABLE_CMD_REGEX.test(cmdLine)) {
-          deliverableRunCountSinceLastPropose++;
-        }
-        if (latestUserStepIndex >= 0 && idx > latestUserStepIndex) {
+      } else {
+        if (activeUserTurnStep >= 0 && idx > activeUserTurnStep) {
           toolWorkStepsAfterUserCorrection++;
+        }
+
+        if (EDIT_TOOL_NAMES.has(toolName)) {
+          const targetPath = normalizePath(
+            args.Path || args.path || args.TargetFile || args.target_file || args.AbsolutePath || ''
+          );
+          const isIgnoredMetaEdit =
+            targetPath.includes('/.gemini/antigravity/brain/') ||
+            targetPath.includes('/.evo/') ||
+            targetPath.endsWith('/PROJECT_STATE.md');
+
+          const isScratchScript =
+            (targetPath.includes('/.gemini/antigravity/scratch/') ||
+              targetPath.includes('/scratch/')) &&
+            /\.(?:py|mjs|cjs|js|ts|ps1|sh)$/i.test(targetPath);
+
+          if (isScratchScript) {
+            scratchScriptCountSinceLastPropose++;
+          }
+
+          if (!isIgnoredMetaEdit) {
+            editCountSinceLastPropose++;
+            if (seenPropose) {
+              editsAfterPropose++;
+              latestDirtyEditStepIndex = idx;
+            }
+          }
+        } else if (toolName === 'run_command') {
+          const cmdLine = normalizeTranscriptString(
+            args.CommandLine || args.command_line || args.command || ''
+          );
+          const cmdOutput = normalizeTranscriptString(
+            tc.output || tc.result || step.output || ''
+          );
+          const isCmdError =
+            tc.status === 'ERROR' || CMD_ERROR_OUTPUT_REGEX.test(cmdOutput);
+          const isCmdSuccess =
+            !isCmdError &&
+            (tc.status === 'COMPLETED' ||
+              cmdOutput.includes('Command exited with code 0') ||
+              cmdOutput.length > 0);
+
+          if (isCmdError) {
+            hadCommandErrorSinceLastPropose = true;
+          } else if (hadCommandErrorSinceLastPropose && isCmdSuccess) {
+            hasCommandErrorRecovery = true;
+            latestErrorRecoveryStepIndex = idx;
+          }
+
+          if (DELIVERABLE_CMD_REGEX.test(cmdLine)) {
+            deliverableRunCountSinceLastPropose++;
+          }
         }
       }
     }
   }
-
-  const allState = loadHookState(statePath);
-  const convState = allState[conversationId] || {
-    lastRemindedStep: -999,
-    lastCorrectionStep: -1,
-    clearedCorrectionStep: -1,
-    lastDirtyRemindedStep: -1,
-    lastErrorRecoveryStep: -1,
-  };
 
   if (latestStepIndex <= (convState.lastRemindedStep ?? -999)) {
     process.stdout.write('{}\n');
     return;
   }
 
+  const effectiveCorrectionStep =
+    latestUserStepIndex >= 0 ? latestUserStepIndex : persistedPendingCorrectionStep;
+
   const hasUserCorrection =
-    userInputHadPriorModelStep &&
-    latestUserStepIndex > lastProposeStepIndex &&
-    latestUserStepIndex > (convState.clearedCorrectionStep ?? -1) &&
-    CORRECTION_REGEX.test(latestUserContent);
+    latestUserStepIndex >= 0
+      ? userInputHadPriorModelStep &&
+        latestUserStepIndex > lastProposeStepIndex &&
+        latestUserStepIndex > (convState.clearedCorrectionStep ?? -1) &&
+        CORRECTION_REGEX.test(latestUserContent)
+      : persistedPendingCorrectionStep >= 0 &&
+        persistedPendingCorrectionStep > lastProposeStepIndex;
 
   const hasHeavyUnproposeEdits =
     editCountSinceLastPropose >= 4 ||
@@ -331,25 +349,25 @@ function main() {
   }
 
   const isNewCorrection =
-    hasUserCorrection && latestUserStepIndex > (convState.lastCorrectionStep ?? -1);
+    hasUserCorrection && effectiveCorrectionStep > (convState.lastCorrectionStep ?? -1);
   const isPendingCorrectionAfterWork =
     hasUserCorrection &&
-    latestUserStepIndex === (convState.lastCorrectionStep ?? -1) &&
+    effectiveCorrectionStep === (convState.lastCorrectionStep ?? -1) &&
     toolWorkStepsAfterUserCorrection > 0;
-  const isNewDirtyEdit =
+  const isPendingDirtyEdit =
     hasDirtyPostProposeEdits &&
-    latestDirtyEditStepIndex > (convState.lastDirtyRemindedStep ?? -1);
-  const isNewErrorRecovery =
+    latestDirtyEditStepIndex > (convState.clearedDirtyEditStep ?? -1);
+  const isPendingErrorRecovery =
     hasCommandErrorRecovery &&
-    latestErrorRecoveryStepIndex > (convState.lastErrorRecoveryStep ?? -1);
+    latestErrorRecoveryStepIndex > (convState.clearedErrorRecoveryStep ?? -1);
   const cooldownExpired =
     latestStepIndex - (convState.lastRemindedStep ?? -999) >= COOLDOWN_STEPS;
 
   if (
     !isNewCorrection &&
     !isPendingCorrectionAfterWork &&
-    !isNewDirtyEdit &&
-    !isNewErrorRecovery &&
+    !isPendingDirtyEdit &&
+    !isPendingErrorRecovery &&
     !(hasHeavyUnproposeEdits && cooldownExpired)
   ) {
     process.stdout.write('{}\n');
@@ -359,20 +377,25 @@ function main() {
   allState[conversationId] = {
     lastRemindedStep: latestStepIndex,
     lastCorrectionStep: hasUserCorrection
-      ? latestUserStepIndex
+      ? effectiveCorrectionStep
       : (convState.lastCorrectionStep ?? -1),
-    clearedCorrectionStep: convState.clearedCorrectionStep ?? -1,
-    lastDirtyRemindedStep: hasDirtyPostProposeEdits
+    clearedCorrectionStep:
+      lastProposeStepIndex >= 0
+        ? Math.max(convState.clearedCorrectionStep ?? -1, lastProposeStepIndex)
+        : (convState.clearedCorrectionStep ?? -1),
+    lastDirtyEditStep: hasDirtyPostProposeEdits
       ? latestDirtyEditStepIndex
-      : (convState.lastDirtyRemindedStep ?? -1),
+      : (convState.lastDirtyEditStep ?? -1),
+    clearedDirtyEditStep: convState.clearedDirtyEditStep ?? -1,
     lastErrorRecoveryStep: hasCommandErrorRecovery
       ? latestErrorRecoveryStepIndex
       : (convState.lastErrorRecoveryStep ?? -1),
+    clearedErrorRecoveryStep: convState.clearedErrorRecoveryStep ?? -1,
   };
   saveHookState(statePath, allState);
 
   const reasons = [];
-  if (isNewDirtyEdit) {
+  if (isPendingDirtyEdit) {
     reasons.push(
       `在结晶 '${lastProposeId}' 后又发生了 ${editsAfterPropose} 次源码修改（防脏规则投毒校验）`
     );
@@ -380,7 +403,7 @@ function main() {
   if (isNewCorrection || isPendingCorrectionAfterWork) {
     reasons.push('检测到用户纠偏/交付物反馈信号');
   }
-  if (isNewErrorRecovery) {
+  if (isPendingErrorRecovery) {
     reasons.push('检测到命令/脚本执行报错并恢复成功（排障经验待结晶）');
   }
   if (scratchScriptCountSinceLastPropose > 0) {
@@ -388,7 +411,7 @@ function main() {
   }
   if (
     editCountSinceLastPropose >= 4 &&
-    (cooldownExpired || isNewCorrection || isPendingCorrectionAfterWork || isNewDirtyEdit)
+    (cooldownExpired || isNewCorrection || isPendingCorrectionAfterWork || isPendingDirtyEdit)
   ) {
     reasons.push(`已累计 ${editCountSinceLastPropose} 次文件修改尚未结晶`);
   }

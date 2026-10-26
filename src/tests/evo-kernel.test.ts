@@ -15,7 +15,12 @@ import {
   resolveWorkspaceRoot,
   runCli,
 } from '../cli/index.js';
-import { EvoStorage, isPluginOrExtensionInstallDir, parseFrontmatter } from '../core/storage.js';
+import {
+  EvoStorage,
+  estimateTokens,
+  isPluginOrExtensionInstallDir,
+  parseFrontmatter,
+} from '../core/storage.js';
 import { EvoTelemetry, extractQueryTokens } from '../core/telemetry.js';
 import { executeSandboxedScript, sanitizeSandboxEnv } from '../core/sandbox.js';
 import { extractSymbolFingerprint, stripCStyleComments, normalizeCodeStructure } from '../core/memory.js';
@@ -2592,23 +2597,28 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(auditJson.status, 'HEALTHY');
       assert.equal(auditJson.summary.split_brain_conflicts, 0);
 
-      // 3. Verify MEDIUM-7 & CRITICAL-1: agy-config-auditor fails (even with --self-test) when a workspace has a dead symbol only present in a comment or >=3 backtick identifiers
+      // 3. Verify MEDIUM-7 & CRITICAL-1: agy-config-auditor fails (even with --self-test) when a workspace has a dead symbol only present in a comment or string literal, while regex literals with backticks do not corrupt live symbols
       const wsStorage = new EvoStorage(ws);
       wsStorage.ensureInitialized();
       fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
       fs.writeFileSync(
         path.join(ws, 'src', 'mod.ts'),
-        '// deadCommentSymbol was removed in refactor\nexport function liveSymbol() {}\n',
+        [
+          'const reg = /`([a-z]+)`/g;',
+          'const msg = "deadCommentSymbol in string literal";',
+          '// deadCommentSymbol was removed in refactor',
+          'export function liveSymbol() {}',
+        ].join('\n'),
         'utf8'
       );
       wsStorage.saveMemory({
         id: 'comment-only-mem',
         title: 'Memory Referencing Dead Comment Symbol',
-        l0_summary: 'Tests comment stripping in agy-config-auditor Audit 3.',
+        l0_summary: 'Tests comment and string literal stripping in agy-config-auditor Audit 3.',
         symptom: 'Symptom',
         root_cause: 'Cause',
         solution: 'Solution',
-        target_symbols: ['src/mod.ts#deadCommentSymbol'],
+        target_symbols: ['src/mod.ts#deadCommentSymbol', 'src/mod.ts#liveSymbol'],
         tags: [],
         ast_fingerprints: [],
         created_commit: 'HEAD',
@@ -2784,11 +2794,12 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     const fakeGlobal = createTempWorkspace();
     const prevGlobal = process.env.EVO_GLOBAL_DIR;
     process.env.EVO_GLOBAL_DIR = fakeGlobal;
-    runInit(ws, ['agents', 'antigravity', 'claude']);
+    runInit(ws, ['agents', 'antigravity', 'claude', 'cursor']);
     const dispatcher = new EvoMcpDispatcher(ws);
 
     try {
       // 1. Propose an English hardware micro-tool with tags and input_schema properties (TOOL-INDEX-2)
+      // Note: Do NOT put literal 'CN3008' in the manifest so search recall relies purely on pattern & bilingual expansion!
       const toolRes = dispatcher.handleToolCall('evo_propose', {
         workspace: ws,
         kind: 'tool',
@@ -2801,7 +2812,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         input_schema: {
           type: 'object',
           properties: {
-            designator: { type: 'string', description: 'Component reference designator such as CN3008 or U12' },
+            designator: { type: 'string', description: 'Component reference designator on PCB' },
             net_name: { type: 'string', description: 'Electrical rail or voltage net name' },
           },
         },
@@ -2822,13 +2833,24 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         assert.match(content, /`\[tool\] 3ku-hw-query`: Queries 3KU components/);
       }
 
-      // 3. Verify SEARCH-CROSS-LANG-1: Chinese query with PCB designator and voltage unit matches the English hardware tool
+      // 3. Verify SEARCH-CROSS-LANG-1: Short & Long (>35 CJK chars) Chinese queries with PCB designator and voltage unit match the English hardware tool
       const searchRes = dispatcher.handleToolCall('evo_search', {
         workspace: ws,
         query: 'CN3008 12V 调试电源 电源测试口 电压',
       });
       assert.equal(searchRes.isError, undefined);
       assert.match(searchRes.content[0].text, /\[TOOL\] 3ku-hw-query/);
+
+      const longSentenceSearchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: '请帮我仔细检查一下当前逆变器控制板工程里面的某处未知参数以及末尾的 CN3008 12V 调试电源 电源测试口 电压',
+      });
+      assert.equal(longSentenceSearchRes.isError, undefined);
+      assert.match(
+        longSentenceSearchRes.content[0].text,
+        /\[TOOL\] 3ku-hw-query/,
+        'Long Chinese query (>30 CJK bigrams) must not crowd out bilingual synonym and hardware designator expansions'
+      );
 
       // 4. Verify handleSearch appends available workspace tools hint when no tool appears in hits
       const zeroHitSearch = dispatcher.handleToolCall('evo_search', {
@@ -2895,6 +2917,33 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       });
       assert.equal(dupSearchRes.isError, undefined);
       assert.match(dupSearchRes.content[0].text, /dup-rule-id/);
+
+      // 6. Verify Section 5 tool catalog budget cap when >15 micro-tools exist in .evo/tools/
+      for (let i = 1; i <= 16; i++) {
+        storage.saveTool(
+          {
+            id: `extra-micro-tool-${String(i).padStart(2, '0')}`,
+            title: `Extra Micro Tool ${i}`,
+            l0_summary: `Performs automated domain analysis and verification pass number ${i} across workspace files.`,
+            runtime: 'node',
+            entry_script: 'run.mjs',
+            input_schema: { type: 'object', properties: {} },
+            self_test_args: {},
+            timeout_ms: 5000,
+            origin: 'evolved',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          'if (process.argv.includes("--self-test")) process.exit(0);'
+        );
+      }
+      syncManagedRuleBlocks(ws);
+      const mdcContent = fs.readFileSync(path.join(ws, '.cursor', 'rules', 'evo-kernel.mdc'), 'utf8');
+      assert.match(mdcContent, /Additional tools via `evo_run`/);
+      assert.ok(
+        estimateTokens(mdcContent) <= 1500,
+        `Cursor .mdc file must remain <= 1500 tokens even with 17 registered tools (actual: ${estimateTokens(mdcContent)})`
+      );
     } finally {
       if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
       else process.env.EVO_GLOBAL_DIR = prevGlobal;

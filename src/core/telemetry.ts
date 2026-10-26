@@ -78,16 +78,22 @@ const PHYSICAL_UNIT_REGEX =
 export function extractQueryTokens(query: string): string[] {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const literalTokens = new Set<string>();
+
   const asciiMatches = trimmed.match(/[A-Za-z0-9_-]{2,}/g) || [];
-  for (const t of asciiMatches) {
-    literalTokens.add(t);
-  }
-  for (const bg of extractCjkBigrams(trimmed)) {
-    literalTokens.add(bg);
+  const allCjkBigrams = extractCjkBigrams(trimmed);
+
+  const allLiterals = new Set<string>([...asciiMatches, ...allCjkBigrams]);
+  const techCjkBigrams: string[] = [];
+  const otherCjkBigrams: string[] = [];
+  for (const bg of allCjkBigrams) {
+    if (BILINGUAL_TECH_SYNONYMS[bg]) {
+      techCjkBigrams.push(bg);
+    } else {
+      otherCjkBigrams.push(bg);
+    }
   }
 
-  const expandedTokens = new Set<string>(literalTokens);
+  const expansionTokens = new Set<string>();
 
   if (HW_DESIGNATOR_REGEX.test(trimmed)) {
     for (const exp of [
@@ -106,7 +112,7 @@ export function extractQueryTokens(query: string): string[] {
       '器件',
       '引脚',
     ]) {
-      expandedTokens.add(exp);
+      expansionTokens.add(exp);
     }
   }
 
@@ -123,20 +129,41 @@ export function extractQueryTokens(query: string): string[] {
       '网络',
       '采样',
     ]) {
-      expandedTokens.add(exp);
+      expansionTokens.add(exp);
     }
   }
 
-  for (const lit of literalTokens) {
+  for (const lit of allLiterals) {
     const syns = BILINGUAL_TECH_SYNONYMS[lit] || BILINGUAL_TECH_SYNONYMS[lit.toLowerCase()];
     if (syns) {
       for (const s of syns) {
-        expandedTokens.add(s);
+        expansionTokens.add(s);
       }
     }
   }
 
-  return Array.from(expandedTokens).slice(0, 30);
+  const finalTokens = new Set<string>();
+  for (const t of asciiMatches.slice(0, 16)) {
+    finalTokens.add(t);
+  }
+  for (const bg of techCjkBigrams) {
+    finalTokens.add(bg);
+  }
+  const literalBudget = expansionTokens.size > 0 ? 20 : 48;
+  for (const bg of otherCjkBigrams) {
+    if (finalTokens.size >= literalBudget) break;
+    finalTokens.add(bg);
+  }
+  for (const exp of expansionTokens) {
+    if (finalTokens.size >= 48) break;
+    finalTokens.add(exp);
+  }
+  for (const bg of otherCjkBigrams) {
+    if (finalTokens.size >= 48) break;
+    finalTokens.add(bg);
+  }
+
+  return Array.from(finalTokens);
 }
 
 const CODE_EXTENSIONS_FOR_SCOPE = new Set([

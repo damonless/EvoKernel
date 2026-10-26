@@ -50,7 +50,14 @@ function copyDirNonOverwriting(
   if (!fs.existsSync(srcDir)) return;
   fs.mkdirSync(destDir, { recursive: true });
   for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    if (entry.name === '.cache' || entry.name === 'archive' || entry.name === 'scoped') continue;
+    if (
+      entry.name === '.cache' ||
+      entry.name === 'archive' ||
+      entry.name === 'scoped' ||
+      entry.name === 'core-invariants.md'
+    ) {
+      continue;
+    }
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
     if (entry.isDirectory()) {

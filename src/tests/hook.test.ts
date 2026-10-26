@@ -484,10 +484,31 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.ok(Array.isArray(pre1.injectSteps), 'First PreInvocation should inject reminder');
     assert.match(pre1.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
 
-    // 2. Agent writes a scratch script (with double-JSON-quoted Windows path) and runs a failing command then a succeeding command
+    // 2. Agent first calls a read-only tool (view_file) to inspect before editing -> PreInvocation must still inject reminder!
+    baseSteps.push({
+      step_index: 3,
+      type: 'GENERIC',
+      source: 'MODEL',
+      tool_calls: [
+        {
+          name: '"view_file"',
+          args: {
+            AbsolutePath: '"C:\\\\workspace\\\\report_template.py"',
+          },
+        },
+      ],
+    });
+    writeSteps(baseSteps);
+    const preAfterRead = runAgyHook('PreInvocation');
+    assert.ok(
+      Array.isArray(preAfterRead.injectSteps),
+      'PreInvocation after read-only investigation tool must still inject pending correction reminder'
+    );
+
+    // 3. Agent writes a scratch script (with double-JSON-quoted Windows path), runs a failing command, recovers, and then runs a verification step
     baseSteps.push(
       {
-        step_index: 3,
+        step_index: 4,
         type: 'GENERIC',
         source: 'MODEL',
         tool_calls: [
@@ -501,7 +522,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         ],
       },
       {
-        step_index: 4,
+        step_index: 5,
         type: 'GENERIC',
         source: 'MODEL',
         tool_calls: [
@@ -516,7 +537,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         ],
       },
       {
-        step_index: 5,
+        step_index: 6,
         type: 'GENERIC',
         source: 'MODEL',
         tool_calls: [
@@ -533,23 +554,43 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     );
     writeSteps(baseSteps);
 
-    // Final PreInvocation before responding to user (step 5): MUST STILL inject reminder because Stop has not occurred and evo_propose was not called!
+    // PreInvocation right after recovery (step 6)
+    const preAfterRecovery = runAgyHook('PreInvocation');
+    assert.ok(Array.isArray(preAfterRecovery.injectSteps));
+    assert.match(preAfterRecovery.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
+
+    // Agent runs one more verification step (step 7: view_file) before final response -> PreInvocation must STILL retain both correction and error-recovery reminders!
+    baseSteps.push({
+      step_index: 7,
+      type: 'GENERIC',
+      source: 'MODEL',
+      tool_calls: [
+        {
+          name: '"view_file"',
+          args: {
+            AbsolutePath: '"C:\\\\workspace\\\\verify_output.txt"',
+          },
+        },
+      ],
+    });
+    writeSteps(baseSteps);
+
     const preFinal = runAgyHook('PreInvocation');
     assert.ok(
       Array.isArray(preFinal.injectSteps),
-      'Final PreInvocation after multi-step tool work must still inject reminder'
+      'Final PreInvocation after verification step must still inject reminder'
     );
     assert.match(preFinal.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
     assert.match(preFinal.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
     assert.match(preFinal.injectSteps[0].ephemeralMessage, /已编写 1 个临时分析\/交付物生成脚本尚未结晶/);
 
-    // 3. Stop event clears the correction state for this turn
+    // 4. Stop event clears the correction and error-recovery state for this turn
     const stopOut = runAgyHook('Stop');
     assert.equal(stopOut.decision, 'allow');
 
-    // Next turn step without new correction or new error recovery should not re-trigger the cleared correction
+    // Next turn step without new correction or new error recovery should not re-trigger the cleared state
     baseSteps.push({
-      step_index: 6,
+      step_index: 8,
       type: 'PLANNER_RESPONSE',
       source: 'MODEL',
       content: 'Done.',
@@ -558,9 +599,9 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const afterStop = runAgyHook('PreInvocation');
     assert.deepEqual(afterStop, {});
 
-    // 4. Double-JSON-quoted call_mcp_tool evo_propose resets all counters
+    // 5. Double-JSON-quoted call_mcp_tool evo_propose resets all counters
     baseSteps.push({
-      step_index: 7,
+      step_index: 9,
       type: 'GENERIC',
       source: 'MODEL',
       tool_calls: [

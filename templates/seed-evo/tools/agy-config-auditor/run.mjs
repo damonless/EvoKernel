@@ -348,12 +348,170 @@ const memoriesDir = path.join(root, '.evo', 'memories');
 const memoryAuditResults = [];
 const brokenSymbols = [];
 
-function stripCodeComments(code) {
-  if (!code) return '';
-  return code.replace(
-    /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/.*$/gm,
-    (match) => (match.startsWith('/') ? ' ' : match)
+function canPrecedeRegexLiteral(out) {
+  const trimmed = out.trimEnd();
+  if (!trimmed) return true;
+  if (trimmed.endsWith('++') || trimmed.endsWith('--')) return false;
+  const lastChar = trimmed[trimmed.length - 1];
+  if ('=(:[{,;!&|?^~<>+-*%'.includes(lastChar)) return true;
+  return /(?:^|[^\w$])(return|case|throw|yield|await|typeof|delete|void|default|do|else|in|instanceof|of)$/.test(
+    trimmed
   );
+}
+
+function stripCodeComments(input) {
+  if (!input) return '';
+  let out = '';
+  let i = 0;
+  const len = input.length;
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  const templateBraceStack = [];
+
+  while (i < len) {
+    const ch = input[i];
+    const next = i + 1 < len ? input[i + 1] : '';
+
+    if (inSingle) {
+      if (ch === '\\' && i + 1 < len) {
+        i += 2;
+        continue;
+      }
+      if (ch === "'") inSingle = false;
+      i++;
+      continue;
+    }
+
+    if (inDouble) {
+      if (ch === '\\' && i + 1 < len) {
+        i += 2;
+        continue;
+      }
+      if (ch === '"') inDouble = false;
+      i++;
+      continue;
+    }
+
+    if (inTemplate) {
+      if (ch === '\\' && i + 1 < len) {
+        i += 2;
+        continue;
+      }
+      if (ch === '$' && next === '{') {
+        inTemplate = false;
+        templateBraceStack.push(0);
+        out += ' ';
+        i += 2;
+        continue;
+      }
+      if (ch === '`') inTemplate = false;
+      i++;
+      continue;
+    }
+
+    if (templateBraceStack.length > 0) {
+      if (ch === '{') {
+        templateBraceStack[templateBraceStack.length - 1]++;
+      } else if (ch === '}') {
+        if (templateBraceStack[templateBraceStack.length - 1] === 0) {
+          templateBraceStack.pop();
+          inTemplate = true;
+          out += ' ';
+          i++;
+          continue;
+        }
+        templateBraceStack[templateBraceStack.length - 1]--;
+      }
+    }
+
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < len && input[i] !== '\n') i++;
+      out += ' ';
+      continue;
+    }
+
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i + 1 < len && !(input[i] === '*' && input[i + 1] === '/')) i++;
+      i += 2;
+      out += ' ';
+      continue;
+    }
+
+    if (ch === '/' && canPrecedeRegexLiteral(out)) {
+      out += ch;
+      i++;
+      let inCharClass = false;
+      while (i < len) {
+        const rCh = input[i];
+        if (rCh === '\\' && i + 1 < len) {
+          out += rCh + input[i + 1];
+          i += 2;
+          continue;
+        }
+        if (rCh === '[') {
+          inCharClass = true;
+          out += rCh;
+          i++;
+          continue;
+        }
+        if (rCh === ']' && inCharClass) {
+          inCharClass = false;
+          out += rCh;
+          i++;
+          continue;
+        }
+        if (rCh === '/' && !inCharClass) {
+          out += rCh;
+          i++;
+          while (i < len && /[a-z]/i.test(input[i])) {
+            out += input[i];
+            i++;
+          }
+          break;
+        }
+        if (rCh === '\n') break;
+        out += rCh;
+        i++;
+      }
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      out += ' ';
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      out += ' ';
+      i++;
+      continue;
+    }
+    if (ch === '`') {
+      inTemplate = true;
+      out += ' ';
+      i++;
+      continue;
+    }
+
+    out += ch;
+    i++;
+  }
+
+  return out;
+}
+
+function hasSymbolIdentifier(codeWithoutComments, symbolName) {
+  if (!symbolName) return false;
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(symbolName)) {
+    const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`).test(codeWithoutComments);
+  }
+  return codeWithoutComments.includes(symbolName);
 }
 
 function checkSymbolInWorkspace(rawSpec) {
@@ -364,19 +522,25 @@ function checkSymbolInWorkspace(rawSpec) {
   if (hashIdx !== -1) {
     fileHint = spec.slice(0, hashIdx).trim().replace(/^[/\\]+/, '');
     symbolName = spec.slice(hashIdx + 1).trim();
+  } else {
+    const cleanFileCandidate = spec.replace(/^[/\\]+/, '');
+    const fullCandidate = path.resolve(root, cleanFileCandidate);
+    if (fs.existsSync(fullCandidate) && fs.statSync(fullCandidate).isFile()) {
+      return { exists: true, file: cleanFileCandidate.replace(/\\/g, '/') };
+    }
   }
 
   if (fileHint) {
     const fullHint = path.resolve(root, fileHint);
     if (fs.existsSync(fullHint) && fs.statSync(fullHint).isFile()) {
       const content = stripCodeComments(fs.readFileSync(fullHint, 'utf8'));
-      if (content.includes(symbolName)) {
+      if (hasSymbolIdentifier(content, symbolName)) {
         return { exists: true, file: fileHint };
       }
     }
   }
 
-  // Fallback: search source files in workspace
+  // Fallback: search non-test source files in workspace
   const srcDirs = ['src', 'lib'];
   for (const sd of srcDirs) {
     const fullSd = path.join(root, sd);
@@ -387,13 +551,17 @@ function checkSymbolInWorkspace(rawSpec) {
       for (const ent of fs.readdirSync(current, { withFileTypes: true })) {
         const entPath = path.join(current, ent.name);
         if (ent.isDirectory()) {
-          if (!['node_modules', '.git', 'dist', 'build', '.evo'].includes(ent.name)) {
+          if (!['node_modules', '.git', 'dist', 'build', '.evo', 'tests', '__tests__'].includes(ent.name)) {
             stack.push(entPath);
           }
-        } else if (ent.isFile() && /\.(?:ts|js|mjs|cjs|c|h|cpp|py)$/i.test(ent.name)) {
+        } else if (
+          ent.isFile() &&
+          /\.(?:ts|js|mjs|cjs|c|h|cpp|py)$/i.test(ent.name) &&
+          !/\.(?:test|spec)\.[a-z0-9]+$/i.test(ent.name)
+        ) {
           try {
             const code = stripCodeComments(fs.readFileSync(entPath, 'utf8'));
-            if (code.includes(symbolName)) {
+            if (hasSymbolIdentifier(code, symbolName)) {
               return { exists: true, file: path.relative(root, entPath).replace(/\\/g, '/') };
             }
           } catch {}
@@ -558,13 +726,15 @@ if (isSelfTest) {
     'Always update `fooBar()` and `my_var` and `obj.prop` before calling.'
   );
   const strippedCheck = stripCodeComments(
-    '// LegacyDeadFn was removed\n/* AnotherDeadSym */\nexport function activeFn() {}\n'
+    'const r = /`([a-z]+)`/g;\nconst msg = "StringOnlySym";\n// LegacyDeadFn was removed\n/* AnotherDeadSym */\nexport function activeFn() {}\n'
   );
   const selfTestAssertionsPassed =
     coupledCheck.length >= 3 &&
-    !strippedCheck.includes('LegacyDeadFn') &&
-    !strippedCheck.includes('AnotherDeadSym') &&
-    strippedCheck.includes('activeFn');
+    !hasSymbolIdentifier(strippedCheck, 'LegacyDeadFn') &&
+    !hasSymbolIdentifier(strippedCheck, 'AnotherDeadSym') &&
+    !hasSymbolIdentifier(strippedCheck, 'StringOnlySym') &&
+    !hasSymbolIdentifier(strippedCheck, 'active') &&
+    hasSymbolIdentifier(strippedCheck, 'activeFn');
   const ok = selfTestAssertionsPassed && totalViolations === 0;
   const result = {
     ok,
@@ -618,4 +788,4 @@ const finalReport = {
 };
 
 console.log(JSON.stringify(finalReport, null, 2));
-process.exit(totalViolations === 0 ? 0 : 1);
+process.exit(totalViolations === 0 ? 0 : 1);

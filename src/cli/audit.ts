@@ -729,40 +729,58 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
       );
     }
 
-    for (const gv of localGateViolations) {
-      const existingRule = storage.getRule(gv.ruleId);
-      if (!existingRule) continue;
-      let modified = false;
-      const updatedRule = { ...existingRule };
+    const remediateRuleGateViolations = (
+      targetStorage: EvoStorage,
+      violationsList: GateViolationWarning[]
+    ) => {
+      for (const gv of violationsList) {
+        const existingRule = targetStorage.getRule(gv.ruleId);
+        if (!existingRule) continue;
+        let modified = false;
+        const updatedRule = { ...existingRule };
 
-      if (gv.violations.some((v) => v.code === 'ERR_SCOPE_TOO_NARROW')) {
-        const ext = path.posix.extname(updatedRule.scope_glob.replace(/\\/g, '/'));
-        const dir = path.posix.dirname(updatedRule.scope_glob.replace(/\\/g, '/'));
-        updatedRule.scope_glob =
-          dir && dir !== '.' ? `${dir}/**/*${ext || ''}` : `**/*${ext || ''}`;
-        modified = true;
+        if (gv.violations.some((v) => v.code === 'ERR_SCOPE_TOO_NARROW')) {
+          const ext = path.posix.extname(updatedRule.scope_glob.replace(/\\/g, '/'));
+          const dir = path.posix.dirname(updatedRule.scope_glob.replace(/\\/g, '/'));
+          updatedRule.scope_glob =
+            dir && dir !== '.' ? `${dir}/**/*${ext || ''}` : `**/*${ext || ''}`;
+          modified = true;
+        }
+
+        if (gv.violations.some((v) => v.code === 'ERR_INSUFFICIENT_TRANSFER_SCENARIOS')) {
+          const existingScenarios = Array.isArray(updatedRule.transfer_scenarios)
+            ? updatedRule.transfer_scenarios.filter((s) => String(s).trim().length >= 8)
+            : [];
+          const defaults = [
+            `Cross-module verification for files matching ${updatedRule.scope_glob}`,
+            `Subsystem boundary and regression checks for ${updatedRule.id}`,
+          ];
+          updatedRule.transfer_scenarios = Array.from(
+            new Set([...existingScenarios, ...defaults])
+          ).slice(0, Math.max(2, existingScenarios.length));
+          modified = true;
+        }
+
+        if (modified) {
+          updatedRule.updated_at = now;
+          targetStorage.saveRule(updatedRule);
+          appliedChanges.push(
+            `Remediated Gate 1.5 metadata on rule '${updatedRule.id}' (${gv.displayPath})`
+          );
+        }
       }
+    };
 
-      if (gv.violations.some((v) => v.code === 'ERR_INSUFFICIENT_TRANSFER_SCENARIOS')) {
-        const existingScenarios = Array.isArray(updatedRule.transfer_scenarios)
-          ? updatedRule.transfer_scenarios.filter((s) => String(s).trim().length >= 8)
-          : [];
-        const defaults = [
-          `Cross-module verification for files matching ${updatedRule.scope_glob}`,
-          `Subsystem boundary and regression checks for ${updatedRule.id}`,
-        ];
-        updatedRule.transfer_scenarios = Array.from(
-          new Set([...existingScenarios, ...defaults])
-        ).slice(0, Math.max(2, existingScenarios.length));
-        modified = true;
-      }
+    remediateRuleGateViolations(storage, localGateViolations);
 
-      if (modified) {
-        updatedRule.updated_at = now;
-        storage.saveRule(updatedRule);
-        appliedChanges.push(
-          `Remediated Gate 1.5 metadata on rule '${updatedRule.id}' (${gv.displayPath})`
-        );
+    if ((options.includeGlobal ?? true) && globalGateViolations.length > 0) {
+      const globalHomeDir = options.globalHomeDir ?? os.homedir();
+      const globalRoot = process.env.EVO_GLOBAL_DIR
+        ? path.resolve(process.env.EVO_GLOBAL_DIR)
+        : path.join(globalHomeDir, '.evo', 'global');
+      const globalStorage = new EvoStorage(globalRoot);
+      if (fs.existsSync(globalStorage.rulesDir)) {
+        remediateRuleGateViolations(globalStorage, globalGateViolations);
       }
     }
   }

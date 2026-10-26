@@ -1078,7 +1078,7 @@ export function upsertAntigravityHooks(ws: string): string[] {
   }
 
   const makeHookCmd = (event: 'PreInvocation' | 'Stop') =>
-    `node -e "const fs=require('node:fs'),path=require('node:path'),url=require('node:url'),p=[path.resolve('scripts/antigravity_hook.mjs'),path.resolve('.agents/scripts/antigravity_hook.mjs')].find(f=>fs.existsSync(f));if(p){process.argv=[process.argv[0],p,'${event}'];import(url.pathToFileURL(p).href);}else{process.stdout.write('{}\\n');}"`;
+    `node -e "const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),url=require('node:url'),p=[path.resolve('scripts/antigravity_hook.mjs'),path.resolve('.agents/scripts/antigravity_hook.mjs'),path.join(os.homedir(),'.gemini','config','plugins','evo-kernel','scripts','antigravity_hook.mjs'),path.join(os.homedir(),'.gemini','extensions','evo-kernel','scripts','antigravity_hook.mjs')].find(f=>fs.existsSync(f));if(p){process.argv=[process.argv[0],p,'${event}'];import(url.pathToFileURL(p).href);}else{process.stdout.write('{}\\n');}"`;
 
   hooksObj['evo-evolution-reminder'] = {
     PreInvocation: [
