@@ -479,12 +479,12 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     ];
     writeSteps(baseSteps);
 
-    // First PreInvocation (step 2): injects reminder
+    // First PreInvocation (step 2): immediate edge trigger for new user correction
     const pre1 = runAgyHook('PreInvocation');
     assert.ok(Array.isArray(pre1.injectSteps), 'First PreInvocation should inject reminder');
     assert.match(pre1.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
 
-    // 2. Agent first calls a read-only tool (view_file) to inspect before editing -> PreInvocation must still inject reminder!
+    // 2. Step 3 (1 step after reminder at step 2): Agent calls read-only view_file -> cooldown (COOLDOWN_STEPS = 4) suppresses every-step spam!
     baseSteps.push({
       step_index: 3,
       type: 'GENERIC',
@@ -499,17 +499,40 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       ],
     });
     writeSteps(baseSteps);
+    const preDuringCooldown = runAgyHook('PreInvocation');
+    assert.deepEqual(
+      preDuringCooldown,
+      {},
+      'PreInvocation at step 3 (within 4-step cooldown of step 2) must not spam reminder'
+    );
+
+    // Once cooldown expires (step 6 >= 2 + 4), pending correction after read-only work re-injects reminder!
+    baseSteps.push({
+      step_index: 6,
+      type: 'GENERIC',
+      source: 'MODEL',
+      tool_calls: [
+        {
+          name: '"view_file"',
+          args: {
+            AbsolutePath: '"C:\\\\workspace\\\\report_schema.py"',
+          },
+        },
+      ],
+    });
+    writeSteps(baseSteps);
     const preAfterRead = runAgyHook('PreInvocation');
     assert.ok(
       Array.isArray(preAfterRead.injectSteps),
-      'PreInvocation after read-only investigation tool must still inject pending correction reminder'
+      'PreInvocation after cooldown expiration must re-inject pending correction reminder'
     );
+    assert.match(preAfterRead.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
 
-    // 3. Agent writes a scratch script (with double-JSON-quoted Windows path), runs a failing command, recovers, and then runs a verification step
+    // 3. Real Antigravity transcript format: PLANNER_RESPONSE has run_command without inline output, and next GENERIC step has content with command output!
     baseSteps.push(
       {
-        step_index: 4,
-        type: 'GENERIC',
+        step_index: 7,
+        type: 'PLANNER_RESPONSE',
         source: 'MODEL',
         tool_calls: [
           {
@@ -522,8 +545,8 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         ],
       },
       {
-        step_index: 5,
-        type: 'GENERIC',
+        step_index: 8,
+        type: 'PLANNER_RESPONSE',
         source: 'MODEL',
         tool_calls: [
           {
@@ -531,14 +554,20 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
             args: {
               CommandLine: '"python scratch/update_xlsx.py 软体自测报告.xlsx"',
             },
-            status: 'ERROR',
-            output: 'Traceback (most recent call last):\nValueError: invalid format\nCommand exited with code 1',
           },
         ],
       },
       {
-        step_index: 6,
+        step_index: 9,
         type: 'GENERIC',
+        source: 'SYSTEM',
+        status: 'ERROR',
+        content:
+          'Command exited with code 1.\n\nCommand output:\nTraceback (most recent call last):\nValueError: invalid format',
+      },
+      {
+        step_index: 10,
+        type: 'PLANNER_RESPONSE',
         source: 'MODEL',
         tool_calls: [
           {
@@ -546,23 +575,28 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
             args: {
               CommandLine: '"python scratch/update_xlsx.py 软体自测报告.xlsx"',
             },
-            status: 'COMPLETED',
-            output: 'Successfully updated workbook.\nCommand exited with code 0',
           },
         ],
+      },
+      {
+        step_index: 11,
+        type: 'GENERIC',
+        source: 'SYSTEM',
+        status: 'DONE',
+        content: 'Command exited with code 0.\n\nCommand output:\nSuccessfully updated workbook.',
       }
     );
     writeSteps(baseSteps);
 
-    // PreInvocation right after recovery (step 6)
+    // PreInvocation right after recovery (step 11): immediate edge trigger for new error recovery
     const preAfterRecovery = runAgyHook('PreInvocation');
     assert.ok(Array.isArray(preAfterRecovery.injectSteps));
     assert.match(preAfterRecovery.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
 
-    // Agent runs one more verification step (step 7: view_file) before final response -> PreInvocation must STILL retain both correction and error-recovery reminders!
+    // Step 12 (1 step after step 11): cooldown suppresses immediate repeat spam
     baseSteps.push({
-      step_index: 7,
-      type: 'GENERIC',
+      step_index: 12,
+      type: 'PLANNER_RESPONSE',
       source: 'MODEL',
       tool_calls: [
         {
@@ -574,11 +608,32 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       ],
     });
     writeSteps(baseSteps);
+    assert.deepEqual(
+      runAgyHook('PreInvocation'),
+      {},
+      'Step 12 must respect 4-step cooldown after step 11 reminder'
+    );
+
+    // Step 15 (15 - 11 >= 4): cooldown expired -> retains correction, error-recovery, and scratch script reminders!
+    baseSteps.push({
+      step_index: 15,
+      type: 'PLANNER_RESPONSE',
+      source: 'MODEL',
+      tool_calls: [
+        {
+          name: '"view_file"',
+          args: {
+            AbsolutePath: '"C:\\\\workspace\\\\final_check.txt"',
+          },
+        },
+      ],
+    });
+    writeSteps(baseSteps);
 
     const preFinal = runAgyHook('PreInvocation');
     assert.ok(
       Array.isArray(preFinal.injectSteps),
-      'Final PreInvocation after verification step must still inject reminder'
+      'PreInvocation after cooldown expiration must still retain all pending reminders'
     );
     assert.match(preFinal.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
     assert.match(preFinal.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
@@ -588,20 +643,24 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const stopOut = runAgyHook('Stop');
     assert.equal(stopOut.decision, 'allow');
 
-    // Next turn step without new correction or new error recovery should not re-trigger the cleared state
+    // Even after cooldown expires (step 20 - 15 >= 4), Stop has cleared correction & error-recovery state
+    // (only the uncrystallized temp_script_writes counter remains until evo_propose is called)
     baseSteps.push({
-      step_index: 8,
+      step_index: 20,
       type: 'PLANNER_RESPONSE',
       source: 'MODEL',
       content: 'Done.',
     });
     writeSteps(baseSteps);
     const afterStop = runAgyHook('PreInvocation');
-    assert.deepEqual(afterStop, {});
+    assert.ok(Array.isArray(afterStop.injectSteps));
+    assert.doesNotMatch(afterStop.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
+    assert.doesNotMatch(afterStop.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
+    assert.match(afterStop.injectSteps[0].ephemeralMessage, /已编写 1 个临时分析\/交付物生成脚本尚未结晶/);
 
-    // 5. Double-JSON-quoted call_mcp_tool evo_propose resets all counters
+    // 5. Double-JSON-quoted call_mcp_tool evo_propose resets all counters (even after cooldown expires at step 25)
     baseSteps.push({
-      step_index: 9,
+      step_index: 25,
       type: 'GENERIC',
       source: 'MODEL',
       tool_calls: [

@@ -20,6 +20,7 @@ import {
 import { EvoTelemetry } from './telemetry.js';
 import { checkScriptSyntax, executeSandboxedScript } from './sandbox.js';
 import { buildFingerprintsForTargets, resolveCurrentGitCommit } from './memory.js';
+import { renderManagedBlock } from '../templates/meta-rule.js';
 
 const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\brm\s+-rf\s+(\/|~|\$HOME|c:\\)/i, reason: 'Destructive root/home directory deletion detected' },
@@ -630,7 +631,19 @@ export class EvoGatekeeper {
     // =========================================================================
     if (rawProposal.kind === 'rule') {
       const scopeGlob = (rawProposal.scope_glob || '**/*').trim();
-      const isCoreRule = Boolean(rawProposal.core ?? false);
+      const existingRuleForTransfer = this.storage.getRule(cleanId);
+      const supersededRuleForTransfer = rawProposal.supersedes_id
+        ? this.storage.getRule(sanitizeId(rawProposal.supersedes_id))
+        : null;
+      const isCoreRule =
+        rawProposal.core !== undefined
+          ? Boolean(rawProposal.core)
+          : Boolean(
+              existingRuleForTransfer?.core ||
+                supersededRuleForTransfer?.core ||
+                options?.supersededRules?.some((r) => r.core) ||
+                false
+            );
       const bodyForLexicalAudit = stripCaseAnchorLines(
         `${rawProposal.l0_summary}\n${resolvedRuleContent}`
       );
@@ -691,10 +704,6 @@ export class EvoGatekeeper {
       }
 
       // 5. Require transfer_scenarios for non-core/scoped rules or when explicitly provided (Issue #6 Layer 2 & Module 7.2)
-      const existingRuleForTransfer = this.storage.getRule(cleanId);
-      const supersededRuleForTransfer = rawProposal.supersedes_id
-        ? this.storage.getRule(sanitizeId(rawProposal.supersedes_id))
-        : null;
       const inheritedTransferScenarios =
         existingRuleForTransfer?.transfer_scenarios ||
         supersededRuleForTransfer?.transfer_scenarios ||
@@ -886,7 +895,23 @@ export class EvoGatekeeper {
         };
       }
 
-      const isCore = Boolean(rawProposal.core ?? false);
+      const existing = this.storage.getRule(cleanId);
+      const supersededTargetId = rawProposal.supersedes_id
+        ? sanitizeId(rawProposal.supersedes_id)
+        : (existing ? cleanId : undefined);
+      const supersededRuleFromStorage = supersededTargetId
+        ? this.storage.getRule(supersededTargetId)
+        : undefined;
+
+      const isCore =
+        rawProposal.core !== undefined
+          ? Boolean(rawProposal.core)
+          : Boolean(
+              existing?.core ||
+                supersededRuleFromStorage?.core ||
+                options?.supersededRules?.some((r) => r.core) ||
+                false
+            );
       const scopeGlob = (rawProposal.scope_glob || '**/*').trim();
       const newRuleTokens = estimateTokens(`- **[${cleanId}]**: ${rawProposal.l0_summary}\n${content}`);
 
@@ -895,7 +920,21 @@ export class EvoGatekeeper {
         const filteredRules = existingCoreRules.filter((r) => !excludeSet.has(r.id));
         const currentTokens = filteredRules.reduce((acc, r) => acc + r.tokens, 0);
 
-        if (currentTokens + newRuleTokens > config.maxCoreRuleTokens) {
+        const candidateCoreLines = [
+          ...filteredRules.map(
+            (r) =>
+              `- **[${r.id}]** (\`${r.scope_glob}\`): ${r.l0_summary}\n  ${r.content.replace(/\n/g, '\n  ')}`
+          ),
+          `- **[${cleanId}]** (\`${scopeGlob}\`): ${rawProposal.l0_summary}\n  ${content.replace(/\n/g, '\n  ')}`,
+        ];
+        const renderedHostTokens =
+          estimateTokens(renderManagedBlock(candidateCoreLines.join('\n'))) + 45;
+        const effectiveCandidateTokens =
+          config.maxCoreRuleTokens >= 1200
+            ? Math.max(currentTokens + newRuleTokens, renderedHostTokens)
+            : currentTokens + newRuleTokens;
+
+        if (effectiveCandidateTokens > config.maxCoreRuleTokens) {
           const telemetryMap = this.telemetry.getTelemetryMap();
           const lowValueCandidates = filteredRules
             .map((r) => ({
@@ -911,7 +950,7 @@ export class EvoGatekeeper {
             passed: false,
             gate_failed: 'TOKEN_BUDGET',
             error_code: 'ERR_BUDGET_EXCEEDED',
-            message: `Core rule token budget exceeded (${currentTokens + newRuleTokens} / ${config.maxCoreRuleTokens} tokens). Call 'evo_compact' to merge or demote low-hit rules first, or set 'core: false' for scoped loading.`,
+            message: `Core rule token budget exceeded (${effectiveCandidateTokens} / ${config.maxCoreRuleTokens} tokens). Call 'evo_compact' to merge or demote low-hit rules first, or set 'core: false' for scoped loading.`,
             low_value_candidates: lowValueCandidates,
           };
         }
@@ -949,13 +988,6 @@ export class EvoGatekeeper {
         added_clauses: string[];
       } | undefined;
       let clauseWarning: string | undefined;
-
-      const supersededTargetId = rawProposal.supersedes_id
-        ? sanitizeId(rawProposal.supersedes_id)
-        : (this.storage.getRule(cleanId) ? cleanId : undefined);
-      const supersededRuleFromStorage = supersededTargetId
-        ? this.storage.getRule(supersededTargetId)
-        : undefined;
 
       if (options?.supersededRules && options.supersededRules.length > 0) {
         const oldClauses: string[] = [];
@@ -1015,7 +1047,6 @@ export class EvoGatekeeper {
         };
       }
 
-      const existing = this.storage.getRule(cleanId);
       const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
       const inheritedTransferScenarios =
         rawProposal.transfer_scenarios !== undefined

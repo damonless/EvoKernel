@@ -70,10 +70,13 @@ const BILINGUAL_TECH_SYNONYMS: Record<string, string[]> = {
 };
 
 const HW_DESIGNATOR_REGEX =
-  /\b(?:CN|J|P|U|UA|IC|R|C|L|Q|D|ZD|LED|RY|RLY|TP|F|SW|K|T|CT|XTAL)\d+[A-Z0-9]*\b/i;
+  /\b(?:(?:CN|JP|TP|RY|RLY|ZD|LED|SW|CT|XTAL|IC|UA)[1-9]\d*[A-Z0-9]*|[RCLUQDJPFKT]\d{2,}[A-Z0-9]*|[UQDJ][1-9]\b)/;
 
-const PHYSICAL_UNIT_REGEX =
-  /[+-]?\d+(?:\.\d+)?\s*(?:V|mV|A|mA|kHz|MHz|ohm|kohm|uF|nF|pF)\b/i;
+const VOLTAGE_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?(?:V|mV)\b/;
+const CURRENT_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?(?:A|mA)\b/;
+const RESISTANCE_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?\s*(?:kohm|mohm|ohm)\b/i;
+const CAPACITANCE_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?\s*(?:uF|nF|pF)\b/;
+const FREQUENCY_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?\s*(?:kHz|MHz|GHz|Hz)\b/i;
 
 export function extractQueryTokens(query: string): string[] {
   const trimmed = query.trim();
@@ -116,7 +119,7 @@ export function extractQueryTokens(query: string): string[] {
     }
   }
 
-  if (PHYSICAL_UNIT_REGEX.test(trimmed)) {
+  if (VOLTAGE_UNIT_REGEX.test(trimmed)) {
     for (const exp of [
       'voltage',
       'power',
@@ -128,6 +131,65 @@ export function extractQueryTokens(query: string): string[] {
       '电源',
       '网络',
       '采样',
+    ]) {
+      expansionTokens.add(exp);
+    }
+  }
+
+  if (CURRENT_UNIT_REGEX.test(trimmed)) {
+    for (const exp of [
+      'current',
+      'power',
+      'analog',
+      'shunt',
+      'hw',
+      '电流',
+      '采样',
+      '电源',
+    ]) {
+      expansionTokens.add(exp);
+    }
+  }
+
+  if (RESISTANCE_UNIT_REGEX.test(trimmed)) {
+    for (const exp of [
+      'resistor',
+      'analog',
+      'divider',
+      'component',
+      'hw',
+      '电阻',
+      '分压',
+      '采样',
+      '器件',
+    ]) {
+      expansionTokens.add(exp);
+    }
+  }
+
+  if (CAPACITANCE_UNIT_REGEX.test(trimmed)) {
+    for (const exp of [
+      'capacitor',
+      'filter',
+      'component',
+      'hw',
+      '电容',
+      '滤波',
+      '器件',
+    ]) {
+      expansionTokens.add(exp);
+    }
+  }
+
+  if (FREQUENCY_UNIT_REGEX.test(trimmed)) {
+    for (const exp of [
+      'frequency',
+      'clock',
+      'pwm',
+      'signal',
+      '频率',
+      '时钟',
+      '信号',
     ]) {
       expansionTokens.add(exp);
     }

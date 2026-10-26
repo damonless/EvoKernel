@@ -289,14 +289,35 @@ function main() {
           const cmdLine = normalizeTranscriptString(
             args.CommandLine || args.command_line || args.command || ''
           );
-          const cmdOutput = normalizeTranscriptString(
+          let cmdOutput = normalizeTranscriptString(
             tc.output || tc.result || step.output || ''
           );
+          let nextStepStatus = '';
+          if (!cmdOutput && i + 1 < steps.length) {
+            const nextStep = steps[i + 1];
+            const nextType = String(nextStep?.type || '');
+            const nextSource = String(nextStep?.source || '');
+            if (
+              nextType !== 'USER_INPUT' &&
+              nextType !== 'PLANNER_RESPONSE' &&
+              nextSource !== 'USER_EXPLICIT' &&
+              nextSource !== 'MODEL'
+            ) {
+              cmdOutput = normalizeTranscriptString(
+                nextStep.content || nextStep.output || nextStep.result || ''
+              );
+              nextStepStatus = String(nextStep.status || '');
+            }
+          }
           const isCmdError =
-            tc.status === 'ERROR' || CMD_ERROR_OUTPUT_REGEX.test(cmdOutput);
+            tc.status === 'ERROR' ||
+            nextStepStatus === 'ERROR' ||
+            CMD_ERROR_OUTPUT_REGEX.test(cmdOutput);
           const isCmdSuccess =
             !isCmdError &&
             (tc.status === 'COMPLETED' ||
+              nextStepStatus === 'DONE' ||
+              nextStepStatus === 'COMPLETED' ||
               cmdOutput.includes('Command exited with code 0') ||
               cmdOutput.length > 0);
 
@@ -354,22 +375,31 @@ function main() {
     hasUserCorrection &&
     effectiveCorrectionStep === (convState.lastCorrectionStep ?? -1) &&
     toolWorkStepsAfterUserCorrection > 0;
+  const isNewDirtyEdit =
+    hasDirtyPostProposeEdits &&
+    latestDirtyEditStepIndex > (convState.lastDirtyEditStep ?? -1);
   const isPendingDirtyEdit =
     hasDirtyPostProposeEdits &&
     latestDirtyEditStepIndex > (convState.clearedDirtyEditStep ?? -1);
+  const isNewErrorRecovery =
+    hasCommandErrorRecovery &&
+    latestErrorRecoveryStepIndex > (convState.lastErrorRecoveryStep ?? -1);
   const isPendingErrorRecovery =
     hasCommandErrorRecovery &&
     latestErrorRecoveryStepIndex > (convState.clearedErrorRecoveryStep ?? -1);
   const cooldownExpired =
     latestStepIndex - (convState.lastRemindedStep ?? -999) >= COOLDOWN_STEPS;
 
-  if (
-    !isNewCorrection &&
-    !isPendingCorrectionAfterWork &&
-    !isPendingDirtyEdit &&
-    !isPendingErrorRecovery &&
-    !(hasHeavyUnproposeEdits && cooldownExpired)
-  ) {
+  const hasImmediateNewTrigger =
+    isNewCorrection || isNewDirtyEdit || isNewErrorRecovery;
+  const hasCooldownPendingTrigger =
+    cooldownExpired &&
+    (isPendingCorrectionAfterWork ||
+      isPendingDirtyEdit ||
+      isPendingErrorRecovery ||
+      hasHeavyUnproposeEdits);
+
+  if (!hasImmediateNewTrigger && !hasCooldownPendingTrigger) {
     process.stdout.write('{}\n');
     return;
   }

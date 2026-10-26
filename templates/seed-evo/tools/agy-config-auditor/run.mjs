@@ -222,6 +222,16 @@ const ruleFiles = [
   '.cursor/rules/evo-kernel.mdc',
   '.evo/rules/core-invariants.md',
 ];
+let configuredBudgetLimit = 1500;
+const localConfigFile = path.join(root, '.evo', 'config.json');
+if (fs.existsSync(localConfigFile)) {
+  try {
+    const parsedCfg = JSON.parse(fs.readFileSync(localConfigFile, 'utf8'));
+    if (typeof parsedCfg.maxCoreRuleTokens === 'number' && parsedCfg.maxCoreRuleTokens > 0) {
+      configuredBudgetLimit = parsedCfg.maxCoreRuleTokens;
+    }
+  } catch {}
+}
 const tokenAudit = [];
 const budgetViolations = [];
 for (const rel of ruleFiles) {
@@ -229,12 +239,12 @@ for (const rel of ruleFiles) {
   if (fs.existsSync(full)) {
     const text = fs.readFileSync(full, 'utf8');
     const tokens = estimateTokens(text);
-    const healthy = tokens <= 1500;
+    const healthy = tokens <= configuredBudgetLimit;
     const entry = {
       file: rel,
       bytes: Buffer.byteLength(text, 'utf8'),
       estimated_tokens: tokens,
-      budget_limit: 1500,
+      budget_limit: configuredBudgetLimit,
       status: healthy ? 'HEALTHY' : 'OVER_BUDGET',
     };
     tokenAudit.push(entry);
@@ -507,6 +517,18 @@ function stripCodeComments(input) {
 
 function hasSymbolIdentifier(codeWithoutComments, symbolName) {
   if (!symbolName) return false;
+  if (symbolName.includes('.')) {
+    const parts = symbolName
+      .split('.')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length > 0 && parts.every((p) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(p))) {
+      return parts.every((p) => {
+        const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`\\b${escaped}\\b`).test(codeWithoutComments);
+      });
+    }
+  }
   if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(symbolName)) {
     const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`\\b${escaped}\\b`).test(codeWithoutComments);
@@ -523,21 +545,30 @@ function checkSymbolInWorkspace(rawSpec) {
     fileHint = spec.slice(0, hashIdx).trim().replace(/^[/\\]+/, '');
     symbolName = spec.slice(hashIdx + 1).trim();
   } else {
-    const cleanFileCandidate = spec.replace(/^[/\\]+/, '');
-    const fullCandidate = path.resolve(root, cleanFileCandidate);
-    if (fs.existsSync(fullCandidate) && fs.statSync(fullCandidate).isFile()) {
-      return { exists: true, file: cleanFileCandidate.replace(/\\/g, '/') };
+    const colonIdx = spec.indexOf(':', 2);
+    if (colonIdx !== -1 && /\.[a-z0-9]+$/i.test(spec.slice(0, colonIdx).trim())) {
+      fileHint = spec.slice(0, colonIdx).trim().replace(/^[/\\]+/, '');
+      symbolName = spec.slice(colonIdx + 1).trim();
+    } else {
+      const cleanFileCandidate = spec.replace(/^[/\\]+/, '');
+      const fullCandidate = path.resolve(root, cleanFileCandidate);
+      if (fs.existsSync(fullCandidate) && fs.statSync(fullCandidate).isFile()) {
+        return { exists: true, file: cleanFileCandidate.replace(/\\/g, '/') };
+      }
     }
   }
 
   if (fileHint) {
+    const normalizedHint = fileHint.replace(/\\/g, '/');
     const fullHint = path.resolve(root, fileHint);
     if (fs.existsSync(fullHint) && fs.statSync(fullHint).isFile()) {
       const content = stripCodeComments(fs.readFileSync(fullHint, 'utf8'));
-      if (hasSymbolIdentifier(content, symbolName)) {
-        return { exists: true, file: fileHint };
-      }
+      return {
+        exists: hasSymbolIdentifier(content, symbolName),
+        file: normalizedHint,
+      };
     }
+    return { exists: false, file: normalizedHint };
   }
 
   // Fallback: search non-test source files in workspace
@@ -728,13 +759,18 @@ if (isSelfTest) {
   const strippedCheck = stripCodeComments(
     'const r = /`([a-z]+)`/g;\nconst msg = "StringOnlySym";\n// LegacyDeadFn was removed\n/* AnotherDeadSym */\nexport function activeFn() {}\n'
   );
+  const classMethodSample = stripCodeComments(
+    'export class SampleCtrl {\n  handleStep() {}\n}\n'
+  );
   const selfTestAssertionsPassed =
     coupledCheck.length >= 3 &&
     !hasSymbolIdentifier(strippedCheck, 'LegacyDeadFn') &&
     !hasSymbolIdentifier(strippedCheck, 'AnotherDeadSym') &&
     !hasSymbolIdentifier(strippedCheck, 'StringOnlySym') &&
     !hasSymbolIdentifier(strippedCheck, 'active') &&
-    hasSymbolIdentifier(strippedCheck, 'activeFn');
+    hasSymbolIdentifier(strippedCheck, 'activeFn') &&
+    hasSymbolIdentifier(classMethodSample, 'SampleCtrl.handleStep') &&
+    !hasSymbolIdentifier(classMethodSample, 'SampleCtrl.missingStep');
   const ok = selfTestAssertionsPassed && totalViolations === 0;
   const result = {
     ok,

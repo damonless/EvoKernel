@@ -42,7 +42,7 @@ export function formatToolsCatalogMarkdown(storage: EvoStorage, coreDigest: stri
   const tools = storage.listTools();
   if (tools.length === 0) return '';
   const maxHostFileBudget = storage.getConfig().maxCoreRuleTokens || 1500;
-  const maxManagedBlockTokens = Math.max(400, maxHostFileBudget - 50);
+  const maxManagedBlockTokens = Math.max(400, maxHostFileBudget - 120);
 
   const detailedLines: string[] = [];
   const remainingIds: string[] = [];
@@ -84,7 +84,7 @@ export function formatToolsCatalogMarkdown(storage: EvoStorage, coreDigest: stri
         coreDigest,
         [...detailedLines, overflowLine].join('\n')
       );
-      if (estimateTokens(candidateBlock) <= maxManagedBlockTokens || overflowIds.length === 1) {
+      if (estimateTokens(candidateBlock) <= maxManagedBlockTokens) {
         detailedLines.push(overflowLine);
         break;
       }

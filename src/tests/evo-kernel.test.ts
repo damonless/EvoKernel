@@ -2952,6 +2952,198 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(fakeGlobal, { recursive: true, force: true });
     }
   });
+
+  test('40. Issue #13 Regressions: Query Expansion Precision, Host Budget Alignment, Symbol Parser (Class.method / file:symbol / fileHint Isolation) & Core Rule Inheritance', () => {
+    // 1. HIGH-1: extractQueryTokens must NOT trigger hardware/power expansions on software terms or hex SHAs
+    for (const softwareQuery of [
+      'L0 token budget',
+      'L1 L2 tier',
+      'u8 u16 u32 f32',
+      'k8s',
+      'p99',
+      'commit d0d4e1a',
+      'step 1 a',
+    ]) {
+      const toks = extractQueryTokens(softwareQuery);
+      assert.equal(
+        toks.includes('hardware') ||
+          toks.includes('schematic') ||
+          toks.includes('voltage') ||
+          toks.includes('power') ||
+          toks.includes('resistor'),
+        false,
+        `Pure software query "${softwareQuery}" must not inject hardware/power tokens (got: ${toks.join(', ')})`
+      );
+    }
+
+    const cnTokens = extractQueryTokens('CN3008 12V');
+    assert.ok(cnTokens.includes('hardware') && cnTokens.includes('voltage'), 'CN3008 12V must expand hardware & voltage tokens');
+
+    const uaTokens = extractQueryTokens('UA1 R7310 10kohm');
+    assert.ok(
+      uaTokens.includes('hardware') && uaTokens.includes('resistor') && !uaTokens.includes('voltage'),
+      'UA1 R7310 10kohm must expand hardware & resistor tokens without false voltage tokens'
+    );
+
+    // 2. MEDIUM-1 & HIGH-2: evo_propose(supersedes_id) and evo_compact preserve core: true when core is omitted, and Gate 4 enforces host file budget ceiling
+    const ws = createTempWorkspace();
+    const fakeGlobal = createTempWorkspace();
+    const prevGlobal = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = fakeGlobal;
+    runInit(ws, { targets: ['claude', 'cursor', 'agents', 'gemini'] });
+    const dispatcher = new EvoMcpDispatcher(ws);
+
+    try {
+      const core1 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'core-inherit-alpha',
+        title: 'Core Inherit Alpha',
+        l0_summary: 'Preserve alpha invariant across module boundaries.',
+        scope_glob: 'src/**/*.ts',
+        core: true,
+        content: '1. Preserve alpha invariant across module boundaries.',
+      });
+      assert.equal(core1.isError, undefined, core1.content[0]?.text);
+
+      // Upgrade core-inherit-alpha via supersedes_id WITHOUT passing core -> must inherit core: true!
+      const core1Upgraded = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'core-inherit-alpha',
+        supersedes_id: 'core-inherit-alpha',
+        title: 'Core Inherit Alpha v2',
+        l0_summary: 'Preserve alpha invariant across module boundaries and verify inputs.',
+        scope_glob: 'src/**/*.ts',
+        content: '1. Preserve alpha invariant across module boundaries and verify inputs.',
+      });
+      assert.equal(core1Upgraded.isError, undefined, core1Upgraded.content[0]?.text);
+
+      const storage = new EvoStorage(ws);
+      const upgradedRule = storage.getRule('core-inherit-alpha');
+      assert.ok(upgradedRule);
+      assert.equal(upgradedRule.core, true, 'supersedes_id upgrade with omitted core must inherit core: true');
+
+      // Add a second core rule and compact both WITHOUT passing core -> must inherit core: true!
+      const core2 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'core-inherit-beta',
+        title: 'Core Inherit Beta',
+        l0_summary: 'Enforce beta timeout guard on external calls.',
+        scope_glob: 'src/**/*.ts',
+        core: true,
+        content: '1. Enforce beta timeout guard on external calls.',
+      });
+      assert.equal(core2.isError, undefined, core2.content[0]?.text);
+
+      const compactRes = dispatcher.handleToolCall('evo_compact', {
+        workspace: ws,
+        target_ids: ['core-inherit-alpha', 'core-inherit-beta'],
+        reason: 'Consolidate core rules without specifying core flag',
+        merged_proposal: {
+          kind: 'rule',
+          id: 'core-inherit-merged',
+          title: 'Core Inherit Merged',
+          l0_summary: 'Preserve alpha invariant and enforce beta timeout guard across module boundaries.',
+          scope_glob: 'src/**/*.ts',
+          content:
+            '1. Preserve alpha invariant across module boundaries and verify inputs.\n2. Enforce beta timeout guard on external calls.',
+        },
+      });
+      assert.equal(compactRes.isError, false, compactRes.content[0]?.text);
+      const mergedRule = storage.getRule('core-inherit-merged');
+      assert.ok(mergedRule);
+      assert.equal(mergedRule.core, true, 'evo_compact of core rules with omitted core must inherit core: true');
+
+      // HIGH-2: Attempting to propose a core: true rule that would push rendered host files over 1500 tokens must be blocked by Gate 4
+      const oversizedCore = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'oversized-host-budget-rule',
+        title: 'Oversized Host Budget Rule',
+        l0_summary: 'Attempt to exceed rendered host file budget of 1500 tokens.',
+        scope_glob: 'src/**/*.ts',
+        core: true,
+        content: Array.from(
+          { length: 24 },
+          (_, idx) =>
+            `${idx + 1}. Enforce deterministic validation across asynchronous state transitions and boundary adapters in subsystem layer ${idx + 1}.`
+        ).join('\n'),
+      });
+      assert.equal(oversizedCore.isError, true, 'Gate 4 must block core rules that push host files over 1500 tokens');
+      assert.match(oversizedCore.content[0].text, /ERR_BUDGET_EXCEEDED/);
+
+      // Verify host files remain healthy in runAudit
+      const auditReport = runAudit(ws);
+      assert.equal(auditReport.budgetViolations.length, 0);
+
+      // 3. HIGH-3: agy-config-auditor verifies file.ts#Class.method, file.ts:symbol, and rejects deleted symbol in existing fileHint even when another file defines the same symbol name
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'service.ts'),
+        'export class OrderController {\n  processOrder() { return true; }\n}\nexport function validatePayload() { return 1; }\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(ws, 'src', 'other.ts'),
+        'export function deletedInServiceButPresentInOther() { return 2; }\n',
+        'utf8'
+      );
+
+      storage.saveMemory({
+        id: 'mem-valid-targets',
+        title: 'Valid Class Method and Colon Targets',
+        l0_summary: 'Verifies Class.method and colon separator targets.',
+        symptom: 'Symbol target check.',
+        root_cause: 'Parser test.',
+        solution: 'Use Class.method and colon syntax.',
+        target_symbols: ['src/service.ts#OrderController.processOrder', 'src/service.ts:validatePayload'],
+        ast_fingerprints: {},
+        created_commit: 'HEAD',
+        tags: [],
+        origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const auditorScript = path.resolve('.evo/tools/agy-config-auditor/run.mjs');
+      const validRun = executeSandboxedScript('node', auditorScript, {}, { cwd: ws, timeoutMs: 5000 });
+      assert.equal(validRun.exitCode, 0, `Expected healthy auditor for Class.method and file:symbol, got: ${validRun.stdout}`);
+
+      // Now add a memory targeting src/service.ts#deletedInServiceButPresentInOther -> must fail (no cross-file masking!)
+      storage.saveMemory({
+        id: 'mem-deleted-in-hint',
+        title: 'Deleted Symbol In FileHint',
+        l0_summary: 'Must not be masked by src/other.ts.',
+        symptom: 'Deleted symbol in service.ts.',
+        root_cause: 'Cross-file fallback masked deletion.',
+        solution: 'Return exists: false immediately when fileHint exists.',
+        target_symbols: ['src/service.ts#deletedInServiceButPresentInOther'],
+        ast_fingerprints: {},
+        created_commit: 'HEAD',
+        tags: [],
+        origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const invalidRun = executeSandboxedScript('node', auditorScript, {}, { cwd: ws, timeoutMs: 5000 });
+      assert.equal(
+        invalidRun.exitCode,
+        1,
+        'agy-config-auditor must report broken symbol when existing fileHint lacks target symbol even if another file defines it'
+      );
+      const invalidParsed = JSON.parse(invalidRun.stdout);
+      assert.equal(invalidParsed.summary.broken_memory_symbols, 1);
+    } finally {
+      if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobal;
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(fakeGlobal, { recursive: true, force: true });
+    }
+  });
 });
 
 

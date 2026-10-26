@@ -300,7 +300,9 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   const root = path.resolve(workspaceRoot);
   const includeGlobal = Boolean(options.includeGlobal);
   const globalHomeDir = path.resolve(options.globalHomeDir || os.homedir());
-  const tokenBudgetLimit = options.tokenBudgetLimit ?? 1500;
+  const localStorage = new EvoStorage(root);
+  const tokenBudgetLimit =
+    options.tokenBudgetLimit ?? (localStorage.getConfig().maxCoreRuleTokens || 1500);
   const overlapThreshold = options.overlapThreshold ?? 0.25;
 
   const entries = discoverAuditableFiles(root, includeGlobal, globalHomeDir);
@@ -414,7 +416,6 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
 
   // Retroactive Gate 1.5 rule compliance checks
   const gateViolations: GateViolationWarning[] = [];
-  const localStorage = new EvoStorage(root);
   if (fs.existsSync(localStorage.rulesDir)) {
     const localRules = localStorage.listRules();
     for (const rule of localRules) {

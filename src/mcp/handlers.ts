@@ -962,6 +962,14 @@ export class EvoMcpDispatcher {
     const existingRuleTargets: EvoRule[] = targetIds
       .map((id) => this.storage.getRule(id))
       .filter((r): r is EvoRule => r !== null);
+    const inheritedCore =
+      mergedProposal.core !== undefined
+        ? Boolean(mergedProposal.core)
+        : existingRuleTargets.some((r) => r.core);
+    const effectiveMergedProposal =
+      mergedProposal.kind === 'rule'
+        ? { ...mergedProposal, core: inheritedCore }
+        : mergedProposal;
     const inheritedTransferScenarios = Array.from(
       new Set(
         existingRuleTargets
@@ -974,7 +982,7 @@ export class EvoMcpDispatcher {
     // Module 3.1: Atomic pre-check before archiving or deleting any target_ids
     const precheck = this.gatekeeper.evaluateAndCommit(
       {
-        ...mergedProposal,
+        ...effectiveMergedProposal,
         origin: 'compacted',
       },
       {
@@ -1024,7 +1032,7 @@ export class EvoMcpDispatcher {
 
     const commitRes = this.gatekeeper.evaluateAndCommit(
       {
-        ...mergedProposal,
+        ...effectiveMergedProposal,
         origin: 'compacted',
       },
       {
