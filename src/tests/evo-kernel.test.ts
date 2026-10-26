@@ -19,7 +19,7 @@ import { EvoStorage, isPluginOrExtensionInstallDir, parseFrontmatter } from '../
 import { EvoTelemetry } from '../core/telemetry.js';
 import { executeSandboxedScript, sanitizeSandboxEnv } from '../core/sandbox.js';
 import { extractSymbolFingerprint, stripCStyleComments, normalizeCodeStructure } from '../core/memory.js';
-import { detectDomainNumbersInRule } from '../core/gatekeeper.js';
+import { EvoGatekeeper, detectDomainNumbersInRule } from '../core/gatekeeper.js';
 
 function createTempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-test-ws-'));
@@ -2271,7 +2271,277 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(subWs, { recursive: true, force: true });
     }
   });
+
+  test('34. Feature 12: Bootstrap commit log isolation - no commit logs in gatekeeper-self-test-invariant or host instruction files', () => {
+    const ws = createTempWorkspace();
+    try {
+      const srcDir = path.join(ws, 'src');
+      fs.mkdirSync(srcDir, { recursive: true });
+      const testFile = path.join(srcDir, 'driver.ts');
+      fs.writeFileSync(
+        testFile,
+        'export function resetDriver(): void { console.log("reset"); }\n',
+        'utf8'
+      );
+
+      // Initialize git repository with a fix commit
+      spawnSync('git', ['init'], { cwd: ws });
+      spawnSync('git', ['config', 'user.email', 'test@evokernel.dev'], { cwd: ws });
+      spawnSync('git', ['config', 'user.name', 'Evo Test'], { cwd: ws });
+      spawnSync('git', ['add', 'src/driver.ts'], { cwd: ws });
+      spawnSync('git', ['commit', '-m', 'fix(driver): resolve timeout in resetDriver'], { cwd: ws });
+
+      // Run init to create host instruction files
+      runInit(ws, ['claude', 'agents', 'gemini']);
+
+      // Run bootstrap
+      const bootRes = runBootstrap(ws);
+      assert.ok(bootRes.rulesCreated.includes('gatekeeper-self-test-invariant'));
+
+      // 1. Verify gatekeeper-self-test-invariant does NOT contain commit history logs or commit hashes
+      const storage = new EvoStorage(ws);
+      const rule = storage.getRule('gatekeeper-self-test-invariant');
+      assert.ok(rule, 'gatekeeper-self-test-invariant must exist');
+      assert.doesNotMatch(
+        rule.content,
+        /historical fix commits analyzed/i,
+        'Rule content must NOT contain commit history log line'
+      );
+      assert.doesNotMatch(
+        rule.content,
+        /\b[0-9a-f]{7,40}\b/i,
+        'Rule content must NOT contain raw commit SHA hashes'
+      );
+
+      // 2. Verify host files (AGENTS.md, CLAUDE.md, GEMINI.md) are free of commit hashes and commit logs
+      for (const hostFile of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']) {
+        const filePath = path.join(ws, hostFile);
+        assert.ok(fs.existsSync(filePath), `${hostFile} must exist`);
+        const content = fs.readFileSync(filePath, 'utf8');
+        assert.doesNotMatch(
+          content,
+          /historical fix commits analyzed/i,
+          `${hostFile} must NOT contain historical fix commit logs`
+        );
+        assert.doesNotMatch(
+          content,
+          /\b[0-9a-f]{7,40}\b/i,
+          `${hostFile} must NOT contain commit hashes in managed blocks`
+        );
+      }
+
+      // 3. Verify that commit history was properly isolated into Episodic Memories
+      assert.ok(
+        bootRes.memoriesCreated.length >= 1,
+        'Bootstrap must mine git fix commits into episodic memories'
+      );
+      const memories = storage.listMemories();
+      assert.ok(
+        memories.some((m) => m.id.startsWith('git-fix-')),
+        'Episodic memories must contain git-fix-* memory'
+      );
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('35. Feature 12: Gatekeeper supersedes_id clause diff & orthogonal clause warning', () => {
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    storage.ensureInitialized();
+    const telemetry = new EvoTelemetry(storage);
+    const gatekeeper = new EvoGatekeeper(storage, telemetry);
+
+    try {
+      // 1. Case A: Upgrade via supersedes_id dropping orthogonal clauses (clause 2 & 3 removed)
+      gatekeeper.evaluateAndCommit({
+        workspace: ws,
+        kind: 'rule',
+        id: 'rule-base-warn',
+        title: 'Rule Base Warn Invariant',
+        l0_summary: 'Comprehensive multi-clause base rule invariant.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: [
+          '1. Always validate input arguments before executing shell commands.',
+          '2. Ensure all child processes specify a timeout of at least 5000ms.',
+          '3. Sanitize output buffers before logging to console.',
+        ].join('\n'),
+        transfer_scenarios: [
+          'Input sanitation and process isolation',
+          'Resource cleanup in subprocess workflows',
+        ],
+      });
+
+      const warnRes = gatekeeper.evaluateAndCommit({
+        workspace: ws,
+        kind: 'rule',
+        id: 'rule-upgrade-warn',
+        supersedes_id: 'rule-base-warn',
+        title: 'Rule Upgrade With Removed Clauses',
+        l0_summary: 'Upgraded rule that inadvertently drops orthogonal clauses.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: [
+          '1. Always validate input arguments before executing shell commands.',
+          '2. Record execution metrics in telemetry database.',
+        ].join('\n'),
+        transfer_scenarios: [
+          'Input sanitation and process isolation',
+          'Telemetry collection in execution workflows',
+        ],
+      });
+      assert.equal(warnRes.passed, true);
+      assert.ok(warnRes.warning, 'Warning must be emitted when orthogonal clauses are removed');
+      assert.match(warnRes.warning, /ORTHOGONAL CLAUSE WARNING/);
+
+      const compWarn = warnRes.diagnostics.superseded_comparison as {
+        superseded_id: string;
+        clause_count_before: number;
+        clause_count_after: number;
+        removed_clauses: string[];
+        preserved_clauses: string[];
+        added_clauses: string[];
+      };
+      assert.ok(compWarn, 'superseded_comparison must be present in diagnostics');
+      assert.equal(compWarn.superseded_id, 'rule-base-warn');
+      assert.equal(compWarn.clause_count_before, 3);
+      assert.equal(compWarn.clause_count_after, 2);
+      assert.equal(compWarn.removed_clauses.length, 2);
+      assert.equal(compWarn.preserved_clauses.length, 1);
+      assert.equal(compWarn.added_clauses.length, 1);
+
+      // 2. Case B: Upgrade via supersedes_id preserving all orthogonal clauses (0 removed clauses)
+      gatekeeper.evaluateAndCommit({
+        workspace: ws,
+        kind: 'rule',
+        id: 'rule-base-preserve',
+        title: 'Rule Base Preserve Invariant',
+        l0_summary: 'Comprehensive multi-clause base rule invariant.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: [
+          '1. Always validate input arguments before executing shell commands.',
+          '2. Ensure all child processes specify a timeout of at least 5000ms.',
+          '3. Sanitize output buffers before logging to console.',
+        ].join('\n'),
+        transfer_scenarios: [
+          'Input sanitation and process isolation',
+          'Resource cleanup in subprocess workflows',
+        ],
+      });
+
+      const preserveRes = gatekeeper.evaluateAndCommit({
+        workspace: ws,
+        kind: 'rule',
+        id: 'rule-upgrade-preserved',
+        supersedes_id: 'rule-base-preserve',
+        title: 'Rule Upgrade Preserving All Clauses',
+        l0_summary: 'Upgraded rule that preserves all orthogonal invariants.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: [
+          '1. Always validate input arguments before executing shell commands.',
+          '2. Ensure all child processes specify a timeout of at least 5000ms.',
+          '3. Sanitize output buffers before logging to console.',
+          '4. Record execution metrics in telemetry database.',
+        ].join('\n'),
+        transfer_scenarios: [
+          'Input sanitation and process isolation',
+          'Resource cleanup and telemetry workflows',
+        ],
+      });
+      assert.equal(preserveRes.passed, true);
+      assert.equal(preserveRes.warning, undefined, 'No warning when all orthogonal clauses are preserved');
+
+      const compPreserve = preserveRes.diagnostics.superseded_comparison as {
+        superseded_id: string;
+        clause_count_before: number;
+        clause_count_after: number;
+        removed_clauses: string[];
+        preserved_clauses: string[];
+        added_clauses: string[];
+      };
+      assert.ok(compPreserve, 'superseded_comparison must be present in diagnostics');
+      assert.equal(compPreserve.superseded_id, 'rule-base-preserve');
+      assert.equal(compPreserve.clause_count_before, 3);
+      assert.equal(compPreserve.clause_count_after, 4);
+      assert.equal(compPreserve.removed_clauses.length, 0);
+      assert.equal(compPreserve.preserved_clauses.length, 3);
+      assert.equal(compPreserve.added_clauses.length, 1);
+    } finally {
+      telemetry.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('36. Feature 12: Retroactive Gate 1.5 Audit in evo audit populates gateViolations and marks healthy=false', () => {
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    storage.ensureInitialized();
+
+    try {
+      // 1. Initial compliant state: save a valid scoped rule conforming to Gate 1.5
+      const now = new Date().toISOString();
+      storage.saveRule({
+        id: 'valid-scoped-guard',
+        title: 'Valid Scoped Guardrail Rule',
+        l0_summary: 'Valid summary conforming to Gate 1.5 requirements.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        priority: 70,
+        content: '1. Always ensure valid error handling.\n2. Verify state before transitions.',
+        tokens: 30,
+        origin: 'session',
+        created_at: now,
+        updated_at: now,
+        transfer_scenarios: ['State transition safety', 'Error handling in service handlers'],
+      });
+
+      const initialReport = runAudit(ws);
+      assert.equal(initialReport.gateViolations.length, 0);
+      assert.equal(initialReport.healthy, true);
+
+      // 2. Introduce a non-compliant rule with Gate 1.5 violations:
+      // - ERR_POINT_BUG_CASE_LOG: contains commit history log pattern
+      // - ERR_SCOPE_TOO_NARROW: literal single file path
+      // - ERR_INSUFFICIENT_TRANSFER_SCENARIOS: missing transfer_scenarios on scoped rule
+      storage.saveRule({
+        id: 'legacy-narrow-fix-bug',
+        title: 'Legacy Point Bug Rule',
+        l0_summary: 'Historical fix commits analyzed (3 commits): 387153f fix bug.',
+        scope_glob: 'src/core/gatekeeper.ts',
+        core: false,
+        priority: 50,
+        content: 'Fixed in commit d0d4e13 by changing condition in single file.',
+        tokens: 40,
+        origin: 'session',
+        created_at: now,
+        updated_at: now,
+      });
+
+      const auditReport = runAudit(ws);
+      assert.equal(auditReport.healthy, false, 'Audit must report unhealthy when Gate 1.5 violations exist');
+      assert.ok(auditReport.gateViolations.length >= 1, 'gateViolations must be populated');
+
+      const gv = auditReport.gateViolations.find((v) => v.ruleId === 'legacy-narrow-fix-bug');
+      assert.ok(gv, 'Gate violation entry for non-compliant rule must exist');
+      assert.equal(gv.scope, 'workspace');
+      assert.ok(
+        gv.violations.some((v) => v.code === 'ERR_SCOPE_TOO_NARROW' || v.code === 'ERR_POINT_BUG_CASE_LOG'),
+        'Must catch Gate 1.5 violations'
+      );
+
+      // 3. Render audit report and verify Gate 1.5 section is rendered
+      const rendered = renderAuditReport(auditReport);
+      assert.match(rendered, /Gate 1\.5 Rule Compliance Violations/);
+      assert.match(rendered, /legacy-narrow-fix-bug/);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 });
+
 
 
 

@@ -189,6 +189,274 @@ function isGlobalFallbackRoot(rootDir: string): boolean {
   return false;
 }
 
+export interface Gate1_5Violation {
+  code:
+    | 'ERR_SCOPE_TOO_NARROW'
+    | 'ERR_POINT_BUG_CASE_LOG'
+    | 'ERR_RULE_CONTAINS_DOMAIN_NUMBERS'
+    | 'ERR_RULE_COUPLED_TO_IDENTIFIERS'
+    | 'ERR_INSUFFICIENT_TRANSFER_SCENARIOS';
+  message: string;
+  details?: string[];
+}
+
+export function auditRuleGate1_5(rule: EvoRule): Gate1_5Violation[] {
+  const violations: Gate1_5Violation[] = [];
+  const cleanId = sanitizeId(rule.id);
+  const scopeGlob = (rule.scope_glob || '**/*').trim();
+  const isCoreRule = Boolean(rule.core ?? false);
+  const bodyForLexicalAudit = stripCaseAnchorLines(
+    `${rule.l0_summary}\n${rule.content}`
+  );
+
+  // 1. Reject single-file literal scope_glob without wildcards (Issue #4 Problem 1)
+  if (scopeGlob !== '**/*' && !/[*?[\]{}]/.test(scopeGlob)) {
+    violations.push({
+      code: 'ERR_SCOPE_TOO_NARROW',
+      message: `Scope '${scopeGlob}' targets a single literal file without glob wildcards (*, ?, {}). Single-file bug fixes belong in Episodic Memory or must be abstracted 1-level-up to a subsystem pattern.`,
+    });
+  }
+
+  // 2. Reject point-bug case logs / commit logs disguised as rules (Issue #4 Problem 1 & Issue #6)
+  const isPointBugCaseLog =
+    /-(?:bug|defect|hotfix|crash)$/i.test(cleanId) ||
+    /\b(?:fixed in commit|root cause in commit|regression in commit)\s+[0-9a-f]{7,40}\b/i.test(
+      bodyForLexicalAudit
+    ) ||
+    /\b(?:historical fix commits analyzed|fix commits analyzed|\d+\s+commits analyzed)\b/i.test(
+      bodyForLexicalAudit
+    ) ||
+    /\b[0-9a-f]{7,40}\s+(?:fix|feat|chore|refactor|docs|test|hotfix|revert)\b/i.test(
+      bodyForLexicalAudit
+    );
+
+  if (isPointBugCaseLog) {
+    violations.push({
+      code: 'ERR_POINT_BUG_CASE_LOG',
+      message: `Rule proposal '${cleanId}' reads like a point-bug postmortem or commit log rather than a reusable architectural guardrail. Use kind: 'memory' (with symptom, root_cause, solution, target_symbols) to record specific bug cases at 0 core token cost, or abstract the rule 1-level-up into a general class invariant.`,
+    });
+  }
+
+  // 3. Reject hardcoded domain/physical parameter thresholds in rule body (Issue #6 Layer 1)
+  const domainNumbers = detectDomainNumbersInRule(bodyForLexicalAudit);
+  if (domainNumbers.length >= 2) {
+    violations.push({
+      code: 'ERR_RULE_CONTAINS_DOMAIN_NUMBERS',
+      message: `Lexical De-Symbolization Gate blocked rule '${cleanId}': detected hardcoded domain/physical parameter thresholds (${domainNumbers.slice(0, 4).join(', ')}). Code is the Single Source of Truth (SSOT) for concrete thresholds and magic numbers; rules must express the verification methodology or move concrete case parameters into kind: 'memory' / a single 'Case Anchor:' line.`,
+      details: domainNumbers,
+    });
+  }
+
+  // 4. Reject rules coupled to >= 3 concrete project identifiers/macros (Issue #6 Layer 1 & Module 7.1)
+  const coupledIdentifiers = detectCoupledIdentifiersInRule(bodyForLexicalAudit);
+  if (coupledIdentifiers.length >= 3) {
+    violations.push({
+      code: 'ERR_RULE_COUPLED_TO_IDENTIFIERS',
+      message: `Lexical De-Symbolization Gate blocked rule '${cleanId}': main body is tightly coupled to concrete project identifiers (${coupledIdentifiers.slice(0, 5).join(', ')}). Replace specific variable/macro names with architectural domain concepts in the rule body, and either use kind: 'memory' (with target_symbols) or isolate concrete symbols inside a 'Case Anchor:' line / '## 典型反例锚点' section.`,
+      details: coupledIdentifiers,
+    });
+  }
+
+  // 5. Require transfer_scenarios >= 2 on scoped rules (Issue #6 Layer 2 & Module 7.2)
+  const isScopedRule = !isCoreRule;
+  if (isScopedRule || (rule.transfer_scenarios && rule.transfer_scenarios.length > 0)) {
+    const validScenarios = Array.isArray(rule.transfer_scenarios)
+      ? Array.from(
+          new Set(
+            rule.transfer_scenarios
+              .map((s) => String(s).trim())
+              .filter((s) => s.length >= 8)
+          )
+        )
+      : [];
+    if (validScenarios.length < 2) {
+      violations.push({
+        code: 'ERR_INSUFFICIENT_TRANSFER_SCENARIOS',
+        message: `Transferability Gate blocked rule '${cleanId}': 'transfer_scenarios' is required for new non-core/scoped rules and must provide at least 2 distinct cross-module/cross-scenario applications (>= 8 chars each) proving the rule is not overfitted to a single bug location.`,
+      });
+    }
+  }
+
+  return violations;
+}
+
+export function extractActionableClauses(text: string): string[] {
+  if (!text) return [];
+  const lines = text.split(/\r?\n/);
+  const clauses: string[] = [];
+  let currentClause: string[] = [];
+
+  const isClauseStart = (line: string): boolean => {
+    return /^\s*(?:\d+\.|[-*]|#{1,4})\s+/.test(line);
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (currentClause.length > 0) {
+        clauses.push(currentClause.join(' ').trim());
+        currentClause = [];
+      }
+      continue;
+    }
+
+    if (isClauseStart(rawLine)) {
+      if (currentClause.length > 0) {
+        clauses.push(currentClause.join(' ').trim());
+        currentClause = [];
+      }
+      currentClause.push(line);
+    } else if (currentClause.length > 0) {
+      currentClause.push(line);
+    }
+  }
+
+  if (currentClause.length > 0) {
+    clauses.push(currentClause.join(' ').trim());
+  }
+
+  return clauses;
+}
+
+export const CLAUSE_STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'when', 'from', 'that', 'this',
+  'must', 'always', 'never', 'use', 'rule', 'code', 'should',
+  'into', 'than', 'then', 'each', 'have', 'been', 'which', 'their',
+  'clause', 'step', 'item', 'check', 'ensure', 'verify',
+  'before', 'after', 'only', 'first', 'second', 'third',
+  'inputs', 'outputs',
+]);
+
+export function normalizeClauseText(clause: string): string {
+  return clause
+    .replace(/^\s*(?:#{1,6}\s+)?(?:[-*+]\s+)?(?:\(?\d+(?:\.\d+)*[.:)]?|(?:step|clause|item)\s+\d+[.:]?)\s*/i, '')
+    .replace(/^\s*[-*+]\s+/, '')
+    .replace(/[.,:;!?]+$/, '')
+    .trim()
+    .toLowerCase();
+}
+
+export function tokenizeClauseText(clause: string): Set<string> {
+  const stripped = normalizeClauseText(clause);
+  const words = stripped.match(/[a-z0-9_]+|[\u4e00-\u9fa5]+/g) || [];
+  return new Set(
+    words.filter((w) => !CLAUSE_STOP_WORDS.has(w) && !/^\d+$/.test(w))
+  );
+}
+
+export function calculateClauseSimilarity(
+  tokensA: Set<string>,
+  tokensB: Set<string>,
+  textA: string,
+  textB: string
+): number {
+  const normA = normalizeClauseText(textA);
+  const normB = normalizeClauseText(textB);
+  if (normA.length > 0 && normA === normB) {
+    return 1.0;
+  }
+  if (tokensA.size === 0 || tokensB.size === 0) {
+    return 0.0;
+  }
+  let shared = 0;
+  for (const token of tokensA) {
+    if (tokensB.has(token)) {
+      shared++;
+    }
+  }
+  if (shared === 0) return 0.0;
+  const jaccard = shared / (tokensA.size + tokensB.size - shared);
+  return jaccard;
+}
+
+export function compareRuleClauses(
+  oldClauses: string[],
+  newClauses: string[]
+): {
+  removed: string[];
+  preserved: string[];
+  added: string[];
+} {
+  const oldTokenSets = oldClauses.map((c) => ({
+    text: c,
+    tokens: tokenizeClauseText(c),
+  }));
+  const newTokenSets = newClauses.map((c) => ({
+    text: c,
+    tokens: tokenizeClauseText(c),
+  }));
+
+  interface CandidatePair {
+    oldIdx: number;
+    newIdx: number;
+    sim: number;
+  }
+
+  const candidates: CandidatePair[] = [];
+  for (let i = 0; i < oldTokenSets.length; i++) {
+    for (let j = 0; j < newTokenSets.length; j++) {
+      const sim = calculateClauseSimilarity(
+        oldTokenSets[i].tokens,
+        newTokenSets[j].tokens,
+        oldTokenSets[i].text,
+        newTokenSets[j].text
+      );
+      if (sim >= 0.40) {
+        candidates.push({ oldIdx: i, newIdx: j, sim });
+      }
+    }
+  }
+
+  // Sort candidate pairs in descending order of similarity.
+  // Greedily match pairs ensuring that each old clause is matched to at most ONE new clause,
+  // and each new clause is matched to at most ONE old clause.
+  candidates.sort(
+    (a, b) =>
+      b.sim - a.sim ||
+      Math.abs(a.oldIdx - a.newIdx) - Math.abs(b.oldIdx - b.newIdx) ||
+      a.oldIdx - b.oldIdx ||
+      a.newIdx - b.newIdx
+  );
+
+  const matchedOldIndices = new Set<number>();
+  const matchedNewIndices = new Set<number>();
+
+  for (const pair of candidates) {
+    if (matchedOldIndices.has(pair.oldIdx) || matchedNewIndices.has(pair.newIdx)) {
+      continue;
+    }
+    matchedOldIndices.add(pair.oldIdx);
+    matchedNewIndices.add(pair.newIdx);
+  }
+
+  // Strict Invariant: preserved.length <= Math.min(oldClauses.length, newClauses.length)
+  if (matchedOldIndices.size > Math.min(oldClauses.length, newClauses.length)) {
+    throw new Error(
+      `Invariant violation in compareRuleClauses: matched count ${matchedOldIndices.size} exceeds min(${oldClauses.length}, ${newClauses.length})`
+    );
+  }
+
+  const preserved: string[] = [];
+  const removed: string[] = [];
+  for (let i = 0; i < oldClauses.length; i++) {
+    if (matchedOldIndices.has(i)) {
+      preserved.push(oldClauses[i]);
+    } else {
+      removed.push(oldClauses[i]);
+    }
+  }
+
+  const added: string[] = [];
+  for (let j = 0; j < newClauses.length; j++) {
+    if (!matchedNewIndices.has(j)) {
+      added.push(newClauses[j]);
+    }
+  }
+
+  return { removed, preserved, added };
+}
+
+
 export interface EvaluateOptions {
   dryRun?: boolean;
   excludeIdsFromBudgetAndSim?: string[];
@@ -314,7 +582,6 @@ export class EvoGatekeeper {
     // =========================================================================
     if (
       rawProposal.kind === 'rule' &&
-      rawProposal.origin !== 'bootstrap' &&
       rawProposal.origin !== 'compacted'
     ) {
       const scopeGlob = (rawProposal.scope_glob || '**/*').trim();
@@ -337,6 +604,12 @@ export class EvoGatekeeper {
       if (
         /-(?:bug|defect|hotfix|crash)$/i.test(cleanId) ||
         /\b(?:fixed in commit|root cause in commit|regression in commit)\s+[0-9a-f]{7,40}\b/i.test(
+          bodyForLexicalAudit
+        ) ||
+        /\b(?:historical fix commits analyzed|fix commits analyzed|\d+\s+commits analyzed)\b/i.test(
+          bodyForLexicalAudit
+        ) ||
+        /\b[0-9a-f]{7,40}\s+(?:fix|feat|chore|refactor|docs|test|hotfix|revert)\b/i.test(
           bodyForLexicalAudit
         )
       ) {
@@ -614,11 +887,59 @@ export class EvoGatekeeper {
         }
       }
 
+      let supersededComparison: {
+        superseded_id: string;
+        clause_count_before: number;
+        clause_count_after: number;
+        removed_clauses: string[];
+        preserved_clauses: string[];
+        added_clauses: string[];
+      } | undefined;
+      let clauseWarning: string | undefined;
+
+      const supersededTargetId = rawProposal.supersedes_id
+        ? sanitizeId(rawProposal.supersedes_id)
+        : (this.storage.getRule(cleanId) ? cleanId : undefined);
+
+      if (supersededTargetId) {
+        const supersededRule = this.storage.getRule(supersededTargetId);
+        if (supersededRule) {
+          const oldClauses = extractActionableClauses(supersededRule.content);
+          const newClauses = extractActionableClauses(content);
+          const { removed, preserved, added } = compareRuleClauses(oldClauses, newClauses);
+          supersededComparison = {
+            superseded_id: supersededTargetId,
+            clause_count_before: oldClauses.length,
+            clause_count_after: newClauses.length,
+            removed_clauses: removed,
+            preserved_clauses: preserved,
+            added_clauses: added,
+          };
+          if (removed.length > 0) {
+            clauseWarning = `⚠️ [ORTHOGONAL CLAUSE WARNING] Upgrading '${supersededTargetId}' discarded ${removed.length} clause(s) from the superseded rule:\n${removed.map((c, i) => `  ${i + 1}. ${c.slice(0, 100)}${c.length > 100 ? '...' : ''}`).join('\n')}\nEnsure orthogonal invariants are not inadvertently discarded.`;
+          }
+        }
+      }
+
       if (options?.dryRun) {
+        const dryRunDiagnostics: Record<string, unknown> = {
+          id: cleanId,
+          kind: 'rule',
+          tokens: newRuleTokens,
+          core: isCore,
+        };
+        if (supersededComparison) {
+          dryRunDiagnostics.superseded_comparison = supersededComparison;
+        }
+        let dryRunMsg = `Dry-run: Rule '${cleanId}' passed all Gatekeeper checks (${newRuleTokens} tokens).`;
+        if (supersededComparison && supersededComparison.removed_clauses.length > 0) {
+          dryRunMsg += ` (Warning: ${supersededComparison.removed_clauses.length} orthogonal clause(s) discarded from superseded rule '${supersededComparison.superseded_id}')`;
+        }
         return {
           passed: true,
-          message: `Dry-run: Rule '${cleanId}' passed all Gatekeeper checks (${newRuleTokens} tokens).`,
-          diagnostics: { id: cleanId, kind: 'rule', tokens: newRuleTokens, core: isCore },
+          message: dryRunMsg,
+          warning: clauseWarning,
+          diagnostics: dryRunDiagnostics,
         };
       }
 
@@ -659,10 +980,25 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
 
+      const commitDiagnostics: Record<string, unknown> = {
+        id: cleanId,
+        kind: 'rule',
+        tokens: newRuleTokens,
+        core: isCore,
+      };
+      if (supersededComparison) {
+        commitDiagnostics.superseded_comparison = supersededComparison;
+      }
+      let commitMsg = `Rule '${cleanId}' passed all Gatekeeper checks and is now active (${newRuleTokens} tokens).`;
+      if (supersededComparison && supersededComparison.removed_clauses.length > 0) {
+        commitMsg += ` (Warning: ${supersededComparison.removed_clauses.length} orthogonal clause(s) discarded from superseded rule '${supersededComparison.superseded_id}')`;
+      }
+
       return {
         passed: true,
-        message: `Rule '${cleanId}' passed all Gatekeeper checks and is now active (${newRuleTokens} tokens).`,
-        diagnostics: { id: cleanId, kind: 'rule', tokens: newRuleTokens, core: isCore },
+        message: commitMsg,
+        warning: clauseWarning,
+        diagnostics: commitDiagnostics,
       };
     }
 

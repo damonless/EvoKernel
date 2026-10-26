@@ -1,16 +1,24 @@
 ---
 id: workspace-isolation-and-fts5-guard
-title: "Global Fallback Isolation, Parent Git Stealth & SQLite FTS5 Resilience Guardrail"
-l0_summary: "Isolate global fallback to ~/.evo/global, walk parent dirs for .git/info/exclude, and keep SQLite FTS5 fallback table synced."
+title: "Workspace Isolation, Stealth Git Exclusion, Windows Realpath Boundary & FTS5 Search Guard"
+l0_summary: "Isolate ~/.evo/global fallback, resolve parent git in stealth, normalize Windows realpaths, guard zero-hit queries, and ensure FTS5 parity."
 scope_glob: "src/**/*.ts"
 core: false
 priority: 50
-tokens: 258
+tokens: 412
 origin: "evolved"
+supersedes_id: "workspace-isolation-and-fts5-guard"
+transfer_scenarios: ["Cross-platform filesystem path normalization and parent boundary discovery","Search engine zero-match semantics and optional native database module degradation"]
 created_at: "2026-10-15T17:25:28.446Z"
-updated_at: "2026-10-15T17:25:28.446Z"
+updated_at: "2026-10-26T05:50:00.000Z"
 ---
 
-1. **Global Fallback Isolation**: `resolveWorkspaceRoot` must fall back to `~/.evo/global` (or `EVO_GLOBAL_DIR`) when no local `.evo/` exists, treating the EvoKernel installation directory strictly as a read-only seed source so project-specific capabilities never pollute the open-source repository.
-2. **Parent Git Root Discovery (`--stealth`)**: Always resolve `.git` via `findGitRoot(workspaceRoot)` (supporting parent `.git` directories and worktree `.git` files) and write both `<pattern>` and `/<relPrefix>/<pattern>` into `<gitRoot>/.git/info/exclude`.
-3. **Node v22 SQLite FTS5 Resilience**: Wrap `CREATE VIRTUAL TABLE ... USING fts5` in `try/catch` and maintain `capability_fts_fallback` so Windows Node.js v22.5–v22.14 builds without `SQLITE_ENABLE_FTS5` degrade cleanly to in-memory BM25 scoring.
+When managing workspace boundaries, stealth exclusions, telemetry indexing, or search retrieval:
+1. Fall back to the designated user global directory (or environment override) when no local capability folder exists or when navigating inside host plugin directories; treat the distribution repository strictly as an immutable seed source.
+2. In stealth git configuration, traverse parent directories to identify the true repository root (supporting worktrees and subpackages), registering both root-relative and subpath patterns into the local exclude file.
+3. On Windows platforms, resolve filesystem paths through native realpath resolution before evaluating containment against user profile or temporary directories, preventing short-name alias bypasses.
+4. When executing text search, limit full-index fallback dumping exclusively to empty query tokens; any non-empty query returning zero index matches must return an empty result list without polluting agent context.
+5. Provide automatic degradation when SQLite full-text search extensions are absent in the host runtime, maintaining shadow fallback indexes with equivalent scoring parity.
+
+## 典型反例锚点
+Case Anchor: `.evo/memories/git-fix-d0d4e13.md`, `.evo/memories/git-fix-387153f.md`, `.evo/memories/issue-8-workspace-isolation-and-atomic-compact.md` (`src/cli/index.ts`, `src/cli/init.ts`, `src/core/telemetry.ts`, `src/mcp/handlers.ts`)

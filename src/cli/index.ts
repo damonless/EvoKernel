@@ -211,6 +211,9 @@ export function runCli(argv: string[]): void {
       const includeGlobal = args.includes('--global') || args.includes('-g');
       const report = runAudit(workspaceRoot, { includeGlobal });
       console.log(renderAuditReport(report));
+      if (!report.healthy) {
+        process.exit(1);
+      }
       break;
     }
 

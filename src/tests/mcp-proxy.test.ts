@@ -139,7 +139,7 @@ rl.on('line', (line) => {
     try {
       const discovered = await proxyManager.syncExternalTools({
         mockdb: {
-          command: 'node',
+          command: process.execPath,
           args: [mockServerScript],
         },
       });
@@ -245,7 +245,7 @@ rl.on('line', (line) => {
     const config = storage.getConfig();
     config.externalServers = {
       mockdb: {
-        command: 'node',
+        command: process.execPath,
         args: [mockServerScript],
       },
     };
@@ -287,7 +287,7 @@ rl.on('line', (line) => {
     const config = storage.getConfig();
     config.externalServers = {
       mockdb: {
-        command: 'node',
+        command: process.execPath,
         args: [mockServerScript],
       },
     };
@@ -348,7 +348,7 @@ rl.on('line', (line) => {
     const storage = new EvoStorage(ws);
     const config = storage.getConfig();
     config.externalServers = {
-      github: { command: 'node', args: [camelServerScript] },
+      github: { command: process.execPath, args: [camelServerScript] },
     };
     storage.saveConfig(config);
 
@@ -392,7 +392,7 @@ rl.on('line', (line) => {
       const storageA = new EvoStorage(ws);
       const cfgA = storageA.getConfig();
       cfgA.externalServers = {
-        db: { command: 'node', args: [mockServerScript], env: { WS_TAG: 'Alpha' } },
+        db: { command: process.execPath, args: [mockServerScript], env: { WS_TAG: 'Alpha' } },
       };
       storageA.saveConfig(cfgA);
 
@@ -406,7 +406,7 @@ rl.on('line', (line) => {
       storageB.ensureInitialized();
       const cfgB = storageB.getConfig();
       cfgB.externalServers = {
-        db: { command: 'node', args: [scriptB] },
+        db: { command: process.execPath, args: [scriptB] },
       };
       storageB.saveConfig(cfgB);
 

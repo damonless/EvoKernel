@@ -497,9 +497,6 @@ export function runBootstrap(
       'When proposing a new Micro-Tool via `evo_propose(kind: "tool")`:',
       '- The script MUST check `process.env.EVO_SELF_TEST === "1"` or `process.argv.includes("--self-test")` and run a side-effect-free verification check exiting with code `0`.',
       '- Never hardcode user-specific absolute paths; read workspace root from `process.env.EVO_WORKSPACE || process.cwd()`.',
-      ...(fixCommits.length > 0
-        ? [`- Historical fix commits analyzed (${fixCommits.length} commits): ${fixCommits.slice(0, 3).join(' | ')}`]
-        : []),
     ].join('\n'),
   });
 

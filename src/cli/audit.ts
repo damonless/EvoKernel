@@ -3,9 +3,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { EvoStorage, estimateTokens, sanitizeId } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { EvoGatekeeper } from '../core/gatekeeper.js';
+import { EvoGatekeeper, auditRuleGate1_5 } from '../core/gatekeeper.js';
+import type { Gate1_5Violation } from '../core/gatekeeper.js';
 import { runInit } from './init.js';
-import type { EvoSkill, ProposalPayload } from '../core/types.js';
+import type { EvoRule, EvoSkill, ProposalPayload } from '../core/types.js';
 
 export interface AuditOptions {
   includeGlobal?: boolean;
@@ -41,6 +42,13 @@ export interface RedundancyOverlap {
   recommendation: string;
 }
 
+export interface GateViolationWarning {
+  scope: 'workspace' | 'global';
+  ruleId: string;
+  displayPath: string;
+  violations: Gate1_5Violation[];
+}
+
 export interface AuditReport {
   workspaceRoot: string;
   includeGlobal: boolean;
@@ -49,6 +57,7 @@ export interface AuditReport {
   budgetViolations: AuditedFileMetric[];
   domainLeaks: DomainLeakWarning[];
   redundancyOverlaps: RedundancyOverlap[];
+  gateViolations: GateViolationWarning[];
   healthy: boolean;
 }
 
@@ -403,8 +412,66 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     }
   }
 
+  // Retroactive Gate 1.5 rule compliance checks
+  const gateViolations: GateViolationWarning[] = [];
+  const localStorage = new EvoStorage(root);
+  if (fs.existsSync(localStorage.rulesDir)) {
+    const localRules = localStorage.listRules();
+    for (const rule of localRules) {
+      const violations = auditRuleGate1_5(rule);
+      if (violations.length > 0) {
+        const coreCandidate = path.join(localStorage.rulesDir, `${rule.id}.md`);
+        const scopedCandidate = path.join(localStorage.rulesDir, 'scoped', `${rule.id}.md`);
+        const actualPath = fs.existsSync(scopedCandidate)
+          ? scopedCandidate
+          : fs.existsSync(coreCandidate)
+            ? coreCandidate
+            : (rule.core ? coreCandidate : scopedCandidate);
+        const rel = path.relative(root, actualPath).replace(/\\/g, '/');
+        gateViolations.push({
+          scope: 'workspace',
+          ruleId: rule.id,
+          displayPath: rel,
+          violations,
+        });
+      }
+    }
+  }
+
+  if (includeGlobal) {
+    const globalRoot = process.env.EVO_GLOBAL_DIR
+      ? path.resolve(process.env.EVO_GLOBAL_DIR)
+      : path.join(globalHomeDir, '.evo', 'global');
+    const globalStorage = new EvoStorage(globalRoot);
+    if (fs.existsSync(globalStorage.rulesDir)) {
+      const globalRules = globalStorage.listRules();
+      for (const rule of globalRules) {
+        const violations = auditRuleGate1_5(rule);
+        if (violations.length > 0) {
+          const coreCandidate = path.join(globalStorage.rulesDir, `${rule.id}.md`);
+          const scopedCandidate = path.join(globalStorage.rulesDir, 'scoped', `${rule.id}.md`);
+          const actualPath = fs.existsSync(scopedCandidate)
+            ? scopedCandidate
+            : fs.existsSync(coreCandidate)
+              ? coreCandidate
+              : (rule.core ? coreCandidate : scopedCandidate);
+          const rel = path.relative(globalHomeDir, actualPath).replace(/\\/g, '/');
+          gateViolations.push({
+            scope: 'global',
+            ruleId: rule.id,
+            displayPath: `~/${rel}`,
+            violations,
+          });
+        }
+      }
+    }
+  }
+
   const healthy =
-    budgetViolations.length === 0 && domainLeaks.length === 0 && redundancyOverlaps.length === 0;
+    budgetViolations.length === 0 &&
+    domainLeaks.length === 0 &&
+    redundancyOverlaps.length === 0 &&
+    gateViolations.length === 0;
 
   return {
     workspaceRoot: root,
@@ -414,6 +481,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     budgetViolations,
     domainLeaks,
     redundancyOverlaps,
+    gateViolations,
     healthy,
   };
 }
@@ -452,6 +520,18 @@ export function renderAuditReport(report: AuditReport): string {
     }
   }
 
+  lines.push(`├── 🛡️  Gate 1.5 Rule Compliance Violations (${report.gateViolations.length} detected)`);
+  if (report.gateViolations.length === 0) {
+    lines.push('│   └── None — All rules in .evo/rules/ comply with Gate 1.5 abstraction guardrails.');
+  } else {
+    for (const gv of report.gateViolations) {
+      lines.push(`│   ├── [${gv.scope.toUpperCase()}:RULE] ${gv.displayPath} (${gv.ruleId})`);
+      for (const v of gv.violations) {
+        lines.push(`│   │      └─ [${v.code}] ${v.message}`);
+      }
+    }
+  }
+
   lines.push(`└── 🔄 Rule/Skill Redundancy Overlaps (${report.redundancyOverlaps.length} detected)`);
   if (report.redundancyOverlaps.length === 0) {
     lines.push('    └── None — Low Jaccard overlap across rules and skills.');
@@ -466,7 +546,7 @@ export function renderAuditReport(report: AuditReport): string {
 
   lines.push('');
   if (report.healthy) {
-    lines.push('✨ Audit Status: HEALTHY (Zero budget bloat, zero domain leaks, zero redundant coupling).');
+    lines.push('✨ Audit Status: HEALTHY (Zero budget bloat, zero domain leaks, zero redundant coupling, zero Gate 1.5 violations).');
   } else {
     lines.push(
       '💡 Next Step: Run `evo refactor` (or `evo refactor --apply`) to execute the 4-stage decoupling workflow via `evo-rule-architect`.'
