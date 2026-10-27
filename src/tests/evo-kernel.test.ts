@@ -3215,6 +3215,91 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(fakeGlobal, { recursive: true, force: true });
     }
   });
+
+  test('41. Issue #14 [META-RULE-COMMIT-TRIGGER-1, SEARCH-COMMIT-SYNONYMS-2, MANAGED-BLOCK-WORKFLOW-INDEX-3]: Pre-action recall triggers, bilingual git/commit synonym expansion, and Section 5 on-demand workflow rule/skill index', () => {
+    const ws = createTempWorkspace();
+    const fakeGlobal = createTempWorkspace();
+    const prevGlobal = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = fakeGlobal;
+    runInit(ws, { targets: ['agents', 'claude', 'gemini', 'cursor'] });
+    const dispatcher = new EvoMcpDispatcher(ws);
+
+    try {
+      // 1. META-RULE-COMMIT-TRIGGER-1: Section 1 of L0_META_RULE_SEED and synced host files explicitly require recall before git commit & engineering deliverable generation
+      const agentsContentInitial = fs.readFileSync(path.join(ws, 'AGENTS.md'), 'utf8');
+      assert.match(agentsContentInitial, /executing `git commit` \/ `git commit --amend`/);
+      assert.match(
+        agentsContentInitial,
+        /generating\/editing engineering deliverables \(`\.xlsx`, `\.xls`, `\.docx`/
+      );
+
+      // 2. SEARCH-COMMIT-SYNONYMS-2: Propose git-commit-message-format-and-completeness (core: false, scope_glob: "**/*")
+      const commitRuleRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'git-commit-message-format-and-completeness',
+        title: 'Git Commit Message Format and Completeness',
+        l0_summary: 'Format commit header aligned with branch history and include [What], [Why ], and [How ] sections.',
+        scope_glob: '**/*',
+        core: false,
+        transfer_scenarios: [
+          'Formatting bugfix commit messages in embedded firmware branches',
+          'Structuring multi-module feature commit descriptions across repositories',
+        ],
+        content: [
+          '1. Align header format with branch history ([<type>][<project>][<version.date>] - <summary>).',
+          '2. Include [What], [Why ], and [How ] sections without empty placeholder blocks.',
+        ].join('\n'),
+      });
+      assert.equal(commitRuleRes.isError, undefined, commitRuleRes.content[0]?.text);
+
+      // Verify bidirectional expansion in extractQueryTokens
+      const tokensEnToZh = extractQueryTokens('将工作区的bug修改commit');
+      assert.ok(
+        tokensEnToZh.includes('git') &&
+          tokensEnToZh.includes('message') &&
+          tokensEnToZh.includes('format') &&
+          tokensEnToZh.includes('提交'),
+        `Expected 'commit' query to expand git/message/format/提交, got: ${tokensEnToZh.join(', ')}`
+      );
+
+      const tokensZhToEn = extractQueryTokens('代码提交说明规范');
+      assert.ok(
+        tokensZhToEn.includes('commit') &&
+          tokensZhToEn.includes('git') &&
+          tokensZhToEn.includes('format'),
+        `Expected '提交'/'规范' query to expand commit/git/format, got: ${tokensZhToEn.join(', ')}`
+      );
+
+      // Verify evo_search ranks git-commit-message-format-and-completeness at top for both queries
+      const search1 = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: '将工作区的bug修改commit',
+      });
+      assert.match(search1.content[0].text, /git-commit-message-format-and-completeness/);
+
+      const search2 = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: '代码提交说明规范',
+      });
+      assert.match(search2.content[0].text, /git-commit-message-format-and-completeness/);
+
+      // 3. MANAGED-BLOCK-WORKFLOW-INDEX-3: Section 5 surfaces compact L0 IDs of scope_glob: "**/*" workflow rules and skills even when 0 micro-tools exist
+      for (const hostFile of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']) {
+        const syncedText = fs.readFileSync(path.join(ws, hostFile), 'utf8');
+        assert.match(
+          syncedText,
+          /- On-demand rules\/skills \(inspect via `evo_inspect`\):.*`\[rule\] git-commit-message-format-and-completeness`/
+        );
+      }
+    } finally {
+      if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobal;
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(fakeGlobal, { recursive: true, force: true });
+    }
+  });
 });
 
 

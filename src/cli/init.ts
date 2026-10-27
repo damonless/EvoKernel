@@ -42,7 +42,21 @@ export const MAX_TOOLS_CATALOG_TOKENS = 350;
 
 export function formatToolsCatalogMarkdown(storage: EvoStorage, _coreDigest: string = ''): string {
   const tools = storage.listTools();
-  if (tools.length === 0) return '';
+  const universalScopedRules = storage
+    .listRules()
+    .filter(
+      (r) => !r.core && (!r.scope_glob || r.scope_glob.trim() === '**/*' || r.scope_glob.trim() === '*')
+    );
+  const skills = storage.listSkills();
+  const workflowItems = [
+    ...universalScopedRules.map((r) => `\`[rule] ${r.id}\``),
+    ...skills.map((s) => `\`[skill] ${s.id}\``),
+  ];
+
+  if (tools.length === 0 && workflowItems.length === 0) return '';
+
+  const toolBudgetCap =
+    workflowItems.length > 0 ? MAX_TOOLS_CATALOG_TOKENS - 90 : MAX_TOOLS_CATALOG_TOKENS;
 
   const detailedLines: string[] = [];
   const remainingIds: string[] = [];
@@ -64,7 +78,7 @@ export function formatToolsCatalogMarkdown(storage: EvoStorage, _coreDigest: str
     ];
     if (
       detailedLines.length < 6 &&
-      estimateTokens(candidateLines.join('\n')) <= MAX_TOOLS_CATALOG_TOKENS
+      estimateTokens(candidateLines.join('\n')) <= toolBudgetCap
     ) {
       detailedLines.push(line);
     } else {
@@ -83,11 +97,28 @@ export function formatToolsCatalogMarkdown(storage: EvoStorage, _coreDigest: str
         .map((id) => `\`${id}\``)
         .join(', ')}${suffix}`;
       const candidateCatalog = [...detailedLines, overflowLine].join('\n');
-      if (estimateTokens(candidateCatalog) <= MAX_TOOLS_CATALOG_TOKENS) {
+      if (estimateTokens(candidateCatalog) <= toolBudgetCap) {
         detailedLines.push(overflowLine);
         break;
       }
       overflowIds.pop();
+    }
+  }
+
+  if (workflowItems.length > 0) {
+    const visibleWorkflow = [...workflowItems];
+    while (visibleWorkflow.length > 0) {
+      const wfSuffix =
+        visibleWorkflow.length < workflowItems.length
+          ? ` (+${workflowItems.length - visibleWorkflow.length} more via evo_search)`
+          : '';
+      const wfLine = `- On-demand rules/skills (inspect via \`evo_inspect\`): ${visibleWorkflow.join(', ')}${wfSuffix}`;
+      const candidateCatalog = [...detailedLines, wfLine].join('\n');
+      if (estimateTokens(candidateCatalog) <= MAX_TOOLS_CATALOG_TOKENS) {
+        detailedLines.push(wfLine);
+        break;
+      }
+      visibleWorkflow.pop();
     }
   }
 

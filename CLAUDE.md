@@ -4,7 +4,7 @@
 You are connected to **EvoKernel** (`evo-kernel` MCP + `.evo/` capability & memory tree). Follow these 3 invariants strictly:
 
 ## 1. Two-Stage Cascaded Recall (`evo_search` -> `evo_inspect`)
-- Before debugging build/test failures, analyzing logs/packets, or modifying unfamiliar modules, call `evo_search(query, workspace)` with error symptoms, keywords, or symbol names and your active `workspace` root path.
+- Before debugging build/test failures, analyzing logs/packets/schematics, modifying unfamiliar modules, executing `git commit` / `git commit --amend`, or generating/editing engineering deliverables (`.xlsx`, `.xls`, `.docx`, QA/whitebox reports), call `evo_search(query, workspace)` (or `evo_inspect(id, tier, workspace)` when listed in Section 5) with relevant keywords and your active `workspace` root path.
 - `evo_search` searches **Rules, Skills, Micro-Tools, and Episodic Memories (`memory`)** with live **AST Anti-Drift verification** (`[VERIFIED]` vs `[STALE]`). Call `evo_inspect(id, tier, workspace)` on hits to load SOPs or Stage 3 **Topology Penetration Anchors** (live `file:line`, signatures, callers).
 - Skip `evo_search` during general chat or host slash-command wizards (`/automation`, `/schedule`) when no code workspace is involved.
 
@@ -35,4 +35,5 @@ Whenever ANY of the following occurs in this session, you MUST call `evo_propose
 - `[tool] agy-config-auditor`: Audits host rule token budgets, Gate 1.5 rule compliance, memory AST symbols, and local/global split-brain divergence.
 - `[tool] git-hotspot-analyzer`: Identifies top 10 most frequently modified files in recent git history to pinpoint fragile modules.
 - `[tool] workspace-metrics-scanner`: Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.
+- On-demand rules/skills (inspect via `evo_inspect`): `[skill] bug-to-guardrail-sop`, `[skill] evo-rule-architect`
 <!-- EVO:END -->
