@@ -550,6 +550,12 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         source: 'MODEL',
         tool_calls: [
           {
+            name: '"view_file"',
+            args: {
+              AbsolutePath: '"C:\\\\workspace\\\\header.txt"',
+            },
+          },
+          {
             name: '"run_command"',
             args: {
               CommandLine: '"python scratch/update_xlsx.py 软体自测报告.xlsx"',
@@ -560,13 +566,20 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       {
         step_index: 9,
         type: 'GENERIC',
-        source: 'SYSTEM',
-        status: 'ERROR',
-        content:
-          'Command exited with code 1.\n\nCommand output:\nTraceback (most recent call last):\nValueError: invalid format',
+        source: 'MODEL',
+        status: 'DONE',
+        content: 'Created At: 2026-10-27T00:00:00Z\nShowing lines 1-5 of 5\nHeader OK',
       },
       {
         step_index: 10,
+        type: 'GENERIC',
+        source: 'MODEL',
+        status: 'DONE',
+        content:
+          'Created At: 2026-10-27T00:00:01Z\nCompleted At: 2026-10-27T00:00:02Z\nCommand exited with code 1.\n\nCommand output:\nTraceback (most recent call last):\nValueError: invalid format',
+      },
+      {
+        step_index: 11,
         type: 'PLANNER_RESPONSE',
         source: 'MODEL',
         tool_calls: [
@@ -579,23 +592,24 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         ],
       },
       {
-        step_index: 11,
+        step_index: 12,
         type: 'GENERIC',
-        source: 'SYSTEM',
+        source: 'MODEL',
         status: 'DONE',
-        content: 'Command exited with code 0.\n\nCommand output:\nSuccessfully updated workbook.',
+        content:
+          'Created At: 2026-10-27T00:00:03Z\nCompleted At: 2026-10-27T00:00:04Z\nCommand exited with code 0.\n\nCommand output:\nSuccessfully updated workbook.',
       }
     );
     writeSteps(baseSteps);
 
-    // PreInvocation right after recovery (step 11): immediate edge trigger for new error recovery
+    // PreInvocation right after recovery (step 12): immediate edge trigger for new error recovery
     const preAfterRecovery = runAgyHook('PreInvocation');
     assert.ok(Array.isArray(preAfterRecovery.injectSteps));
     assert.match(preAfterRecovery.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
 
-    // Step 12 (1 step after step 11): cooldown suppresses immediate repeat spam
+    // Step 13 (1 step after step 12): cooldown suppresses immediate repeat spam
     baseSteps.push({
-      step_index: 12,
+      step_index: 13,
       type: 'PLANNER_RESPONSE',
       source: 'MODEL',
       tool_calls: [
@@ -611,12 +625,12 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.deepEqual(
       runAgyHook('PreInvocation'),
       {},
-      'Step 12 must respect 4-step cooldown after step 11 reminder'
+      'Step 13 must respect 4-step cooldown after step 12 reminder'
     );
 
-    // Step 15 (15 - 11 >= 4): cooldown expired -> retains correction, error-recovery, and scratch script reminders!
+    // Step 16 (16 - 12 >= 4): cooldown expired -> retains correction, error-recovery, and scratch script reminders!
     baseSteps.push({
-      step_index: 15,
+      step_index: 16,
       type: 'PLANNER_RESPONSE',
       source: 'MODEL',
       tool_calls: [

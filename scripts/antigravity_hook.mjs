@@ -229,7 +229,8 @@ function main() {
     const activeUserTurnStep =
       latestUserStepIndex >= 0 ? latestUserStepIndex : persistedPendingCorrectionStep;
 
-    for (const tc of toolCalls) {
+    for (let tcIdx = 0; tcIdx < toolCalls.length; tcIdx++) {
+      const tc = toolCalls[tcIdx];
       const toolName = normalizeTranscriptString(tc.name || tc.tool_name || tc.ToolName || '');
       const args = parseTranscriptObject(tc.arguments || tc.args || tc.Arguments || {});
       const innerToolName = normalizeTranscriptString(args.ToolName || args.tool_name || '');
@@ -293,15 +294,15 @@ function main() {
             tc.output || tc.result || step.output || ''
           );
           let nextStepStatus = '';
-          if (!cmdOutput && i + 1 < steps.length) {
-            const nextStep = steps[i + 1];
+          if (!cmdOutput && i + 1 + tcIdx < steps.length) {
+            const nextStep = steps[i + 1 + tcIdx];
             const nextType = String(nextStep?.type || '');
             const nextSource = String(nextStep?.source || '');
             if (
               nextType !== 'USER_INPUT' &&
               nextType !== 'PLANNER_RESPONSE' &&
               nextSource !== 'USER_EXPLICIT' &&
-              nextSource !== 'MODEL'
+              !Array.isArray(nextStep?.tool_calls)
             ) {
               cmdOutput = normalizeTranscriptString(
                 nextStep.content || nextStep.output || nextStep.result || ''

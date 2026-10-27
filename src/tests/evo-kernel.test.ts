@@ -3056,25 +3056,96 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.ok(mergedRule);
       assert.equal(mergedRule.core, true, 'evo_compact of core rules with omitted core must inherit core: true');
 
-      // HIGH-2: Attempting to propose a core: true rule that would push rendered host files over 1500 tokens must be blocked by Gate 4
+      // HIGH-new-2, MEDIUM-new-1, MEDIUM-new-2:
+      // 1) A 600+ token coreDigest (within 1500 core rule budget) must be accepted by Gate 4 AND must NOT wipe out Section 5 micro-tools!
+      const core600 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'production-sized-core-rule',
+        title: 'Production Sized Core Invariant',
+        l0_summary: 'Validate impact radius and inductive abstraction across production subsystems.',
+        scope_glob: 'src/**/*.ts',
+        core: true,
+        content: Array.from(
+          { length: 16 },
+          (_, idx) =>
+            `${idx + 1}. Verify impact radius and cross-module caller preconditions across boundary adapters in layer ${idx + 1}.`
+        ).join('\n'),
+      });
+      assert.equal(core600.isError, undefined, `600-token core rule must pass Gate 4: ${core600.content[0]?.text}`);
+
+      storage.saveTool(
+        {
+          id: 'prod-diag-tool',
+          title: 'Production Diagnostic Tool',
+          l0_summary: 'Scans production telemetry metrics and verifies invariants.',
+          runtime: 'node',
+          entry_script: 'run.mjs',
+          input_schema: { type: 'object', properties: {} },
+          self_test_args: {},
+          timeout_ms: 5000,
+          origin: 'evolved',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        'if (process.argv.includes("--self-test")) process.exit(0);'
+      );
+
+      // 2) Stale .agents/scripts/antigravity_hook.mjs in workspace is refreshed by syncManagedRuleBlocks (MEDIUM-new-1)
+      const wsHookDir = path.join(ws, '.agents', 'scripts');
+      fs.mkdirSync(wsHookDir, { recursive: true });
+      const wsHookFile = path.join(wsHookDir, 'antigravity_hook.mjs');
+      fs.writeFileSync(wsHookFile, '// stale hook script\n', 'utf8');
+
+      // 3) Add 2,000+ tokens of user-authored project docs outside <!-- EVO:START -->...<!-- EVO:END --> in AGENTS.md (MEDIUM-new-2)
+      const currentAgents = fs.readFileSync(path.join(ws, 'AGENTS.md'), 'utf8');
+      const userDocsPrefix =
+        '# Custom Project Architecture Guide\n\n' +
+        Array.from(
+          { length: 60 },
+          (_, idx) =>
+            `Section ${idx + 1}: General project setup notes and developer onboarding documentation paragraph ${idx + 1}.`
+        ).join('\n\n') +
+        '\n\n';
+      fs.writeFileSync(path.join(ws, 'AGENTS.md'), userDocsPrefix + currentAgents, 'utf8');
+
+      const syncedFiles = syncManagedRuleBlocks(ws);
+      assert.ok(
+        syncedFiles.includes('.agents/scripts/antigravity_hook.mjs'),
+        'syncManagedRuleBlocks must refresh stale .agents/scripts/antigravity_hook.mjs'
+      );
+      assert.doesNotMatch(
+        fs.readFileSync(wsHookFile, 'utf8'),
+        /^\/\/ stale hook script/,
+        'Stale workspace hook script must be overwritten with bundled antigravity_hook.mjs'
+      );
+
+      const syncedAgents = fs.readFileSync(path.join(ws, 'AGENTS.md'), 'utf8');
+      assert.match(
+        syncedAgents,
+        /`\[tool\] prod-diag-tool`/,
+        'Section 5 micro-tool catalog must NOT be wiped out when coreDigest is ~600+ tokens'
+      );
+
+      // 4) Attempting to propose a core: true rule that pushes Section 4 coreDigest over 1500 tokens must be blocked by Gate 4
       const oversizedCore = dispatcher.handleToolCall('evo_propose', {
         workspace: ws,
         kind: 'rule',
         id: 'oversized-host-budget-rule',
         title: 'Oversized Host Budget Rule',
-        l0_summary: 'Attempt to exceed rendered host file budget of 1500 tokens.',
+        l0_summary: 'Attempt to exceed Section 4 core rule budget of 1500 tokens.',
         scope_glob: 'src/**/*.ts',
         core: true,
         content: Array.from(
-          { length: 24 },
+          { length: 35 },
           (_, idx) =>
             `${idx + 1}. Enforce deterministic validation across asynchronous state transitions and boundary adapters in subsystem layer ${idx + 1}.`
         ).join('\n'),
       });
-      assert.equal(oversizedCore.isError, true, 'Gate 4 must block core rules that push host files over 1500 tokens');
+      assert.equal(oversizedCore.isError, true, 'Gate 4 must block core rules that push Section 4 coreDigest over 1500 tokens');
       assert.match(oversizedCore.content[0].text, /ERR_BUDGET_EXCEEDED/);
 
-      // Verify host files remain healthy in runAudit
+      // Verify host files (including AGENTS.md with 2000+ tokens of external user docs) remain healthy in runAudit
       const auditReport = runAudit(ws);
       assert.equal(auditReport.budgetViolations.length, 0);
 

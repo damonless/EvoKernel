@@ -919,20 +919,7 @@ export class EvoGatekeeper {
         const { rules: existingCoreRules } = this.storage.getCoreRulesTokenUsage();
         const filteredRules = existingCoreRules.filter((r) => !excludeSet.has(r.id));
         const currentTokens = filteredRules.reduce((acc, r) => acc + r.tokens, 0);
-
-        const candidateCoreLines = [
-          ...filteredRules.map(
-            (r) =>
-              `- **[${r.id}]** (\`${r.scope_glob}\`): ${r.l0_summary}\n  ${r.content.replace(/\n/g, '\n  ')}`
-          ),
-          `- **[${cleanId}]** (\`${scopeGlob}\`): ${rawProposal.l0_summary}\n  ${content.replace(/\n/g, '\n  ')}`,
-        ];
-        const renderedHostTokens =
-          estimateTokens(renderManagedBlock(candidateCoreLines.join('\n'))) + 45;
-        const effectiveCandidateTokens =
-          config.maxCoreRuleTokens >= 1200
-            ? Math.max(currentTokens + newRuleTokens, renderedHostTokens)
-            : currentTokens + newRuleTokens;
+        const effectiveCandidateTokens = currentTokens + newRuleTokens;
 
         if (effectiveCandidateTokens > config.maxCoreRuleTokens) {
           const telemetryMap = this.telemetry.getTelemetryMap();

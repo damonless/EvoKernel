@@ -238,13 +238,16 @@ for (const rel of ruleFiles) {
   const full = path.join(root, rel);
   if (fs.existsSync(full)) {
     const text = fs.readFileSync(full, 'utf8');
-    const tokens = estimateTokens(text);
-    const healthy = tokens <= configuredBudgetLimit;
+    const markerMatch = text.match(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/);
+    const measuredText = markerMatch ? markerMatch[0] : text;
+    const tokens = estimateTokens(measuredText);
+    const effectiveLimit = markerMatch ? configuredBudgetLimit + 1350 : configuredBudgetLimit;
+    const healthy = tokens <= effectiveLimit;
     const entry = {
       file: rel,
-      bytes: Buffer.byteLength(text, 'utf8'),
+      bytes: Buffer.byteLength(measuredText, 'utf8'),
       estimated_tokens: tokens,
-      budget_limit: configuredBudgetLimit,
+      budget_limit: effectiveLimit,
       status: healthy ? 'HEALTHY' : 'OVER_BUDGET',
     };
     tokenAudit.push(entry);

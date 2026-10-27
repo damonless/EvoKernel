@@ -38,11 +38,11 @@ export interface InitOptions {
   linkEvoFrom?: string;
 }
 
-export function formatToolsCatalogMarkdown(storage: EvoStorage, coreDigest: string = ''): string {
+export const MAX_TOOLS_CATALOG_TOKENS = 350;
+
+export function formatToolsCatalogMarkdown(storage: EvoStorage, _coreDigest: string = ''): string {
   const tools = storage.listTools();
   if (tools.length === 0) return '';
-  const maxHostFileBudget = storage.getConfig().maxCoreRuleTokens || 1500;
-  const maxManagedBlockTokens = Math.max(400, maxHostFileBudget - 120);
 
   const detailedLines: string[] = [];
   const remainingIds: string[] = [];
@@ -62,8 +62,10 @@ export function formatToolsCatalogMarkdown(storage: EvoStorage, coreDigest: stri
           ]
         : []),
     ];
-    const candidateBlock = renderManagedBlock(coreDigest, candidateLines.join('\n'));
-    if (detailedLines.length < 6 && estimateTokens(candidateBlock) <= maxManagedBlockTokens) {
+    if (
+      detailedLines.length < 6 &&
+      estimateTokens(candidateLines.join('\n')) <= MAX_TOOLS_CATALOG_TOKENS
+    ) {
       detailedLines.push(line);
     } else {
       remainingIds.push(t.id);
@@ -80,11 +82,8 @@ export function formatToolsCatalogMarkdown(storage: EvoStorage, coreDigest: stri
       const overflowLine = `- Additional tools via \`evo_run\`: ${overflowIds
         .map((id) => `\`${id}\``)
         .join(', ')}${suffix}`;
-      const candidateBlock = renderManagedBlock(
-        coreDigest,
-        [...detailedLines, overflowLine].join('\n')
-      );
-      if (estimateTokens(candidateBlock) <= maxManagedBlockTokens) {
+      const candidateCatalog = [...detailedLines, overflowLine].join('\n');
+      if (estimateTokens(candidateCatalog) <= MAX_TOOLS_CATALOG_TOKENS) {
         detailedLines.push(overflowLine);
         break;
       }
@@ -159,6 +158,29 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
       }
     } catch {
       // Ignore malformed JSON
+    }
+  }
+
+  const wsHookScript = path.join(workspaceRoot, '.agents', 'scripts', 'antigravity_hook.mjs');
+  const bundledHookScript = path.resolve(
+    import.meta.dirname,
+    '..',
+    '..',
+    'scripts',
+    'antigravity_hook.mjs'
+  );
+  if (fs.existsSync(wsHookScript) && fs.existsSync(bundledHookScript)) {
+    try {
+      if (fs.statSync(wsHookScript).isFile() && fs.statSync(bundledHookScript).isFile()) {
+        const wsHookContent = fs.readFileSync(wsHookScript, 'utf8');
+        const bundledHookContent = fs.readFileSync(bundledHookScript, 'utf8');
+        if (wsHookContent !== bundledHookContent) {
+          fs.writeFileSync(wsHookScript, bundledHookContent, 'utf8');
+          updated.push('.agents/scripts/antigravity_hook.mjs');
+        }
+      }
+    } catch {
+      // Ignore sync errors on read-only paths
     }
   }
 

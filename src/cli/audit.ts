@@ -5,7 +5,8 @@ import { EvoStorage, estimateTokens, sanitizeId } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper, auditRuleGate1_5 } from '../core/gatekeeper.js';
 import type { Gate1_5Violation } from '../core/gatekeeper.js';
-import { runInit } from './init.js';
+import { renderManagedBlock } from '../templates/meta-rule.js';
+import { MAX_TOOLS_CATALOG_TOKENS, runInit } from './init.js';
 import type { EvoRule, EvoSkill, ProposalPayload } from '../core/types.js';
 
 export interface AuditOptions {
@@ -303,6 +304,11 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   const localStorage = new EvoStorage(root);
   const tokenBudgetLimit =
     options.tokenBudgetLimit ?? (localStorage.getConfig().maxCoreRuleTokens || 1500);
+  const baseSeedTokens = estimateTokens(renderManagedBlock('', ''));
+  const managedBlockBudgetLimit =
+    options.tokenBudgetLimit !== undefined
+      ? options.tokenBudgetLimit
+      : tokenBudgetLimit + baseSeedTokens + MAX_TOOLS_CATALOG_TOKENS;
   const overlapThreshold = options.overlapThreshold ?? 0.25;
 
   const entries = discoverAuditableFiles(root, includeGlobal, globalHomeDir);
@@ -318,8 +324,11 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
       continue;
     }
     const raw = fs.readFileSync(entry.fullPath, 'utf8');
-    const tokens = estimateTokens(raw);
-    const overBudget = tokens > tokenBudgetLimit;
+    const markerMatch = raw.match(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/);
+    const textToMeasure = markerMatch ? markerMatch[0] : raw;
+    const tokens = estimateTokens(textToMeasure);
+    const effectiveLimit = markerMatch ? managedBlockBudgetLimit : tokenBudgetLimit;
+    const overBudget = tokens > effectiveLimit;
     const metric: AuditedFileMetric = {
       scope: entry.scope,
       kind: entry.kind,
