@@ -537,6 +537,15 @@ export class EvoMcpDispatcher {
       return `• [${h.kind.toUpperCase()}]${tierBadge} ${h.id} — ${h.l0_summary} (scope: ${h.scope_glob} | hits: ${h.hit_count} | pass: ${h.success_rate})`;
     });
 
+    const topGuardrailIds = hits
+      .filter((h) => h.kind === 'rule' || h.kind === 'skill')
+      .slice(0, 3)
+      .map((h) => h.id);
+    const footerDirective =
+      topGuardrailIds.length > 0
+        ? `Action Required: Call evo_inspect(id, "L2", workspace) on matched guardrails/SOPs [${topGuardrailIds.join(', ')}] to load full checklists (never rely on L0 summaries alone), or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}`
+        : `Tip: Call evo_inspect(id, "L1"|"L2", workspace) for details/topology anchors or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}`;
+
     return {
       content: [
         {
@@ -545,7 +554,7 @@ export class EvoMcpDispatcher {
             `Found ${hits.length} capability(s) [Core Budget: ${totalTokens}/${maxTokens} tokens]:`,
             ...lines,
             '',
-            `Tip: Call evo_inspect(id, "L1"|"L2") for details/topology anchors or evo_run(tool_id, args) to execute a TOOL.${toolFooter}`,
+            footerDirective,
           ].join('\n'),
         },
       ],

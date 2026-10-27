@@ -691,5 +691,170 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const afterPropose = runAgyHook('PreInvocation');
     assert.deepEqual(afterPropose, {});
   });
+
+  test('17. Issue #15 [HOOK-READ-ONLY-AND-SUBAGENT-BLINDNESS-3, STRUCTURAL-CORRECTION-PATTERNS-4]: Antigravity hook triggers on >=10 read-only diagnostic reads, native subagent wakeups, and rhetorical/empirical user corrections', () => {
+    const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
+    const transcriptFile = path.join(ws, 'transcript-issue15.jsonl');
+    const convId = `issue15-conv-${Date.now()}`;
+
+    const writeSteps = (steps: unknown[]) => {
+      fs.writeFileSync(
+        transcriptFile,
+        steps.map((s) => JSON.stringify(s)).join('\n') + '\n',
+        'utf8'
+      );
+    };
+
+    const runAgyHook = (event: 'PreInvocation' | 'Stop') => {
+      const proc = spawnSync(process.execPath, [hookScript, event], {
+        cwd: ws,
+        input: JSON.stringify({
+          conversationId: convId,
+          transcriptPath: transcriptFile,
+          workspacePaths: [ws],
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(proc.status, 0);
+      return JSON.parse(proc.stdout.trim());
+    };
+
+    // 1. Read-only investigation: 9 source/codegraph reads + 3 ignored meta reads (/.gemini/, /.evo/, /.agents/) -> below 10 threshold
+    const steps: unknown[] = [
+      {
+        step_index: 1,
+        type: 'USER_INPUT',
+        source: 'USER_EXPLICIT',
+        content: 'Analyze the field logs and explain why state machine transitions fail.',
+      },
+    ];
+    for (let k = 1; k <= 8; k++) {
+      steps.push({
+        step_index: 1 + k,
+        type: 'PLANNER_RESPONSE',
+        source: 'MODEL',
+        tool_calls: [
+          {
+            name: '"view_file"',
+            args: { AbsolutePath: `"C:\\\\workspace\\\\src\\\\fsm_${k}.c"` },
+          },
+        ],
+      });
+    }
+    // 9th read via codegraph MCP call + 3 ignored meta reads
+    steps.push({
+      step_index: 10,
+      type: 'PLANNER_RESPONSE',
+      source: 'MODEL',
+      tool_calls: [
+        {
+          name: '"call_mcp_tool"',
+          args: {
+            ServerName: '"codegraph"',
+            ToolName: '"codegraph_explore"',
+            Arguments: '{"query":"FsmTransition"}',
+          },
+        },
+        {
+          name: '"view_file"',
+          args: { AbsolutePath: '"C:\\\\Users\\\\Admin\\\\.gemini\\\\rules.md"' },
+        },
+        {
+          name: '"read_file"',
+          args: { Path: '"C:\\\\workspace\\\\.evo\\\\config.json"' },
+        },
+        {
+          name: '"view_file"',
+          args: { AbsolutePath: '"C:\\\\workspace\\\\.agents\\\\scripts\\\\antigravity_hook.mjs"' },
+        },
+      ],
+    });
+    writeSteps(steps);
+    assert.deepEqual(
+      runAgyHook('PreInvocation'),
+      {},
+      '9 source/codegraph reads + 3 ignored meta reads must not trigger heavy diagnostic reads (< 10)'
+    );
+
+    // 10th read on project source file (with editCountSinceLastPropose === 0) triggers hasHeavyDiagnosticReads!
+    steps.push({
+      step_index: 11,
+      type: 'PLANNER_RESPONSE',
+      source: 'MODEL',
+      tool_calls: [
+        {
+          name: '"view_code_item"',
+          args: { File: '"C:\\\\workspace\\\\src\\\\fsm_lookup.c"' },
+        },
+      ],
+    });
+    writeSteps(steps);
+    const preRead10 = runAgyHook('PreInvocation');
+    assert.ok(
+      Array.isArray(preRead10.injectSteps),
+      '10th read-only source/codegraph inspection with 0 edits must trigger diagnostic crystallization reminder'
+    );
+    assert.match(
+      preRead10.injectSteps[0].ephemeralMessage,
+      /已累计深度精读\/图谱检索 10 次源码尚未结晶/
+    );
+
+    // 2. Structural user corrections: rhetorical counter-questions (@[Quote], 为什么要, 不就是, 不是吗) and empirical contradictions (已经确认, 实际...显示, 但实验室)
+    steps.push({
+      step_index: 12,
+      type: 'USER_INPUT',
+      source: 'USER_EXPLICIT',
+      content:
+        '@[Quote] 这里为什么要切换到待机模式？不就是应该保持并网状态吗，不是吗？已经确认上位机没有下发关机指令，实际波形显示电流直接跌零，但实验室自测是可以的。前面的推断是否合理？',
+    });
+    writeSteps(steps);
+    const preRhetorical = runAgyHook('PreInvocation');
+    assert.ok(
+      Array.isArray(preRhetorical.injectSteps),
+      'Rhetorical counter-question and empirical contradiction must trigger immediate user correction reminder'
+    );
+    assert.match(preRhetorical.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
+
+    // Clear turn state via Stop
+    runAgyHook('Stop');
+
+    // 3. Native subagent wakeup via SYSTEM_MESSAGE (sender=<subagent-uuid>) triggers immediate audit reminder even within cooldown
+    steps.push({
+      step_index: 13,
+      type: 'SYSTEM_MESSAGE',
+      source: 'SYSTEM',
+      content:
+        '[Message] timestamp=2026-10-27T13:50:00Z sender=9f8e7d6c-1111-2222-3333-444455556666 priority=MESSAGE_PRIORITY_HIGH content=Subagent verification complete: overturned 2 assumptions and confirmed deadlock in fsm_lookup.c:L142.',
+    });
+    writeSteps(steps);
+    const preSubagent = runAgyHook('PreInvocation');
+    assert.ok(
+      Array.isArray(preSubagent.injectSteps),
+      'Subagent SYSTEM_MESSAGE wakeup must immediately trigger audit crystallization reminder'
+    );
+    assert.match(
+      preSubagent.injectSteps[0].ephemeralMessage,
+      /检测到子智能体（Subagent）专项核查\/取证完成唤醒信号/
+    );
+
+    // 4. Calling evo_propose resets codeReadCountSinceLastPropose, latestAuditStepIndex, and user correction state
+    steps.push({
+      step_index: 14,
+      type: 'PLANNER_RESPONSE',
+      source: 'MODEL',
+      tool_calls: [
+        {
+          name: '"evo_propose"',
+          args: {
+            id: '"fsm-deadlock-read-only-diagnosis"',
+            kind: '"memory"',
+          },
+        },
+      ],
+    });
+    writeSteps(steps);
+    assert.deepEqual(runAgyHook('PreInvocation'), {});
+  });
 });
+
 

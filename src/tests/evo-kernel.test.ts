@@ -3300,7 +3300,71 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(fakeGlobal, { recursive: true, force: true });
     }
   });
+
+  test('42. Issue #15 [READ-ONLY-DIAGNOSIS-BLIND-SPOT-1, SUPERFICIAL-L0-RECALL-TRAP-2]: L0 Meta-Rule mandates read-only diagnostic crystallization and L2 guardrail inspection, and evo_search emits Action Required directive naming matched rule/skill IDs', () => {
+    const ws = createTempWorkspace();
+    const fakeGlobal = createTempWorkspace();
+    const prevGlobal = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = fakeGlobal;
+    runInit(ws, { targets: ['agents', 'claude', 'gemini'] });
+    const dispatcher = new EvoMcpDispatcher(ws);
+
+    try {
+      // 1. Verify synced host files contain read-only diagnostic crystallization and L2 inspection mandates
+      for (const hostFile of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']) {
+        const text = fs.readFileSync(path.join(ws, hostFile), 'utf8');
+        assert.match(
+          text,
+          /Never rely on `<30-token` L0 titles alone — whenever `evo_search` hits a relevant `RULE`, `SKILL`, or `\[VERIFIED\]` `MEMORY`, you MUST call `evo_inspect\(id, tier: "L2", workspace\)`/
+        );
+        assert.match(
+          text,
+          /after a root-cause diagnosis is confirmed \(including read-only white-box troubleshooting or log-forensic sessions without code edits\), after an initial hypothesis is overturned\/corrected/
+        );
+      }
+
+      // 2. Propose a domain guardrail rule and verify evo_search outputs explicit Action Required footer naming the rule ID
+      const propRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'fsm-transition-lookup-verification',
+        title: 'FSM Transition Lookup Verification Guardrail',
+        l0_summary: 'Verify state transition lookup tables and hardware guard macros before diagnosing mode faults.',
+        scope_glob: '**/*',
+        core: false,
+        transfer_scenarios: [
+          'Auditing embedded inverter mode state machine transitions',
+          'Debugging BMS contactor state transition guards across firmware branches',
+        ],
+        content: [
+          '1. Locate the complete state transition lookup table in source code before concluding.',
+          '2. Verify conditional compilation guards for target hardware variants.',
+        ].join('\n'),
+      });
+      assert.equal(propRes.isError, undefined, propRes.content[0]?.text);
+
+      const searchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: 'state transition lookup fault',
+      });
+      assert.match(
+        searchRes.content[0].text,
+        /Action Required: Call evo_inspect\(id, "L2", workspace\) on matched guardrails\/SOPs \[fsm-transition-lookup-verification\] to load full checklists \(never rely on L0 summaries alone\)/
+      );
+      assert.match(
+        searchRes.content[0].text,
+        /if this session confirms a root cause \(even read-only\) or corrects a hypothesis, call evo_propose before finishing/
+      );
+    } finally {
+      if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobal;
+      dispatcher.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(fakeGlobal, { recursive: true, force: true });
+    }
+  });
 });
+
 
 
 

@@ -18,7 +18,7 @@ const TAIL_BYTES = 128 * 1024;
 const COOLDOWN_STEPS = 4;
 
 const CORRECTION_REGEX =
-  /(?:不对|错了|还是有|乱码|漏了|为什么把|为什么会|为什么没|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|you broke|still broken|that's wrong|incorrect|regression)/i;
+  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|actually[\s,]|in fact[\s,])/i;
 
 const CMD_ERROR_OUTPUT_REGEX =
   /(?:Traceback \(most recent call last\)|SyntaxError:|TypeError:|ValueError:|AttributeError:|KeyError:|ModuleNotFoundError:|ImportError:|PermissionError:|FileNotFoundError:|Command exited with code [1-9]|Exception calling|At line:\d+ char:\d+)/i;
@@ -32,6 +32,13 @@ const EDIT_TOOL_NAMES = new Set([
   'write_to_file',
   'replace_file_content',
   'multi_replace_file_content',
+]);
+
+const READ_TOOL_NAMES = new Set([
+  'read_file',
+  'view_file',
+  'view_file_outline',
+  'view_code_item',
 ]);
 
 export function normalizeTranscriptString(val) {
@@ -157,6 +164,7 @@ function main() {
       cs.clearedCorrectionStep = cs.lastCorrectionStep ?? -1;
       cs.clearedDirtyEditStep = cs.lastDirtyEditStep ?? -1;
       cs.clearedErrorRecoveryStep = cs.lastErrorRecoveryStep ?? -1;
+      cs.clearedAuditStep = cs.lastAuditStep ?? -1;
       saveHookState(statePath, allState);
     }
     process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
@@ -180,6 +188,8 @@ function main() {
     clearedDirtyEditStep: -1,
     lastErrorRecoveryStep: -1,
     clearedErrorRecoveryStep: -1,
+    lastAuditStep: -1,
+    clearedAuditStep: -1,
   };
 
   let latestStepIndex = steps.length;
@@ -188,11 +198,13 @@ function main() {
   let seenModelStep = false;
   let userInputHadPriorModelStep = false;
   let editCountSinceLastPropose = 0;
+  let codeReadCountSinceLastPropose = 0;
   let scratchScriptCountSinceLastPropose = 0;
   let deliverableRunCountSinceLastPropose = 0;
   let hadCommandErrorSinceLastPropose = false;
   let hasCommandErrorRecovery = false;
   let latestErrorRecoveryStepIndex = -1;
+  let latestAuditStepIndex = -1;
   let editsAfterPropose = 0;
   let latestDirtyEditStepIndex = -1;
   let lastProposeId = '';
@@ -212,6 +224,18 @@ function main() {
 
     if (step.type === 'PLANNER_RESPONSE' || step.source === 'MODEL') {
       seenModelStep = true;
+    }
+
+    if (step.source === 'SYSTEM' && step.type === 'SYSTEM_MESSAGE') {
+      const sysContent = normalizeTranscriptString(step.content || '');
+      if (
+        sysContent.includes('sender=') &&
+        !sysContent.includes('sender=system') &&
+        (seenModelStep || !sysContent.includes('<original_task>'))
+      ) {
+        seenModelStep = true;
+        latestAuditStepIndex = idx;
+      }
     }
 
     if (step.type === 'USER_INPUT' || step.source === 'USER_EXPLICIT') {
@@ -234,6 +258,7 @@ function main() {
       const toolName = normalizeTranscriptString(tc.name || tc.tool_name || tc.ToolName || '');
       const args = parseTranscriptObject(tc.arguments || tc.args || tc.Arguments || {});
       const innerToolName = normalizeTranscriptString(args.ToolName || args.tool_name || '');
+      const serverName = normalizeTranscriptString(args.ServerName || args.server_name || '');
 
       const isEvoPropose =
         toolName.includes('evo_propose') ||
@@ -245,11 +270,13 @@ function main() {
         seenPropose = true;
         lastProposeStepIndex = idx;
         editCountSinceLastPropose = 0;
+        codeReadCountSinceLastPropose = 0;
         scratchScriptCountSinceLastPropose = 0;
         deliverableRunCountSinceLastPropose = 0;
         hadCommandErrorSinceLastPropose = false;
         hasCommandErrorRecovery = false;
         latestErrorRecoveryStepIndex = -1;
+        latestAuditStepIndex = -1;
         editsAfterPropose = 0;
         latestDirtyEditStepIndex = -1;
         toolWorkStepsAfterUserCorrection = 0;
@@ -259,6 +286,37 @@ function main() {
       } else {
         if (activeUserTurnStep >= 0 && idx > activeUserTurnStep) {
           toolWorkStepsAfterUserCorrection++;
+        }
+
+        if (toolName === 'invoke_subagent') {
+          latestAuditStepIndex = idx;
+        }
+
+        const isCodegraphCall =
+          toolName.toLowerCase().includes('codegraph') ||
+          innerToolName.toLowerCase().includes('codegraph') ||
+          serverName.toLowerCase().includes('codegraph');
+
+        if (isCodegraphCall) {
+          codeReadCountSinceLastPropose++;
+        } else if (READ_TOOL_NAMES.has(toolName)) {
+          const readPath = normalizePath(
+            args.AbsolutePath ||
+              args.Path ||
+              args.path ||
+              args.File ||
+              args.file ||
+              args.TargetFile ||
+              args.target_file ||
+              ''
+          );
+          const isIgnoredMetaRead =
+            readPath.includes('/.gemini/') ||
+            readPath.includes('/.evo/') ||
+            readPath.includes('/.agents/');
+          if (!isIgnoredMetaRead) {
+            codeReadCountSinceLastPropose++;
+          }
         }
 
         if (EDIT_TOOL_NAMES.has(toolName)) {
@@ -358,13 +416,21 @@ function main() {
     editCountSinceLastPropose >= 4 ||
     scratchScriptCountSinceLastPropose >= 2 ||
     (scratchScriptCountSinceLastPropose >= 1 && deliverableRunCountSinceLastPropose >= 1);
+  const hasHeavyDiagnosticReads =
+    editCountSinceLastPropose === 0 && codeReadCountSinceLastPropose >= 10;
   const hasDirtyPostProposeEdits = seenPropose && editsAfterPropose > 0;
+  const hasSubagentAudit =
+    latestAuditStepIndex >= 0 &&
+    latestAuditStepIndex > lastProposeStepIndex &&
+    latestAuditStepIndex > (convState.clearedAuditStep ?? -1);
 
   if (
     !hasUserCorrection &&
     !hasHeavyUnproposeEdits &&
+    !hasHeavyDiagnosticReads &&
     !hasDirtyPostProposeEdits &&
-    !hasCommandErrorRecovery
+    !hasCommandErrorRecovery &&
+    !hasSubagentAudit
   ) {
     process.stdout.write('{}\n');
     return;
@@ -388,17 +454,25 @@ function main() {
   const isPendingErrorRecovery =
     hasCommandErrorRecovery &&
     latestErrorRecoveryStepIndex > (convState.clearedErrorRecoveryStep ?? -1);
+  const isNewAudit =
+    hasSubagentAudit &&
+    latestAuditStepIndex > (convState.lastAuditStep ?? -1);
+  const isPendingAudit =
+    hasSubagentAudit &&
+    latestAuditStepIndex > (convState.clearedAuditStep ?? -1);
   const cooldownExpired =
     latestStepIndex - (convState.lastRemindedStep ?? -999) >= COOLDOWN_STEPS;
 
   const hasImmediateNewTrigger =
-    isNewCorrection || isNewDirtyEdit || isNewErrorRecovery;
+    isNewCorrection || isNewDirtyEdit || isNewErrorRecovery || isNewAudit;
   const hasCooldownPendingTrigger =
     cooldownExpired &&
     (isPendingCorrectionAfterWork ||
       isPendingDirtyEdit ||
       isPendingErrorRecovery ||
-      hasHeavyUnproposeEdits);
+      isPendingAudit ||
+      hasHeavyUnproposeEdits ||
+      hasHeavyDiagnosticReads);
 
   if (!hasImmediateNewTrigger && !hasCooldownPendingTrigger) {
     process.stdout.write('{}\n');
@@ -422,6 +496,13 @@ function main() {
       ? latestErrorRecoveryStepIndex
       : (convState.lastErrorRecoveryStep ?? -1),
     clearedErrorRecoveryStep: convState.clearedErrorRecoveryStep ?? -1,
+    lastAuditStep: hasSubagentAudit
+      ? latestAuditStepIndex
+      : (convState.lastAuditStep ?? -1),
+    clearedAuditStep:
+      lastProposeStepIndex >= 0
+        ? Math.max(convState.clearedAuditStep ?? -1, lastProposeStepIndex)
+        : (convState.clearedAuditStep ?? -1),
   };
   saveHookState(statePath, allState);
 
@@ -433,6 +514,9 @@ function main() {
   }
   if (isNewCorrection || isPendingCorrectionAfterWork) {
     reasons.push('检测到用户纠偏/交付物反馈信号');
+  }
+  if (isNewAudit || isPendingAudit) {
+    reasons.push('检测到子智能体（Subagent）专项核查/取证完成唤醒信号');
   }
   if (isPendingErrorRecovery) {
     reasons.push('检测到命令/脚本执行报错并恢复成功（排障经验待结晶）');
@@ -446,8 +530,16 @@ function main() {
   ) {
     reasons.push(`已累计 ${editCountSinceLastPropose} 次文件修改尚未结晶`);
   }
+  if (
+    hasHeavyDiagnosticReads &&
+    (cooldownExpired || isNewCorrection || isPendingCorrectionAfterWork || isNewAudit || isPendingAudit)
+  ) {
+    reasons.push(
+      `已累计深度精读/图谱检索 ${codeReadCountSinceLastPropose} 次源码尚未结晶（只读根因诊断或假说证伪亦须沉淀）`
+    );
+  }
 
-  const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮修复或交付物生成并验证通过后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，通用脚本沉淀为 tool，单点故障使用 memory），并在回复末尾输出 🧬 EvoKernel 演进回执。`;
+  const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮根因诊断确认（含零代码修改的只读白盒排查）、假说证伪纠偏、代码修复或交付物验证后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，通用脚本沉淀为 tool，单点故障使用 memory），并在回复末尾输出 🧬 EvoKernel 演进回执。`;
 
   process.stdout.write(
     JSON.stringify({
