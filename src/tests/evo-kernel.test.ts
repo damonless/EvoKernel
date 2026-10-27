@@ -941,7 +941,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(claudePlugin.name, 'evo-kernel');
       assert.match(
         claudePlugin.mcpServers['evo-kernel'].args[0],
-        /\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\/index\.js/
+        /\$\{CLAUDE_PLUGIN_ROOT\}\/(?:scripts\/boot-mcp\.mjs|dist\/cli\/index\.js)/
       );
 
       // 3. Verify Gemini CLI gemini-extension.json
@@ -952,7 +952,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(geminiExt.contextFileName, 'GEMINI.md');
       assert.match(
         geminiExt.mcpServers['evo-kernel'].args[0],
-        /\$\{extensionPath\}\/dist\/cli\/index\.js/
+        /\$\{extensionPath\}\/(?:scripts\/boot-mcp\.mjs|dist\/cli\/index\.js)/
       );
 
       // 4. Verify templates/seed-evo seeds global fallback even when plugin .evo is absent
@@ -2235,6 +2235,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     try {
       const res = spawnSync(process.execPath, nodeArgs, {
         cwd: emptyWs,
+        env: { ...process.env, HOME: emptyWs, USERPROFILE: emptyWs },
         encoding: 'utf8',
         timeout: 5000,
       });
@@ -3293,11 +3294,23 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       });
       assert.match(search2.content[0].text, /git-commit-message-format-and-completeness/);
 
-      // 3. MANAGED-BLOCK-WORKFLOW-INDEX-3: Section 5 surfaces compact L0 IDs of scope_glob: "**/*" workflow rules and skills even when 0 micro-tools exist, including rules/AGENTS.md when present
+      // 3. MANAGED-BLOCK-WORKFLOW-INDEX-3: Section 5 surfaces compact L0 IDs of scope_glob: "**/*" workflow rules and skills even when 0 micro-tools exist, including rules/AGENTS.md when present, and evo_propose(kind: "skill") auto-syncs managed blocks
       fs.mkdirSync(path.join(ws, 'rules'), { recursive: true });
       fs.writeFileSync(path.join(ws, 'rules', 'AGENTS.md'), '<!-- EVO:START -->\n<!-- EVO:END -->\n', 'utf8');
       const syncedList = syncManagedRuleBlocks(ws);
       assert.ok(syncedList.includes('rules/AGENTS.md'), 'syncManagedRuleBlocks must update rules/AGENTS.md when present');
+
+      const skillPropRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'skill',
+        id: 'commit-changelog-audit-sop',
+        title: 'Commit Changelog Audit SOP',
+        l0_summary: 'Step-by-step SOP for auditing release changelogs before tagging versions.',
+        tags: ['git', 'commit', 'version', 'log'],
+        l1_contract: '- Trigger: Before tagging a release version.\n- Output: Verified changelog.',
+        l2_sop: '1. Inspect git log.\n2. Cross-check version bump.',
+      });
+      assert.equal(skillPropRes.isError, undefined, skillPropRes.content[0]?.text);
 
       for (const hostFile of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'rules/AGENTS.md']) {
         const syncedText = fs.readFileSync(path.join(ws, hostFile), 'utf8');
@@ -3305,7 +3318,18 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
           syncedText,
           /- On-demand rules\/skills \(inspect via `evo_inspect`\):.*`\[rule\] git-commit-message-format-and-completeness`/
         );
+        assert.match(
+          syncedText,
+          /- On-demand rules\/skills \(inspect via `evo_inspect`\):.*`\[skill\] commit-changelog-audit-sop`/,
+          `Proposing a skill via evo_propose must auto-sync Section 5 in ${hostFile}`
+        );
       }
+
+      const auditReport = runAudit(ws);
+      assert.ok(
+        auditReport.files.some((f) => f.displayPath === 'rules/AGENTS.md' && !f.overBudget),
+        'runAudit must discover and audit rules/AGENTS.md when present'
+      );
     } finally {
       if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
       else process.env.EVO_GLOBAL_DIR = prevGlobal;
@@ -3401,7 +3425,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('43. Zero-Build Plugin Bootstrap: package.json prepack/files, scripts/boot-mcp.mjs, and mcp_config.json auto-build when dist/ is missing', () => {
+  test('43. Zero-Build Plugin Bootstrap: package.json prepack/files, .claude-plugin/plugin.json, gemini-extension.json, and mcp_config.json auto-build when dist/ is missing', () => {
     const repoRoot = path.resolve(import.meta.dirname, '..', '..');
     const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     assert.equal(pkg.scripts?.prepack, 'node ./scripts/build.mjs');
@@ -3409,6 +3433,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     assert.ok(fs.existsSync(path.join(repoRoot, 'scripts', 'boot-mcp.mjs')));
 
     const mockCloneDir = createTempWorkspace();
+    const isolatedEnv = { ...process.env, HOME: mockCloneDir, USERPROFILE: mockCloneDir };
     try {
       fs.mkdirSync(path.join(mockCloneDir, 'scripts'), { recursive: true });
       fs.mkdirSync(path.join(mockCloneDir, 'src', 'cli'), { recursive: true });
@@ -3431,23 +3456,49 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       const nodeArgs = mcpConfig.mcpServers['evo-kernel'].args;
       const res = spawnSync(process.execPath, nodeArgs, {
         cwd: mockCloneDir,
+        env: isolatedEnv,
         encoding: 'utf8',
         timeout: 5000,
       });
-      assert.equal(res.status, 0, `Expected auto-build exit 0, stderr: ${res.stderr}`);
+      assert.equal(res.status, 0, `Expected mcp_config.json auto-build exit 0, stderr: ${res.stderr}`);
       assert.ok(fs.existsSync(path.join(mockCloneDir, 'dist', 'cli', 'index.js')));
       assert.deepEqual(JSON.parse(res.stdout.trim()), { booted: true, mode: 'mcp' });
 
-      // 2. Verify scripts/boot-mcp.mjs also auto-builds dist/ when dist/ is removed
+      // 2. Verify .claude-plugin/plugin.json auto-builds dist/ when dist/ is removed
       fs.rmSync(path.join(mockCloneDir, 'dist'), { recursive: true, force: true });
-      const bootRes = spawnSync(process.execPath, [path.join(mockCloneDir, 'scripts', 'boot-mcp.mjs')], {
+      const claudePlugin = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, '.claude-plugin', 'plugin.json'), 'utf8')
+      );
+      const claudeArgs = (claudePlugin.mcpServers['evo-kernel'].args as string[]).map((a) =>
+        a.replace('${CLAUDE_PLUGIN_ROOT}', mockCloneDir)
+      );
+      const claudeRes = spawnSync(process.execPath, claudeArgs, {
         cwd: mockCloneDir,
+        env: isolatedEnv,
         encoding: 'utf8',
         timeout: 5000,
       });
-      assert.equal(bootRes.status, 0, `Expected boot-mcp.mjs exit 0, stderr: ${bootRes.stderr}`);
+      assert.equal(claudeRes.status, 0, `Expected .claude-plugin/plugin.json exit 0, stderr: ${claudeRes.stderr}`);
       assert.ok(fs.existsSync(path.join(mockCloneDir, 'dist', 'cli', 'index.js')));
-      assert.deepEqual(JSON.parse(bootRes.stdout.trim()), { booted: true, mode: 'mcp' });
+      assert.deepEqual(JSON.parse(claudeRes.stdout.trim()), { booted: true, mode: 'mcp' });
+
+      // 3. Verify gemini-extension.json auto-builds dist/ when dist/ is removed
+      fs.rmSync(path.join(mockCloneDir, 'dist'), { recursive: true, force: true });
+      const geminiExt = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, 'gemini-extension.json'), 'utf8')
+      );
+      const geminiArgs = (geminiExt.mcpServers['evo-kernel'].args as string[]).map((a) =>
+        a.replace('${extensionPath}', mockCloneDir)
+      );
+      const geminiRes = spawnSync(process.execPath, geminiArgs, {
+        cwd: mockCloneDir,
+        env: isolatedEnv,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(geminiRes.status, 0, `Expected gemini-extension.json exit 0, stderr: ${geminiRes.stderr}`);
+      assert.ok(fs.existsSync(path.join(mockCloneDir, 'dist', 'cli', 'index.js')));
+      assert.deepEqual(JSON.parse(geminiRes.stdout.trim()), { booted: true, mode: 'mcp' });
     } finally {
       fs.rmSync(mockCloneDir, { recursive: true, force: true });
     }

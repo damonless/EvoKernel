@@ -219,6 +219,7 @@ const ruleFiles = [
   'CLAUDE.md',
   'AGENTS.md',
   'GEMINI.md',
+  'rules/AGENTS.md',
   '.cursor/rules/evo-kernel.mdc',
   '.evo/rules/core-invariants.md',
 ];

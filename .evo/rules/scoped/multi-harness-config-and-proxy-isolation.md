@@ -5,16 +5,16 @@ l0_summary: "Enforce safe config merging, agent detection, multi-step/read-only 
 scope_glob: "src/{cli,mcp}/**/*.ts"
 core: false
 priority: 50
-tokens: 617
+tokens: 657
 origin: "evolved"
 supersedes_id: "multi-harness-config-and-proxy-isolation"
 transfer_scenarios: ["Implementing or updating multi-agent configuration adapters and uninstallers in src/cli/harness.ts and src/cli/init.ts","Hardening PreInvocation/PostTool/Stop lifecycle hooks and MCP proxy dispatchers in src/cli/hook.ts, scripts/antigravity_hook.mjs, and src/mcp/handlers.ts"]
 created_at: "2026-10-23T09:28:08.219Z"
-updated_at: "2026-10-27T15:29:54.202Z"
+updated_at: "2026-10-27T15:55:54.682Z"
 ---
 
 When adding or modifying host agent harness adapters, lifecycle hooks, or MCP proxy integrations:
-1. Preserve non-destructive configuration merging across JSON, TOML, YAML, and Markdown frontmatter files; track bracket depth and multi-line comments when parsing section blocks, sync plugin-level rule files alongside root rule files, and never overwrite self-bootstrapping plugin manifests (which auto-compile missing build outputs cleanly without polluting standard output).
+1. Preserve non-destructive configuration merging across JSON, TOML, YAML, and Markdown frontmatter files; track bracket depth and multi-line comments when parsing section blocks, sync and audit plugin-level rule files alongside root rule files across rule/tool/skill proposals (reading the latest on-disk seed template so long-running MCP servers never regress managed blocks), and wire all plugin manifests to zero-build bootstrap entrypoints that auto-compile missing build outputs cleanly without polluting standard output.
 2. Isolate environment auto-detection to agent-specific process markers rather than generic provider API keys or bare editor settings directories.
 3. Decouple read-only file inspection from mutation debt tracking in post-tool lifecycle hooks while preserving active scoped rule recall, and support piped standard input payloads when CLI flags are omitted.
 4. Isolate downstream proxy connections per workspace context with configuration-hash invalidation, preserve exact case for external tool identifiers prior to local ID sanitization, and terminate child process trees on handshake timeout.

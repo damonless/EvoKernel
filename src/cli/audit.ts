@@ -196,6 +196,7 @@ function discoverAuditableFiles(
     'CLAUDE.md',
     'AGENTS.md',
     'GEMINI.md',
+    'rules/AGENTS.md',
     '.cursorrules',
     '.windsurfrules',
     '.clinerules',

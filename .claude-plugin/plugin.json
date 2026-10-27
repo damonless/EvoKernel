@@ -8,7 +8,7 @@
   "mcpServers": {
     "evo-kernel": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/cli/index.js", "mcp"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/boot-mcp.mjs", "mcp"]
     }
   }
 }

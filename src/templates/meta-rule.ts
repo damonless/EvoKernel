@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
 export const META_RULE_MARKER_START = '<!-- EVO:START -->';
 export const META_RULE_MARKER_END = '<!-- EVO:END -->';
 
@@ -25,11 +28,43 @@ Whenever ANY of the following occurs in this session, you MUST call \`evo_propos
 > **Gatekeeper Notice**: \`evo_propose\` enforces Static Security, Lexical De-Symbolization, Sandbox \`--self-test\` / AST Grounding, BM25 Deduplication, Scoped Bucket Quotas (max 3/bucket), and a **1,500-token core rule budget**. On \`ERR_BUDGET_EXCEEDED\`, \`ERR_SCOPED_BUCKET_FULL\`, or \`ERR_DUPLICATE\`, call \`evo_compact\` first.
 <!-- EVO:END -->`;
 
+export function resolveLatestMetaRuleSeed(): string {
+  try {
+    const candidates = [
+      path.resolve(import.meta.dirname, '..', '..', 'src', 'templates', 'meta-rule.ts'),
+      path.join(import.meta.dirname, 'meta-rule.js'),
+    ].filter((p) => fs.existsSync(p));
+    candidates.sort((a, b) => {
+      try {
+        return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+      } catch {
+        return 0;
+      }
+    });
+    for (const filePath of candidates) {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const m = raw.match(
+        /L0_META_RULE_SEED\s*=\s*`(<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->)`;/
+      );
+      if (m) {
+        return m[1]
+          .replace(/\\`/g, '`')
+          .replace(/\\\$/g, '$')
+          .replace(/\r?\n/g, '\n');
+      }
+    }
+  } catch {
+    // Fall back to in-memory constant
+  }
+  return L0_META_RULE_SEED;
+}
+
 export function renderManagedBlock(
   coreRulesMarkdown: string,
   toolsCatalogMarkdown: string = ''
 ): string {
-  const inner = L0_META_RULE_SEED
+  const seed = resolveLatestMetaRuleSeed();
+  const inner = seed
     .replace(META_RULE_MARKER_START, '')
     .replace(META_RULE_MARKER_END, '')
     .trim();

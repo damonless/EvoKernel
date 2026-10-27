@@ -886,7 +886,7 @@ export class EvoMcpDispatcher {
       };
     }
 
-    if (proposal.kind === 'rule' || proposal.kind === 'tool') {
+    if (proposal.kind === 'rule' || proposal.kind === 'tool' || proposal.kind === 'skill') {
       syncManagedRuleBlocks(this.storage.rootDir);
       if (proposal.kind === 'rule' && this.onCoreRulesChanged) {
         this.onCoreRulesChanged();

@@ -489,6 +489,21 @@ export function runInit(
     activeDirs.push(...adapter.dirs);
   }
 
+  const pluginRulesAgents = path.join(workspaceRoot, 'rules', 'AGENTS.md');
+  if (fs.existsSync(pluginRulesAgents)) {
+    try {
+      if (fs.statSync(pluginRulesAgents).isFile()) {
+        const current = fs.readFileSync(pluginRulesAgents, 'utf8');
+        if (current.includes(META_RULE_MARKER_START)) {
+          fs.writeFileSync(pluginRulesAgents, upsertMarkerBlock(current, managedBlock), 'utf8');
+          updatedFilesList.push('rules/AGENTS.md');
+        }
+      }
+    } catch {
+      // Ignore read-only errors
+    }
+  }
+
   const updatedFiles = Array.from(new Set(updatedFilesList));
   const mcpConfigFiles = Array.from(new Set(mcpConfigFilesList));
 
