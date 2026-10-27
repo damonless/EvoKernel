@@ -741,7 +741,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         ],
       });
     }
-    // 9th read via codegraph MCP call + 3 ignored meta reads
+    // 9th read via virtualized codegraph evo_run + 4 ignored meta reads (including relative paths without leading slash)
     steps.push({
       step_index: 10,
       type: 'PLANNER_RESPONSE',
@@ -750,9 +750,9 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         {
           name: '"call_mcp_tool"',
           args: {
-            ServerName: '"codegraph"',
-            ToolName: '"codegraph_explore"',
-            Arguments: '{"query":"FsmTransition"}',
+            ServerName: '"evo-kernel"',
+            ToolName: '"evo_run"',
+            Arguments: '{"tool_id":"ext__codegraph__codegraph_explore","args":{"query":"FsmTransition"}}',
           },
         },
         {
@@ -761,11 +761,15 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         },
         {
           name: '"read_file"',
-          args: { Path: '"C:\\\\workspace\\\\.evo\\\\config.json"' },
+          args: { Path: '".evo/config.json"' },
         },
         {
           name: '"view_file"',
-          args: { AbsolutePath: '"C:\\\\workspace\\\\.agents\\\\scripts\\\\antigravity_hook.mjs"' },
+          args: { AbsolutePath: '".agents/scripts/antigravity_hook.mjs"' },
+        },
+        {
+          name: '"view_file"',
+          args: { AbsolutePath: '".gemini/settings.json"' },
         },
       ],
     });
@@ -773,7 +777,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.deepEqual(
       runAgyHook('PreInvocation'),
       {},
-      '9 source/codegraph reads + 3 ignored meta reads must not trigger heavy diagnostic reads (< 10)'
+      '9 source/codegraph reads + 4 ignored meta reads (including relative .evo/.agents/.gemini paths) must not trigger heavy diagnostic reads (< 10)'
     );
 
     // 10th read on project source file (with editCountSinceLastPropose === 0) triggers hasHeavyDiagnosticReads!
@@ -799,13 +803,13 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       /已累计深度精读\/图谱检索 10 次源码尚未结晶/
     );
 
-    // 2. Structural user corrections: rhetorical counter-questions (@[Quote], 为什么要, 不就是, 不是吗) and empirical contradictions (已经确认, 实际...显示, 但实验室)
+    // 2. Structural user corrections: rhetorical counter-questions (@[Quote], 为什么要, 不就是, 不是吗, 这么理解对吗) and empirical contradictions (已经确认, confirmed that, 实际...显示, 但实验室)
     steps.push({
       step_index: 12,
       type: 'USER_INPUT',
       source: 'USER_EXPLICIT',
       content:
-        '@[Quote] 这里为什么要切换到待机模式？不就是应该保持并网状态吗，不是吗？已经确认上位机没有下发关机指令，实际波形显示电流直接跌零，但实验室自测是可以的。前面的推断是否合理？',
+        '@[Quote] 这里为什么要切换到待机模式？不就是应该保持并网状态吗，不是吗？这么理解对吗？已经确认上位机没有下发关机指令，We confirmed that the relay stayed closed，实际波形显示电流直接跌零，但实验室自测是可以的。前面的推断是否合理？',
     });
     writeSteps(steps);
     const preRhetorical = runAgyHook('PreInvocation');
@@ -837,7 +841,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       /检测到子智能体（Subagent）专项核查\/取证完成唤醒信号/
     );
 
-    // 4. Calling evo_propose resets codeReadCountSinceLastPropose, latestAuditStepIndex, and user correction state
+    // 4. Calling evo_propose resets codeReadCountSinceLastPropose, latestAuditStepIndex, and user correction state, AND persists cleared watermarks before early return
     steps.push({
       step_index: 14,
       type: 'PLANNER_RESPONSE',
@@ -854,6 +858,28 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     });
     writeSteps(steps);
     assert.deepEqual(runAgyHook('PreInvocation'), {});
+
+    // 5. >128KB transcript tail truncation after evo_propose: steps 1..14 scroll out of the 128KB window, must NOT resurrect cleared correction or subagent audit!
+    const hugePadding = 'X'.repeat(40 * 1024);
+    for (let p = 15; p <= 19; p++) {
+      steps.push({
+        step_index: p,
+        type: 'GENERIC',
+        source: 'MODEL',
+        status: 'DONE',
+        content: `Step ${p} output padding: ${hugePadding}`,
+      });
+    }
+    writeSteps(steps);
+    assert.ok(
+      fs.statSync(transcriptFile).size > 128 * 1024,
+      'Transcript file must exceed 128 KB TAIL_BYTES window'
+    );
+    assert.deepEqual(
+      runAgyHook('PreInvocation'),
+      {},
+      'Cleared correction and subagent audit must remain cleared even after evo_propose step scrolls past the 128KB tail window'
+    );
   });
 });
 

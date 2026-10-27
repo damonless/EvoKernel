@@ -3263,12 +3263,13 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         `Expected 'commit' query to expand git/message/format/提交, got: ${tokensEnToZh.join(', ')}`
       );
 
-      const tokensZhToEn = extractQueryTokens('代码提交说明规范');
+      const tokensZhToEn = extractQueryTokens('代码提交说明规范与日志');
       assert.ok(
         tokensZhToEn.includes('commit') &&
           tokensZhToEn.includes('git') &&
-          tokensZhToEn.includes('format'),
-        `Expected '提交'/'规范' query to expand commit/git/format, got: ${tokensZhToEn.join(', ')}`
+          tokensZhToEn.includes('format') &&
+          tokensZhToEn.includes('log'),
+        `Expected '提交'/'规范'/'日志' query to expand commit/git/format/log, got: ${tokensZhToEn.join(', ')}`
       );
 
       // Verify evo_search ranks git-commit-message-format-and-completeness at top for both queries
@@ -3301,7 +3302,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('42. Issue #15 [READ-ONLY-DIAGNOSIS-BLIND-SPOT-1, SUPERFICIAL-L0-RECALL-TRAP-2]: L0 Meta-Rule mandates read-only diagnostic crystallization and L2 guardrail inspection, and evo_search emits Action Required directive naming matched rule/skill IDs', () => {
+  test('42. Issue #15 [READ-ONLY-DIAGNOSIS-BLIND-SPOT-1, SUPERFICIAL-L0-RECALL-TRAP-2]: L0 Meta-Rule mandates read-only diagnostic crystallization and L2 guardrail inspection, and evo_search emits Action Required directive naming matched rule/skill/VERIFIED-memory IDs vs Tip for tool-only hits', () => {
     const ws = createTempWorkspace();
     const fakeGlobal = createTempWorkspace();
     const prevGlobal = process.env.EVO_GLOBAL_DIR;
@@ -3354,6 +3355,29 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.match(
         searchRes.content[0].text,
         /if this session confirms a root cause \(even read-only\) or corrects a hypothesis, call evo_propose before finishing/
+      );
+
+      // 3. Tool-only search hits emit passive Tip directive instead of guardrail Action Required
+      const toolPropRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'tool',
+        id: 'diag-packet-parser',
+        title: 'Diagnostic Packet Parser',
+        l0_summary: 'Parses raw hex diagnostic frames in sandbox.',
+        scope_glob: '**/*',
+        runtime: 'node',
+        script_code: 'if (process.argv.includes("--self-test") || process.env.EVO_SELF_TEST === "1") process.exit(0);\nconsole.log("ok");\n',
+      });
+      assert.equal(toolPropRes.isError, undefined, toolPropRes.content[0]?.text);
+
+      const toolOnlySearch = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        kind: 'tool',
+        query: 'diagnostic packet hex frames',
+      });
+      assert.match(
+        toolOnlySearch.content[0].text,
+        /Tip: Call evo_inspect\(id, "L1"\|"L2", workspace\) for details\/topology anchors or evo_run\(tool_id, args\) to execute a TOOL/
       );
     } finally {
       if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;

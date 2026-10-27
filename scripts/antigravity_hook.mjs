@@ -18,7 +18,7 @@ const TAIL_BYTES = 128 * 1024;
 const COOLDOWN_STEPS = 4;
 
 const CORRECTION_REGEX =
-  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|actually[\s,]|in fact[\s,])/i;
+  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,])/i;
 
 const CMD_ERROR_OUTPUT_REGEX =
   /(?:Traceback \(most recent call last\)|SyntaxError:|TypeError:|ValueError:|AttributeError:|KeyError:|ModuleNotFoundError:|ImportError:|PermissionError:|FileNotFoundError:|Command exited with code [1-9]|Exception calling|At line:\d+ char:\d+)/i;
@@ -212,7 +212,7 @@ function main() {
   let seenPropose = false;
   let toolWorkStepsAfterUserCorrection = 0;
 
-  const persistedPendingCorrectionStep =
+  const initialPersistedCorrectionStep =
     (convState.lastCorrectionStep ?? -1) > (convState.clearedCorrectionStep ?? -1)
       ? (convState.lastCorrectionStep ?? -1)
       : -1;
@@ -222,7 +222,11 @@ function main() {
     const idx = typeof step.step_index === 'number' ? step.step_index : i;
     latestStepIndex = idx;
 
-    if (step.type === 'PLANNER_RESPONSE' || step.source === 'MODEL') {
+    if (
+      step.type === 'PLANNER_RESPONSE' ||
+      step.source === 'MODEL' ||
+      (typeof step.step_index === 'number' && step.step_index > 1)
+    ) {
       seenModelStep = true;
     }
 
@@ -251,12 +255,13 @@ function main() {
     }
 
     const activeUserTurnStep =
-      latestUserStepIndex >= 0 ? latestUserStepIndex : persistedPendingCorrectionStep;
+      latestUserStepIndex >= 0 ? latestUserStepIndex : initialPersistedCorrectionStep;
 
     for (let tcIdx = 0; tcIdx < toolCalls.length; tcIdx++) {
       const tc = toolCalls[tcIdx];
       const toolName = normalizeTranscriptString(tc.name || tc.tool_name || tc.ToolName || '');
       const args = parseTranscriptObject(tc.arguments || tc.args || tc.Arguments || {});
+      const innerArgs = parseTranscriptObject(args.Arguments || args);
       const innerToolName = normalizeTranscriptString(args.ToolName || args.tool_name || '');
       const serverName = normalizeTranscriptString(args.ServerName || args.server_name || '');
 
@@ -280,11 +285,14 @@ function main() {
         editsAfterPropose = 0;
         latestDirtyEditStepIndex = -1;
         toolWorkStepsAfterUserCorrection = 0;
-        const innerArgs = parseTranscriptObject(args.Arguments || args);
         lastProposeId =
           normalizeTranscriptString(innerArgs?.id) || lastProposeId || 'capability';
       } else {
-        if (activeUserTurnStep >= 0 && idx > activeUserTurnStep) {
+        if (
+          activeUserTurnStep >= 0 &&
+          activeUserTurnStep > lastProposeStepIndex &&
+          idx > activeUserTurnStep
+        ) {
           toolWorkStepsAfterUserCorrection++;
         }
 
@@ -292,10 +300,14 @@ function main() {
           latestAuditStepIndex = idx;
         }
 
+        const targetToolId = normalizeTranscriptString(
+          innerArgs?.tool_id || args.tool_id || ''
+        );
         const isCodegraphCall =
           toolName.toLowerCase().includes('codegraph') ||
           innerToolName.toLowerCase().includes('codegraph') ||
-          serverName.toLowerCase().includes('codegraph');
+          serverName.toLowerCase().includes('codegraph') ||
+          targetToolId.toLowerCase().includes('codegraph');
 
         if (isCodegraphCall) {
           codeReadCountSinceLastPropose++;
@@ -311,9 +323,7 @@ function main() {
               ''
           );
           const isIgnoredMetaRead =
-            readPath.includes('/.gemini/') ||
-            readPath.includes('/.evo/') ||
-            readPath.includes('/.agents/');
+            /(?:^|\/)\.(?:gemini|evo|agents)(?:\/|$)/i.test(readPath);
           if (!isIgnoredMetaRead) {
             codeReadCountSinceLastPropose++;
           }
@@ -325,8 +335,9 @@ function main() {
           );
           const isIgnoredMetaEdit =
             targetPath.includes('/.gemini/antigravity/brain/') ||
-            targetPath.includes('/.evo/') ||
-            targetPath.endsWith('/PROJECT_STATE.md');
+            /(?:^|\/)\.evo(?:\/|$)/i.test(targetPath) ||
+            targetPath.endsWith('/PROJECT_STATE.md') ||
+            targetPath === 'PROJECT_STATE.md';
 
           const isScratchScript =
             (targetPath.includes('/.gemini/antigravity/scratch/') ||
@@ -395,13 +406,48 @@ function main() {
     }
   }
 
+  if (lastProposeStepIndex >= 0) {
+    let watermarkUpdated = false;
+    if (lastProposeStepIndex > (convState.clearedCorrectionStep ?? -1)) {
+      convState.clearedCorrectionStep = lastProposeStepIndex;
+      watermarkUpdated = true;
+    }
+    if (lastProposeStepIndex > (convState.clearedDirtyEditStep ?? -1)) {
+      convState.clearedDirtyEditStep = lastProposeStepIndex;
+      watermarkUpdated = true;
+    }
+    if (lastProposeStepIndex > (convState.clearedErrorRecoveryStep ?? -1)) {
+      convState.clearedErrorRecoveryStep = lastProposeStepIndex;
+      watermarkUpdated = true;
+    }
+    if (lastProposeStepIndex > (convState.clearedAuditStep ?? -1)) {
+      convState.clearedAuditStep = lastProposeStepIndex;
+      watermarkUpdated = true;
+    }
+    if (watermarkUpdated) {
+      allState[conversationId] = convState;
+      saveHookState(statePath, allState);
+    }
+  }
+
   if (latestStepIndex <= (convState.lastRemindedStep ?? -999)) {
     process.stdout.write('{}\n');
     return;
   }
 
+  const persistedPendingCorrectionStep =
+    (convState.lastCorrectionStep ?? -1) > (convState.clearedCorrectionStep ?? -1)
+      ? (convState.lastCorrectionStep ?? -1)
+      : -1;
+  const persistedPendingAuditStep =
+    (convState.lastAuditStep ?? -1) > (convState.clearedAuditStep ?? -1)
+      ? (convState.lastAuditStep ?? -1)
+      : -1;
+
   const effectiveCorrectionStep =
     latestUserStepIndex >= 0 ? latestUserStepIndex : persistedPendingCorrectionStep;
+  const effectiveAuditStep =
+    latestAuditStepIndex >= 0 ? latestAuditStepIndex : persistedPendingAuditStep;
 
   const hasUserCorrection =
     latestUserStepIndex >= 0
@@ -420,9 +466,9 @@ function main() {
     editCountSinceLastPropose === 0 && codeReadCountSinceLastPropose >= 10;
   const hasDirtyPostProposeEdits = seenPropose && editsAfterPropose > 0;
   const hasSubagentAudit =
-    latestAuditStepIndex >= 0 &&
-    latestAuditStepIndex > lastProposeStepIndex &&
-    latestAuditStepIndex > (convState.clearedAuditStep ?? -1);
+    effectiveAuditStep >= 0 &&
+    effectiveAuditStep > lastProposeStepIndex &&
+    effectiveAuditStep > (convState.clearedAuditStep ?? -1);
 
   if (
     !hasUserCorrection &&
@@ -456,10 +502,10 @@ function main() {
     latestErrorRecoveryStepIndex > (convState.clearedErrorRecoveryStep ?? -1);
   const isNewAudit =
     hasSubagentAudit &&
-    latestAuditStepIndex > (convState.lastAuditStep ?? -1);
+    effectiveAuditStep > (convState.lastAuditStep ?? -1);
   const isPendingAudit =
     hasSubagentAudit &&
-    latestAuditStepIndex > (convState.clearedAuditStep ?? -1);
+    effectiveAuditStep > (convState.clearedAuditStep ?? -1);
   const cooldownExpired =
     latestStepIndex - (convState.lastRemindedStep ?? -999) >= COOLDOWN_STEPS;
 
@@ -491,13 +537,19 @@ function main() {
     lastDirtyEditStep: hasDirtyPostProposeEdits
       ? latestDirtyEditStepIndex
       : (convState.lastDirtyEditStep ?? -1),
-    clearedDirtyEditStep: convState.clearedDirtyEditStep ?? -1,
+    clearedDirtyEditStep:
+      lastProposeStepIndex >= 0
+        ? Math.max(convState.clearedDirtyEditStep ?? -1, lastProposeStepIndex)
+        : (convState.clearedDirtyEditStep ?? -1),
     lastErrorRecoveryStep: hasCommandErrorRecovery
       ? latestErrorRecoveryStepIndex
       : (convState.lastErrorRecoveryStep ?? -1),
-    clearedErrorRecoveryStep: convState.clearedErrorRecoveryStep ?? -1,
+    clearedErrorRecoveryStep:
+      lastProposeStepIndex >= 0
+        ? Math.max(convState.clearedErrorRecoveryStep ?? -1, lastProposeStepIndex)
+        : (convState.clearedErrorRecoveryStep ?? -1),
     lastAuditStep: hasSubagentAudit
-      ? latestAuditStepIndex
+      ? effectiveAuditStep
       : (convState.lastAuditStep ?? -1),
     clearedAuditStep:
       lastProposeStepIndex >= 0

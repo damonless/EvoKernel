@@ -56,6 +56,7 @@ const BILINGUAL_TECH_SYNONYMS: Record<string, string[]> = {
   文档: ['document', 'docx', 'word', 'report', 'sop'],
   提交: ['commit', 'git', 'message', 'format', 'log'],
   版本: ['version', 'commit', 'release', 'git'],
+  日志: ['log', 'commit', 'git', 'trace', 'debug'],
   规范: ['format', 'convention', 'sop', 'standard', 'commit'],
   commit: ['git', 'message', 'format', '提交', '规范'],
   git: ['commit', 'branch', 'merge', '提交', '版本'],

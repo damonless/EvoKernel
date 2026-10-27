@@ -538,7 +538,12 @@ export class EvoMcpDispatcher {
     });
 
     const topGuardrailIds = hits
-      .filter((h) => h.kind === 'rule' || h.kind === 'skill')
+      .filter(
+        (h) =>
+          h.kind === 'rule' ||
+          h.kind === 'skill' ||
+          (h.kind === 'memory' && h.memory_status === 'VERIFIED')
+      )
       .slice(0, 3)
       .map((h) => h.id);
     const footerDirective =
