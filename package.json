@@ -14,8 +14,21 @@
   },
   "homepage": "https://github.com/damonless/EvoKernel",
   "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "scripts",
+    "templates",
+    "rules",
+    "skills",
+    ".claude-plugin",
+    "plugin.json",
+    "gemini-extension.json",
+    "hooks.json",
+    "mcp_config.json"
+  ],
   "scripts": {
     "build": "node ./scripts/build.mjs",
+    "prepack": "node ./scripts/build.mjs",
     "start": "node ./dist/cli/index.js",
     "mcp": "node ./dist/cli/index.js mcp",
     "test": "node ./scripts/test.mjs"

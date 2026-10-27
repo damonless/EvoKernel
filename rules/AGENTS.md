@@ -20,5 +20,20 @@ Whenever ANY of the following occurs in this session, you MUST call `evo_propose
 - **Visible Evolution Receipt**: Whenever you call `evo_propose` or `evo_compact`, append at the end of your response: `🧬 EvoKernel 演进回执：[<kind>] <id>（<新增/更新摘要>）`.
 
 > **Gatekeeper Notice**: `evo_propose` enforces Static Security, Lexical De-Symbolization, Sandbox `--self-test` / AST Grounding, BM25 Deduplication, Scoped Bucket Quotas (max 3/bucket), and a **1,500-token core rule budget**. On `ERR_BUDGET_EXCEEDED`, `ERR_SCOPED_BUCKET_FULL`, or `ERR_DUPLICATE`, call `evo_compact` first.
-<!-- EVO:END -->
 
+## 4. Evolved Core Invariants (Auto-Managed by EvoKernel)
+- **[gatekeeper-self-test-invariant]** (`.evo/tools/**/*`): Every evolved Micro-Tool script must handle --self-test or EVO_SELF_TEST=1 and exit 0 deterministically.
+  When proposing a new Micro-Tool via `evo_propose(kind: "tool")`:
+  - The script MUST check `process.env.EVO_SELF_TEST === "1"` or `process.argv.includes("--self-test")` and run a side-effect-free verification check exiting with code `0`.
+  - Never hardcode user-specific absolute paths; read workspace root from `process.env.EVO_WORKSPACE || process.cwd()`.
+- **[esm-typescript-imports]** (`src/**/*.ts`): Always use explicit .js extensions on relative imports and import type for types in ESM TypeScript.
+  1. Use explicit `.js` file extensions in relative module imports (e.g., `import { EvoStorage } from "./storage.js"`).
+  2. Always use `import type { ... }` when importing TypeScript interfaces or type aliases so native Node type-stripping (`node:module.stripTypeScriptTypes`) never fails at runtime.
+  3. Prefer built-in Node.js modules (`node:fs`, `node:path`, `node:sqlite`, `node:test`) over third-party npm packages to preserve zero-dependency security.
+
+### 5. 已注册受控微工具目录 (Registered Micro-Tools via `evo_run`)
+- `[tool] agy-config-auditor`: Audits host rule token budgets, Gate 1.5 rule compliance, memory AST symbols, and local/global split-brain divergence.
+- `[tool] git-hotspot-analyzer`: Identifies top 10 most frequently modified files in recent git history to pinpoint fragile modules.
+- `[tool] workspace-metrics-scanner`: Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.
+- On-demand rules/skills (inspect via `evo_inspect`): `[skill] bug-to-guardrail-sop`, `[skill] evo-rule-architect`
+<!-- EVO:END -->

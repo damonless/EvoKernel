@@ -232,6 +232,35 @@ if (fs.existsSync(localConfigFile)) {
     }
   } catch {}
 }
+const MAX_TOOLS_CATALOG_TOKENS = 350;
+
+function resolveBaseSeedTokens(markerBlock = '') {
+  const metaRulePath = path.join(root, 'src', 'templates', 'meta-rule.ts');
+  if (fs.existsSync(metaRulePath)) {
+    try {
+      const tsSrc = fs.readFileSync(metaRulePath, 'utf8');
+      const m = tsSrc.match(/L0_META_RULE_SEED\s*=\s*`([\s\S]*?)`;/);
+      if (m) {
+        const unescaped = m[1]
+          .replace(/\\`/g, '`')
+          .replace(/\\\$/g, '$')
+          .replace(/\r?\n/g, '\n')
+          .trim();
+        return estimateTokens(`${unescaped}\n`);
+      }
+    } catch {}
+  }
+  if (markerBlock && markerBlock.includes('# EvoKernel L0 Meta-Rule Seed')) {
+    const seedOnly =
+      markerBlock
+        .replace(/\r?\n/g, '\n')
+        .replace(/\n\n## 4\. Evolved Core Invariants[\s\S]*?(?=\n\n### 5\.|\n<!-- EVO:END -->)/, '')
+        .replace(/\n\n### 5\.[\s\S]*?(?=\n<!-- EVO:END -->)/, '') + '\n';
+    return estimateTokens(seedOnly);
+  }
+  return 1137;
+}
+
 const tokenAudit = [];
 const budgetViolations = [];
 for (const rel of ruleFiles) {
@@ -241,7 +270,10 @@ for (const rel of ruleFiles) {
     const markerMatch = text.match(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/);
     const measuredText = markerMatch ? markerMatch[0] : text;
     const tokens = estimateTokens(measuredText);
-    const effectiveLimit = markerMatch ? configuredBudgetLimit + 1350 : configuredBudgetLimit;
+    const baseSeedTokens = resolveBaseSeedTokens(markerMatch ? markerMatch[0] : '');
+    const managedBlockBudgetLimit =
+      configuredBudgetLimit + baseSeedTokens + MAX_TOOLS_CATALOG_TOKENS;
+    const effectiveLimit = markerMatch ? managedBlockBudgetLimit : configuredBudgetLimit;
     const healthy = tokens <= effectiveLimit;
     const entry = {
       file: rel,

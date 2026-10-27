@@ -4,7 +4,7 @@
       "command": "node",
       "args": [
         "-e",
-        "const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),url=require('node:url');const c=[path.resolve('dist/cli/index.js'),path.join(os.homedir(),'.gemini','config','plugins','evo-kernel','dist','cli','index.js'),path.join(os.homedir(),'.gemini','extensions','evo-kernel','dist','cli','index.js')].find(p=>fs.existsSync(p));if(!c){console.error('[EvoKernel MCP] Error: dist/cli/index.js not found. Please build the project first (node ./scripts/build.mjs).');process.exit(1);}process.argv=[process.argv[0],c,'mcp'];import(url.pathToFileURL(c).href);"
+        "const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),url=require('node:url'),cp=require('node:child_process');const roots=[path.resolve('.'),path.join(os.homedir(),'.gemini','config','plugins','evo-kernel'),path.join(os.homedir(),'.gemini','extensions','evo-kernel')];let c=roots.map(r=>path.join(r,'dist','cli','index.js')).find(p=>fs.existsSync(p));if(!c){const br=roots.find(r=>fs.existsSync(path.join(r,'scripts','build.mjs'))&&fs.existsSync(path.join(r,'src','cli','index.ts')));if(br){cp.spawnSync(process.execPath,[path.join(br,'scripts','build.mjs')],{cwd:br,stdio:'ignore'});if(fs.existsSync(path.join(br,'dist','cli','index.js')))c=path.join(br,'dist','cli','index.js');}}if(!c){console.error('[EvoKernel MCP] Error: dist/cli/index.js not found. Please build the project first (node ./scripts/build.mjs).');process.exit(1);}process.argv=[process.argv[0],c,'mcp'];import(url.pathToFileURL(c).href);"
       ]
     }
   }

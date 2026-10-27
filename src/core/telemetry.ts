@@ -60,6 +60,8 @@ const BILINGUAL_TECH_SYNONYMS: Record<string, string[]> = {
   规范: ['format', 'convention', 'sop', 'standard', 'commit'],
   commit: ['git', 'message', 'format', '提交', '规范'],
   git: ['commit', 'branch', 'merge', '提交', '版本'],
+  log: ['日志', 'commit', 'git'],
+  version: ['版本', 'release', 'commit'],
   hardware: ['hw', 'pcb', 'schematic', 'component', '硬件', '原理', '器件', '引脚'],
   hw: ['hardware', 'pcb', 'schematic', 'component', 'pin', 'net', '硬件', '器件'],
   schematic: ['pcb', 'net', 'pin', 'component', 'hardware', '原理', '理图', '网络'],

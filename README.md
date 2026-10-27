@@ -137,7 +137,7 @@ Declare external MCP servers under the `externalServers` dictionary:
 
 ```json
 {
-  "tokenBudgetCap": 1500,
+  "maxCoreRuleTokens": 1500,
   "externalServers": {
     "postgres": {
       "command": "npx",
@@ -265,7 +265,7 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-All 5 test suites (72+ tests) run in ~5 seconds:
+All 5 test suites (100+ tests) run in ~5 seconds:
 1. `dist/tests/evo-kernel.test.js`: Core Gatekeeper, Sandbox, AST Cognitive Memory, and Invariants.
 2. `dist/tests/multi-harness.test.js`: 10-Agent Harness Matrix, Non-Destructive Merging, and Stealth Exclude.
 3. `dist/tests/hook.test.js`: Universal Hook Router, Scoped Glob Matching, and Anti-Poisoning Alerts.

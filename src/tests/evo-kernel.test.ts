@@ -3272,6 +3272,14 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         `Expected '提交'/'规范'/'日志' query to expand commit/git/format/log, got: ${tokensZhToEn.join(', ')}`
       );
 
+      const tokensLogVersionToZh = extractQueryTokens('git log version');
+      assert.ok(
+        tokensLogVersionToZh.includes('日志') &&
+          tokensLogVersionToZh.includes('版本') &&
+          tokensLogVersionToZh.includes('release'),
+        `Expected 'log'/'version' query to expand 日志/版本/release, got: ${tokensLogVersionToZh.join(', ')}`
+      );
+
       // Verify evo_search ranks git-commit-message-format-and-completeness at top for both queries
       const search1 = dispatcher.handleToolCall('evo_search', {
         workspace: ws,
@@ -3285,8 +3293,13 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       });
       assert.match(search2.content[0].text, /git-commit-message-format-and-completeness/);
 
-      // 3. MANAGED-BLOCK-WORKFLOW-INDEX-3: Section 5 surfaces compact L0 IDs of scope_glob: "**/*" workflow rules and skills even when 0 micro-tools exist
-      for (const hostFile of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']) {
+      // 3. MANAGED-BLOCK-WORKFLOW-INDEX-3: Section 5 surfaces compact L0 IDs of scope_glob: "**/*" workflow rules and skills even when 0 micro-tools exist, including rules/AGENTS.md when present
+      fs.mkdirSync(path.join(ws, 'rules'), { recursive: true });
+      fs.writeFileSync(path.join(ws, 'rules', 'AGENTS.md'), '<!-- EVO:START -->\n<!-- EVO:END -->\n', 'utf8');
+      const syncedList = syncManagedRuleBlocks(ws);
+      assert.ok(syncedList.includes('rules/AGENTS.md'), 'syncManagedRuleBlocks must update rules/AGENTS.md when present');
+
+      for (const hostFile of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'rules/AGENTS.md']) {
         const syncedText = fs.readFileSync(path.join(ws, hostFile), 'utf8');
         assert.match(
           syncedText,
@@ -3385,6 +3398,58 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       dispatcher.close();
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(fakeGlobal, { recursive: true, force: true });
+    }
+  });
+
+  test('43. Zero-Build Plugin Bootstrap: package.json prepack/files, scripts/boot-mcp.mjs, and mcp_config.json auto-build when dist/ is missing', () => {
+    const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+    assert.equal(pkg.scripts?.prepack, 'node ./scripts/build.mjs');
+    assert.ok(Array.isArray(pkg.files) && pkg.files.includes('dist') && pkg.files.includes('scripts'));
+    assert.ok(fs.existsSync(path.join(repoRoot, 'scripts', 'boot-mcp.mjs')));
+
+    const mockCloneDir = createTempWorkspace();
+    try {
+      fs.mkdirSync(path.join(mockCloneDir, 'scripts'), { recursive: true });
+      fs.mkdirSync(path.join(mockCloneDir, 'src', 'cli'), { recursive: true });
+      fs.copyFileSync(
+        path.join(repoRoot, 'scripts', 'build.mjs'),
+        path.join(mockCloneDir, 'scripts', 'build.mjs')
+      );
+      fs.copyFileSync(
+        path.join(repoRoot, 'scripts', 'boot-mcp.mjs'),
+        path.join(mockCloneDir, 'scripts', 'boot-mcp.mjs')
+      );
+      fs.writeFileSync(
+        path.join(mockCloneDir, 'src', 'cli', 'index.ts'),
+        'const mode: string = process.argv[2] || "none";\nconsole.log(JSON.stringify({ booted: true, mode }));\n',
+        'utf8'
+      );
+
+      // 1. Verify mcp_config.json auto-builds dist/ when dist/cli/index.js is missing
+      const mcpConfig = JSON.parse(fs.readFileSync(path.join(repoRoot, 'mcp_config.json'), 'utf8'));
+      const nodeArgs = mcpConfig.mcpServers['evo-kernel'].args;
+      const res = spawnSync(process.execPath, nodeArgs, {
+        cwd: mockCloneDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(res.status, 0, `Expected auto-build exit 0, stderr: ${res.stderr}`);
+      assert.ok(fs.existsSync(path.join(mockCloneDir, 'dist', 'cli', 'index.js')));
+      assert.deepEqual(JSON.parse(res.stdout.trim()), { booted: true, mode: 'mcp' });
+
+      // 2. Verify scripts/boot-mcp.mjs also auto-builds dist/ when dist/ is removed
+      fs.rmSync(path.join(mockCloneDir, 'dist'), { recursive: true, force: true });
+      const bootRes = spawnSync(process.execPath, [path.join(mockCloneDir, 'scripts', 'boot-mcp.mjs')], {
+        cwd: mockCloneDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(bootRes.status, 0, `Expected boot-mcp.mjs exit 0, stderr: ${bootRes.stderr}`);
+      assert.ok(fs.existsSync(path.join(mockCloneDir, 'dist', 'cli', 'index.js')));
+      assert.deepEqual(JSON.parse(bootRes.stdout.trim()), { booted: true, mode: 'mcp' });
+    } finally {
+      fs.rmSync(mockCloneDir, { recursive: true, force: true });
     }
   });
 });

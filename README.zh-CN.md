@@ -72,7 +72,7 @@
 | **门禁自测与防毒化** | 模型自我反思（无确定性保证） | Git diff 与测试执行 | 无门禁校验 | 人工运行 `/learn-eval` | 异步 LLM 评审 | **4 道确定性编译门禁（静态 AST、沙盒 exit 0、BM25、1500-tok 预算）** |
 | **情景记忆与防漂移** | 语义向量检索（极易产生重构幻觉）| 仅 Repo Map 索引 | 无记忆体系 | 无（静态只读文档） | 无 AST 存在性校验 | **3 阶认知记忆（AST 结构指纹防刻舟求剑 + [STALE] 降权 + 拓扑穿透）** |
 | **多智能体宿主适配** | 仅独立运行时 | 仅独立运行时 | 通用 MCP 客户端 | 仅 Claude Code / Cursor | 通用代理 | **原生深度适配 10 大宿主（Claude, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, Antigravity）** |
-| **冷启动基因提取** | 依赖长期对话积累 | 仅扫 Git 仓库文件 | 无初始化挖掘 | 静态静态库 | 依赖漫长会话累积 | **`evo bootstrap` 10 秒提取工程技术栈 + Git Fix 经验** |
+| **冷启动基因提取** | 依赖长期对话积累 | 仅扫 Git 仓库文件 | 无初始化挖掘 | 静态模板库 | 依赖漫长会话累积 | **`evo bootstrap` 10 秒提取工程技术栈 + Git Fix 经验** |
 
 ---
 
@@ -137,7 +137,7 @@ EvoKernel 将下游业务 MCP 虚拟化隐藏在 **5 个固定元工具** 背后
 
 ```json
 {
-  "tokenBudgetCap": 1500,
+  "maxCoreRuleTokens": 1500,
   "externalServers": {
     "postgres": {
       "command": "npx",
@@ -228,7 +228,7 @@ node ./dist/cli/index.js refactor
 ├── 🛡️  规则资产 (3 条生效 | 核心规则预算: 412/1500 tokens)
 │   ├── [CORE] gatekeeper-self-test-invariant (132 tok | 命中: 4) — 演进的微工具脚本必须处理 --self-test 且安全退出 0。
 │   ├── [CORE] esm-typescript-imports (154 tok | 命中: 7) — 在 ESM TypeScript 中始终对相对导入使用明确的 .js 扩展名。
-│   └── [STACK] stack-rust-core-invariants (126 tok | 命中: 2) — 优先采用 channels/Arc<Mutex> 代替裸裸裸指针。
+│   └── [STACK] stack-rust-core-invariants (126 tok | 命中: 2) — 优先采用 channels/Arc<Mutex> 代替裸指针。
 ├── ⚡ 技能流程 (1 份已验证 L0/L1/L2 战术剧本)
 │   └── [SOP] bug-to-guardrail-sop (命中: 3 | 标签: debugging,evolution) — 将已定位根因转化为规则或微工具的标准 SOP。
 ├── 🔧 沙盒微工具 (3 个持久脚本 | 经固定 Meta-MCP 路由调度)
@@ -263,7 +263,7 @@ EvoKernel 自带基于 Node.js 原生测试运行器（`node:test`）构建的�
 node ./scripts/test.mjs
 ```
 
-全量 5 大测试套件（72+ 测试用例）仅需 ~5 秒全部通过：
+全量 5 大测试套件（100+ 测试用例）仅需 ~5 秒全部通过：
 1. `dist/tests/evo-kernel.test.js`：核心门禁、沙盒执行、AST 认知记忆防漂移与元规则。
 2. `dist/tests/multi-harness.test.js`：10 大智能体接入矩阵、无损标记块合并与 Git 隐身模式。
 3. `dist/tests/hook.test.js`：全局 Hook 路由器、通配符作用域匹配与防毒化反转告警。

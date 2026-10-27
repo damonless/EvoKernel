@@ -771,24 +771,32 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
           name: '"view_file"',
           args: { AbsolutePath: '".gemini/settings.json"' },
         },
+        {
+          name: '"grep_search"',
+          args: { SearchPath: '".evo/rules"', Query: '"invariant"' },
+        },
       ],
     });
     writeSteps(steps);
     assert.deepEqual(
       runAgyHook('PreInvocation'),
       {},
-      '9 source/codegraph reads + 4 ignored meta reads (including relative .evo/.agents/.gemini paths) must not trigger heavy diagnostic reads (< 10)'
+      '9 source/codegraph reads + 5 ignored meta reads (including grep_search on .evo/rules and relative .evo/.agents/.gemini paths) must not trigger heavy diagnostic reads (< 10)'
     );
 
-    // 10th read on project source file (with editCountSinceLastPropose === 0) triggers hasHeavyDiagnosticReads!
+    // Boundary check: 1..3 source edits + 10th source read via grep_search (closing the 1..3 editCount dead zone) triggers hasHeavyDiagnosticReads!
     steps.push({
       step_index: 11,
       type: 'PLANNER_RESPONSE',
       source: 'MODEL',
       tool_calls: [
         {
-          name: '"view_code_item"',
-          args: { File: '"C:\\\\workspace\\\\src\\\\fsm_lookup.c"' },
+          name: '"replace_file_content"',
+          args: { TargetFile: '"C:\\\\workspace\\\\src\\\\fsm_lookup.c"' },
+        },
+        {
+          name: '"grep_search"',
+          args: { SearchPath: '"C:\\\\workspace\\\\src"', Query: '"FsmTransitionTable"' },
         },
       ],
     });
@@ -796,7 +804,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const preRead10 = runAgyHook('PreInvocation');
     assert.ok(
       Array.isArray(preRead10.injectSteps),
-      '10th read-only source/codegraph inspection with 0 edits must trigger diagnostic crystallization reminder'
+      '10th source/codegraph/grep_search inspection with 1..3 edits must trigger diagnostic crystallization reminder'
     );
     assert.match(
       preRead10.injectSteps[0].ephemeralMessage,

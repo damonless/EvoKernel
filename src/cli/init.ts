@@ -136,6 +136,7 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
     'CLAUDE.md',
     'AGENTS.md',
     'GEMINI.md',
+    'rules/AGENTS.md',
     '.cursor/rules/evo-kernel.mdc',
     '.windsurfrules',
     '.windsurf/rules/evo-kernel.md',

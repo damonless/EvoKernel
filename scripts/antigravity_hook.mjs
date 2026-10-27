@@ -39,6 +39,7 @@ const READ_TOOL_NAMES = new Set([
   'view_file',
   'view_file_outline',
   'view_code_item',
+  'grep_search',
 ]);
 
 export function normalizeTranscriptString(val) {
@@ -320,6 +321,10 @@ function main() {
               args.file ||
               args.TargetFile ||
               args.target_file ||
+              args.SearchPath ||
+              args.search_path ||
+              args.SearchDirectory ||
+              args.search_directory ||
               ''
           );
           const isIgnoredMetaRead =
@@ -463,7 +468,7 @@ function main() {
     scratchScriptCountSinceLastPropose >= 2 ||
     (scratchScriptCountSinceLastPropose >= 1 && deliverableRunCountSinceLastPropose >= 1);
   const hasHeavyDiagnosticReads =
-    editCountSinceLastPropose === 0 && codeReadCountSinceLastPropose >= 10;
+    editCountSinceLastPropose < 4 && codeReadCountSinceLastPropose >= 10;
   const hasDirtyPostProposeEdits = seenPropose && editsAfterPropose > 0;
   const hasSubagentAudit =
     effectiveAuditStep >= 0 &&
