@@ -891,14 +891,41 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
   });
 
   test('20. Unified CLI Hook (handlePostTool + handleStop): Read-only diagnostic threshold (>=10 reads with <4 edits) and user counter-question/correction detection', () => {
-    // 9 read-only calls should NOT trigger crystallizationSuggested in handleStop
+    // Internal .evo/ reads via AbsolutePath or SearchPath must NOT increment unproposed_read_count
+    handlePostTool(
+      ws,
+      {
+        tool_name: 'view_file',
+        tool_input: { AbsolutePath: path.join(ws, '.evo', 'config.json') },
+      },
+      {}
+    );
+    handlePostTool(
+      ws,
+      {
+        tool_name: 'grep_search',
+        tool_input: { SearchPath: path.join(ws, '.evo') },
+      },
+      {}
+    );
+
+    // 9 read-only calls (including call_mcp_tool wrapping codegraph_explore and AbsolutePath view_file) should NOT trigger crystallizationSuggested in handleStop
     for (let i = 1; i <= 9; i++) {
       handlePostTool(
         ws,
-        {
-          tool_name: i % 2 === 0 ? 'codegraph_explore' : 'view_file',
-          tool_input: { path: `src/module${i}.ts` },
-        },
+        i % 2 === 0
+          ? {
+              tool_name: 'call_mcp_tool',
+              tool_input: {
+                ServerName: 'codegraph',
+                ToolName: 'codegraph_explore',
+                Arguments: { query: `sym${i}` },
+              },
+            }
+          : {
+              tool_name: 'view_file',
+              tool_input: { AbsolutePath: path.join(ws, 'src', `module${i}.ts`) },
+            },
         {}
       );
     }
@@ -910,7 +937,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       ws,
       {
         tool_name: 'grep_search',
-        tool_input: { path: 'src/module10.ts' },
+        tool_input: { SearchPath: path.join(ws, 'src', 'module10.ts') },
       },
       {}
     );
@@ -918,12 +945,16 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.equal(stopAt10.crystallizationSuggested, true);
     assert.match(stopAt10.output, /10 read-only diagnostic steps with 0 edits/);
 
-    // Calling evo_propose resets unproposed_read_count and user_correction_detected
+    // Calling evo_propose via call_mcp_tool wrapper resets unproposed_read_count and user_correction_detected
     handlePostTool(
       ws,
       {
-        tool_name: 'evo_propose',
-        tool_input: { id: 'diag-read-memory' },
+        tool_name: 'call_mcp_tool',
+        tool_input: {
+          ServerName: 'evo-kernel',
+          ToolName: 'evo_propose',
+          Arguments: { id: 'diag-read-memory' },
+        },
       },
       {}
     );

@@ -573,47 +573,97 @@ function hasSymbolIdentifier(codeWithoutComments, symbolName) {
   return codeWithoutComments.includes(symbolName);
 }
 
-function checkSymbolAtParallelBranchCommit(commitSha, fileCandidate, symbolName, isWholeFile) {
-  if (!commitSha || commitSha === 'uncommitted' || !/^[0-9a-f]{4,40}$/i.test(String(commitSha).trim())) {
-    return false;
-  }
-  const sha = String(commitSha).trim();
+function resolveAuditorCurrentBranch() {
   try {
-    const catRes = spawnSync('git', ['cat-file', '-e', `${sha}^{commit}`], {
+    const res = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
       cwd: root,
       encoding: 'utf8',
       timeout: 1500,
     });
-    if (catRes.status !== 0) return false;
-
-    const ancRes = spawnSync('git', ['merge-base', '--is-ancestor', sha, 'HEAD'], {
-      cwd: root,
-      encoding: 'utf8',
-      timeout: 1500,
-    });
-    // If sha IS an ancestor of HEAD (status === 0), current branch evolved past sha and genuinely deleted/mutated the symbol
-    if (ancRes.status === 0) return false;
-
-    if (!fileCandidate || fileCandidate === '(unlocated)' || fileCandidate === '(unrecorded)') {
-      return false;
+    if (res.status === 0 && res.stdout) {
+      const b = res.stdout.trim();
+      return b && b !== 'HEAD' ? b : '';
     }
-    const cleanRel = fileCandidate.replace(/^[/\\]+/, '').replace(/\\/g, '/');
-    const showRes = spawnSync('git', ['show', `${sha}:${cleanRel}`], {
-      cwd: root,
-      encoding: 'utf8',
-      timeout: 2000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    if (showRes.status !== 0 || typeof showRes.stdout !== 'string') return false;
-    if (isWholeFile) return true;
-    const code = stripCodeComments(showRes.stdout);
-    return hasSymbolIdentifier(code, symbolName);
-  } catch {
-    return false;
-  }
+  } catch {}
+  return '';
 }
 
-function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = '') {
+const auditorCurrentBranch = resolveAuditorCurrentBranch();
+
+function checkSymbolAtParallelBranchCommit(
+  commitSha,
+  createdBranch,
+  fileCandidate,
+  symbolName,
+  isWholeFile
+) {
+  if (!fileCandidate || fileCandidate === '(unlocated)' || fileCandidate === '(unrecorded)') {
+    return false;
+  }
+  const cleanRel = fileCandidate.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+
+  const checkGitRef = (ref) => {
+    try {
+      const showRes = spawnSync('git', ['show', `${ref}:${cleanRel}`], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 2000,
+        maxBuffer: 4 * 1024 * 1024,
+      });
+      if (showRes.status !== 0 || typeof showRes.stdout !== 'string') return false;
+      if (isWholeFile) return true;
+      const code = stripCodeComments(showRes.stdout);
+      return hasSymbolIdentifier(code, symbolName);
+    } catch {
+      return false;
+    }
+  };
+
+  if (commitSha && commitSha !== 'uncommitted' && /^[0-9a-f]{4,40}$/i.test(String(commitSha).trim())) {
+    const sha = String(commitSha).trim();
+    try {
+      const catRes = spawnSync('git', ['cat-file', '-e', `${sha}^{commit}`], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 1500,
+      });
+      if (catRes.status === 0) {
+        const ancRes = spawnSync('git', ['merge-base', '--is-ancestor', sha, 'HEAD'], {
+          cwd: root,
+          encoding: 'utf8',
+          timeout: 1500,
+        });
+        if (ancRes.status !== 0 && checkGitRef(sha)) {
+          return true;
+        }
+      }
+    } catch {}
+  }
+
+  const branchClean = String(createdBranch || '').trim();
+  if (
+    branchClean &&
+    branchClean !== 'HEAD' &&
+    branchClean !== auditorCurrentBranch &&
+    !branchClean.includes('..') &&
+    !branchClean.startsWith('-')
+  ) {
+    try {
+      const branchCat = spawnSync('git', ['cat-file', '-e', `${branchClean}^{commit}`], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 1500,
+      });
+      if (branchCat.status === 0 && checkGitRef(branchClean)) {
+        return true;
+      }
+    } catch {}
+  }
+
+  return false;
+}
+
+function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = '', createdBranch = '') {
   const spec = rawSpec.trim();
   const hashIdx = spec.indexOf('#');
   let fileHint = '';
@@ -658,6 +708,7 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
     if (
       checkSymbolAtParallelBranchCommit(
         createdCommit,
+        createdBranch,
         normalizedHint,
         symbolName,
         isWholeFile
@@ -704,7 +755,7 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
 
   if (
     recordedFilePath &&
-    checkSymbolAtParallelBranchCommit(createdCommit, recordedFilePath, symbolName, false)
+    checkSymbolAtParallelBranchCommit(createdCommit, createdBranch, recordedFilePath, symbolName, false)
   ) {
     return {
       exists: true,
@@ -724,6 +775,7 @@ if (fs.existsSync(memoriesDir)) {
       const { meta } = parseFrontmatter(raw);
       const id = String(meta.id || path.basename(ent.name, '.md'));
       const createdCommit = String(meta.created_commit || '');
+      const createdBranch = String(meta.created_branch || '');
       const fingerprints =
         meta.ast_fingerprints && typeof meta.ast_fingerprints === 'object'
           ? meta.ast_fingerprints
@@ -734,7 +786,7 @@ if (fs.existsSync(memoriesDir)) {
       for (const sym of targetSymbols) {
         const recordedFp = fingerprints[String(sym)];
         const recordedFile = recordedFp && typeof recordedFp.file_path === 'string' ? recordedFp.file_path : '';
-        const check = checkSymbolInWorkspace(String(sym), createdCommit, recordedFile);
+        const check = checkSymbolInWorkspace(String(sym), createdCommit, recordedFile, createdBranch);
         checkedSymbols.push({
           symbol: sym,
           exists: check.exists,

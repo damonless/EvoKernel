@@ -242,15 +242,43 @@ export function handlePostTool(
   ).toLowerCase();
 
   const toolInput = (payload.tool_input || payload.input || payload.Arguments || payload.args || {}) as Record<string, unknown>;
+  const innerArgs = (toolInput.Arguments || toolInput.args || toolInput) as Record<string, unknown>;
+  const innerToolName = String(
+    toolInput.ToolName ||
+    toolInput.tool_name ||
+    payload.inner_tool_name ||
+    ''
+  ).toLowerCase();
+  const serverName = String(
+    toolInput.ServerName ||
+    toolInput.server_name ||
+    payload.server_name ||
+    ''
+  ).toLowerCase();
+
   const rawPath = String(
     toolInput.path ||
     toolInput.Path ||
+    toolInput.AbsolutePath ||
+    toolInput.absolute_path ||
     toolInput.file ||
+    toolInput.File ||
     toolInput.filePath ||
     toolInput.file_path ||
     toolInput.TargetFile ||
     toolInput.target_file ||
+    toolInput.SearchPath ||
+    toolInput.search_path ||
+    toolInput.SearchDirectory ||
+    toolInput.search_directory ||
+    innerArgs.path ||
+    innerArgs.Path ||
+    innerArgs.AbsolutePath ||
+    innerArgs.file_path ||
+    innerArgs.SearchPath ||
+    innerArgs.SearchDirectory ||
     payload.path ||
+    payload.AbsolutePath ||
     payload.file ||
     payload.filePath ||
     payload.file_path ||
@@ -266,10 +294,11 @@ export function handlePostTool(
 
   const isEvoPropose =
     toolName.includes('evo_propose') ||
-    toolName.includes('evo_compact');
+    innerToolName.includes('evo_propose') ||
+    toolName.includes('evo_compact') ||
+    innerToolName.includes('evo_compact');
 
   if (isEvoPropose) {
-    const innerArgs = (toolInput.Arguments || toolInput.args || toolInput) as Record<string, unknown>;
     const proposedId = String(innerArgs.id || 'capability');
     telemetry.setSessionFlag('last_crystallized_id', proposedId);
     telemetry.setSessionFlag('pending_evolution', 'false');
@@ -287,16 +316,20 @@ export function handlePostTool(
         normPath.includes('/.agents/teamwork/') ||
         normPath.includes('/.gemini/antigravity/'));
 
-    const innerArgs = (toolInput.Arguments || toolInput.args || toolInput) as Record<string, unknown>;
     const isCodeGraphEvoRun =
-      toolName.includes('evo_run') &&
+      (toolName.includes('evo_run') || innerToolName.includes('evo_run')) &&
       String(innerArgs.tool_id || toolInput.tool_id || '').toLowerCase().includes('codegraph');
 
     const isMutation = toolName ? EDIT_TOOL_NAMES.has(toolName) : Boolean(rawPath);
     const isReadDiagnostic =
       !isMutation &&
-      Boolean(toolName) &&
-      (READ_TOOL_NAMES.has(toolName) || toolName.includes('codegraph') || isCodeGraphEvoRun);
+      Boolean(toolName || innerToolName) &&
+      (READ_TOOL_NAMES.has(toolName) ||
+        READ_TOOL_NAMES.has(innerToolName) ||
+        toolName.includes('codegraph') ||
+        innerToolName.includes('codegraph') ||
+        serverName.includes('codegraph') ||
+        isCodeGraphEvoRun);
 
     if (isMutation && !isInternalMeta) {
       telemetry.setSessionFlag('pending_evolution', 'true');

@@ -486,14 +486,27 @@ export function removeClaudeSettings(filePath: string): boolean {
         ['stop', 'hook stop'],
       ] as const) {
         if (Array.isArray(hooks[key])) {
-          const origLen = (hooks[key] as Array<Record<string, unknown>>).length;
-          hooks[key] = (hooks[key] as Array<Record<string, unknown>>).filter(
-            (entry) => !matchesClaudeHookEntry(entry, needle)
-          );
-          if ((hooks[key] as Array<Record<string, unknown>>).length !== origLen) {
-            modified = true;
+          const nextEntries: Array<Record<string, unknown>> = [];
+          for (const entry of hooks[key] as Array<Record<string, unknown>>) {
+            if (Array.isArray(entry?.hooks)) {
+              const origInner = entry.hooks as Array<Record<string, unknown>>;
+              const filteredInner = origInner.filter(
+                (h) => !(typeof h?.command === 'string' && h.command.includes(needle))
+              );
+              if (filteredInner.length !== origInner.length) {
+                modified = true;
+              }
+              if (filteredInner.length > 0) {
+                nextEntries.push({ ...entry, hooks: filteredInner });
+              }
+            } else if (matchesClaudeHookEntry(entry, needle)) {
+              modified = true;
+            } else {
+              nextEntries.push(entry);
+            }
           }
-          if ((hooks[key] as Array<Record<string, unknown>>).length === 0) {
+          hooks[key] = nextEntries;
+          if (nextEntries.length === 0) {
             delete hooks[key];
           }
         }

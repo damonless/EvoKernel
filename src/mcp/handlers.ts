@@ -713,7 +713,7 @@ export class EvoMcpDispatcher {
           : report.overall_status === 'OTHER_BRANCH'
             ? [
                 '',
-                `> [!NOTE] **MULTI-BRANCH MEMORY**: Recorded on branch \`${branchLabel}\` (\`${report.recorded_commit}\`), currently on \`${currentBranchLabel}@${report.current_commit}\`. ${report.verified_count}/${report.total_symbols} symbol(s) verified in HEAD; ${branchOnlyCount}/${report.total_symbols} verified in source branch via \`git show ${report.recorded_commit}:${sampleBranchFile}\`.`,
+                `> [!NOTE] **MULTI-BRANCH MEMORY**: Recorded on branch \`${branchLabel}\` (@ commit \`${report.recorded_commit}\`). ${branchOnlyCount}/${report.total_symbols} symbol(s) are specific to that branch and not yet merged into current HEAD (\`${currentBranchLabel}@${report.current_commit}\`; ${report.verified_count}/${report.total_symbols} verified in HEAD). Use \`git show ${report.recorded_commit}:${sampleBranchFile}\` to inspect the source branch implementation.`,
                 '',
               ].join('\n')
             : '';

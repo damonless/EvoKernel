@@ -3551,8 +3551,25 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(legacyProp.isError, undefined, legacyProp.content[0]?.text);
       dispatcher.close();
 
-      // 2. Create sibling branch 'feature/parallel-trip' and add branch-specific file + symbol
+      // 2. Create sibling branch 'feature/parallel-trip':
+      //    First propose a memory on 'feature/parallel-trip' AT the fork point (before committing on feature/parallel-trip)
+      //    targeting obsoleteLegacyHandler (which remains untouched on feature/parallel-trip when main later renames it).
       spawnSync('git', ['checkout', '-b', 'feature/parallel-trip'], { cwd: ws, encoding: 'utf8' });
+      dispatcher = new EvoMcpDispatcher(ws);
+      const forkSiblingProp = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        id: 'mem-sibling-fork-untouched',
+        title: 'Sibling Fork Legacy Handler Preservation',
+        l0_summary: 'Legacy handler remains active on sibling branch after main rename.',
+        symptom: 'Sibling branch still invokes obsoleteLegacyHandler on status check.',
+        root_cause: 'feature/parallel-trip preserves obsoleteLegacyHandler contract prior to main refactor.',
+        solution: 'Keep obsoleteLegacyHandler intact on feature/parallel-trip.',
+        target_symbols: [{ file_path: 'src/legacy.ts', symbol_name: 'obsoleteLegacyHandler' }],
+      });
+      assert.equal(forkSiblingProp.isError, undefined, forkSiblingProp.content[0]?.text);
+      dispatcher.close();
+
       fs.writeFileSync(
         path.join(ws, 'src', 'parallelTrip.ts'),
         'export function handleParallelBranchTrip(faultMask: number): boolean {\n  return (faultMask & 0x04) !== 0;\n}\n',
@@ -3620,6 +3637,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       // Verify 3-tier classification via verifyMemoryFreshness:
       const memVerified = storageCheck.getMemory('mem-verified-on-main')!;
       const memOtherBranch = storageCheck.getMemory('mem-parallel-branch-trip')!;
+      const memSiblingFork = storageCheck.getMemory('mem-sibling-fork-untouched')!;
       const memStale = storageCheck.getMemory('mem-deleted-on-main')!;
 
       const repVerified = verifyMemoryFreshness(ws, memVerified);
@@ -3633,8 +3651,13 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(repOtherBranch.verified_count, 1); // commonDiagnosticLoop is VERIFIED in HEAD
       assert.equal(repOtherBranch.branch_verified_count, 1); // handleParallelBranchTrip is OTHER_BRANCH via git show
 
+      // Memory recorded on sibling branch at fork point (where created_commit is ancestor of main, but created_branch still preserves symbol) MUST be OTHER_BRANCH
+      const repSiblingFork = verifyMemoryFreshness(ws, memSiblingFork);
+      assert.equal(repSiblingFork.overall_status, 'OTHER_BRANCH');
+      assert.equal(repSiblingFork.recorded_branch, 'feature/parallel-trip');
+
       const repStale = verifyMemoryFreshness(ws, memStale);
-      assert.equal(repStale.overall_status, 'STALE'); // created_commit IS an ancestor of main HEAD, symbol was deleted
+      assert.equal(repStale.overall_status, 'STALE'); // created on main, and main deleted symbol
 
       // Verify evo_search 3-tier ranking (VERIFIED -> OTHER_BRANCH -> STALE) and badge rendering
       const searchRes = dispatcher.handleToolCall('evo_search', {

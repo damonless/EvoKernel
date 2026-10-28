@@ -860,7 +860,11 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       assert.equal(claudeSettings.hooks.Stop[0].hooks[0].type, 'command');
       assert.match(claudeSettings.hooks.Stop[0].hooks[0].command, /hook stop/);
 
-      // Preserve sibling user PostToolUse hook when uninstalling
+      // Preserve sibling user PostToolUse hook (both separate matcher entry AND shared inner hooks array) when uninstalling
+      claudeSettings.hooks.PostToolUse[0].hooks.unshift({
+        type: 'command',
+        command: 'eslint --fix',
+      });
       claudeSettings.hooks.PostToolUse.push({
         matcher: 'Bash',
         hooks: [{ type: 'command', command: 'echo custom-bash-hook' }],
@@ -875,8 +879,10 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       const afterRemove = JSON.parse(
         fs.readFileSync(path.join(extWs, '.claude', 'settings.json'), 'utf8')
       );
-      assert.equal(afterRemove.hooks.PostToolUse.length, 1);
-      assert.equal(afterRemove.hooks.PostToolUse[0].hooks[0].command, 'echo custom-bash-hook');
+      assert.equal(afterRemove.hooks.PostToolUse.length, 2);
+      assert.equal(afterRemove.hooks.PostToolUse[0].hooks.length, 1);
+      assert.equal(afterRemove.hooks.PostToolUse[0].hooks[0].command, 'eslint --fix');
+      assert.equal(afterRemove.hooks.PostToolUse[1].hooks[0].command, 'echo custom-bash-hook');
       assert.equal(afterRemove.hooks.Stop, undefined);
       assert.equal(afterRemove.hooks['post-tool'], undefined);
       assert.equal(afterRemove.hooks['stop'], undefined);
@@ -885,10 +891,19 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
     }
   });
 
-  test('14. evo virtualize: One-Click Folding of Third-Party Stdio MCPs into .evo/mcp-pool.json & Lossless Restore', () => {
+  test('14. evo virtualize: One-Click Folding of Third-Party Stdio MCPs (including .codex/config.toml with env/comments/multi-line arrays) into .evo/mcp-pool.json & Lossless Restore', () => {
     const ws = createTempWorkspace();
     try {
-      // Seed third-party MCP servers across .mcp.json, .cursor/mcp.json, and .vscode/mcp.json
+      // Pre-seed a manual externalServer in .evo/config.json to ensure --restore does not wipe it
+      const storageInit = new EvoStorage(ws);
+      storageInit.ensureInitialized();
+      const preCfg = storageInit.getConfig();
+      preCfg.externalServers = {
+        'manual-kept': { command: 'node', args: ['manual-server.js'] },
+      };
+      storageInit.saveConfig(preCfg);
+
+      // Seed third-party MCP servers across .mcp.json, .vscode/mcp.json, and .codex/config.toml
       fs.writeFileSync(
         path.join(ws, '.mcp.json'),
         JSON.stringify(
@@ -928,23 +943,45 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
         ),
         'utf8'
       );
+      fs.mkdirSync(path.join(ws, '.codex'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, '.codex', 'config.toml'),
+        [
+          'model = "o3"',
+          '',
+          '[mcp_servers.brave-search] # inline comment with [brackets]',
+          'command = "npx"',
+          'args = [',
+          '  "-y", # multi-line array element',
+          '  "@modelcontextprotocol/server-brave-search"',
+          ']',
+          'cwd = "/srv/brave"',
+          'env = { BRAVE_API_KEY = "bsa_123" }',
+          '',
+          '[mcp_servers.brave-search.env]',
+          'BRAVE_TIMEOUT = "5000" # env sub-table comment',
+          '',
+        ].join('\n'),
+        'utf8'
+      );
 
-      // 1. Dry-run should report 3 servers without modifying host files
+      // 1. Dry-run should report 4 servers without modifying host files
       const dryRes = runVirtualize(ws, { dryRun: true });
       assert.equal(dryRes.mode, 'dry-run');
-      assert.equal(dryRes.servers.length, 3);
-      assert.ok(dryRes.estimatedTokensSavedPerTurn >= 2500);
+      assert.equal(dryRes.servers.length, 4);
+      assert.ok(dryRes.estimatedTokensSavedPerTurn >= 3000);
       assert.equal(fs.existsSync(path.join(ws, '.evo', 'mcp-pool.json')), false);
       const reportText = renderVirtualizeReport(dryRes);
       assert.match(reportText, /Fold|Would fold/);
       assert.match(reportText, /github/);
       assert.match(reportText, /postgres/);
       assert.match(reportText, /filesystem/);
+      assert.match(reportText, /brave-search/);
 
-      // 2. Apply virtualization: folds 3 servers into .evo/mcp-pool.json & .evo/config.json, leaves only evo-kernel in host configs
+      // 2. Apply virtualization: folds 4 servers into .evo/mcp-pool.json & .evo/config.json, leaves only evo-kernel in host configs
       const applyRes = runVirtualize(ws, { dryRun: false });
       assert.equal(applyRes.mode, 'virtualize');
-      assert.equal(applyRes.servers.length, 3);
+      assert.equal(applyRes.servers.length, 4);
       assert.ok(fs.existsSync(path.join(ws, '.evo', 'mcp-pool.json')));
 
       const dotMcpAfter = JSON.parse(fs.readFileSync(path.join(ws, '.mcp.json'), 'utf8'));
@@ -953,16 +990,30 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       const vscodeAfter = JSON.parse(fs.readFileSync(path.join(ws, '.vscode', 'mcp.json'), 'utf8'));
       assert.deepEqual(Object.keys(vscodeAfter.servers), ['evo-kernel']);
 
+      const codexAfter = fs.readFileSync(path.join(ws, '.codex', 'config.toml'), 'utf8');
+      assert.doesNotMatch(codexAfter, /\[mcp_servers\.brave-search/);
+      assert.match(codexAfter, /\[mcp_servers\.evo-kernel\]/);
+
       const storage = new EvoStorage(ws);
       const evoCfg = storage.getConfig();
       assert.ok(evoCfg.externalServers?.github);
       assert.ok(evoCfg.externalServers?.postgres);
       assert.ok(evoCfg.externalServers?.filesystem);
+      assert.ok(evoCfg.externalServers?.['brave-search']);
+      assert.deepEqual(evoCfg.externalServers?.['brave-search']?.args, [
+        '-y',
+        '@modelcontextprotocol/server-brave-search',
+      ]);
+      assert.equal(evoCfg.externalServers?.['brave-search']?.cwd, '/srv/brave');
+      assert.deepEqual(evoCfg.externalServers?.['brave-search']?.env, {
+        BRAVE_API_KEY: 'bsa_123',
+        BRAVE_TIMEOUT: '5000',
+      });
 
-      // 3. Restore (`--restore`) losslessly puts github, postgres, and filesystem back into their original host configs
+      // 3. Restore (`--restore`) losslessly puts github, postgres, filesystem, and brave-search back into their original host configs while preserving manual-kept
       const restoreRes = runVirtualize(ws, { restore: true });
       assert.equal(restoreRes.mode, 'restore');
-      assert.equal(restoreRes.servers.length, 3);
+      assert.equal(restoreRes.servers.length, 4);
       assert.equal(fs.existsSync(path.join(ws, '.evo', 'mcp-pool.json')), false);
 
       const dotMcpRestored = JSON.parse(fs.readFileSync(path.join(ws, '.mcp.json'), 'utf8'));
@@ -971,6 +1022,15 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
 
       const vscodeRestored = JSON.parse(fs.readFileSync(path.join(ws, '.vscode', 'mcp.json'), 'utf8'));
       assert.ok(vscodeRestored.servers.filesystem);
+
+      const codexRestored = fs.readFileSync(path.join(ws, '.codex', 'config.toml'), 'utf8');
+      assert.match(codexRestored, /\[mcp_servers\.brave-search\]/);
+      assert.match(codexRestored, /\[mcp_servers\.brave-search\.env\]/);
+      assert.match(codexRestored, /BRAVE_TIMEOUT = "5000"/);
+
+      const cfgAfterRestore = storage.getConfig();
+      assert.ok(cfgAfterRestore.externalServers?.['manual-kept']);
+      assert.equal(cfgAfterRestore.externalServers?.github, undefined);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

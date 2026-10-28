@@ -95,32 +95,212 @@ function normalizeServerConfig(raw: Record<string, unknown>, format: Virtualized
   };
 }
 
+function stripTomlInlineComment(line: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '\\' && inDouble) {
+      i++;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble && ch === '#') {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+function countTomlOpenDelta(line: string): number {
+  const clean = stripTomlInlineComment(line);
+  let delta = 0;
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean[i];
+    if (ch === '\\' && inDouble) {
+      i++;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      if (ch === '[' || ch === '{') delta++;
+      else if (ch === ']' || ch === '}') delta--;
+    }
+  }
+  return delta;
+}
+
+function parseTomlQuotedString(raw: string): string | undefined {
+  const m = raw.trim().match(/^(?:"((?:[^"\\]|\\.)*)"|'([^']*)')$/);
+  if (!m) return undefined;
+  if (m[1] !== undefined) {
+    return m[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return m[2];
+}
+
 function parseCodexTomlMcpServers(content: string): Array<{
   name: string;
   config: ExternalMcpServerConfig;
   rawBlock: string;
+  lineRanges: Array<[number, number]>;
 }> {
-  const results: Array<{ name: string; config: ExternalMcpServerConfig; rawBlock: string }> = [];
-  const sectionRegex = /(?:^|\r?\n)\[mcp_servers\.([a-zA-Z0-9_-]+)\]\r?\n([\s\S]*?)(?=\r?\n\[|$)/g;
-  let match: RegExpExecArray | null;
-  while ((match = sectionRegex.exec(content)) !== null) {
-    const name = match[1];
-    if (!name || name === 'evo-kernel') continue;
-    const body = match[2] || '';
-    const cmdMatch = body.match(/^\s*command\s*=\s*"([^"]+)"/m);
-    if (!cmdMatch) continue;
-    const command = cmdMatch[1];
-    let args: string[] = [];
-    const argsMatch = body.match(/^\s*args\s*=\s*\[([^\]]*)\]/m);
-    if (argsMatch) {
-      args = (argsMatch[1].match(/"([^"]*)"/g) || []).map((s) => s.slice(1, -1));
+  const lines = content.split(/\r?\n/);
+  interface TomlSection {
+    header: string;
+    startLine: number;
+    endLine: number;
+  }
+  const sections: TomlSection[] = [];
+  let bracketDepth = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const clean = stripTomlInlineComment(lines[i]).trim();
+    if (bracketDepth === 0) {
+      const hdrMatch = clean.match(/^\[([^\]]+)\]$/);
+      if (hdrMatch) {
+        if (sections.length > 0) {
+          let prevEnd = i;
+          while (prevEnd > sections[sections.length - 1].startLine + 1 && lines[prevEnd - 1].trim().startsWith('#')) {
+            prevEnd--;
+          }
+          sections[sections.length - 1].endLine = prevEnd;
+        }
+        sections.push({
+          header: hdrMatch[1].trim(),
+          startLine: i,
+          endLine: lines.length,
+        });
+        continue;
+      }
     }
+    bracketDepth = Math.max(0, bracketDepth + countTomlOpenDelta(lines[i]));
+  }
+
+  const grouped = new Map<
+    string,
+    {
+      mainSection?: TomlSection;
+      envSection?: TomlSection;
+    }
+  >();
+
+  for (const sec of sections) {
+    const mainMatch = sec.header.match(/^mcp_servers\.([a-zA-Z0-9_-]+)$/);
+    if (mainMatch) {
+      const name = mainMatch[1];
+      if (!name || name === 'evo-kernel') continue;
+      const cur = grouped.get(name) || {};
+      cur.mainSection = sec;
+      grouped.set(name, cur);
+      continue;
+    }
+    const envMatch = sec.header.match(/^mcp_servers\.([a-zA-Z0-9_-]+)\.env$/);
+    if (envMatch) {
+      const name = envMatch[1];
+      if (!name || name === 'evo-kernel') continue;
+      const cur = grouped.get(name) || {};
+      cur.envSection = sec;
+      grouped.set(name, cur);
+    }
+  }
+
+  const results: Array<{
+    name: string;
+    config: ExternalMcpServerConfig;
+    rawBlock: string;
+    lineRanges: Array<[number, number]>;
+  }> = [];
+
+  for (const [name, entry] of grouped.entries()) {
+    if (!entry.mainSection) continue;
+    const mainRawLines = lines.slice(entry.mainSection.startLine, entry.mainSection.endLine);
+    const bodyClean = mainRawLines
+      .slice(1)
+      .map((l) => stripTomlInlineComment(l))
+      .join('\n');
+
+    const cmdMatch = bodyClean.match(/^\s*command\s*=\s*("[^"]*"|'[^']*')/m);
+    if (!cmdMatch) continue;
+    const command = parseTomlQuotedString(cmdMatch[1]) || '';
+    if (!command) continue;
+
+    let args: string[] = [];
+    const argsMatch = bodyClean.match(/^\s*args\s*=\s*\[([\s\S]*?)\]/m);
+    if (argsMatch) {
+      const tokens = argsMatch[1].match(/"(?:[^"\\]|\\.)*"|'[^']*'/g) || [];
+      args = tokens
+        .map((t) => parseTomlQuotedString(t))
+        .filter((v): v is string => v !== undefined);
+    }
+
+    let cwd: string | undefined;
+    const cwdMatch = bodyClean.match(/^\s*cwd\s*=\s*("[^"]*"|'[^']*')/m);
+    if (cwdMatch) {
+      cwd = parseTomlQuotedString(cwdMatch[1]);
+    }
+
+    const env: Record<string, string> = {};
+    const inlineEnvMatch = bodyClean.match(/^\s*env\s*=\s*\{([\s\S]*?)\}/m);
+    if (inlineEnvMatch) {
+      const kvRegex = /([A-Za-z0-9_.-]+)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g;
+      let kv: RegExpExecArray | null;
+      while ((kv = kvRegex.exec(inlineEnvMatch[1])) !== null) {
+        const val = parseTomlQuotedString(kv[2]);
+        if (val !== undefined) env[kv[1]] = val;
+      }
+    }
+
+    const lineRanges: Array<[number, number]> = [
+      [entry.mainSection.startLine, entry.mainSection.endLine],
+    ];
+    const rawParts = [mainRawLines.join('\n').trim()];
+
+    if (entry.envSection) {
+      const envRawLines = lines.slice(entry.envSection.startLine, entry.envSection.endLine);
+      rawParts.push(envRawLines.join('\n').trim());
+      lineRanges.push([entry.envSection.startLine, entry.envSection.endLine]);
+      for (const rawLine of envRawLines.slice(1)) {
+        const cleanLine = stripTomlInlineComment(rawLine).trim();
+        if (!cleanLine) continue;
+        const eqIdx = cleanLine.indexOf('=');
+        if (eqIdx === -1) continue;
+        const k = cleanLine.slice(0, eqIdx).trim();
+        const vRaw = cleanLine.slice(eqIdx + 1).trim();
+        const val = parseTomlQuotedString(vRaw) ?? vRaw;
+        if (k) env[k] = val;
+      }
+    }
+
     results.push({
       name,
-      config: { command, args },
-      rawBlock: `[mcp_servers.${name}]\n${body.trim()}\n`,
+      config: {
+        command,
+        args,
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+        ...(cwd ? { cwd } : {}),
+      },
+      rawBlock: rawParts.join('\n\n') + '\n',
+      lineRanges,
     });
   }
+
   return results;
 }
 
@@ -193,15 +373,16 @@ export function runVirtualize(
       }
 
       if (!options.dryRun) {
-        let updated = content;
+        const lines = content.split(/\r?\n/);
+        const removedIndices = new Set<number>();
         for (const blk of parsedBlocks) {
-          const escaped = blk.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const removeRegex = new RegExp(
-            `(?:^|\\r?\\n)\\[mcp_servers\\.${escaped}\\]\\r?\\n[\\s\\S]*?(?=\\r?\\n\\[|$)`,
-            'g'
-          );
-          updated = updated.replace(removeRegex, '');
+          for (const [sLine, eLine] of blk.lineRanges) {
+            for (let idx = sLine; idx < eLine; idx++) {
+              removedIndices.add(idx);
+            }
+          }
         }
+        let updated = lines.filter((_, idx) => !removedIndices.has(idx)).join('\n');
         if (!updated.includes('[mcp_servers.evo-kernel]')) {
           const argsToml = JSON.stringify(evoLaunch.args);
           const evoBlock = `[mcp_servers.evo-kernel]\ncommand = "${evoLaunch.command.replace(/\\/g, '/')}"\nargs = ${argsToml}\n`;
@@ -370,9 +551,11 @@ function runRestoreVirtualized(
       : {};
 
   const evoConfig = storage.getConfig();
-  const allServerNames = Array.from(
-    new Set([...Object.keys(poolServers), ...Object.keys(evoConfig.externalServers || {})])
-  );
+  const poolKeys = Object.keys(poolServers);
+  const allServerNames =
+    poolKeys.length > 0
+      ? poolKeys
+      : Object.keys(evoConfig.externalServers || {});
 
   const restoredEntries: VirtualizedServerEntry[] = [];
   const modifiedSet = new Set<string>();
@@ -455,7 +638,12 @@ function runRestoreVirtualized(
       fs.unlinkSync(poolPath);
     }
     if (evoConfig.externalServers) {
-      delete evoConfig.externalServers;
+      for (const name of allServerNames) {
+        delete evoConfig.externalServers[name];
+      }
+      if (Object.keys(evoConfig.externalServers).length === 0) {
+        delete evoConfig.externalServers;
+      }
       storage.saveConfig(evoConfig);
     }
   }

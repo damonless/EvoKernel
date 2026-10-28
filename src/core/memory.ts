@@ -819,6 +819,26 @@ function isGitCommitPresent(workspaceRoot: string, commitSha: string): boolean {
   }
 }
 
+function resolveGitBranchCommit(workspaceRoot: string, branchName?: string): string | undefined {
+  const clean = (branchName || '').trim();
+  if (!clean || clean === 'HEAD' || clean.includes('..') || clean.startsWith('-')) {
+    return undefined;
+  }
+  try {
+    const res = spawnSync('git', ['rev-parse', '--verify', '--short=12', `${clean}^{commit}`], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    if (res.status === 0 && res.stdout && res.stdout.trim()) {
+      return res.stdout.trim();
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
 function isGitAncestorOfHead(workspaceRoot: string, commitSha: string): boolean {
   try {
     const res = spawnSync('git', ['merge-base', '--is-ancestor', commitSha.trim(), 'HEAD'], {
@@ -1136,15 +1156,24 @@ export function verifyMemoryFreshness(
   }
 
   // Tier 2: Git-Topology-Aware Fallback (OTHER_BRANCH vs STALE)
-  if (
-    totalSymbols > 0 &&
-    verifiedCount < totalSymbols &&
+  const nonAncestorCommit =
     isGitCommitPresent(root, memory.created_commit) &&
     !isGitAncestorOfHead(root, memory.created_commit)
-  ) {
+      ? memory.created_commit.trim()
+      : undefined;
+  const siblingBranchCommit =
+    memory.created_branch &&
+    memory.created_branch.trim() &&
+    memory.created_branch.trim() !== 'HEAD' &&
+    memory.created_branch.trim() !== currentBranch
+      ? resolveGitBranchCommit(root, memory.created_branch.trim())
+      : undefined;
+  const candidateGitRef = nonAncestorCommit || siblingBranchCommit;
+
+  if (totalSymbols > 0 && verifiedCount < totalSymbols && candidateGitRef) {
     const branchLabel = resolveCommitBranchLabel(
       root,
-      memory.created_commit,
+      candidateGitRef,
       memory.created_branch
     );
     let branchVerifiedCount = 0;
@@ -1153,29 +1182,44 @@ export function verifyMemoryFreshness(
       if (checks[i].status === 'VERIFIED') continue;
       const symKey = checks[i].symbol;
       const recorded = checks[i].recorded;
-      const commitFp = extractSymbolFingerprintAtCommit(
+      let commitFp = extractSymbolFingerprintAtCommit(
         root,
-        memory.created_commit,
+        candidateGitRef,
         symKey,
         recorded
       );
+      if (
+        (!commitFp || (recorded.ast_hash && commitFp.ast_hash !== recorded.ast_hash)) &&
+        siblingBranchCommit &&
+        siblingBranchCommit !== candidateGitRef
+      ) {
+        commitFp = extractSymbolFingerprintAtCommit(
+          root,
+          siblingBranchCommit,
+          symKey,
+          recorded
+        );
+      }
       if (commitFp && (!recorded.ast_hash || commitFp.ast_hash === recorded.ast_hash)) {
         branchVerifiedCount++;
+        const refDisplay = memory.created_commit && memory.created_commit !== 'uncommitted'
+          ? memory.created_commit
+          : candidateGitRef;
         checks[i] = {
           symbol: symKey,
           status: 'OTHER_BRANCH',
           recorded,
           current: commitFp,
-          detail: `AST fingerprint verified (${commitFp.ast_hash}) on branch '${branchLabel}' (@ commit ${memory.created_commit}) at ${commitFp.file_path}:L${commitFp.start_line}-L${commitFp.end_line} (not yet merged into ${currentBranch || 'HEAD'}@${currentCommit}).`,
+          detail: `AST fingerprint verified (${commitFp.ast_hash}) on branch '${branchLabel}' (@ commit ${refDisplay}) at ${commitFp.file_path}:L${commitFp.start_line}-L${commitFp.end_line} (not yet merged into ${currentBranch || 'HEAD'}@${currentCommit}).`,
         };
         topologyAnchors[i] = {
           symbol: symKey,
           file_path: commitFp.file_path,
-          lines: `L${commitFp.start_line}-L${commitFp.end_line} (@ ${branchLabel}:${memory.created_commit})`,
+          lines: `L${commitFp.start_line}-L${commitFp.end_line} (@ ${branchLabel}:${refDisplay})`,
           signature: commitFp.signature,
           status: 'OTHER_BRANCH',
           callers: [],
-          codegraph_hint: `git show ${memory.created_commit}:${commitFp.file_path}`,
+          codegraph_hint: `git show ${refDisplay}:${commitFp.file_path}`,
         };
       }
     }
