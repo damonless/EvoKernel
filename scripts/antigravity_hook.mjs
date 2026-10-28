@@ -40,6 +40,7 @@ const READ_TOOL_NAMES = new Set([
   'view_file_outline',
   'view_code_item',
   'grep_search',
+  'find_by_name',
 ]);
 
 export function normalizeTranscriptString(val) {

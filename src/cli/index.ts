@@ -30,7 +30,7 @@ Commands:
                       (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
   bootstrap [--max-commits <N>]
                       Cold-start repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories (default: 50, up to 500)
-  virtualize [--dry-run] [--restore]
+  virtualize [--dry-run] [--restore] [--global]
                       One-click fold third-party stdio MCPs from host configs into .evo/mcp-pool.json (0 schema bloat)
   memory [verify]     Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
   audit [--global]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat

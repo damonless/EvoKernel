@@ -64,13 +64,18 @@ function writeJsonAtomic(filePath: string, data: unknown): void {
 }
 
 function normalizeServerConfig(raw: Record<string, unknown>, format: VirtualizedServerOrigin['format']): ExternalMcpServerConfig | null {
-  if (format === 'opencodeMcp') {
-    const cmdArr = Array.isArray(raw.command) ? raw.command.map(String) : [];
+  if (format === 'opencodeMcp' && Array.isArray(raw.command)) {
+    const cmdArr = raw.command.map(String);
     if (cmdArr.length === 0 || !cmdArr[0]) return null;
-    const envObj =
+    const rawEnv =
       raw.environment && typeof raw.environment === 'object' && !Array.isArray(raw.environment)
-        ? Object.fromEntries(Object.entries(raw.environment as Record<string, unknown>).map(([k, v]) => [k, String(v)]))
-        : undefined;
+        ? raw.environment
+        : raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)
+          ? raw.env
+          : undefined;
+    const envObj = rawEnv
+      ? Object.fromEntries(Object.entries(rawEnv as Record<string, unknown>).map(([k, v]) => [k, String(v)]))
+      : undefined;
     return {
       command: cmdArr[0],
       args: cmdArr.slice(1),
@@ -82,10 +87,15 @@ function normalizeServerConfig(raw: Record<string, unknown>, format: Virtualized
   const command = typeof raw.command === 'string' ? raw.command.trim() : '';
   if (!command) return null;
   const args = Array.isArray(raw.args) ? raw.args.map(String) : [];
-  const envObj =
+  const rawEnv =
     raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)
-      ? Object.fromEntries(Object.entries(raw.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]))
-      : undefined;
+      ? raw.env
+      : raw.environment && typeof raw.environment === 'object' && !Array.isArray(raw.environment)
+        ? raw.environment
+        : undefined;
+  const envObj = rawEnv
+    ? Object.fromEntries(Object.entries(rawEnv as Record<string, unknown>).map(([k, v]) => [k, String(v)]))
+    : undefined;
 
   return {
     command,
@@ -173,7 +183,7 @@ function parseCodexTomlMcpServers(content: string): Array<{
   for (let i = 0; i < lines.length; i++) {
     const clean = stripTomlInlineComment(lines[i]).trim();
     if (bracketDepth === 0) {
-      const hdrMatch = clean.match(/^\[([^\]]+)\]$/);
+      const hdrMatch = clean.match(/^\[{1,2}([^\]]+)\]{1,2}$/);
       if (hdrMatch) {
         if (sections.length > 0) {
           let prevEnd = i;
@@ -397,14 +407,26 @@ export function runVirtualize(
     const doc = readJsonSafe(target.configPath);
     if (!doc) continue;
 
-    const containerKey =
+    let containerKey =
       target.format === 'vscodeServers'
         ? 'servers'
         : target.format === 'opencodeMcp'
           ? 'mcp'
           : 'mcpServers';
 
-    const serversObj = doc[containerKey];
+    let effectiveFormat = target.format;
+    let serversObj = doc[containerKey];
+    if (
+      (!serversObj || typeof serversObj !== 'object' || Array.isArray(serversObj)) &&
+      containerKey !== 'mcpServers' &&
+      doc.mcpServers &&
+      typeof doc.mcpServers === 'object' &&
+      !Array.isArray(doc.mcpServers)
+    ) {
+      containerKey = 'mcpServers';
+      effectiveFormat = 'mcpServers';
+      serversObj = doc.mcpServers;
+    }
     if (!serversObj || typeof serversObj !== 'object' || Array.isArray(serversObj)) {
       continue;
     }
@@ -422,7 +444,7 @@ export function runVirtualize(
       const origin: VirtualizedServerOrigin = {
         configPath: target.configPath,
         relPath: target.relPath,
-        format: target.format,
+        format: effectiveFormat,
         rawEntry: rawDef,
       };
 
@@ -445,13 +467,13 @@ export function runVirtualize(
     if (fileTouched) {
       if (!options.dryRun) {
         if (!record['evo-kernel']) {
-          if (target.format === 'vscodeServers') {
+          if (effectiveFormat === 'vscodeServers') {
             record['evo-kernel'] = {
               type: 'stdio',
               command: evoLaunch.command,
               args: evoLaunch.args,
             };
-          } else if (target.format === 'opencodeMcp') {
+          } else if (effectiveFormat === 'opencodeMcp') {
             record['evo-kernel'] = {
               type: 'local',
               command: [evoLaunch.command, ...evoLaunch.args],

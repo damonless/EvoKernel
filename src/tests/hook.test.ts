@@ -775,16 +775,20 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
           name: '"grep_search"',
           args: { SearchPath: '".evo/rules"', Query: '"invariant"' },
         },
+        {
+          name: '"find_by_name"',
+          args: { SearchDirectory: '".evo/memories"', Pattern: '"*.md"' },
+        },
       ],
     });
     writeSteps(steps);
     assert.deepEqual(
       runAgyHook('PreInvocation'),
       {},
-      '9 source/codegraph reads + 5 ignored meta reads (including grep_search on .evo/rules and relative .evo/.agents/.gemini paths) must not trigger heavy diagnostic reads (< 10)'
+      '9 source/codegraph reads + 6 ignored meta reads (including grep_search/find_by_name on .evo/* and relative .evo/.agents/.gemini paths) must not trigger heavy diagnostic reads (< 10)'
     );
 
-    // Boundary check: 1..3 source edits + 10th source read via grep_search (closing the 1..3 editCount dead zone) triggers hasHeavyDiagnosticReads!
+    // Boundary check: 1..3 source edits + 10th source read via find_by_name (closing the 1..3 editCount dead zone) triggers hasHeavyDiagnosticReads!
     steps.push({
       step_index: 11,
       type: 'PLANNER_RESPONSE',
@@ -795,8 +799,8 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
           args: { TargetFile: '"C:\\\\workspace\\\\src\\\\fsm_lookup.c"' },
         },
         {
-          name: '"grep_search"',
-          args: { SearchPath: '"C:\\\\workspace\\\\src"', Query: '"FsmTransitionTable"' },
+          name: '"find_by_name"',
+          args: { SearchDirectory: '"C:\\\\workspace\\\\src"', Pattern: '"*fsm*"' },
         },
       ],
     });

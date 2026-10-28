@@ -23,6 +23,7 @@ export interface AuditedFileMetric {
   fullPath: string;
   bytes: number;
   tokens: number;
+  budgetLimit: number;
   overBudget: boolean;
 }
 
@@ -345,6 +346,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
       fullPath: entry.fullPath,
       bytes: Buffer.byteLength(raw, 'utf8'),
       tokens,
+      budgetLimit: effectiveLimit,
       overBudget,
     };
     files.push(metric);

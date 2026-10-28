@@ -961,6 +961,9 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
           '[mcp_servers.brave-search.env]',
           'BRAVE_TIMEOUT = "5000" # env sub-table comment',
           '',
+          '[[profiles]]',
+          'name = "default"',
+          '',
         ].join('\n'),
         'utf8'
       );
@@ -993,6 +996,8 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       const codexAfter = fs.readFileSync(path.join(ws, '.codex', 'config.toml'), 'utf8');
       assert.doesNotMatch(codexAfter, /\[mcp_servers\.brave-search/);
       assert.match(codexAfter, /\[mcp_servers\.evo-kernel\]/);
+      assert.match(codexAfter, /\[\[profiles\]\]/);
+      assert.match(codexAfter, /name = "default"/);
 
       const storage = new EvoStorage(ws);
       const evoCfg = storage.getConfig();
@@ -1023,6 +1028,12 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       const vscodeRestored = JSON.parse(fs.readFileSync(path.join(ws, '.vscode', 'mcp.json'), 'utf8'));
       assert.ok(vscodeRestored.servers.filesystem);
 
+      // Verify removeMcpJson cleans parsed.servers['evo-kernel'] written by runVirtualize
+      assert.equal(removeMcpJson(path.join(ws, '.vscode', 'mcp.json')), true);
+      const vscodeCleaned = JSON.parse(fs.readFileSync(path.join(ws, '.vscode', 'mcp.json'), 'utf8'));
+      assert.equal(vscodeCleaned.servers['evo-kernel'], undefined);
+      assert.ok(vscodeCleaned.servers.filesystem);
+
       const codexRestored = fs.readFileSync(path.join(ws, '.codex', 'config.toml'), 'utf8');
       assert.match(codexRestored, /\[mcp_servers\.brave-search\]/);
       assert.match(codexRestored, /\[mcp_servers\.brave-search\.env\]/);
@@ -1031,6 +1042,42 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       const cfgAfterRestore = storage.getConfig();
       assert.ok(cfgAfterRestore.externalServers?.['manual-kept']);
       assert.equal(cfgAfterRestore.externalServers?.github, undefined);
+
+      // 4. Verify opencodeMcp string+args normalization and legacy mcpServers containerKey fallback
+      const ws2 = createTempWorkspace();
+      try {
+        fs.mkdirSync(path.join(ws2, '.vscode'), { recursive: true });
+        fs.writeFileSync(
+          path.join(ws2, '.vscode', 'mcp.json'),
+          JSON.stringify({
+            mcpServers: {
+              legacy_vsc: { command: 'npx', args: ['-y', 'vsc-legacy-mcp'] },
+            },
+          }),
+          'utf8'
+        );
+        fs.writeFileSync(
+          path.join(ws2, 'opencode.json'),
+          JSON.stringify({
+            mcp: {
+              opencode_str: {
+                command: 'npx',
+                args: ['-y', 'opencode-str-mcp'],
+                environment: { OC_KEY: 'val' },
+              },
+            },
+          }),
+          'utf8'
+        );
+        const edgeRes = runVirtualize(ws2, { dryRun: false });
+        assert.equal(edgeRes.servers.length, 2);
+        const ocSrv = edgeRes.servers.find((s) => s.name === 'opencode_str');
+        assert.equal(ocSrv?.config.command, 'npx');
+        assert.deepEqual(ocSrv?.config.args, ['-y', 'opencode-str-mcp']);
+        assert.deepEqual(ocSrv?.config.env, { OC_KEY: 'val' });
+      } finally {
+        fs.rmSync(ws2, { recursive: true, force: true });
+      }
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

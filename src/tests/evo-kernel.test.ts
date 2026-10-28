@@ -3730,8 +3730,13 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       );
 
       const auditWithSkillOnly = runAudit(ws, { includeGlobal: false });
+      const skillMetric = auditWithSkillOnly.files.find(
+        (f) => f.displayPath.includes('SKILL.md') || f.fullPath.includes('SKILL.md')
+      );
+      assert.ok(skillMetric, 'Audit files must include SKILL.md');
+      assert.equal(skillMetric.budgetLimit, 3000);
       const skillBloatFindings = auditWithSkillOnly.budgetViolations.filter(
-        (f) => f.displayPath.includes('SKILL.md') || f.filePath.includes('SKILL.md')
+        (f) => f.displayPath.includes('SKILL.md') || f.fullPath.includes('SKILL.md')
       );
       assert.equal(
         skillBloatFindings.length,
@@ -3747,12 +3752,20 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       );
       const auditWithBloatedRule = runAudit(ws, { includeGlobal: false });
       const ruleBloatFindings = auditWithBloatedRule.budgetViolations.filter(
-        (f) => f.displayPath.endsWith('CLAUDE.md') || f.filePath.endsWith('CLAUDE.md')
+        (f) => f.displayPath.endsWith('CLAUDE.md') || f.fullPath.endsWith('CLAUDE.md')
       );
       assert.equal(
         ruleBloatFindings.length,
         1,
         'Always-On rule file (~2,200 tokens > 1,500 limit) must still trigger budgetViolations'
+      );
+      assert.equal(ruleBloatFindings[0].budgetLimit, 1500);
+      const refactorPlan = runRefactor(ws, { includeGlobal: false });
+      assert.ok(
+        refactorPlan.stages[2].actions.some(
+          (a) => a.includes('/1500 tokens)') && !a.includes('undefined')
+        ),
+        'runRefactor Stage 3 action must format budgetLimit without undefined'
       );
 
       dispatcher.close();

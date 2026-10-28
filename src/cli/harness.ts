@@ -247,6 +247,16 @@ export function removeMcpJson(filePath: string): boolean {
         delete parsed.mcp;
       }
     }
+    if (parsed.servers && typeof parsed.servers === 'object') {
+      const vscServers = parsed.servers as Record<string, unknown>;
+      if ('evo-kernel' in vscServers) {
+        delete vscServers['evo-kernel'];
+        modified = true;
+      }
+      if (Object.keys(vscServers).length === 0) {
+        delete parsed.servers;
+      }
+    }
 
     if (!modified) return false;
 
