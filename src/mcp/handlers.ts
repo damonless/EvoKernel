@@ -499,11 +499,13 @@ export class EvoMcpDispatcher {
       }
     }
 
+    const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
+      s === 'STALE' ? 2 : s === 'OTHER_BRANCH' ? 1 : 0;
+
     const hits = mergedHits
       .sort((a, b) => {
-        const aStale = a.memory_status === 'STALE' ? 1 : 0;
-        const bStale = b.memory_status === 'STALE' ? 1 : 0;
-        if (aStale !== bStale) return aStale - bStale;
+        const tierDiff = statusTier(a.memory_status) - statusTier(b.memory_status);
+        if (tierDiff !== 0) return tierDiff;
         return b.score - a.score || b.hit_count - a.hit_count;
       })
       .slice(0, limit);
@@ -530,7 +532,12 @@ export class EvoMcpDispatcher {
 
     const lines = hits.map((h) => {
       if (h.kind === 'memory' && h.memory_badge) {
-        const icon = h.memory_status === 'VERIFIED' ? '✅' : '⚠️';
+        const icon =
+          h.memory_status === 'VERIFIED'
+            ? '✅'
+            : h.memory_status === 'OTHER_BRANCH'
+              ? '🌿'
+              : '⚠️';
         return `• [MEMORY] ${icon} ${h.memory_badge} ${h.id} — ${h.l0_summary} (anchors: ${h.scope_glob} | hits: ${h.hit_count})`;
       }
       const tierBadge = h.tier === 'GLOBAL' ? ' [GLOBAL]' : '';
@@ -542,7 +549,8 @@ export class EvoMcpDispatcher {
         (h) =>
           h.kind === 'rule' ||
           h.kind === 'skill' ||
-          (h.kind === 'memory' && h.memory_status === 'VERIFIED')
+          (h.kind === 'memory' &&
+            (h.memory_status === 'VERIFIED' || h.memory_status === 'OTHER_BRANCH'))
       )
       .slice(0, 3)
       .map((h) => h.id);
@@ -663,10 +671,15 @@ export class EvoMcpDispatcher {
       const report = verifyMemoryFreshness(this.storage.rootDir, memory, {
         includeCallers: tier !== 'L1',
       });
-      this.telemetry.recordUsage(id, report.overall_status === 'VERIFIED', 650);
+      this.telemetry.recordUsage(id, report.overall_status !== 'STALE', 650);
 
       const driftLines = report.checks.map((c) => {
-        const badge = c.status === 'VERIFIED' ? '✅ [VERIFIED]' : `⚠️ [${c.status}]`;
+        const badge =
+          c.status === 'VERIFIED'
+            ? '✅ [VERIFIED]'
+            : c.status === 'OTHER_BRANCH'
+              ? '🌿 [OTHER_BRANCH]'
+              : `⚠️ [${c.status}]`;
         return `- ${badge} \`${c.symbol}\`: ${c.detail}`;
       });
 
@@ -677,7 +690,17 @@ export class EvoMcpDispatcher {
         return `- \`${a.symbol}\` -> \`${a.file_path}:${a.lines}\` [${a.status}]\n    Signature: \`${a.signature}\`${callerText}${hintText}`;
       });
 
-      const staleWarning =
+      const branchLabel = report.recorded_branch || memory.created_branch || 'other-branch';
+      const currentBranchLabel = report.current_branch || 'HEAD';
+      const branchOnlyCount =
+        report.branch_verified_count ?? Math.max(0, report.total_symbols - report.verified_count);
+      const sampleBranchFile =
+        report.checks.find((c) => c.status === 'OTHER_BRANCH')?.current?.file_path ||
+        report.checks.find((c) => c.status === 'OTHER_BRANCH')?.recorded.file_path ||
+        report.checks[0]?.recorded.file_path ||
+        '<file_path>';
+
+      const statusBanner =
         report.overall_status === 'STALE'
           ? [
               '',
@@ -687,14 +710,20 @@ export class EvoMcpDispatcher {
               '> Treat this case strictly as historical reference — DO NOT blindly apply without re-verifying the mutated code!',
               '',
             ].join('\n')
-          : '';
+          : report.overall_status === 'OTHER_BRANCH'
+            ? [
+                '',
+                `> [!NOTE] **MULTI-BRANCH MEMORY**: Recorded on branch \`${branchLabel}\` (\`${report.recorded_commit}\`), currently on \`${currentBranchLabel}@${report.current_commit}\`. ${report.verified_count}/${report.total_symbols} symbol(s) verified in HEAD; ${branchOnlyCount}/${report.total_symbols} verified in source branch via \`git show ${report.recorded_commit}:${sampleBranchFile}\`.`,
+                '',
+              ].join('\n')
+            : '';
 
       if (tier === 'L1') {
         const l1Body = [
           `[MEMORY L1] ${memory.id} — ${memory.title}`,
           `Status: ${report.overall_status} ${report.confidence_tag} (${report.verified_count}/${report.total_symbols} AST symbols verified | commit ${report.recorded_commit} -> ${report.current_commit})`,
           `L0: ${memory.l0_summary}`,
-          staleWarning,
+          statusBanner,
           '## Symptom',
           memory.symptom,
           '',
@@ -711,7 +740,7 @@ export class EvoMcpDispatcher {
         `Status: ${report.overall_status} ${report.confidence_tag} (${report.verified_count}/${report.total_symbols} AST symbols verified | commit ${report.recorded_commit} -> ${report.current_commit})`,
         `Tags: ${memory.tags.join(', ') || 'troubleshooting'}`,
         `L0: ${memory.l0_summary}`,
-        staleWarning,
+        statusBanner,
         '## 1. Symptom (现象指纹)',
         memory.symptom,
         '',

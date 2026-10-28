@@ -26,6 +26,11 @@ if (!fs.existsSync(distEntry)) {
   process.exit(1);
 }
 
-const extraArgs = process.argv.slice(2).filter((arg) => arg !== 'mcp');
-process.argv = [process.argv[0], distEntry, 'mcp', ...extraArgs];
+const rawArgs = process.argv.slice(2);
+const firstArg = (rawArgs[0] || '').toLowerCase();
+const forwardedArgs =
+  firstArg && firstArg !== 'mcp' && !firstArg.startsWith('-')
+    ? rawArgs
+    : ['mcp', ...rawArgs.filter((arg) => arg !== 'mcp')];
+process.argv = [process.argv[0], distEntry, ...forwardedArgs];
 await import(url.pathToFileURL(distEntry).href);

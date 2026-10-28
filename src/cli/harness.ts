@@ -106,6 +106,84 @@ function isPluginBootstrapEntry(entry: unknown): boolean {
   return Array.isArray(args) && args[0] === '-e';
 }
 
+export function resolveInstalledEvoKernelRoot(): string | null {
+  if (process.env.EVO_FORCE_NPX === '1') {
+    return null;
+  }
+  const candidates = [
+    process.env.EVO_KERNEL_ROOT ? path.resolve(process.env.EVO_KERNEL_ROOT) : '',
+    path.resolve(import.meta.dirname, '..', '..'),
+    path.join(os.homedir(), '.gemini', 'config', 'plugins', 'evo-kernel'),
+    path.join(os.homedir(), '.gemini', 'extensions', 'evo-kernel'),
+  ].filter(Boolean);
+
+  for (const cand of candidates) {
+    if (
+      fs.existsSync(path.join(cand, 'scripts', 'boot-mcp.mjs')) ||
+      fs.existsSync(path.join(cand, 'dist', 'cli', 'index.js'))
+    ) {
+      return cand;
+    }
+  }
+  return null;
+}
+
+export function resolveEvoMcpLaunchConfig(workspaceRoot: string): {
+  command: string;
+  args: string[];
+} {
+  const localBootEntry = path.join(workspaceRoot, 'scripts', 'boot-mcp.mjs');
+  const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
+  if (fs.existsSync(localBootEntry)) {
+    return { command: 'node', args: ['./scripts/boot-mcp.mjs', 'mcp'] };
+  }
+  if (fs.existsSync(localDistEntry)) {
+    return { command: 'node', args: ['./dist/cli/index.js', 'mcp'] };
+  }
+
+  const installedRoot = resolveInstalledEvoKernelRoot();
+  if (installedRoot) {
+    const extBoot = path.join(installedRoot, 'scripts', 'boot-mcp.mjs');
+    if (fs.existsSync(extBoot)) {
+      return { command: 'node', args: [extBoot.replace(/\\/g, '/'), 'mcp'] };
+    }
+    const extDist = path.join(installedRoot, 'dist', 'cli', 'index.js');
+    if (fs.existsSync(extDist)) {
+      return { command: 'node', args: [extDist.replace(/\\/g, '/'), 'mcp'] };
+    }
+  }
+
+  return { command: 'npx', args: ['-y', 'evo-kernel', 'mcp'] };
+}
+
+export function resolveEvoHookCommand(
+  workspaceRoot: string,
+  hookEvent: 'post-tool' | 'stop'
+): string {
+  const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
+  if (fs.existsSync(localDistEntry)) {
+    return `node ./dist/cli/index.js hook ${hookEvent}`;
+  }
+  const localBootEntry = path.join(workspaceRoot, 'scripts', 'boot-mcp.mjs');
+  if (fs.existsSync(localBootEntry)) {
+    return `node ./scripts/boot-mcp.mjs hook ${hookEvent}`;
+  }
+
+  const installedRoot = resolveInstalledEvoKernelRoot();
+  if (installedRoot) {
+    const extDist = path.join(installedRoot, 'dist', 'cli', 'index.js');
+    const extBoot = path.join(installedRoot, 'scripts', 'boot-mcp.mjs');
+    const targetScript = fs.existsSync(extDist) ? extDist : extBoot;
+    if (fs.existsSync(targetScript)) {
+      const norm = targetScript.replace(/\\/g, '/');
+      const quoted = norm.includes(' ') ? `"${norm}"` : norm;
+      return `node ${quoted} hook ${hookEvent}`;
+    }
+  }
+
+  return `npx -y evo-kernel hook ${hookEvent}`;
+}
+
 export function upsertMcpJson(filePath: string, workspaceRoot: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let current: Record<string, unknown> = {};
@@ -130,18 +208,7 @@ export function upsertMcpJson(filePath: string, workspaceRoot: string): void {
     return;
   }
 
-  const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
-  const useLocalDist = fs.existsSync(localDistEntry);
-
-  mcpServers['evo-kernel'] = useLocalDist
-    ? {
-        command: 'node',
-        args: ['./dist/cli/index.js', 'mcp'],
-      }
-    : {
-        command: 'npx',
-        args: ['-y', 'evo-kernel', 'mcp'],
-      };
+  mcpServers['evo-kernel'] = resolveEvoMcpLaunchConfig(workspaceRoot);
 
   current.mcpServers = mcpServers;
   fs.writeFileSync(filePath, JSON.stringify(current, null, 2) + '\n', 'utf8');
@@ -271,10 +338,9 @@ export function upsertCodexToml(
     command = workspaceRootOrCommand;
     args = customArgs;
   } else {
-    const localDistEntry = path.join(workspaceRootOrCommand, 'dist', 'cli', 'index.js');
-    const useLocalDist = fs.existsSync(localDistEntry);
-    command = useLocalDist ? 'node' : 'npx';
-    args = useLocalDist ? ['./dist/cli/index.js', 'mcp'] : ['-y', 'evo-kernel', 'mcp'];
+    const resolved = resolveEvoMcpLaunchConfig(workspaceRootOrCommand);
+    command = resolved.command;
+    args = resolved.args;
   }
 
   let existing = '';
@@ -329,6 +395,18 @@ export function removeCodexToml(filePath: string): boolean {
 // Claude Code Settings Hooks Utilities (.claude/settings.json)
 // ============================================================================
 
+function matchesClaudeHookEntry(entry: Record<string, unknown>, needle: string): boolean {
+  if (typeof entry?.command === 'string' && entry.command.includes(needle)) {
+    return true;
+  }
+  if (Array.isArray(entry?.hooks)) {
+    return (entry.hooks as Array<Record<string, unknown>>).some(
+      (h) => typeof h?.command === 'string' && h.command.includes(needle)
+    );
+  }
+  return false;
+}
+
 export function upsertClaudeSettings(filePath: string, workspaceRoot: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let settings: Record<string, unknown> = {};
@@ -340,25 +418,42 @@ export function upsertClaudeSettings(filePath: string, workspaceRoot: string): v
     }
   }
 
-  const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
-  const useLocalDist = fs.existsSync(localDistEntry);
-  const postToolCmd = useLocalDist
-    ? 'node ./dist/cli/index.js hook post-tool'
-    : 'npx -y evo-kernel hook post-tool';
-  const stopCmd = useLocalDist
-    ? 'node ./dist/cli/index.js hook stop'
-    : 'npx -y evo-kernel hook stop';
+  const postToolCmd = resolveEvoHookCommand(workspaceRoot, 'post-tool');
+  const stopCmd = resolveEvoHookCommand(workspaceRoot, 'stop');
 
   if (!settings.hooks || typeof settings.hooks !== 'object') {
     settings.hooks = {};
   }
   const hooks = settings.hooks as Record<string, unknown>;
 
+  // Official Claude Code PascalCase nested hook format (PostToolUse / Stop)
+  if (!Array.isArray(hooks.PostToolUse)) {
+    hooks.PostToolUse = [];
+  }
+  const postToolUseList = hooks.PostToolUse as Array<Record<string, unknown>>;
+  if (!postToolUseList.some((entry) => matchesClaudeHookEntry(entry, 'hook post-tool'))) {
+    postToolUseList.push({
+      matcher: '*',
+      hooks: [{ type: 'command', command: postToolCmd }],
+    });
+  }
+
+  if (!Array.isArray(hooks.Stop)) {
+    hooks.Stop = [];
+  }
+  const officialStopList = hooks.Stop as Array<Record<string, unknown>>;
+  if (!officialStopList.some((entry) => matchesClaudeHookEntry(entry, 'hook stop'))) {
+    officialStopList.push({
+      hooks: [{ type: 'command', command: stopCmd }],
+    });
+  }
+
+  // Backward-compatible flat keys (post-tool / stop)
   if (!Array.isArray(hooks['post-tool'])) {
     hooks['post-tool'] = [];
   }
   const postList = hooks['post-tool'] as Array<Record<string, unknown>>;
-  const hasPost = postList.some((entry) => typeof entry?.command === 'string' && entry.command.includes('hook post-tool'));
+  const hasPost = postList.some((entry) => matchesClaudeHookEntry(entry, 'hook post-tool'));
   if (!hasPost) {
     postList.push({ command: postToolCmd });
   }
@@ -367,7 +462,7 @@ export function upsertClaudeSettings(filePath: string, workspaceRoot: string): v
     hooks['stop'] = [];
   }
   const stopList = hooks['stop'] as Array<Record<string, unknown>>;
-  const hasStop = stopList.some((entry) => typeof entry?.command === 'string' && entry.command.includes('hook stop'));
+  const hasStop = stopList.some((entry) => matchesClaudeHookEntry(entry, 'hook stop'));
   if (!hasStop) {
     stopList.push({ command: stopCmd });
   }
@@ -384,21 +479,24 @@ export function removeClaudeSettings(filePath: string): boolean {
 
     if (settings.hooks && typeof settings.hooks === 'object') {
       const hooks = settings.hooks as Record<string, unknown>;
-      if (Array.isArray(hooks['post-tool'])) {
-        const origLen = hooks['post-tool'].length;
-        hooks['post-tool'] = (hooks['post-tool'] as Array<Record<string, unknown>>).filter(
-          (entry) => !(typeof entry?.command === 'string' && entry.command.includes('hook post-tool'))
-        );
-        if (hooks['post-tool'].length !== origLen) modified = true;
-        if (hooks['post-tool'].length === 0) delete hooks['post-tool'];
-      }
-      if (Array.isArray(hooks['stop'])) {
-        const origLen = hooks['stop'].length;
-        hooks['stop'] = (hooks['stop'] as Array<Record<string, unknown>>).filter(
-          (entry) => !(typeof entry?.command === 'string' && entry.command.includes('hook stop'))
-        );
-        if (hooks['stop'].length !== origLen) modified = true;
-        if (hooks['stop'].length === 0) delete hooks['stop'];
+      for (const [key, needle] of [
+        ['PostToolUse', 'hook post-tool'],
+        ['post-tool', 'hook post-tool'],
+        ['Stop', 'hook stop'],
+        ['stop', 'hook stop'],
+      ] as const) {
+        if (Array.isArray(hooks[key])) {
+          const origLen = (hooks[key] as Array<Record<string, unknown>>).length;
+          hooks[key] = (hooks[key] as Array<Record<string, unknown>>).filter(
+            (entry) => !matchesClaudeHookEntry(entry, needle)
+          );
+          if ((hooks[key] as Array<Record<string, unknown>>).length !== origLen) {
+            modified = true;
+          }
+          if ((hooks[key] as Array<Record<string, unknown>>).length === 0) {
+            delete hooks[key];
+          }
+        }
       }
       if (Object.keys(hooks).length === 0) {
         delete settings.hooks;
@@ -439,11 +537,7 @@ export function upsertOpenCode(
     }
   }
 
-  const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
-  const useLocalDist = fs.existsSync(localDistEntry);
-  const mcpEntry = useLocalDist
-    ? { command: 'node', args: ['./dist/cli/index.js', 'mcp'] }
-    : { command: 'npx', args: ['-y', 'evo-kernel', 'mcp'] };
+  const mcpEntry = resolveEvoMcpLaunchConfig(workspaceRoot);
 
   if (current.mcp && typeof current.mcp === 'object') {
     (current.mcp as Record<string, unknown>)['evo-kernel'] = mcpEntry;

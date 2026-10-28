@@ -19,7 +19,11 @@ import {
 } from './storage.js';
 import { EvoTelemetry } from './telemetry.js';
 import { checkScriptSyntax, executeSandboxedScript } from './sandbox.js';
-import { buildFingerprintsForTargets, resolveCurrentGitCommit } from './memory.js';
+import {
+  buildFingerprintsForTargets,
+  resolveCurrentGitBranch,
+  resolveCurrentGitCommit,
+} from './memory.js';
 import { renderManagedBlock } from '../templates/meta-rule.js';
 
 const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
@@ -744,8 +748,19 @@ export class EvoGatekeeper {
       const symptom = resolvedSymptom;
       const rootCause = resolvedRootCause;
       const solution = resolvedSolution;
+      const normalizeTargetSymbol = (s: unknown): string => {
+        if (typeof s === 'string') return s.trim();
+        if (s && typeof s === 'object' && !Array.isArray(s)) {
+          const obj = s as Record<string, unknown>;
+          const filePart = String(obj.file_path ?? obj.file ?? obj.path ?? '').trim();
+          const symPart = String(obj.symbol_name ?? obj.symbol ?? obj.name ?? '').trim();
+          if (filePart && symPart) return `${filePart}:${symPart}`;
+          return symPart || filePart;
+        }
+        return String(s ?? '').trim();
+      };
       const targetSymbols = Array.isArray(rawProposal.target_symbols)
-        ? rawProposal.target_symbols.map((s) => String(s).trim()).filter(Boolean)
+        ? rawProposal.target_symbols.map(normalizeTargetSymbol).filter(Boolean)
         : [];
 
       if (!symptom || !rootCause || !solution) {
@@ -1219,8 +1234,23 @@ export class EvoGatekeeper {
       const symptom = resolvedSymptom;
       const rootCause = resolvedRootCause;
       const solution = resolvedSolution;
-      const targetSymbols = (rawProposal.target_symbols || []).map((s) => String(s).trim()).filter(Boolean);
+      const targetSymbols = (rawProposal.target_symbols || [])
+        .map((s: unknown) => {
+          if (typeof s === 'string') return s.trim();
+          if (s && typeof s === 'object' && !Array.isArray(s)) {
+            const obj = s as Record<string, unknown>;
+            const filePart = String(obj.file_path ?? obj.file ?? obj.path ?? '').trim();
+            const symPart = String(obj.symbol_name ?? obj.symbol ?? obj.name ?? '').trim();
+            if (filePart && symPart) return `${filePart}:${symPart}`;
+            return symPart || filePart;
+          }
+          return String(s ?? '').trim();
+        })
+        .filter(Boolean);
       const currentCommit = resolveCurrentGitCommit(this.storage.rootDir);
+      const currentBranch =
+        (typeof rawProposal.created_branch === 'string' && rawProposal.created_branch.trim()) ||
+        resolveCurrentGitBranch(this.storage.rootDir);
 
       if (options?.dryRun) {
         return {
@@ -1230,6 +1260,7 @@ export class EvoGatekeeper {
             id: cleanId,
             kind: 'memory',
             created_commit: currentCommit,
+            created_branch: currentBranch,
             target_symbols: targetSymbols,
             ast_fingerprints: extractedMemoryFingerprints,
           },
@@ -1259,6 +1290,7 @@ export class EvoGatekeeper {
         target_symbols: targetSymbols,
         ast_fingerprints: extractedMemoryFingerprints,
         created_commit: currentCommit,
+        created_branch: currentBranch,
         tags: rawProposal.tags || [],
         origin: rawProposal.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
@@ -1302,6 +1334,7 @@ export class EvoGatekeeper {
           id: cleanId,
           kind: 'memory',
           created_commit: currentCommit,
+          created_branch: currentBranch,
           target_symbols: targetSymbols,
           ast_fingerprints: extractedMemoryFingerprints,
           scoped_rule_upgrade_candidates: upgradeCandidates,

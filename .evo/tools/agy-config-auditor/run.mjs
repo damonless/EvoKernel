@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -572,11 +573,52 @@ function hasSymbolIdentifier(codeWithoutComments, symbolName) {
   return codeWithoutComments.includes(symbolName);
 }
 
-function checkSymbolInWorkspace(rawSpec) {
+function checkSymbolAtParallelBranchCommit(commitSha, fileCandidate, symbolName, isWholeFile) {
+  if (!commitSha || commitSha === 'uncommitted' || !/^[0-9a-f]{4,40}$/i.test(String(commitSha).trim())) {
+    return false;
+  }
+  const sha = String(commitSha).trim();
+  try {
+    const catRes = spawnSync('git', ['cat-file', '-e', `${sha}^{commit}`], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    if (catRes.status !== 0) return false;
+
+    const ancRes = spawnSync('git', ['merge-base', '--is-ancestor', sha, 'HEAD'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    // If sha IS an ancestor of HEAD (status === 0), current branch evolved past sha and genuinely deleted/mutated the symbol
+    if (ancRes.status === 0) return false;
+
+    if (!fileCandidate || fileCandidate === '(unlocated)' || fileCandidate === '(unrecorded)') {
+      return false;
+    }
+    const cleanRel = fileCandidate.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    const showRes = spawnSync('git', ['show', `${sha}:${cleanRel}`], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 2000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    if (showRes.status !== 0 || typeof showRes.stdout !== 'string') return false;
+    if (isWholeFile) return true;
+    const code = stripCodeComments(showRes.stdout);
+    return hasSymbolIdentifier(code, symbolName);
+  } catch {
+    return false;
+  }
+}
+
+function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = '') {
   const spec = rawSpec.trim();
   const hashIdx = spec.indexOf('#');
   let fileHint = '';
   let symbolName = spec;
+  let isWholeFile = false;
   if (hashIdx !== -1) {
     fileHint = spec.slice(0, hashIdx).trim().replace(/^[/\\]+/, '');
     symbolName = spec.slice(hashIdx + 1).trim();
@@ -587,6 +629,10 @@ function checkSymbolInWorkspace(rawSpec) {
       symbolName = spec.slice(colonIdx + 1).trim();
     } else {
       const cleanFileCandidate = spec.replace(/^[/\\]+/, '');
+      if (/\.[a-z0-9]+$/i.test(cleanFileCandidate) && !cleanFileCandidate.includes(' ')) {
+        isWholeFile = true;
+        fileHint = cleanFileCandidate;
+      }
       const fullCandidate = path.resolve(root, cleanFileCandidate);
       if (fs.existsSync(fullCandidate) && fs.statSync(fullCandidate).isFile()) {
         return { exists: true, file: cleanFileCandidate.replace(/\\/g, '/') };
@@ -598,9 +644,28 @@ function checkSymbolInWorkspace(rawSpec) {
     const normalizedHint = fileHint.replace(/\\/g, '/');
     const fullHint = path.resolve(root, fileHint);
     if (fs.existsSync(fullHint) && fs.statSync(fullHint).isFile()) {
+      if (isWholeFile) {
+        return { exists: true, file: normalizedHint };
+      }
       const content = stripCodeComments(fs.readFileSync(fullHint, 'utf8'));
+      if (hasSymbolIdentifier(content, symbolName)) {
+        return {
+          exists: true,
+          file: normalizedHint,
+        };
+      }
+    }
+    if (
+      checkSymbolAtParallelBranchCommit(
+        createdCommit,
+        normalizedHint,
+        symbolName,
+        isWholeFile
+      )
+    ) {
       return {
-        exists: hasSymbolIdentifier(content, symbolName),
+        exists: true,
+        branch_scoped: true,
         file: normalizedHint,
       };
     }
@@ -637,7 +702,18 @@ function checkSymbolInWorkspace(rawSpec) {
     }
   }
 
-  return { exists: false, file: fileHint || '(unlocated)' };
+  if (
+    recordedFilePath &&
+    checkSymbolAtParallelBranchCommit(createdCommit, recordedFilePath, symbolName, false)
+  ) {
+    return {
+      exists: true,
+      branch_scoped: true,
+      file: recordedFilePath.replace(/\\/g, '/'),
+    };
+  }
+
+  return { exists: false, file: fileHint || recordedFilePath || '(unlocated)' };
 }
 
 if (fs.existsSync(memoriesDir)) {
@@ -647,12 +723,24 @@ if (fs.existsSync(memoriesDir)) {
       const raw = fs.readFileSync(full, 'utf8');
       const { meta } = parseFrontmatter(raw);
       const id = String(meta.id || path.basename(ent.name, '.md'));
+      const createdCommit = String(meta.created_commit || '');
+      const fingerprints =
+        meta.ast_fingerprints && typeof meta.ast_fingerprints === 'object'
+          ? meta.ast_fingerprints
+          : {};
       const targetSymbols = Array.isArray(meta.target_symbols) ? meta.target_symbols : [];
       const checkedSymbols = [];
 
       for (const sym of targetSymbols) {
-        const check = checkSymbolInWorkspace(String(sym));
-        checkedSymbols.push({ symbol: sym, exists: check.exists, file: check.file });
+        const recordedFp = fingerprints[String(sym)];
+        const recordedFile = recordedFp && typeof recordedFp.file_path === 'string' ? recordedFp.file_path : '';
+        const check = checkSymbolInWorkspace(String(sym), createdCommit, recordedFile);
+        checkedSymbols.push({
+          symbol: sym,
+          exists: check.exists,
+          ...(check.branch_scoped ? { branch_scoped: true } : {}),
+          file: check.file,
+        });
         if (!check.exists) {
           brokenSymbols.push({ memoryId: id, symbol: sym, file: check.file });
         }

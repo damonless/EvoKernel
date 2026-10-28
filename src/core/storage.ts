@@ -245,6 +245,23 @@ export class EvoStorage {
         }
       }
     }
+    const mcpPoolPath = path.join(this.evoDir, 'mcp-pool.json');
+    if (fs.existsSync(mcpPoolPath)) {
+      try {
+        const poolRaw = JSON.parse(fs.readFileSync(mcpPoolPath, 'utf8'));
+        const poolServers = (poolRaw?.mcpServers || poolRaw?.externalServers) as
+          | Record<string, { command: string; args?: string[]; env?: Record<string, string>; cwd?: string }>
+          | undefined;
+        if (poolServers && typeof poolServers === 'object') {
+          base.externalServers = {
+            ...poolServers,
+            ...(base.externalServers || {}),
+          };
+        }
+      } catch {
+        // ignore malformed mcp-pool.json
+      }
+    }
     return base;
   }
 
@@ -598,6 +615,7 @@ export class EvoStorage {
       `title: ${JSON.stringify(memory.title)}`,
       `l0_summary: ${JSON.stringify(memory.l0_summary)}`,
       `created_commit: ${JSON.stringify(memory.created_commit)}`,
+      ...(memory.created_branch ? [`created_branch: ${JSON.stringify(memory.created_branch)}`] : []),
       `target_symbols: ${JSON.stringify(memory.target_symbols)}`,
       `ast_fingerprints: ${JSON.stringify(memory.ast_fingerprints)}`,
       `tags: ${JSON.stringify(memory.tags)}`,
@@ -647,6 +665,7 @@ export class EvoStorage {
         target_symbols: Array.isArray(meta.target_symbols) ? meta.target_symbols.map(String) : [],
         ast_fingerprints: rawFingerprints,
         created_commit: String(meta.created_commit || 'uncommitted'),
+        created_branch: meta.created_branch ? String(meta.created_branch) : undefined,
         tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
         origin: String(meta.origin || 'session'),
         supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,

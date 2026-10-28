@@ -889,6 +889,58 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       'Cleared correction and subagent audit must remain cleared even after evo_propose step scrolls past the 128KB tail window'
     );
   });
+
+  test('20. Unified CLI Hook (handlePostTool + handleStop): Read-only diagnostic threshold (>=10 reads with <4 edits) and user counter-question/correction detection', () => {
+    // 9 read-only calls should NOT trigger crystallizationSuggested in handleStop
+    for (let i = 1; i <= 9; i++) {
+      handlePostTool(
+        ws,
+        {
+          tool_name: i % 2 === 0 ? 'codegraph_explore' : 'view_file',
+          tool_input: { path: `src/module${i}.ts` },
+        },
+        {}
+      );
+    }
+    const stopAt9 = handleStop(ws, {}, {});
+    assert.equal(stopAt9.crystallizationSuggested, false);
+
+    // 10th read-only call (with 0 edits < 4) MUST trigger crystallizationSuggested in handleStop
+    handlePostTool(
+      ws,
+      {
+        tool_name: 'grep_search',
+        tool_input: { path: 'src/module10.ts' },
+      },
+      {}
+    );
+    const stopAt10 = handleStop(ws, {}, {});
+    assert.equal(stopAt10.crystallizationSuggested, true);
+    assert.match(stopAt10.output, /10 read-only diagnostic steps with 0 edits/);
+
+    // Calling evo_propose resets unproposed_read_count and user_correction_detected
+    handlePostTool(
+      ws,
+      {
+        tool_name: 'evo_propose',
+        tool_input: { id: 'diag-read-memory' },
+      },
+      {}
+    );
+    const stopAfterPropose = handleStop(ws, {}, {});
+    assert.equal(stopAfterPropose.crystallizationSuggested, false);
+
+    // User rhetorical counter-question / correction in stop payload triggers crystallizationSuggested
+    const stopWithCorrection = handleStop(
+      ws,
+      {
+        user_message: '@[Quote] 这里为什么要切换到待机模式？不就是应该保持并网吗，不是吗？',
+      },
+      {}
+    );
+    assert.equal(stopWithCorrection.crystallizationSuggested, true);
+    assert.match(stopWithCorrection.output, /user correction \/ counter-question detected/);
+  });
 });
 
 

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .evo/.cache/
+.evo/archive/
 .codegraph/
 *.log
 .DS_Store

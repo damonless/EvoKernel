@@ -643,7 +643,14 @@ export class EvoTelemetry {
         const cjkKw = extractCjkBigrams(
           `${m.title} ${m.l0_summary} ${m.symptom} ${m.root_cause} ${m.solution}`
         ).join(' ');
-        const keywords = [idTokens, ...m.target_symbols, ...m.tags, m.created_commit, cjkKw]
+        const keywords = [
+          idTokens,
+          ...m.target_symbols,
+          ...m.tags,
+          m.created_commit,
+          m.created_branch,
+          cjkKw,
+        ]
           .filter(Boolean)
           .join(' ');
         const bodyText = `${m.symptom}\n${m.root_cause}\n${m.solution}`;
@@ -771,7 +778,7 @@ export class EvoTelemetry {
         const mem = this.storage.getMemory(id);
         if (mem) {
           const ver = verifyMemoryFreshness(this.storage.rootDir, mem, { includeCallers: false });
-          const isActive = ver.overall_status === 'VERIFIED' ? 1 : 0;
+          const isActive = ver.overall_status !== 'STALE' ? 1 : 0;
           updateActiveStmt.run(isActive, now, id);
 
           if (ver.overall_status === 'VERIFIED') {
@@ -786,6 +793,20 @@ export class EvoTelemetry {
               score: rawScore,
               memory_status: 'VERIFIED',
               memory_badge: `[VERIFIED ${ver.verified_count}/${ver.total_symbols} symbols @ ${ver.current_commit}]`,
+            };
+          } else if (ver.overall_status === 'OTHER_BRANCH') {
+            const branchLabel = ver.recorded_branch || mem.created_branch || 'other-branch';
+            return {
+              id,
+              kind: itemKind,
+              title: String(r.title),
+              l0_summary: String(r.l0_summary),
+              scope_glob: String(r.scope_glob || '**/*'),
+              hit_count: Number(r.hit_count || 0),
+              success_rate: `BRANCH:${branchLabel}`,
+              score: rawScore * 0.9,
+              memory_status: 'OTHER_BRANCH',
+              memory_badge: `[BRANCH: ${branchLabel}@${ver.recorded_commit} (${ver.verified_count}/${ver.total_symbols} in HEAD)]`,
             };
           } else {
             const drifted = ver.checks
@@ -820,12 +841,14 @@ export class EvoTelemetry {
       };
     });
 
-    // Ensure STALE memories are always ranked below active capabilities
+    // Sort VERIFIED / active capabilities first, OTHER_BRANCH second, and STALE memories last
+    const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
+      s === 'STALE' ? 2 : s === 'OTHER_BRANCH' ? 1 : 0;
+
     return hits
       .sort((a, b) => {
-        const aStale = a.memory_status === 'STALE' ? 1 : 0;
-        const bStale = b.memory_status === 'STALE' ? 1 : 0;
-        if (aStale !== bStale) return aStale - bStale;
+        const tierDiff = statusTier(a.memory_status) - statusTier(b.memory_status);
+        if (tierDiff !== 0) return tierDiff;
         return b.score - a.score || b.hit_count - a.hit_count;
       })
       .slice(0, limit);

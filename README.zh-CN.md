@@ -132,8 +132,21 @@ EvoKernel 将下游业务 MCP 虚拟化隐藏在 **5 个固定元工具** 背后
                                 └─────────────────────────────┘
 ```
 
-### 1. 配置方式 (`.evo/config.json`)
-在工作区配置文件中声明 `externalServers`：
+### 1. 一键收编虚拟化 `evo virtualize`（推荐）
+直接运行 `evo virtualize`，即可自动扫描工作区各宿主配置（`.mcp.json`、`.cursor/mcp.json`、`.windsurf/mcp.json`、`.vscode/mcp.json`、`.gemini/settings.json`、`opencode.json`、`.codex/config.toml`），将所有臃肿的第三方 stdio MCP 一键折叠进 `.evo/mcp-pool.json` 与 `.evo/config.json` (`externalServers`)，宿主工具列表中仅保留 `evo-kernel` 的 5 个固定元工具：
+
+```bash
+# 预览可节省的常驻 Schema Token（不修改任何文件）
+evo virtualize --dry-run
+
+# 一键收编所有第三方 stdio MCP 进入 EvoKernel 动态代理池
+evo virtualize
+
+# 随时无损回滚恢复到原宿主配置文件
+evo virtualize --restore
+```
+
+也可在 `.evo/config.json` 中手动声明 `externalServers`：
 
 ```json
 {
@@ -175,13 +188,13 @@ EvoKernel 将下游业务 MCP 虚拟化隐藏在 **5 个固定元工具** 背后
 
 ## 🪝 全局生命周期 Hook 路由器 (Universal Hook Router)
 
-EvoKernel 提供标准化 CLI Hook 路由器 (`evo hook <event>`)，无缝嵌入 Claude Code post-tool 钩子、Cursor 自动化以及 Git 预提交防护：
+EvoKernel 提供标准化 CLI Hook 路由器 (`evo hook <event>`)，无缝嵌入 Claude Code `PostToolUse` / `Stop` 钩子、Cursor 自动化以及 Git 预提交防护：
 
 ```bash
-# 1. 工具执行后钩子：追踪未沉淀的代码变更，并自动激活关联范围规则
+# 1. 工具执行后钩子：追踪未沉淀的代码变更、只读诊断（>=10 次读取），并自动激活关联范围规则
 evo hook post-tool --tool Edit --file src/core/storage.ts
 
-# 2. 会话停顿钩子：触发结晶建议，并对沉淀后的二次代码篡改发出防毒化告警
+# 2. 会话停顿钩子：触发结晶建议（代码修改、>=10 次只读排障或用户反问纠偏），并对沉淀后的二次代码篡改发出防毒化告警
 evo hook stop
 
 # 3. 提交前门禁：若暂存了内部缓存或规则 Token 超出 1500 上限，阻断 Git 提交
@@ -189,8 +202,9 @@ evo hook pre-commit
 ```
 
 - **路径级规则自动召回**：当智能体修改源码时，`post-tool` 会根据通配符模式（如 `src/**/*.ts` 或 `firmware/**/*.c`）自动把当前领域规则激活并注入提示。
+- **只读白盒排障与反问纠偏感知**：当会话发生深度只读排障（`>= 10` 次读取且 `< 4` 次修改）或检测到用户反问/纠偏时，自动触发经验结晶提醒。
 - **防毒化反转告警（Anti-Poisoning Alert）**：若智能体在完成一次经验提炼（`evo_propose`）后又擅自修改了相关源码但未重新自测，`evo hook stop` 会发出红色告警，防止错误代码毒化经验库。
-- **Git 提交硬预算门禁**：在提交代码前由 `pre-commit` 严格审查规则 Token 消耗与敏感文件，杜绝将臃肿的规则和私有数据库推送到远端。
+- **Git 提交硬预算门禁**：在提交代码前由 `pre-commit` 严格审查规则 Token 消耗与敏感文件（核心常驻规则上限 1,500 tokens；按需 L2 `SKILL.md` 独立放宽至 3,000 tokens），杜绝将臃肿的规则和私有数据库推送到远端。
 
 ---
 
@@ -199,18 +213,25 @@ evo hook pre-commit
 > **环境要求**：Node.js `>= 22.5` 或 `24+`（基于原生内置 `node:sqlite` 与原生 TS 剥离器构建 —— **0 第三方依赖，无需 `npm install` 等待**）。
 
 ```bash
-# 1. 克隆并编译（耗时 <50ms，零外部依赖）
+# 方式 A：在任意工程内通过 npx 一键注入（或 Claude Code 内执行：/plugin marketplace add damonless/EvoKernel）
+npx evo-kernel init --targets auto --stealth
+npx evo-kernel virtualize --dry-run
+
+# 方式 B：从源码克隆并编译（耗时 <50ms，零外部依赖）
 git clone https://github.com/damonless/EvoKernel.git
 cd EvoKernel
 node ./scripts/build.mjs
 
-# 2. 自动检测并无损接入既有智能体（可选 --stealth 启用本地隐身模式）
+# 自动检测并无损接入既有智能体（可选 --stealth 启用本地隐身模式）
 node ./dist/cli/index.js init --targets auto --stealth
 
-# 3. 冷启动仓库基因挖掘：扫描工程技术栈（Rust/Go/Python/Java/TS/C++）与 Git Fix 历史
+# 一键将第三方 stdio MCP 收编折叠至 EvoKernel 零膨胀动态代理池
+node ./dist/cli/index.js virtualize
+
+# 冷启动仓库基因挖掘：扫描工程技术栈（Rust/Go/Python/Java/TS/C++）与 Git Fix 历史
 node ./dist/cli/index.js bootstrap --max-commits=50
 
-# 4. 查看自演进能力树、情景记忆 AST 新鲜度、ROI 遥测账本与规则审计
+# 查看自演进能力树、多分支情景记忆 AST 新鲜度、ROI 遥测账本与规则审计
 node ./dist/cli/index.js tree
 node ./dist/cli/index.js memory verify
 node ./dist/cli/index.js stats

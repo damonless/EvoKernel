@@ -12,7 +12,13 @@
     "type": "git",
     "url": "https://github.com/damonless/EvoKernel.git"
   },
+  "bugs": {
+    "url": "https://github.com/damonless/EvoKernel/issues"
+  },
   "homepage": "https://github.com/damonless/EvoKernel",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "files": [
     "dist",
@@ -38,6 +44,8 @@
     "mcp",
     "mcp-server",
     "self-evolving",
+    "cognitive-memory",
+    "prompt-cache",
     "claude-code",
     "cursor",
     "antigravity",

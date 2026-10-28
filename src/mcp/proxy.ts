@@ -1,6 +1,8 @@
 import * as child_process from 'node:child_process';
+import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import * as path from 'node:path';
+import * as url from 'node:url';
 import type { ExternalMcpServerConfig, ExternalToolDefinition } from '../core/types.js';
 
 export function formatExternalToolId(serverName: string, originalToolName: string): string {
@@ -11,8 +13,66 @@ export function parseExternalToolId(
   toolId: string
 ): { serverName: string; originalToolName: string } | null {
   const match = toolId.match(/^ext__([a-zA-Z0-9_-]+)__(.+)$/);
-  if (!match) return null;
-  return { serverName: match[1], originalToolName: match[2] };
+  if (match) {
+    return { serverName: match[1], originalToolName: match[2] };
+  }
+  const colonMatch = toolId.match(/^mcp:([a-zA-Z0-9_-]+):(.+)$/);
+  if (colonMatch) {
+    return { serverName: colonMatch[1], originalToolName: colonMatch[2] };
+  }
+  return null;
+}
+
+export function resolveWindowsSpawnCommand(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): { command: string; isBatch: boolean } {
+  if (platform !== 'win32') {
+    return { command, isBatch: false };
+  }
+  const unquoted = command.trim().replace(/^"(.*)"$/, '$1');
+  const cmdBase = path.basename(unquoted).toLowerCase();
+  if (/\.(exe|com)$/i.test(unquoted)) {
+    return { command: unquoted, isBatch: false };
+  }
+  if (/\.(cmd|bat)$/i.test(unquoted)) {
+    return { command: unquoted, isBatch: true };
+  }
+  if (unquoted.includes('/') || unquoted.includes('\\')) {
+    if (fs.existsSync(`${unquoted}.exe`)) {
+      return { command: `${unquoted}.exe`, isBatch: false };
+    }
+    if (fs.existsSync(`${unquoted}.cmd`)) {
+      return { command: `${unquoted}.cmd`, isBatch: true };
+    }
+    if (fs.existsSync(`${unquoted}.bat`)) {
+      return { command: `${unquoted}.bat`, isBatch: true };
+    }
+    return { command: unquoted, isBatch: false };
+  }
+  const rawPath = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? '';
+  const delimiter = rawPath.includes(';') ? ';' : path.delimiter;
+  for (const rawDir of rawPath.split(delimiter)) {
+    const dir = rawDir.trim().replace(/^"(.*)"$/, '$1').replace(/[\\/]+$/, '');
+    if (!dir) continue;
+    const exeCandidate = path.join(dir, `${unquoted}.exe`);
+    if (fs.existsSync(exeCandidate)) {
+      return { command: exeCandidate, isBatch: false };
+    }
+    const cmdCandidate = path.join(dir, `${unquoted}.cmd`);
+    if (fs.existsSync(cmdCandidate)) {
+      return { command: cmdCandidate, isBatch: true };
+    }
+    const batCandidate = path.join(dir, `${unquoted}.bat`);
+    if (fs.existsSync(batCandidate)) {
+      return { command: batCandidate, isBatch: true };
+    }
+  }
+  if (/^(?:npx|npm|pnpm|yarn|uvx|bunx)$/i.test(cmdBase)) {
+    return { command: unquoted, isBatch: true };
+  }
+  return { command: unquoted, isBatch: false };
 }
 
 interface PendingRequest {
@@ -46,23 +106,32 @@ export class McpClientConnection {
     const cwd = this.config.cwd
       ? path.resolve(this.workspaceRoot, this.config.cwd)
       : this.workspaceRoot;
+    const rootUri = url.pathToFileURL(cwd).href;
+    const rootName = path.basename(cwd) || 'workspace';
 
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.config.env,
     };
+    if (process.platform === 'win32' && this.config.env) {
+      const customPath = this.config.env.PATH ?? this.config.env.Path;
+      if (customPath !== undefined) {
+        env.PATH = customPath;
+        env.Path = customPath;
+      }
+    }
 
-    const isWin = process.platform === 'win32';
-    const cmdBase = path.basename(this.config.command).toLowerCase();
-    const isBatch =
-      isWin &&
-      (/\.(cmd|bat)$/i.test(this.config.command) ||
-        /^(?:npx|npm|pnpm|yarn|uvx|bunx)$/i.test(cmdBase));
+    const resolvedCmd = resolveWindowsSpawnCommand(this.config.command, env);
+    const isBatch = resolvedCmd.isBatch;
+    const spawnCommand =
+      isBatch && /\s/.test(resolvedCmd.command) && !/^".*"$/.test(resolvedCmd.command)
+        ? `"${resolvedCmd.command}"`
+        : resolvedCmd.command;
     const rawArgs = this.config.args || [];
     const spawnArgs = isBatch
       ? rawArgs.map((a) => (/\s/.test(a) && !/^".*"$/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a))
       : rawArgs;
-    const proc = child_process.spawn(this.config.command, spawnArgs, {
+    const proc = child_process.spawn(spawnCommand, spawnArgs, {
       cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -110,10 +179,37 @@ export class McpClientConnection {
         try {
           const msg = JSON.parse(trimmed) as {
             jsonrpc: string;
-            id?: number;
+            id?: number | string;
+            method?: string;
             result?: unknown;
             error?: { code: number; message: string; data?: unknown };
           };
+          if (typeof msg.method === 'string' && msg.id !== undefined) {
+            if (proc.stdin && !proc.stdin.destroyed) {
+              if (msg.method === 'roots/list') {
+                proc.stdin.write(
+                  JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: msg.id,
+                    result: { roots: [{ uri: rootUri, name: rootName }] },
+                  }) + '\n'
+                );
+              } else if (msg.method === 'ping') {
+                proc.stdin.write(
+                  JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} }) + '\n'
+                );
+              } else {
+                proc.stdin.write(
+                  JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: msg.id,
+                    error: { code: -32601, message: `Method not found: ${msg.method}` },
+                  }) + '\n'
+                );
+              }
+            }
+            return;
+          }
           if (typeof msg.id === 'number' && this.pending.has(msg.id)) {
             const req = this.pending.get(msg.id)!;
             this.pending.delete(msg.id);
@@ -134,7 +230,11 @@ export class McpClientConnection {
     try {
       await this.request('initialize', {
         protocolVersion: '2024-11-05',
-        capabilities: {},
+        capabilities: {
+          roots: { listChanged: false },
+        },
+        rootUri,
+        workspaceFolders: [{ uri: rootUri, name: rootName }],
         clientInfo: {
           name: 'evo-kernel-proxy',
           version: '0.1.0',

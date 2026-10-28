@@ -310,6 +310,10 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     options.tokenBudgetLimit !== undefined
       ? options.tokenBudgetLimit
       : tokenBudgetLimit + baseSeedTokens + MAX_TOOLS_CATALOG_TOKENS;
+  const skillBudgetLimit =
+    options.tokenBudgetLimit !== undefined
+      ? options.tokenBudgetLimit
+      : Math.max(tokenBudgetLimit * 2, 3000);
   const overlapThreshold = options.overlapThreshold ?? 0.25;
 
   const entries = discoverAuditableFiles(root, includeGlobal, globalHomeDir);
@@ -328,7 +332,11 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     const markerMatch = raw.match(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/);
     const textToMeasure = markerMatch ? markerMatch[0] : raw;
     const tokens = estimateTokens(textToMeasure);
-    const effectiveLimit = markerMatch ? managedBlockBudgetLimit : tokenBudgetLimit;
+    const effectiveLimit = markerMatch
+      ? managedBlockBudgetLimit
+      : entry.kind === 'skill'
+        ? skillBudgetLimit
+        : tokenBudgetLimit;
     const overBudget = tokens > effectiveLimit;
     const metric: AuditedFileMetric = {
       scope: entry.scope,

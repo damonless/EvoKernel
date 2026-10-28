@@ -33,6 +33,7 @@ export interface EvoMemory {
   target_symbols: string[];
   ast_fingerprints: Record<string, SymbolFingerprint>;
   created_commit: string;
+  created_branch?: string;
   tags: string[];
   origin: string;
   supersedes_id?: string;
@@ -42,7 +43,7 @@ export interface EvoMemory {
 
 export interface SymbolDriftCheck {
   symbol: string;
-  status: 'VERIFIED' | 'MISMATCH' | 'MISSING';
+  status: 'VERIFIED' | 'OTHER_BRANCH' | 'MISMATCH' | 'MISSING';
   recorded: SymbolFingerprint;
   current?: SymbolFingerprint;
   detail: string;
@@ -53,18 +54,24 @@ export interface TopologyAnchor {
   file_path: string;
   lines: string;
   signature: string;
-  status: 'VERIFIED' | 'MISMATCH' | 'MISSING';
+  status: 'VERIFIED' | 'OTHER_BRANCH' | 'MISMATCH' | 'MISSING';
   callers: string[];
   codegraph_hint?: string;
 }
 
 export interface MemoryVerificationReport {
   memory_id: string;
-  overall_status: 'VERIFIED' | 'STALE';
-  confidence_tag: '[置信度: HIGH (≥80%)]' | '[置信度: LOW (20–50%) · STALE]';
+  overall_status: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE';
+  confidence_tag:
+    | '[置信度: HIGH (≥80%)]'
+    | '[置信度: MID (50–80%) · OTHER_BRANCH]'
+    | '[置信度: LOW (20–50%) · STALE]';
   commit_match: boolean;
   recorded_commit: string;
   current_commit: string;
+  recorded_branch?: string;
+  current_branch?: string;
+  branch_verified_count?: number;
   verified_count: number;
   total_symbols: number;
   checks: SymbolDriftCheck[];
@@ -182,6 +189,7 @@ export interface ProposalPayload {
   root_cause?: string;
   solution?: string;
   target_symbols?: string[];
+  created_branch?: string;
 }
 
 export interface TelemetryRecord {
@@ -207,7 +215,7 @@ export interface SearchHit {
   success_rate: string;
   score: number;
   tier?: 'LOCAL' | 'GLOBAL';
-  memory_status?: 'VERIFIED' | 'STALE';
+  memory_status?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE';
   memory_badge?: string;
 }
 

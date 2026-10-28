@@ -21,12 +21,16 @@ import {
   removeClaudeSettings,
   removeMcpJson,
   removeOpenCode,
+  resolveEvoHookCommand,
+  resolveEvoMcpLaunchConfig,
+  resolveInstalledEvoKernelRoot,
   upsertCodexToml,
   upsertClaudeSettings,
   upsertMdcFile,
   upsertMcpJson,
   upsertOpenCode,
 } from '../cli/harness.js';
+import { renderVirtualizeReport, runVirtualize } from '../cli/virtualize.js';
 import { runAudit } from '../cli/audit.js';
 import { EvoStorage } from '../core/storage.js';
 import { META_RULE_MARKER_END, META_RULE_MARKER_START } from '../templates/meta-rule.js';
@@ -776,6 +780,197 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       runUninstall(ws);
       assert.equal(fs.existsSync(path.join(ws, '.agents', 'hooks.json')), false);
       assert.equal(fs.existsSync(path.join(ws, '.agents')), false);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('12. Zero-build scripts/boot-mcp.mjs priority over dist/cli/index.js across JSON, TOML, and OpenCode harnesses', () => {
+    const ws = createTempWorkspace();
+    try {
+      // Phase A: Only dist/cli/index.js exists -> falls back to ./dist/cli/index.js
+      fs.mkdirSync(path.join(ws, 'dist', 'cli'), { recursive: true });
+      fs.writeFileSync(path.join(ws, 'dist', 'cli', 'index.js'), '// stub\n', 'utf8');
+
+      runInit(ws, ['claude', 'codex', 'opencode']);
+      const mcpDist = JSON.parse(fs.readFileSync(path.join(ws, '.mcp.json'), 'utf8'));
+      assert.deepEqual(mcpDist.mcpServers['evo-kernel'], {
+        command: 'node',
+        args: ['./dist/cli/index.js', 'mcp'],
+      });
+      const tomlDist = fs.readFileSync(path.join(ws, '.codex', 'config.toml'), 'utf8');
+      assert.match(tomlDist, /args = \["\.\/dist\/cli\/index\.js","mcp"\]/);
+      const openCodeDist = JSON.parse(fs.readFileSync(path.join(ws, 'opencode.json'), 'utf8'));
+      assert.deepEqual(openCodeDist.mcp['evo-kernel'], {
+        command: 'node',
+        args: ['./dist/cli/index.js', 'mcp'],
+      });
+
+      // Phase B: scripts/boot-mcp.mjs also exists -> prefers ./scripts/boot-mcp.mjs
+      fs.mkdirSync(path.join(ws, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(ws, 'scripts', 'boot-mcp.mjs'), '// boot stub\n', 'utf8');
+
+      runInit(ws, ['claude', 'codex', 'opencode']);
+      const mcpBoot = JSON.parse(fs.readFileSync(path.join(ws, '.mcp.json'), 'utf8'));
+      assert.deepEqual(mcpBoot.mcpServers['evo-kernel'], {
+        command: 'node',
+        args: ['./scripts/boot-mcp.mjs', 'mcp'],
+      });
+      const tomlBoot = fs.readFileSync(path.join(ws, '.codex', 'config.toml'), 'utf8');
+      assert.match(tomlBoot, /args = \["\.\/scripts\/boot-mcp\.mjs","mcp"\]/);
+      const openCodeBoot = JSON.parse(fs.readFileSync(path.join(ws, 'opencode.json'), 'utf8'));
+      assert.deepEqual(openCodeBoot.mcp['evo-kernel'], {
+        command: 'node',
+        args: ['./scripts/boot-mcp.mjs', 'mcp'],
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('13. External Repository CLI/MCP Path Resolution and Claude Code Official PostToolUse/Stop Nested Hook Structure', () => {
+    const extWs = createTempWorkspace();
+    try {
+      // extWs has NO local scripts/boot-mcp.mjs or dist/cli/index.js (simulating an external user repo)
+      const installedRoot = resolveInstalledEvoKernelRoot();
+      assert.ok(installedRoot, 'resolveInstalledEvoKernelRoot must locate the EvoKernel installation');
+
+      const launchCfg = resolveEvoMcpLaunchConfig(extWs);
+      assert.equal(launchCfg.command, 'node');
+      assert.ok(
+        path.isAbsolute(launchCfg.args[0]),
+        `External workspace MCP launch arg must resolve to absolute installed path, got: ${launchCfg.args[0]}`
+      );
+
+      const postToolCmd = resolveEvoHookCommand(extWs, 'post-tool');
+      assert.match(postToolCmd, /hook post-tool$/);
+
+      runInit(extWs, ['claude']);
+      const claudeSettings = JSON.parse(
+        fs.readFileSync(path.join(extWs, '.claude', 'settings.json'), 'utf8')
+      );
+
+      // Verify official Claude Code PostToolUse & Stop nested matcher-hooks arrays
+      assert.ok(Array.isArray(claudeSettings.hooks.PostToolUse));
+      assert.equal(claudeSettings.hooks.PostToolUse[0].matcher, '*');
+      assert.equal(claudeSettings.hooks.PostToolUse[0].hooks[0].type, 'command');
+      assert.match(claudeSettings.hooks.PostToolUse[0].hooks[0].command, /hook post-tool/);
+
+      assert.ok(Array.isArray(claudeSettings.hooks.Stop));
+      assert.equal(claudeSettings.hooks.Stop[0].hooks[0].type, 'command');
+      assert.match(claudeSettings.hooks.Stop[0].hooks[0].command, /hook stop/);
+
+      // Preserve sibling user PostToolUse hook when uninstalling
+      claudeSettings.hooks.PostToolUse.push({
+        matcher: 'Bash',
+        hooks: [{ type: 'command', command: 'echo custom-bash-hook' }],
+      });
+      fs.writeFileSync(
+        path.join(extWs, '.claude', 'settings.json'),
+        JSON.stringify(claudeSettings, null, 2) + '\n',
+        'utf8'
+      );
+
+      removeClaudeSettings(path.join(extWs, '.claude', 'settings.json'));
+      const afterRemove = JSON.parse(
+        fs.readFileSync(path.join(extWs, '.claude', 'settings.json'), 'utf8')
+      );
+      assert.equal(afterRemove.hooks.PostToolUse.length, 1);
+      assert.equal(afterRemove.hooks.PostToolUse[0].hooks[0].command, 'echo custom-bash-hook');
+      assert.equal(afterRemove.hooks.Stop, undefined);
+      assert.equal(afterRemove.hooks['post-tool'], undefined);
+      assert.equal(afterRemove.hooks['stop'], undefined);
+    } finally {
+      fs.rmSync(extWs, { recursive: true, force: true });
+    }
+  });
+
+  test('14. evo virtualize: One-Click Folding of Third-Party Stdio MCPs into .evo/mcp-pool.json & Lossless Restore', () => {
+    const ws = createTempWorkspace();
+    try {
+      // Seed third-party MCP servers across .mcp.json, .cursor/mcp.json, and .vscode/mcp.json
+      fs.writeFileSync(
+        path.join(ws, '.mcp.json'),
+        JSON.stringify(
+          {
+            mcpServers: {
+              github: {
+                command: 'npx',
+                args: ['-y', '@modelcontextprotocol/server-github'],
+                env: { GITHUB_TOKEN: 'ghp_mock' },
+              },
+              postgres: {
+                command: 'npx',
+                args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost/db'],
+              },
+            },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+      fs.mkdirSync(path.join(ws, '.vscode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, '.vscode', 'mcp.json'),
+        JSON.stringify(
+          {
+            servers: {
+              filesystem: {
+                type: 'stdio',
+                command: 'npx',
+                args: ['-y', '@modelcontextprotocol/server-filesystem', '.'],
+              },
+            },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+
+      // 1. Dry-run should report 3 servers without modifying host files
+      const dryRes = runVirtualize(ws, { dryRun: true });
+      assert.equal(dryRes.mode, 'dry-run');
+      assert.equal(dryRes.servers.length, 3);
+      assert.ok(dryRes.estimatedTokensSavedPerTurn >= 2500);
+      assert.equal(fs.existsSync(path.join(ws, '.evo', 'mcp-pool.json')), false);
+      const reportText = renderVirtualizeReport(dryRes);
+      assert.match(reportText, /Fold|Would fold/);
+      assert.match(reportText, /github/);
+      assert.match(reportText, /postgres/);
+      assert.match(reportText, /filesystem/);
+
+      // 2. Apply virtualization: folds 3 servers into .evo/mcp-pool.json & .evo/config.json, leaves only evo-kernel in host configs
+      const applyRes = runVirtualize(ws, { dryRun: false });
+      assert.equal(applyRes.mode, 'virtualize');
+      assert.equal(applyRes.servers.length, 3);
+      assert.ok(fs.existsSync(path.join(ws, '.evo', 'mcp-pool.json')));
+
+      const dotMcpAfter = JSON.parse(fs.readFileSync(path.join(ws, '.mcp.json'), 'utf8'));
+      assert.deepEqual(Object.keys(dotMcpAfter.mcpServers), ['evo-kernel']);
+
+      const vscodeAfter = JSON.parse(fs.readFileSync(path.join(ws, '.vscode', 'mcp.json'), 'utf8'));
+      assert.deepEqual(Object.keys(vscodeAfter.servers), ['evo-kernel']);
+
+      const storage = new EvoStorage(ws);
+      const evoCfg = storage.getConfig();
+      assert.ok(evoCfg.externalServers?.github);
+      assert.ok(evoCfg.externalServers?.postgres);
+      assert.ok(evoCfg.externalServers?.filesystem);
+
+      // 3. Restore (`--restore`) losslessly puts github, postgres, and filesystem back into their original host configs
+      const restoreRes = runVirtualize(ws, { restore: true });
+      assert.equal(restoreRes.mode, 'restore');
+      assert.equal(restoreRes.servers.length, 3);
+      assert.equal(fs.existsSync(path.join(ws, '.evo', 'mcp-pool.json')), false);
+
+      const dotMcpRestored = JSON.parse(fs.readFileSync(path.join(ws, '.mcp.json'), 'utf8'));
+      assert.ok(dotMcpRestored.mcpServers.github);
+      assert.ok(dotMcpRestored.mcpServers.postgres);
+
+      const vscodeRestored = JSON.parse(fs.readFileSync(path.join(ws, '.vscode', 'mcp.json'), 'utf8'));
+      assert.ok(vscodeRestored.servers.filesystem);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

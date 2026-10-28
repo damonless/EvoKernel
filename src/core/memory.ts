@@ -61,6 +61,25 @@ export function resolveCurrentGitCommit(workspaceRoot: string): string {
   return 'uncommitted';
 }
 
+export function resolveCurrentGitBranch(workspaceRoot: string): string | undefined {
+  try {
+    const res = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    if (res.status === 0 && res.stdout) {
+      const branch = res.stdout.trim();
+      if (branch && branch !== 'HEAD') {
+        return branch;
+      }
+    }
+  } catch {
+    // ignore git spawn errors
+  }
+  return undefined;
+}
+
 /**
  * Strips comments and normalizes whitespace/punctuation so that pure formatting,
  * indentation, line shifts, or comment edits do NOT alter the structural AST hash,
@@ -784,6 +803,183 @@ export function findSymbolCallers(
   return callers;
 }
 
+function isGitCommitPresent(workspaceRoot: string, commitSha: string): boolean {
+  if (!commitSha || commitSha === 'uncommitted' || !/^[0-9a-f]{4,40}$/i.test(commitSha.trim())) {
+    return false;
+  }
+  try {
+    const res = spawnSync('git', ['cat-file', '-e', `${commitSha.trim()}^{commit}`], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function isGitAncestorOfHead(workspaceRoot: string, commitSha: string): boolean {
+  try {
+    const res = spawnSync('git', ['merge-base', '--is-ancestor', commitSha.trim(), 'HEAD'], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function resolveCommitBranchLabel(
+  workspaceRoot: string,
+  commitSha: string,
+  recordedBranch?: string
+): string {
+  if (recordedBranch && recordedBranch.trim() && recordedBranch.trim() !== 'HEAD') {
+    return recordedBranch.trim();
+  }
+  try {
+    const res = spawnSync(
+      'git',
+      ['branch', '--contains', commitSha.trim(), '--format=%(refname:short)'],
+      {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+        timeout: 1500,
+      }
+    );
+    if (res.status === 0 && res.stdout) {
+      const branches = res.stdout
+        .split(/\r?\n/)
+        .map((b) => b.trim())
+        .filter((b) => b && !b.startsWith('(') && b !== 'HEAD');
+      if (branches.length > 0) {
+        return branches[0];
+      }
+    }
+  } catch {
+    // ignore git branch resolution errors
+  }
+  return 'other-branch';
+}
+
+function extractSymbolFingerprintAtCommit(
+  workspaceRoot: string,
+  commitSha: string,
+  rawSpec: string,
+  recordedFp?: SymbolFingerprint
+): SymbolFingerprint | null {
+  const parsed = parseSymbolTarget(rawSpec);
+  const candidateRelFiles: string[] = [];
+  const seenFiles = new Set<string>();
+
+  const addCandidate = (rel?: string) => {
+    if (!rel || rel === '(unrecorded)') return;
+    const clean = rel.replace(/^[/\\]+/, '').replace(/\\/g, '/').trim();
+    if (clean && !seenFiles.has(clean)) {
+      seenFiles.add(clean);
+      candidateRelFiles.push(clean);
+    }
+  };
+
+  addCandidate(parsed.fileHint);
+  addCandidate(recordedFp?.file_path);
+
+  const tryExtractFromGitFiles = (relFiles: string[]): SymbolFingerprint | null => {
+    for (const relFile of relFiles) {
+      let rawContent = '';
+      try {
+        const res = spawnSync('git', ['show', `${commitSha.trim()}:${relFile}`], {
+          cwd: workspaceRoot,
+          encoding: 'utf8',
+          timeout: 2000,
+          maxBuffer: 4 * 1024 * 1024,
+        });
+        if (res.status !== 0 || typeof res.stdout !== 'string') continue;
+        rawContent = res.stdout;
+      } catch {
+        continue;
+      }
+
+      const ext = path.extname(relFile).toLowerCase();
+      if (parsed.isWholeFile) {
+        const lines = rawContent.split(/\r?\n/);
+        return {
+          symbol: rawSpec,
+          file_path: relFile,
+          kind: 'file',
+          start_line: 1,
+          end_line: lines.length,
+          signature: `file ${relFile} (${lines.length} lines)`,
+          ast_hash: computeAstHash(rawContent, ext),
+        };
+      }
+
+      if (!rawContent.includes(parsed.symbolName)) continue;
+      const lines = rawContent.split(/\r?\n/);
+      const decl = findSymbolDeclarationInLines(lines, parsed.symbolName, parsed.classHint);
+      if (!decl) continue;
+
+      const endIdx =
+        ext === '.py'
+          ? findPythonBlockEnd(lines, decl.lineIndex)
+          : findBraceBlockEnd(lines, decl.lineIndex);
+      const blockCode = lines.slice(decl.lineIndex, endIdx + 1).join('\n');
+
+      return {
+        symbol: rawSpec,
+        file_path: relFile,
+        kind: decl.kind,
+        start_line: decl.lineIndex + 1,
+        end_line: endIdx + 1,
+        signature: decl.signature,
+        ast_hash: computeAstHash(blockCode, ext),
+      };
+    }
+    return null;
+  };
+
+  if (candidateRelFiles.length > 0) {
+    const directHit = tryExtractFromGitFiles(candidateRelFiles);
+    if (directHit) return directHit;
+  }
+
+  // Fallback: list files in commitSha tree if fileHint was a suffix or unrecorded
+  try {
+    const treeRes = spawnSync('git', ['ls-tree', '-r', '--name-only', commitSha.trim()], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+    if (treeRes.status === 0 && treeRes.stdout) {
+      const normHint = parsed.fileHint
+        ? parsed.fileHint.replace(/^[/\\]+/, '').replace(/\\/g, '/').toLowerCase()
+        : '';
+      const treeFiles = treeRes.stdout
+        .split(/\r?\n/)
+        .map((f) => f.trim().replace(/\\/g, '/'))
+        .filter((f) => {
+          if (!f || seenFiles.has(f)) return false;
+          const ext = path.extname(f).toLowerCase();
+          if (!SOURCE_EXTENSIONS.has(ext)) return false;
+          if (normHint) {
+            const lower = f.toLowerCase();
+            return lower === normHint || lower.endsWith(`/${normHint}`);
+          }
+          return true;
+        })
+        .slice(0, 60);
+      return tryExtractFromGitFiles(treeFiles);
+    }
+  } catch {
+    // ignore ls-tree fallback errors
+  }
+
+  return null;
+}
+
 export function verifyMemoryFreshness(
   workspaceRoot: string,
   memory: EvoMemory,
@@ -792,6 +988,7 @@ export function verifyMemoryFreshness(
   const root = path.resolve(workspaceRoot);
   const includeCallers = options?.includeCallers ?? true;
   const currentCommit = resolveCurrentGitCommit(root);
+  const currentBranch = resolveCurrentGitBranch(root);
   const hasCodeGraph = fs.existsSync(path.join(root, '.codegraph'));
 
   const checks: SymbolDriftCheck[] = [];
@@ -918,19 +1115,101 @@ export function verifyMemoryFreshness(
   }
 
   const totalSymbols = targetKeys.length;
-  const overallStatus =
-    totalSymbols > 0 && verifiedCount === totalSymbols ? 'VERIFIED' : 'STALE';
 
+  // Tier 1: All symbols verified in live working tree (shared code across branches or current branch)
+  if (totalSymbols > 0 && verifiedCount === totalSymbols) {
+    return {
+      memory_id: memory.id,
+      overall_status: 'VERIFIED',
+      confidence_tag: '[置信度: HIGH (≥80%)]',
+      commit_match: memory.created_commit === currentCommit,
+      recorded_commit: memory.created_commit,
+      current_commit: currentCommit,
+      recorded_branch: memory.created_branch,
+      current_branch: currentBranch,
+      branch_verified_count: 0,
+      verified_count: verifiedCount,
+      total_symbols: totalSymbols,
+      checks,
+      topology_anchors: topologyAnchors,
+    };
+  }
+
+  // Tier 2: Git-Topology-Aware Fallback (OTHER_BRANCH vs STALE)
+  if (
+    totalSymbols > 0 &&
+    verifiedCount < totalSymbols &&
+    isGitCommitPresent(root, memory.created_commit) &&
+    !isGitAncestorOfHead(root, memory.created_commit)
+  ) {
+    const branchLabel = resolveCommitBranchLabel(
+      root,
+      memory.created_commit,
+      memory.created_branch
+    );
+    let branchVerifiedCount = 0;
+
+    for (let i = 0; i < checks.length; i++) {
+      if (checks[i].status === 'VERIFIED') continue;
+      const symKey = checks[i].symbol;
+      const recorded = checks[i].recorded;
+      const commitFp = extractSymbolFingerprintAtCommit(
+        root,
+        memory.created_commit,
+        symKey,
+        recorded
+      );
+      if (commitFp && (!recorded.ast_hash || commitFp.ast_hash === recorded.ast_hash)) {
+        branchVerifiedCount++;
+        checks[i] = {
+          symbol: symKey,
+          status: 'OTHER_BRANCH',
+          recorded,
+          current: commitFp,
+          detail: `AST fingerprint verified (${commitFp.ast_hash}) on branch '${branchLabel}' (@ commit ${memory.created_commit}) at ${commitFp.file_path}:L${commitFp.start_line}-L${commitFp.end_line} (not yet merged into ${currentBranch || 'HEAD'}@${currentCommit}).`,
+        };
+        topologyAnchors[i] = {
+          symbol: symKey,
+          file_path: commitFp.file_path,
+          lines: `L${commitFp.start_line}-L${commitFp.end_line} (@ ${branchLabel}:${memory.created_commit})`,
+          signature: commitFp.signature,
+          status: 'OTHER_BRANCH',
+          callers: [],
+          codegraph_hint: `git show ${memory.created_commit}:${commitFp.file_path}`,
+        };
+      }
+    }
+
+    if (verifiedCount + branchVerifiedCount === totalSymbols) {
+      return {
+        memory_id: memory.id,
+        overall_status: 'OTHER_BRANCH',
+        confidence_tag: '[置信度: MID (50–80%) · OTHER_BRANCH]',
+        commit_match: false,
+        recorded_commit: memory.created_commit,
+        current_commit: currentCommit,
+        recorded_branch: branchLabel,
+        current_branch: currentBranch,
+        branch_verified_count: branchVerifiedCount,
+        verified_count: verifiedCount,
+        total_symbols: totalSymbols,
+        checks,
+        topology_anchors: topologyAnchors,
+      };
+    }
+  }
+
+  // Tier 3: True code drift (STALE)
   return {
     memory_id: memory.id,
-    overall_status: overallStatus,
-    confidence_tag:
-      overallStatus === 'VERIFIED'
-        ? '[置信度: HIGH (≥80%)]'
-        : '[置信度: LOW (20–50%) · STALE]',
+    overall_status: 'STALE',
+    confidence_tag: '[置信度: LOW (20–50%) · STALE]',
     commit_match: memory.created_commit === currentCommit,
     recorded_commit: memory.created_commit,
     current_commit: currentCommit,
+    recorded_branch: memory.created_branch,
+    current_branch: currentBranch,
+    branch_verified_count: 0,
     verified_count: verifiedCount,
     total_symbols: totalSymbols,
     checks,

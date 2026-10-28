@@ -7,6 +7,7 @@ import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from './visualizer.js';
 import { parseHookEvent, parseHookPayloadArg, runHook } from './hook.js';
+import { renderVirtualizeReport, runVirtualize } from './virtualize.js';
 import { startMcpStdioServer } from '../mcp/server.js';
 import {
   EvoStorage,
@@ -29,6 +30,8 @@ Commands:
                       (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
   bootstrap [--max-commits <N>]
                       Cold-start repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories (default: 50, up to 500)
+  virtualize [--dry-run] [--restore]
+                      One-click fold third-party stdio MCPs from host configs into .evo/mcp-pool.json (0 schema bloat)
   memory [verify]     Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
   audit [--global]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
   refactor [--apply]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
@@ -178,7 +181,7 @@ export function runCli(argv: string[]): void {
   if (fs.existsSync(path.join(globalDir, '.evo'))) {
     ensureGlobalFallbackSeeded(globalDir);
   }
-  const isLocalMutationCmd = ['init', 'bootstrap', 'audit', 'refactor', 'uninstall'].includes(cmd);
+  const isLocalMutationCmd = ['init', 'bootstrap', 'virtualize', 'audit', 'refactor', 'uninstall'].includes(cmd);
   const workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
 
   switch (cmd) {
@@ -224,6 +227,15 @@ export function runCli(argv: string[]): void {
       if (summary.skippedOrDuplicate.length > 0) {
         console.log(`  └─ ⏭️  Skipped existing    : ${summary.skippedOrDuplicate.join(', ')}`);
       }
+      break;
+    }
+
+    case 'virtualize': {
+      const dryRun = args.includes('--dry-run');
+      const restore = args.includes('--restore');
+      const includeGlobal = args.includes('--global') || args.includes('-g');
+      const result = runVirtualize(workspaceRoot, { dryRun, restore, includeGlobal });
+      console.log(renderVirtualizeReport(result));
       break;
     }
 
@@ -285,9 +297,15 @@ export function runCli(argv: string[]): void {
       const ftsEnabled = telemetry.isFts5Enabled();
       telemetry.close();
       const memories = storage.listMemories();
-      const verifiedMems = memories.filter(
-        (m) => verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false }).overall_status === 'VERIFIED'
-      ).length;
+      let verifiedMems = 0;
+      let otherBranchMems = 0;
+      let staleMems = 0;
+      for (const m of memories) {
+        const status = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false }).overall_status;
+        if (status === 'VERIFIED') verifiedMems++;
+        else if (status === 'OTHER_BRANCH') otherBranchMems++;
+        else staleMems++;
+      }
       console.log('🩺 EvoKernel Doctor — Diagnostics Check');
       console.log(`  ├─ [x] Node.js Runtime       : ${process.version} (${process.execPath})`);
       console.log(
@@ -298,7 +316,7 @@ export function runCli(argv: string[]): void {
         }`
       );
       console.log(
-        `  ├─ [x] Cognitive Memory AST  : ${verifiedMems}/${memories.length} VERIFIED (${memories.length - verifiedMems} STALE)`
+        `  ├─ [x] Cognitive Memory AST  : ${verifiedMems}/${memories.length} VERIFIED (${otherBranchMems} OTHER_BRANCH, ${staleMems} STALE)`
       );
       console.log(`  ├─ [x] .evo/ Storage Tree    : ${storage.evoDir}`);
       console.log(`  └─ [x] Meta-MCP Config       : ${fs.existsSync(path.join(workspaceRoot, '.mcp.json')) ? 'Registered (.mcp.json)' : 'Run `evo init` to register'}`);

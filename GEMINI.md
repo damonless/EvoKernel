@@ -33,7 +33,8 @@ Whenever ANY of the following occurs in this session, you MUST call `evo_propose
 
 ### 5. 已注册受控微工具目录 (Registered Micro-Tools via `evo_run`)
 - `[tool] agy-config-auditor`: Audits host rule token budgets, Gate 1.5 rule compliance, memory AST symbols, and local/global split-brain divergence.
+- `[tool] evo-release-preflight`: Audits multi-manifest bootstrap parity, seed-evo sync, dist build freshness, and CodeGraph index state before commit.
 - `[tool] git-hotspot-analyzer`: Identifies top 10 most frequently modified files in recent git history to pinpoint fragile modules.
 - `[tool] workspace-metrics-scanner`: Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.
-- On-demand rules/skills (inspect via `evo_inspect`): `[skill] bug-to-guardrail-sop`, `[skill] evo-rule-architect`
+- On-demand rules/skills (inspect via `evo_inspect`): `[skill] bug-to-guardrail-sop`, `[skill] evo-dev-verification-sop`, `[skill] evo-rule-architect`
 <!-- EVO:END -->

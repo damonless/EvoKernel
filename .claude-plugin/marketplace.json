@@ -1,0 +1,33 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "evo-kernel",
+  "version": "0.1.0",
+  "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory for AI Coding Agents — Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway",
+  "owner": {
+    "name": "EvoKernel Contributors",
+    "url": "https://github.com/damonless/EvoKernel"
+  },
+  "plugins": [
+    {
+      "name": "evo-kernel",
+      "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory (Rules, Skills, Micro-Tools, and Multi-Branch Episodic Memories) for Claude Code and AI Agents",
+      "version": "0.1.0",
+      "author": {
+        "name": "EvoKernel Contributors"
+      },
+      "source": "./",
+      "homepage": "https://github.com/damonless/EvoKernel",
+      "repository": "https://github.com/damonless/EvoKernel",
+      "license": "MIT",
+      "category": "development",
+      "keywords": [
+        "mcp",
+        "self-evolving",
+        "cognitive-memory",
+        "context-engineering",
+        "prompt-cache",
+        "ast-verification"
+      ]
+    }
+  ]
+}

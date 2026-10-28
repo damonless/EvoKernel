@@ -23,7 +23,12 @@ import {
 } from '../core/storage.js';
 import { EvoTelemetry, extractQueryTokens } from '../core/telemetry.js';
 import { executeSandboxedScript, sanitizeSandboxEnv } from '../core/sandbox.js';
-import { extractSymbolFingerprint, stripCStyleComments, normalizeCodeStructure } from '../core/memory.js';
+import {
+  extractSymbolFingerprint,
+  stripCStyleComments,
+  normalizeCodeStructure,
+  verifyMemoryFreshness,
+} from '../core/memory.js';
 import {
   EvoGatekeeper,
   compareRuleClauses,
@@ -3501,6 +3506,246 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.deepEqual(JSON.parse(geminiRes.stdout.trim()), { booted: true, mode: 'mcp' });
     } finally {
       fs.rmSync(mockCloneDir, { recursive: true, force: true });
+    }
+  });
+
+  test('44. Issue #16: Git-Topology-Aware Multi-Branch Memory Verification (VERIFIED vs OTHER_BRANCH vs STALE) and Decoupled On-Demand L2 Skill Token Budget', () => {
+    const ws = createTempWorkspace();
+    const prevGlobal = process.env.EVO_GLOBAL_DIR;
+    const fakeGlobal = createTempWorkspace();
+    process.env.EVO_GLOBAL_DIR = fakeGlobal;
+
+    try {
+      // 1. Initialize Git repo on branch 'main'
+      spawnSync('git', ['init', '-b', 'main'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['config', 'user.email', 'test@evokernel.dev'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['config', 'user.name', 'EvoKernel Tester'], { cwd: ws, encoding: 'utf8' });
+
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'common.ts'),
+        'export function commonDiagnosticLoop(state: number): number {\n  return state + 1;\n}\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(ws, 'src', 'legacy.ts'),
+        'export function obsoleteLegacyHandler(code: number): boolean {\n  return code === 0;\n}\n',
+        'utf8'
+      );
+      spawnSync('git', ['add', '.'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'chore: initial main commit'], { cwd: ws, encoding: 'utf8' });
+
+      // Propose a memory on main targeting obsoleteLegacyHandler (which will soon be deleted on main)
+      let dispatcher = new EvoMcpDispatcher(ws);
+      const legacyProp = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        id: 'mem-deleted-on-main',
+        title: 'Legacy Diagnostic Handler Fault',
+        l0_summary: 'Diagnostic fault when legacy handler receives negative status.',
+        symptom: 'Legacy diagnostic handler fails on negative status code.',
+        root_cause: 'obsoleteLegacyHandler only checks equality with zero.',
+        solution: 'Validate negative bounds before invoking obsoleteLegacyHandler.',
+        target_symbols: [{ file_path: 'src/legacy.ts', symbol_name: 'obsoleteLegacyHandler' }],
+      });
+      assert.equal(legacyProp.isError, undefined, legacyProp.content[0]?.text);
+      dispatcher.close();
+
+      // 2. Create sibling branch 'feature/parallel-trip' and add branch-specific file + symbol
+      spawnSync('git', ['checkout', '-b', 'feature/parallel-trip'], { cwd: ws, encoding: 'utf8' });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'parallelTrip.ts'),
+        'export function handleParallelBranchTrip(faultMask: number): boolean {\n  return (faultMask & 0x04) !== 0;\n}\n',
+        'utf8'
+      );
+      spawnSync('git', ['add', 'src/parallelTrip.ts'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'feat: add handleParallelBranchTrip on parallel branch'], {
+        cwd: ws,
+        encoding: 'utf8',
+      });
+
+      dispatcher = new EvoMcpDispatcher(ws);
+      const branchProp = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        id: 'mem-parallel-branch-trip',
+        title: 'Parallel Branch Diagnostic Trip',
+        l0_summary: 'Diagnostic fault trip handling across common loop and parallel branch.',
+        symptom: 'Diagnostic fault bit 0x04 triggers unexpected trip in parallel branch.',
+        root_cause: 'handleParallelBranchTrip masks bit 0x04 without debounce in commonDiagnosticLoop.',
+        solution: 'Debounce faultMask in commonDiagnosticLoop before calling handleParallelBranchTrip.',
+        target_symbols: [
+          { file_path: 'src/common.ts', symbol_name: 'commonDiagnosticLoop' },
+          { file_path: 'src/parallelTrip.ts', symbol_name: 'handleParallelBranchTrip' },
+        ],
+      });
+      assert.equal(branchProp.isError, undefined, branchProp.content[0]?.text);
+      dispatcher.close();
+
+      const storageCheck = new EvoStorage(ws);
+      const savedBranchMem = storageCheck.getMemory('mem-parallel-branch-trip');
+      assert.ok(savedBranchMem);
+      assert.equal(savedBranchMem.created_branch, 'feature/parallel-trip');
+      assert.ok(savedBranchMem.created_commit && savedBranchMem.created_commit.length >= 7);
+
+      // 3. Switch back to 'main', advance 'main' with a commit that deletes obsoleteLegacyHandler
+      //    (making feature/parallel-trip a non-ancestor parallel branch, and initial commit an ancestor of main HEAD)
+      spawnSync('git', ['checkout', 'main'], { cwd: ws, encoding: 'utf8' });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'legacy.ts'),
+        'export function replacementModernHandler(code: number): boolean {\n  return code >= 0;\n}\n',
+        'utf8'
+      );
+      spawnSync('git', ['add', 'src/legacy.ts'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'refactor: replace obsoleteLegacyHandler on main'], {
+        cwd: ws,
+        encoding: 'utf8',
+      });
+
+      // Also propose a 100% VERIFIED memory on current main HEAD
+      dispatcher = new EvoMcpDispatcher(ws);
+      const verifiedProp = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        id: 'mem-verified-on-main',
+        title: 'Main Branch Diagnostic Loop',
+        l0_summary: 'Diagnostic loop state increment invariant on main branch.',
+        symptom: 'Diagnostic loop counter skips state transition.',
+        root_cause: 'commonDiagnosticLoop increments state directly.',
+        solution: 'Preserve commonDiagnosticLoop state transition contract.',
+        target_symbols: [{ file_path: 'src/common.ts', symbol_name: 'commonDiagnosticLoop' }],
+      });
+      assert.equal(verifiedProp.isError, undefined, verifiedProp.content[0]?.text);
+
+      // Verify 3-tier classification via verifyMemoryFreshness:
+      const memVerified = storageCheck.getMemory('mem-verified-on-main')!;
+      const memOtherBranch = storageCheck.getMemory('mem-parallel-branch-trip')!;
+      const memStale = storageCheck.getMemory('mem-deleted-on-main')!;
+
+      const repVerified = verifyMemoryFreshness(ws, memVerified);
+      assert.equal(repVerified.overall_status, 'VERIFIED');
+
+      const repOtherBranch = verifyMemoryFreshness(ws, memOtherBranch);
+      assert.equal(repOtherBranch.overall_status, 'OTHER_BRANCH');
+      assert.equal(repOtherBranch.confidence_tag, '[置信度: MID (50–80%) · OTHER_BRANCH]');
+      assert.equal(repOtherBranch.recorded_branch, 'feature/parallel-trip');
+      assert.equal(repOtherBranch.current_branch, 'main');
+      assert.equal(repOtherBranch.verified_count, 1); // commonDiagnosticLoop is VERIFIED in HEAD
+      assert.equal(repOtherBranch.branch_verified_count, 1); // handleParallelBranchTrip is OTHER_BRANCH via git show
+
+      const repStale = verifyMemoryFreshness(ws, memStale);
+      assert.equal(repStale.overall_status, 'STALE'); // created_commit IS an ancestor of main HEAD, symbol was deleted
+
+      // Verify evo_search 3-tier ranking (VERIFIED -> OTHER_BRANCH -> STALE) and badge rendering
+      const searchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        kind: 'memory',
+        query: 'diagnostic fault loop handler trip',
+        limit: 10,
+      });
+      const searchText = searchRes.content[0].text;
+      assert.match(searchText, /\[MEMORY\] 🌿 \[BRANCH: feature\/parallel-trip@[0-9a-f]{7,12} \(1\/2 in HEAD\)\] mem-parallel-branch-trip/);
+      const idxVerified = searchText.indexOf('mem-verified-on-main');
+      const idxBranch = searchText.indexOf('mem-parallel-branch-trip');
+      const idxStale = searchText.indexOf('mem-deleted-on-main');
+      assert.ok(idxVerified !== -1 && idxBranch !== -1 && idxStale !== -1);
+      assert.ok(idxVerified < idxBranch, 'VERIFIED memory must rank above OTHER_BRANCH memory');
+      assert.ok(idxBranch < idxStale, 'OTHER_BRANCH memory must rank above STALE memory');
+
+      // Verify evo_inspect L2 renders MULTI-BRANCH MEMORY note and NOT STALE warning
+      const inspectBranchRes = dispatcher.handleToolCall('evo_inspect', {
+        workspace: ws,
+        id: 'mem-parallel-branch-trip',
+        tier: 'L2',
+      });
+      const inspectBranchText = inspectBranchRes.content[0].text;
+      assert.match(inspectBranchText, /> \[!NOTE\] \*\*MULTI-BRANCH MEMORY\*\*: Recorded on branch `feature\/parallel-trip`/);
+      assert.doesNotMatch(inspectBranchText, /ANTI-DRIFT WARNING: This memory is marked \[STALE\]/);
+
+      // Verify agy-config-auditor treats OTHER_BRANCH symbols as valid (verified_count: 2/2, branch_scoped: true) while still catching genuinely STALE mem-deleted-on-main (broken_memory_symbols: 1)
+      const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+      const auditorRun = spawnSync(
+        process.execPath,
+        [path.join(repoRoot, '.evo', 'tools', 'agy-config-auditor', 'run.mjs')],
+        {
+          cwd: ws,
+          env: { ...process.env, EVO_WORKSPACE: ws, HOME: fakeGlobal, USERPROFILE: fakeGlobal },
+          encoding: 'utf8',
+        }
+      );
+      const auditorJson = JSON.parse(auditorRun.stdout.trim());
+      assert.equal(
+        auditorJson.summary.broken_memory_symbols,
+        1,
+        'Only genuinely STALE mem-deleted-on-main should count as broken_memory_symbols'
+      );
+      const parallelAuditEntry = (auditorJson.memory_symbols_audit || []).find(
+        (m: { id: string }) => m.id === 'mem-parallel-branch-trip'
+      );
+      assert.ok(parallelAuditEntry);
+      assert.equal(parallelAuditEntry.verified_count, 2);
+      assert.equal(parallelAuditEntry.symbols_count, 2);
+      assert.ok(
+        parallelAuditEntry.symbols.some(
+          (s: { symbol: string; exists: boolean; branch_scoped?: boolean }) =>
+            s.symbol.includes('handleParallelBranchTrip') && s.exists === true && s.branch_scoped === true
+        ),
+        'Parallel branch symbol must be verified via git show with branch_scoped: true'
+      );
+
+      // 4. Verify [MEDIUM] SKILL-ON-DEMAND-BUDGET-DECOUPLING-2 in runAudit:
+      //    A 2,200-token on-demand L2 SKILL.md passes audit, while a 2,200-token Always-On rule fails!
+      const longParagraph = 'Verify register boundary alignments and state transition table indices before dispatching command frames. ';
+      const body2200Tok = longParagraph.repeat(95); // ~2,200 tokens
+
+      const skillDir = path.join(ws, '.evo', 'skills', 'deep-protocol-sop');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nid: deep-protocol-sop\ntitle: Deep Protocol Verification Playbook\nl0_summary: Step-by-step protocol verification SOP.\ntags: [protocol, sop]\n---\n\n${body2200Tok}\n`,
+        'utf8'
+      );
+
+      const auditWithSkillOnly = runAudit(ws, { includeGlobal: false });
+      const skillBloatFindings = auditWithSkillOnly.budgetViolations.filter(
+        (f) => f.displayPath.includes('SKILL.md') || f.filePath.includes('SKILL.md')
+      );
+      assert.equal(
+        skillBloatFindings.length,
+        0,
+        'On-demand L2 SKILL.md (~2,200 tokens <= 3,000 limit) must not trigger budgetViolations'
+      );
+
+      // Now add a 2,200-token rule file and verify it DOES trigger budgetViolations (> 1,500 limit)
+      fs.writeFileSync(
+        path.join(ws, 'CLAUDE.md'),
+        `# Bloated Always-On Rule\n\n${body2200Tok}\n`,
+        'utf8'
+      );
+      const auditWithBloatedRule = runAudit(ws, { includeGlobal: false });
+      const ruleBloatFindings = auditWithBloatedRule.budgetViolations.filter(
+        (f) => f.displayPath.endsWith('CLAUDE.md') || f.filePath.endsWith('CLAUDE.md')
+      );
+      assert.equal(
+        ruleBloatFindings.length,
+        1,
+        'Always-On rule file (~2,200 tokens > 1,500 limit) must still trigger budgetViolations'
+      );
+
+      dispatcher.close();
+    } finally {
+      if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobal;
+      try {
+        fs.rmSync(ws, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      } catch {
+        // ignore transient Windows git packfile lock in temp dir
+      }
+      try {
+        fs.rmSync(fakeGlobal, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      } catch {
+        // ignore transient Windows lock in temp dir
+      }
     }
   });
 });

@@ -73,10 +73,11 @@ export function renderEvoTree(workspaceRoot: string): string {
     report: verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false }),
   }));
   const verifiedCount = verifications.filter((v) => v.report.overall_status === 'VERIFIED').length;
-  const staleCount = verifications.length - verifiedCount;
+  const branchCount = verifications.filter((v) => v.report.overall_status === 'OTHER_BRANCH').length;
+  const staleCount = verifications.length - verifiedCount - branchCount;
 
   lines.push(
-    `└── 🧠 Episodic Memories (${memories.length} fault cases | ${verifiedCount} VERIFIED · ${staleCount} STALE)`
+    `└── 🧠 Episodic Memories (${memories.length} fault cases | ${verifiedCount} VERIFIED · ${branchCount > 0 ? `${branchCount} OTHER_BRANCH · ` : ''}${staleCount} STALE)`
   );
   if (memories.length === 0) {
     lines.push('    └── (empty — propose with `kind: "memory"` or run `evo bootstrap`)');
@@ -88,7 +89,9 @@ export function renderEvoTree(workspaceRoot: string): string {
       const badge =
         report.overall_status === 'VERIFIED'
           ? `✅ [VERIFIED ${report.verified_count}/${report.total_symbols} sym @ ${m.created_commit}]`
-          : `⚠️ [STALE ${report.verified_count}/${report.total_symbols} sym]`;
+          : report.overall_status === 'OTHER_BRANCH'
+            ? `🌿 [BRANCH:${report.recorded_branch || m.created_branch || 'other'}@${m.created_commit} (${report.verified_count}/${report.total_symbols} in HEAD)]`
+            : `⚠️ [STALE ${report.verified_count}/${report.total_symbols} sym]`;
       lines.push(
         `    ${branch} ${badge} ${m.id} (hits: ${stat?.hit_count ?? 0}) — ${m.l0_summary}`
       );
@@ -114,10 +117,13 @@ export function renderEvoStats(workspaceRoot: string): string {
   const { totalTokens } = storage.getCoreRulesTokenUsage();
 
   let verifiedMemories = 0;
+  let branchMemories = 0;
   for (const m of memories) {
     const rep = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false });
     if (rep.overall_status === 'VERIFIED') verifiedMemories++;
+    else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
   }
+  const staleMemories = memories.length - verifiedMemories - branchMemories;
 
   let totalHits = 0;
   let totalSuccess = 0;
@@ -149,7 +155,7 @@ export function renderEvoStats(workspaceRoot: string): string {
     '├──────────────────────────────────────────────────────────────────────────┤',
     `│ 🛡️  Core Rule Token Budget : [${progressBar}] ${totalTokens}/${config.maxCoreRuleTokens} (${pctBudget}%)`,
     `│ 📦 Active Capabilities    : ${rules.length} Rules · ${skills.length} Skills · ${tools.length} Micro-Tools · ${memories.length} Memories`,
-    `│ 🧠 Memory AST Anti-Drift  : ${verifiedMemories}/${memories.length} VERIFIED (${memories.length - verifiedMemories} STALE) | 0 Core Budget Tokens`,
+    `│ 🧠 Memory AST Anti-Drift  : ${verifiedMemories}/${memories.length} VERIFIED${branchMemories > 0 ? ` · ${branchMemories} OTHER_BRANCH` : ''} (${staleMemories} STALE) | 0 Core Budget Tokens`,
     `│ 🗄️  GC Archived Versions   : ${archivedCount} historical snapshots in .evo/archive/`,
     `│ 🎯 Total Capability Hits  : ${totalHits} recalls (${passRate} verification/sandbox pass rate)`,
     `│ ⚡ Prompt Cache Stability : 100% (Fixed 5-Tool Meta-MCP Signature)`,
@@ -180,7 +186,12 @@ export function renderMemoryVerifyReport(workspaceRoot: string): string {
 
   for (const m of memories) {
     const rep = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: true });
-    const badge = rep.overall_status === 'VERIFIED' ? '✅ VERIFIED' : '⚠️ STALE';
+    const badge =
+      rep.overall_status === 'VERIFIED'
+        ? '✅ VERIFIED'
+        : rep.overall_status === 'OTHER_BRANCH'
+          ? `🌿 OTHER_BRANCH (${rep.recorded_branch || m.created_branch || 'other'})`
+          : '⚠️ STALE';
     lines.push(
       `├── [${badge}] ${m.id} — ${m.title} ${rep.confidence_tag}`
     );
@@ -189,7 +200,7 @@ export function renderMemoryVerifyReport(workspaceRoot: string): string {
     );
     lines.push(`│   ├─ L0 Summary    : ${m.l0_summary}`);
     for (const c of rep.checks) {
-      const symBadge = c.status === 'VERIFIED' ? '✓' : '✗';
+      const symBadge = c.status === 'VERIFIED' ? '✓' : c.status === 'OTHER_BRANCH' ? '🌿' : '✗';
       lines.push(`│   ├─ [${symBadge} ${c.status}] ${c.detail}`);
     }
     for (const a of rep.topology_anchors) {

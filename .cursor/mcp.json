@@ -3,7 +3,7 @@
     "evo-kernel": {
       "command": "node",
       "args": [
-        "./dist/cli/index.js",
+        "./scripts/boot-mcp.mjs",
         "mcp"
       ]
     }

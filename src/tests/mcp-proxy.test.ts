@@ -7,6 +7,7 @@ import {
   McpProxyManager,
   formatExternalToolId,
   parseExternalToolId,
+  resolveWindowsSpawnCommand,
 } from '../mcp/proxy.js';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
 import { EvoStorage } from '../core/storage.js';
@@ -432,4 +433,119 @@ rl.on('line', (line) => {
       fs.rmSync(wsB, { recursive: true, force: true });
     }
   });
+
+  test('10. Windows PATH .cmd resolution & bidirectional roots/list + rootUri handshake (CodeGraph MCP compatibility)', async () => {
+    // 1. Verify resolveWindowsSpawnCommand detects .cmd and .exe shims on Windows PATH (including quoted dirs, trailing slashes, and version dots)
+    const binDir = path.join(ws, 'mock bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const mockCmdShim = path.join(binDir, 'codegraph-mock.cmd');
+    const mockExeBin = path.join(binDir, 'native-mcp.exe');
+    const mockDotCmd = path.join(binDir, 'python3.11.cmd');
+    fs.writeFileSync(mockCmdShim, '@echo off\r\n', 'utf8');
+    fs.writeFileSync(mockExeBin, '', 'utf8');
+    fs.writeFileSync(mockDotCmd, '@echo off\r\n', 'utf8');
+
+    const quotedPathEnv = { PATH: `"${binDir}\\";C:\\nonexistent\\bin` };
+    const resolvedCmd = resolveWindowsSpawnCommand('codegraph-mock', quotedPathEnv, 'win32');
+    assert.equal(resolvedCmd.isBatch, true);
+    assert.equal(resolvedCmd.command, mockCmdShim);
+
+    const resolvedDotCmd = resolveWindowsSpawnCommand('python3.11', quotedPathEnv, 'win32');
+    assert.equal(resolvedDotCmd.isBatch, true);
+    assert.equal(resolvedDotCmd.command, mockDotCmd);
+
+    const resolvedExe = resolveWindowsSpawnCommand('native-mcp', quotedPathEnv, 'win32');
+    assert.equal(resolvedExe.isBatch, false);
+    assert.equal(resolvedExe.command, mockExeBin);
+
+    const resolvedPosix = resolveWindowsSpawnCommand('codegraph-mock', quotedPathEnv, 'linux');
+    assert.equal(resolvedPosix.isBatch, false);
+
+    // 2. Verify McpClientConnection passes rootUri/workspaceFolders on initialize and answers server-initiated roots/list & ping
+    const rootsServerScript = path.join(ws, 'roots_mcp_server.mjs');
+    fs.writeFileSync(
+      rootsServerScript,
+      `import * as readline from 'node:readline';
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+let initRootUri = '';
+let resolvedRootsUri = '';
+let pingAcked = false;
+let pendingToolsListId = null;
+
+rl.on('line', (line) => {
+  const msg = JSON.parse(line.trim());
+  if (msg.method === 'initialize') {
+    initRootUri = msg.params?.rootUri || '';
+    process.stdout.write(JSON.stringify({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'codegraph-like', version: '1.0' } }
+    }) + '\\n');
+  } else if (msg.method === 'tools/list') {
+    pendingToolsListId = msg.id;
+    // Server queries client for roots/list and ping before returning tools/list (just like CodeGraph MCPSession.initFromRoots)
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'srv-ping-1', method: 'ping' }) + '\\n');
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'srv-roots-1', method: 'roots/list' }) + '\\n');
+  } else if (msg.id === 'srv-ping-1') {
+    pingAcked = true;
+  } else if (msg.id === 'srv-roots-1') {
+    resolvedRootsUri = msg.result?.roots?.[0]?.uri || '';
+    if (pendingToolsListId !== null) {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id: pendingToolsListId,
+        result: {
+          tools: [{
+            name: 'codegraph_explore',
+            description: 'Explore AST graph at ' + resolvedRootsUri,
+            inputSchema: { type: 'object', properties: { query: { type: 'string' } } }
+          }]
+        }
+      }) + '\\n');
+      pendingToolsListId = null;
+    }
+  } else if (msg.method === 'tools/call') {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: {
+        isError: false,
+        content: [{ type: 'text', text: JSON.stringify({ initRootUri, resolvedRootsUri, pingAcked, query: msg.params?.arguments?.query }) }]
+      }
+    }) + '\\n');
+  }
+});\n`,
+      'utf8'
+    );
+
+    fs.writeFileSync(mockCmdShim, `@"${process.execPath}" "${rootsServerScript}"\r\n`, 'utf8');
+
+    const proxy = new McpProxyManager(ws);
+    try {
+      const serverCfg =
+        process.platform === 'win32'
+          ? {
+              command: 'codegraph-mock',
+              args: [],
+              env: { PATH: `"${binDir}\\";${process.env.PATH || process.env.Path || ''}` },
+              timeoutMs: 3000,
+            }
+          : { command: process.execPath, args: [rootsServerScript], timeoutMs: 3000 };
+      const discovered = await proxy.syncExternalTools({ cg: serverCfg });
+      assert.equal(discovered.length, 1);
+      assert.equal(discovered[0].id, 'ext__cg__codegraph_explore');
+      assert.match(discovered[0].description, /^Explore AST graph at file:\/\//);
+
+      const callRes = await proxy.callTool('cg', 'codegraph_explore', { query: 'EvoMcpDispatcher' }, serverCfg);
+      assert.equal(callRes.isError, false);
+      const parsed = JSON.parse(callRes.content[0].text);
+      assert.equal(parsed.pingAcked, true);
+      assert.ok(parsed.initRootUri.startsWith('file:///'), `Expected file:// rootUri, got ${parsed.initRootUri}`);
+      assert.equal(parsed.resolvedRootsUri, parsed.initRootUri);
+      assert.equal(parsed.query, 'EvoMcpDispatcher');
+    } finally {
+      proxy.close();
+    }
+  });
 });
+

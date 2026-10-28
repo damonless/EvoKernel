@@ -132,8 +132,21 @@ Host Coding Agent (Claude / Cursor / Copilot / etc.)
                                 └─────────────────────────────┘
 ```
 
-### 1. Configuration in `.evo/config.json`
-Declare external MCP servers under the `externalServers` dictionary:
+### 1. One-Click Virtualization via `evo virtualize` (Recommended)
+Run `evo virtualize` to automatically scan your workspace host configs (`.mcp.json`, `.cursor/mcp.json`, `.windsurf/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, `opencode.json`, `.codex/config.toml`), fold all third-party stdio MCP servers into `.evo/mcp-pool.json` & `.evo/config.json` (`externalServers`), and leave only `evo-kernel` in your host config:
+
+```bash
+# Preview token savings without modifying files
+evo virtualize --dry-run
+
+# Fold all third-party stdio MCPs into EvoKernel's dynamic proxy
+evo virtualize
+
+# Losslessly restore virtualized MCP servers back to their original host configs at any time
+evo virtualize --restore
+```
+
+Or declare external MCP servers manually under `externalServers` in `.evo/config.json`:
 
 ```json
 {
@@ -175,13 +188,13 @@ Declare external MCP servers under the `externalServers` dictionary:
 
 ## 🪝 Universal Hook Router & Workflow Enforcement
 
-EvoKernel provides a CLI hook router (`evo hook <event>`) for agent lifecycle integration (Claude Code post-tool hooks, Cursor automation, and Git pre-commit guards):
+EvoKernel provides a CLI hook router (`evo hook <event>`) for agent lifecycle integration (Claude Code `PostToolUse` / `Stop` hooks, Cursor automation, and Git pre-commit guards):
 
 ```bash
-# 1. Post-Tool Hook: Tracks session mutations & auto-recalls path-scoped rules
+# 1. Post-Tool Hook: Tracks session mutations, read-only diagnostics (>=10 reads), & auto-recalls path-scoped rules
 evo hook post-tool --tool Edit --file src/core/storage.ts
 
-# 2. Stop Hook: Emits crystallization reminders & anti-poisoning dirty alerts
+# 2. Stop Hook: Emits crystallization reminders (edits, >=10 read diagnostics, or user corrections) & anti-poisoning dirty alerts
 evo hook stop
 
 # 3. Pre-Commit Guard: Blocks commits if internal caches are staged or token budget >1500
@@ -189,8 +202,9 @@ evo hook pre-commit
 ```
 
 - **Path-Scoped Rule Recall**: When a source file is touched, `post-tool` matches active rules against wildcard globs (e.g., `src/**/*.ts`, `firmware/**/*.c`) and surfaces relevant engineering invariants into the agent's active context.
+- **Read-Only Diagnostic & Counter-Question Detection**: Automatically prompts experience crystallization on read-only troubleshooting sessions (`>= 10` diagnostic reads with `< 4` edits) or when a user correction / counter-question is detected.
 - **Anti-Poisoning Alert**: If source files are modified mid-session *after* a capability has been crystallized without re-verifying, `evo hook stop` raises an alert to prevent stale or poisoned memories.
-- **Pre-Commit Budget Gate**: Ensures that unverified telemetry DB files or bloated rules (>1,500 tokens) are never committed to Git.
+- **Pre-Commit Budget Gate**: Ensures that unverified telemetry DB files or bloated rules (>1,500 tokens; on-demand L2 `SKILL.md` playbooks decoupled up to 3,000 tokens) are never committed to Git.
 
 ---
 
@@ -199,20 +213,25 @@ evo hook pre-commit
 > **Prerequisites**: Node.js `>= 22.5` or `24+` (uses native `node:sqlite` & native TypeScript stripping — **0 third-party npm dependencies**).
 
 ```bash
-# 1. Clone and build (takes <50ms, zero npm install required)
+# Option A: One-line npx initialization in any repository (or Claude Code: /plugin marketplace add damonless/EvoKernel)
+npx evo-kernel init --targets auto --stealth
+npx evo-kernel virtualize --dry-run
+
+# Option B: Clone and build from source (takes <50ms, zero npm install required)
 git clone https://github.com/damonless/EvoKernel.git
 cd EvoKernel
 node ./scripts/build.mjs
 
-# 2. Wire L0 Meta-Rule Seed + Single Meta-MCP into your active coding agents
-#    Auto-detects active agents or targets specific harnesses with stealth exclude
+# Wire L0 Meta-Rule Seed + Single Meta-MCP into your active coding agents
 node ./dist/cli/index.js init --targets auto --stealth
 
-# 3. Cold-start mine your repository structure, project stacks & Git fix history
-#    (Detects Rust, Go, Python, Java/Kotlin, TypeScript/JavaScript, and C/C++)
+# Fold bloated third-party stdio MCPs into EvoKernel's zero-schema-bloat proxy
+node ./dist/cli/index.js virtualize
+
+# Cold-start mine your repository structure, project stacks & Git fix history
 node ./dist/cli/index.js bootstrap --max-commits=50
 
-# 4. Inspect your evolved capability tree, AST memory freshness & ROI ledger
+# Inspect your evolved capability tree, multi-branch AST memory freshness & ROI ledger
 node ./dist/cli/index.js tree
 node ./dist/cli/index.js memory verify
 node ./dist/cli/index.js stats

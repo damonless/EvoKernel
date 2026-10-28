@@ -48,6 +48,31 @@ const EDIT_TOOL_NAMES = new Set([
   'bash',
 ]);
 
+export const READ_TOOL_NAMES = new Set([
+  'read',
+  'read_file',
+  'view_file',
+  'view_file_outline',
+  'view_code_item',
+  'grep',
+  'grep_search',
+  'glob',
+  'find_by_name',
+  'codegraph_explore',
+  'codegraph_node',
+  'codegraph_callers',
+  'codegraph_callees',
+  'codegraph_impact',
+]);
+
+export const CORRECTION_REGEX =
+  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,])/i;
+
+export function isUserCorrectionSignal(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  return CORRECTION_REGEX.test(text);
+}
+
 const FORBIDDEN_STAGED_PATTERNS = [
   /\.evo\/\.cache\//,
   /\.evo\/telemetry\.db(?:-wal|-shm)?$/,
@@ -249,17 +274,30 @@ export function handlePostTool(
     telemetry.setSessionFlag('last_crystallized_id', proposedId);
     telemetry.setSessionFlag('pending_evolution', 'false');
     telemetry.setSessionFlag('unproposed_edit_count', '0');
+    telemetry.setSessionFlag('unproposed_read_count', '0');
+    telemetry.setSessionFlag('user_correction_detected', 'false');
     telemetry.setSessionFlag('dirty_crystallized_id', '');
     output = `[EvoKernel Post-Tool] Capability '${proposedId}' registered. Session evolution debt cleared.`;
   } else {
     const normPath = rawPath.replace(/\\/g, '/');
     const isInternalMeta =
       Boolean(rawPath) &&
-      (normPath.includes('/.evo/') ||
+      (/(?:^|\/)\.(?:evo|agents|gemini)(?:\/|$)/i.test(normPath) ||
+        normPath.includes('/.evo/') ||
         normPath.includes('/.agents/teamwork/') ||
         normPath.includes('/.gemini/antigravity/'));
 
+    const innerArgs = (toolInput.Arguments || toolInput.args || toolInput) as Record<string, unknown>;
+    const isCodeGraphEvoRun =
+      toolName.includes('evo_run') &&
+      String(innerArgs.tool_id || toolInput.tool_id || '').toLowerCase().includes('codegraph');
+
     const isMutation = toolName ? EDIT_TOOL_NAMES.has(toolName) : Boolean(rawPath);
+    const isReadDiagnostic =
+      !isMutation &&
+      Boolean(toolName) &&
+      (READ_TOOL_NAMES.has(toolName) || toolName.includes('codegraph') || isCodeGraphEvoRun);
+
     if (isMutation && !isInternalMeta) {
       telemetry.setSessionFlag('pending_evolution', 'true');
       const currentCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
@@ -269,6 +307,20 @@ export function handlePostTool(
       if (lastCrystallized) {
         telemetry.setSessionFlag('dirty_crystallized_id', lastCrystallized);
       }
+    } else if (isReadDiagnostic && !isInternalMeta) {
+      const currentReadCount = parseInt(telemetry.getSessionFlag('unproposed_read_count') || '0', 10);
+      telemetry.setSessionFlag('unproposed_read_count', String(currentReadCount + 1));
+    }
+
+    const userPromptCandidate = String(
+      payload.user_message ||
+      payload.user_prompt ||
+      payload.prompt ||
+      toolInput.user_message ||
+      ''
+    );
+    if (isUserCorrectionSignal(userPromptCandidate)) {
+      telemetry.setSessionFlag('user_correction_detected', 'true');
     }
 
     if (rawPath && !isInternalMeta) {
@@ -319,6 +371,20 @@ export function handleStop(
   const pending = telemetry.getSessionFlag('pending_evolution') === 'true';
   const dirtyId = telemetry.getSessionFlag('dirty_crystallized_id');
   const editCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
+  const readCount = parseInt(telemetry.getSessionFlag('unproposed_read_count') || '0', 10);
+  const persistedCorrection = telemetry.getSessionFlag('user_correction_detected') === 'true';
+
+  const inlineUserText = String(
+    payload.user_message ||
+    payload.user_prompt ||
+    payload.prompt ||
+    payload.last_user_message ||
+    ''
+  );
+  const hasUserCorrection = persistedCorrection || isUserCorrectionSignal(inlineUserText);
+  if (hasUserCorrection) {
+    telemetry.setSessionFlag('user_correction_detected', 'false');
+  }
 
   const modifiedFiles = getGitFiles(workspaceRoot, false).filter((f) => {
     const norm = f.replace(/\\/g, '/');
@@ -330,6 +396,8 @@ export function handleStop(
   });
 
   const hasUncrystallizedEdits = pending || editCount > 0 || modifiedFiles.length > 0;
+  const hasHeavyDiagnosticReads = editCount < 4 && readCount >= 10;
+  const crystallizationSuggested = hasUncrystallizedEdits || hasHeavyDiagnosticReads || hasUserCorrection;
   const messages: string[] = [];
 
   if (dirtyId) {
@@ -338,13 +406,22 @@ export function handleStop(
     );
   }
 
-  if (hasUncrystallizedEdits) {
-    const editSummary = modifiedFiles.length > 0
-      ? `(${modifiedFiles.slice(0, 3).join(', ')}${modifiedFiles.length > 3 ? ` +${modifiedFiles.length - 3} more` : ''})`
-      : `(${editCount} mutation steps recorded)`;
+  if (crystallizationSuggested) {
+    let reasonSummary: string;
+    if (hasUncrystallizedEdits) {
+      reasonSummary = modifiedFiles.length > 0
+        ? `(${modifiedFiles.slice(0, 3).join(', ')}${modifiedFiles.length > 3 ? ` +${modifiedFiles.length - 3} more` : ''})`
+        : `(${editCount} mutation steps recorded)`;
+    } else if (hasUserCorrection && hasHeavyDiagnosticReads) {
+      reasonSummary = `(user correction / counter-question + ${readCount} read-only diagnostic steps)`;
+    } else if (hasUserCorrection) {
+      reasonSummary = `(user correction / counter-question detected)`;
+    } else {
+      reasonSummary = `(${readCount} read-only diagnostic steps with ${editCount} edits)`;
+    }
 
     messages.push(
-      `💡 [EvoKernel Hook Reminder] Session work detected without capability crystallization ${editSummary}:\n` +
+      `💡 [EvoKernel Hook Reminder] Session work detected without capability crystallization ${reasonSummary}:\n` +
       `  ├─ 🧠 Bug Fix / Defect Pattern : evo_propose(kind: "memory", symptom: "...", root_cause: "...", solution: "...", target_symbols: [...])\n` +
       `  ├─ 🛡️  Architectural Invariant  : evo_propose(kind: "rule", l0_summary: "...", scope_glob: "...") [zero magic numbers]\n` +
       `  └─ 🔧 Reusable Micro-Tool     : evo_propose(kind: "tool", ...) [--self-test verified]\n` +
@@ -365,7 +442,7 @@ export function handleStop(
     success: true,
     exitCode: 0,
     output: finalOutput,
-    crystallizationSuggested: hasUncrystallizedEdits,
+    crystallizationSuggested,
     dirtyRuleId: dirtyId || undefined,
   };
 }
