@@ -40,6 +40,11 @@ jobs:
 
       - name: Publish Package to npm
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RAW_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.tag || 'latest' }}
-        run: npm publish --access public --tag "$NPM_DIST_TAG"
+        run: |
+          CLEAN_TOKEN="$(printf '%s' "$RAW_NPM_TOKEN" | grep -oE 'npm_[A-Za-z0-9]{20,}' | head -n 1 || true)"
+          if [ -z "$CLEAN_TOKEN" ]; then
+            CLEAN_TOKEN="$(printf '%s' "$RAW_NPM_TOKEN" | sed 's/^.*_authToken=//; s/^Bearer[[:space:]]*//' | tr -d '[:space:]')"
+          fi
+          NODE_AUTH_TOKEN="$CLEAN_TOKEN" npm publish --access public --tag "$NPM_DIST_TAG"
