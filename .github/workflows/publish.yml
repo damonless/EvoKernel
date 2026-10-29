@@ -15,7 +15,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
@@ -42,4 +41,4 @@ jobs:
       - name: Publish Package to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public --tag ${{ github.event.inputs.tag || 'latest' }}
+        run: npm publish --access public --tag ${{ github.event.inputs.tag || 'latest' }}
