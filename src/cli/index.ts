@@ -33,8 +33,8 @@ Commands:
   virtualize [--dry-run] [--restore] [--global]
                       One-click fold third-party stdio MCPs from host configs into .evo/mcp-pool.json (0 schema bloat)
   memory [verify]     Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
-  audit [--global]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
-  refactor [--apply]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
+  audit [--global] [--token-budget <N>] [--skill-budget <N>]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
+  refactor [--apply] [--token-budget <N>] [--skill-budget <N>]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
   tree                Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/)
   stats               Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings
   mcp                 Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
@@ -174,6 +174,20 @@ export function parseLinkArg(args: string[]): string | undefined {
   return undefined;
 }
 
+export function parsePositiveIntFlag(args: string[], flag: string): number | undefined {
+  const eqArg = args.find((a) => a.startsWith(`${flag}=`));
+  if (eqArg) {
+    const n = Number.parseInt(eqArg.slice(flag.length + 1).trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  }
+  const idx = args.indexOf(flag);
+  if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
+    const n = Number.parseInt(args[idx + 1].trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  }
+  return undefined;
+}
+
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   const cmd = (args[0] || 'help').toLowerCase();
@@ -247,7 +261,7 @@ export function runCli(argv: string[]): void {
 
     case 'audit': {
       const includeGlobal = args.includes('--global') || args.includes('-g');
-      const report = runAudit(workspaceRoot, { includeGlobal });
+      const report = runAudit(workspaceRoot, { includeGlobal, tokenBudgetLimit: parsePositiveIntFlag(args, '--token-budget'), skillBudgetLimit: parsePositiveIntFlag(args, '--skill-budget') });
       console.log(renderAuditReport(report));
       if (!report.healthy) {
         process.exit(1);
@@ -258,7 +272,7 @@ export function runCli(argv: string[]): void {
     case 'refactor': {
       const includeGlobal = !args.includes('--local-only');
       const apply = args.includes('--apply');
-      const result = runRefactor(workspaceRoot, { includeGlobal, apply });
+      const result = runRefactor(workspaceRoot, { includeGlobal, apply, tokenBudgetLimit: parsePositiveIntFlag(args, '--token-budget'), skillBudgetLimit: parsePositiveIntFlag(args, '--skill-budget') });
       console.log(renderRefactorReport(result));
       break;
     }

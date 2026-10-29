@@ -611,6 +611,26 @@ function findPythonBlockEnd(lines: string[], startIndex: number): number {
   return lastContentLine;
 }
 
+function safeRealpathNative(targetPath: string): string {
+  try {
+    return typeof fs.realpathSync.native === 'function'
+      ? fs.realpathSync.native(targetPath)
+      : fs.realpathSync(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+function resolveCanonicalRelativePath(root: string, targetFile: string): string {
+  const realRoot = safeRealpathNative(root);
+  const realTarget = safeRealpathNative(targetFile);
+  const relReal = path.relative(realRoot, realTarget).replace(/\\/g, '/');
+  if (relReal && !relReal.startsWith('..') && !path.isAbsolute(relReal)) {
+    return relReal;
+  }
+  return path.relative(root, targetFile).replace(/\\/g, '/');
+}
+
 export function extractSymbolFingerprint(
   workspaceRoot: string,
   rawSpec: string
@@ -650,7 +670,7 @@ export function extractSymbolFingerprint(
     const targetFile = candidateFiles[0];
     const rawContent = fs.readFileSync(targetFile, 'utf8');
     const lines = rawContent.split(/\r?\n/);
-    const relPath = path.relative(root, targetFile).replace(/\\/g, '/');
+    const relPath = resolveCanonicalRelativePath(root, targetFile);
     const ext = path.extname(targetFile).toLowerCase();
     return {
       symbol: parsed.raw,
@@ -689,7 +709,7 @@ export function extractSymbolFingerprint(
           : findBraceBlockEnd(lines, decl.lineIndex);
 
       const blockCode = lines.slice(decl.lineIndex, endIdx + 1).join('\n');
-      const relPath = path.relative(root, filePath).replace(/\\/g, '/');
+      const relPath = resolveCanonicalRelativePath(root, filePath);
 
       return {
         symbol: parsed.raw,
@@ -885,6 +905,63 @@ function resolveCommitBranchLabel(
   return 'other-branch';
 }
 
+function discoverDescendantBranchRefs(
+  workspaceRoot: string,
+  baseCommit: string,
+  currentCommit: string,
+  limit = 8
+): Array<{ commit: string; branch: string }> {
+  if (!isGitCommitPresent(workspaceRoot, baseCommit)) return [];
+  try {
+    const res = spawnSync(
+      'git',
+      [
+        'for-each-ref',
+        '--contains',
+        baseCommit.trim(),
+        '--sort=-committerdate',
+        '--format=%(objectname:short=12)|%(refname:short)',
+        'refs/heads',
+        'refs/remotes',
+      ],
+      {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+        timeout: 2000,
+      }
+    );
+    if (res.status !== 0 || !res.stdout) return [];
+
+    const discovered: Array<{ commit: string; branch: string }> = [];
+    const seenCommits = new Set<string>();
+    const cleanBase = baseCommit.trim();
+    const cleanCurrent = (currentCommit || '').trim();
+
+    for (const rawLine of res.stdout.split(/\r?\n/)) {
+      if (discovered.length >= limit) break;
+      const line = rawLine.trim();
+      if (!line) continue;
+      const sepIdx = line.indexOf('|');
+      if (sepIdx === -1) continue;
+      const sha = line.slice(0, sepIdx).trim();
+      const branch = line.slice(sepIdx + 1).trim();
+      if (!sha || !branch || branch === 'HEAD' || branch.endsWith('/HEAD')) continue;
+      if (
+        (cleanCurrent && (sha.startsWith(cleanCurrent) || cleanCurrent.startsWith(sha))) ||
+        (cleanBase && (sha.startsWith(cleanBase) || cleanBase.startsWith(sha)))
+      ) {
+        continue;
+      }
+      if (seenCommits.has(sha)) continue;
+      seenCommits.add(sha);
+      discovered.push({ commit: sha, branch });
+    }
+    return discovered;
+  } catch {
+    return [];
+  }
+}
+
 function extractSymbolFingerprintAtCommit(
   workspaceRoot: string,
   commitSha: string,
@@ -897,7 +974,7 @@ function extractSymbolFingerprintAtCommit(
 
   const addCandidate = (rel?: string) => {
     if (!rel || rel === '(unrecorded)') return;
-    const clean = rel.replace(/^[/\\]+/, '').replace(/\\/g, '/').trim();
+    const clean = rel.replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
     if (clean && !seenFiles.has(clean)) {
       seenFiles.add(clean);
       candidateRelFiles.push(clean);
@@ -909,9 +986,10 @@ function extractSymbolFingerprintAtCommit(
 
   const tryExtractFromGitFiles = (relFiles: string[]): SymbolFingerprint | null => {
     for (const relFile of relFiles) {
+      const cleanRel = relFile.replace(/\\/g, '/').replace(/^\.\/+/, '');
       let rawContent = '';
       try {
-        const res = spawnSync('git', ['show', `${commitSha.trim()}:${relFile}`], {
+        const res = spawnSync('git', ['show', `${commitSha.trim()}:./${cleanRel}`], {
           cwd: workspaceRoot,
           encoding: 'utf8',
           timeout: 2000,
@@ -923,16 +1001,16 @@ function extractSymbolFingerprintAtCommit(
         continue;
       }
 
-      const ext = path.extname(relFile).toLowerCase();
+      const ext = path.extname(cleanRel).toLowerCase();
       if (parsed.isWholeFile) {
         const lines = rawContent.split(/\r?\n/);
         return {
           symbol: rawSpec,
-          file_path: relFile,
+          file_path: cleanRel,
           kind: 'file',
           start_line: 1,
           end_line: lines.length,
-          signature: `file ${relFile} (${lines.length} lines)`,
+          signature: `file ${cleanRel} (${lines.length} lines)`,
           ast_hash: computeAstHash(rawContent, ext),
         };
       }
@@ -950,7 +1028,7 @@ function extractSymbolFingerprintAtCommit(
 
       return {
         symbol: rawSpec,
-        file_path: relFile,
+        file_path: cleanRel,
         kind: decl.kind,
         start_line: decl.lineIndex + 1,
         end_line: endIdx + 1,
@@ -966,32 +1044,41 @@ function extractSymbolFingerprintAtCommit(
     if (directHit) return directHit;
   }
 
-  // Fallback: list files in commitSha tree if fileHint was a suffix or unrecorded
+  // Fallback: list files in commitSha tree (relative to cwd) to recover from NTFS/APFS case drift, suffix hints, or relocations
   try {
-    const treeRes = spawnSync('git', ['ls-tree', '-r', '--name-only', commitSha.trim()], {
+    const treeRes = spawnSync('git', ['ls-tree', '-r', '--name-only', commitSha.trim(), './'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
       timeout: 2000,
     });
     if (treeRes.status === 0 && treeRes.stdout) {
-      const normHint = parsed.fileHint
-        ? parsed.fileHint.replace(/^[/\\]+/, '').replace(/\\/g, '/').toLowerCase()
-        : '';
-      const treeFiles = treeRes.stdout
+      const normHints = [parsed.fileHint, recordedFp?.file_path]
+        .filter((h): h is string => Boolean(h && h !== '(unrecorded)'))
+        .map((h) => h.replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '').toLowerCase());
+
+      const allSourceTreeFiles = treeRes.stdout
         .split(/\r?\n/)
-        .map((f) => f.trim().replace(/\\/g, '/'))
+        .map((f) => f.trim().replace(/\\/g, '/').replace(/^\.\/+/, ''))
         .filter((f) => {
           if (!f || seenFiles.has(f)) return false;
           const ext = path.extname(f).toLowerCase();
-          if (!SOURCE_EXTENSIONS.has(ext)) return false;
-          if (normHint) {
-            const lower = f.toLowerCase();
-            return lower === normHint || lower.endsWith(`/${normHint}`);
-          }
-          return true;
-        })
-        .slice(0, 60);
-      return tryExtractFromGitFiles(treeFiles);
+          return SOURCE_EXTENSIONS.has(ext);
+        });
+
+      if (normHints.length > 0) {
+        const hintMatchedFiles = allSourceTreeFiles.filter((f) => {
+          const lower = f.toLowerCase();
+          return normHints.some((nh) => lower === nh || lower.endsWith(`/${nh}`));
+        });
+        if (hintMatchedFiles.length > 0) {
+          const caseRecoveredHit = tryExtractFromGitFiles(hintMatchedFiles);
+          if (caseRecoveredHit) return caseRecoveredHit;
+        }
+      }
+
+      if (!parsed.isWholeFile) {
+        return tryExtractFromGitFiles(allSourceTreeFiles.slice(0, 60));
+      }
     }
   } catch {
     // ignore ls-tree fallback errors
@@ -1156,70 +1243,86 @@ export function verifyMemoryFreshness(
   }
 
   // Tier 2: Git-Topology-Aware Fallback (OTHER_BRANCH vs STALE)
-  const nonAncestorCommit =
+  const candidateGitRefs: Array<{ commit: string; branchHint?: string }> = [];
+  const pushCandidateRef = (commit?: string, branchHint?: string) => {
+    const c = (commit || '').trim();
+    if (!c) return;
+    if (candidateGitRefs.some((x) => x.commit === c)) return;
+    candidateGitRefs.push({ commit: c, branchHint });
+  };
+
+  const cleanRecordedBranch = (memory.created_branch || '').trim();
+  const hasExplicitBranch = Boolean(cleanRecordedBranch && cleanRecordedBranch !== 'HEAD');
+
+  if (
     isGitCommitPresent(root, memory.created_commit) &&
     !isGitAncestorOfHead(root, memory.created_commit)
-      ? memory.created_commit.trim()
-      : undefined;
-  const siblingBranchCommit =
-    memory.created_branch &&
-    memory.created_branch.trim() &&
-    memory.created_branch.trim() !== 'HEAD' &&
-    memory.created_branch.trim() !== currentBranch
-      ? resolveGitBranchCommit(root, memory.created_branch.trim())
-      : undefined;
-  const candidateGitRef = nonAncestorCommit || siblingBranchCommit;
+  ) {
+    pushCandidateRef(memory.created_commit.trim(), memory.created_branch);
+  }
+  if (hasExplicitBranch && cleanRecordedBranch !== currentBranch) {
+    const branchTip =
+      resolveGitBranchCommit(root, cleanRecordedBranch) ||
+      resolveGitBranchCommit(root, `origin/${cleanRecordedBranch}`);
+    if (branchTip) {
+      pushCandidateRef(branchTip, cleanRecordedBranch);
+    }
+  }
+  if (!hasExplicitBranch && isGitCommitPresent(root, memory.created_commit)) {
+    for (const desc of discoverDescendantBranchRefs(root, memory.created_commit, currentCommit, 8)) {
+      pushCandidateRef(desc.commit, desc.branch);
+    }
+  }
 
-  if (totalSymbols > 0 && verifiedCount < totalSymbols && candidateGitRef) {
-    const branchLabel = resolveCommitBranchLabel(
-      root,
-      candidateGitRef,
-      memory.created_branch
-    );
+  if (totalSymbols > 0 && verifiedCount < totalSymbols && candidateGitRefs.length > 0) {
     let branchVerifiedCount = 0;
+    let resolvedBranchLabel = memory.created_branch || '';
+    let resolvedCommitRef =
+      memory.created_commit && memory.created_commit !== 'uncommitted'
+        ? memory.created_commit
+        : candidateGitRefs[0].commit;
 
     for (let i = 0; i < checks.length; i++) {
       if (checks[i].status === 'VERIFIED') continue;
       const symKey = checks[i].symbol;
       const recorded = checks[i].recorded;
-      let commitFp = extractSymbolFingerprintAtCommit(
-        root,
-        candidateGitRef,
-        symKey,
-        recorded
-      );
-      if (
-        (!commitFp || (recorded.ast_hash && commitFp.ast_hash !== recorded.ast_hash)) &&
-        siblingBranchCommit &&
-        siblingBranchCommit !== candidateGitRef
-      ) {
-        commitFp = extractSymbolFingerprintAtCommit(
-          root,
-          siblingBranchCommit,
-          symKey,
-          recorded
-        );
+      let matchedFp: SymbolFingerprint | null = null;
+      let matchedRef: { commit: string; branchHint?: string } | null = null;
+
+      for (const cand of candidateGitRefs) {
+        const fp = extractSymbolFingerprintAtCommit(root, cand.commit, symKey, recorded);
+        if (fp && (!recorded.ast_hash || fp.ast_hash === recorded.ast_hash)) {
+          matchedFp = fp;
+          matchedRef = cand;
+          break;
+        }
       }
-      if (commitFp && (!recorded.ast_hash || commitFp.ast_hash === recorded.ast_hash)) {
+
+      if (matchedFp && matchedRef) {
         branchVerifiedCount++;
-        const refDisplay = memory.created_commit && memory.created_commit !== 'uncommitted'
-          ? memory.created_commit
-          : candidateGitRef;
+        const branchLabel = resolveCommitBranchLabel(
+          root,
+          matchedRef.commit,
+          matchedRef.branchHint || memory.created_branch
+        );
+        resolvedBranchLabel = branchLabel;
+        resolvedCommitRef = matchedRef.commit;
+        const cleanFpPath = matchedFp.file_path.replace(/^\.\/+/, '');
         checks[i] = {
           symbol: symKey,
           status: 'OTHER_BRANCH',
           recorded,
-          current: commitFp,
-          detail: `AST fingerprint verified (${commitFp.ast_hash}) on branch '${branchLabel}' (@ commit ${refDisplay}) at ${commitFp.file_path}:L${commitFp.start_line}-L${commitFp.end_line} (not yet merged into ${currentBranch || 'HEAD'}@${currentCommit}).`,
+          current: matchedFp,
+          detail: `AST fingerprint verified (${matchedFp.ast_hash}) on branch '${branchLabel}' (@ commit ${matchedRef.commit}) at ${cleanFpPath}:L${matchedFp.start_line}-L${matchedFp.end_line} (not yet merged into ${currentBranch || 'HEAD'}@${currentCommit}).`,
         };
         topologyAnchors[i] = {
           symbol: symKey,
-          file_path: commitFp.file_path,
-          lines: `L${commitFp.start_line}-L${commitFp.end_line} (@ ${branchLabel}:${refDisplay})`,
-          signature: commitFp.signature,
+          file_path: cleanFpPath,
+          lines: `L${matchedFp.start_line}-L${matchedFp.end_line} (@ ${branchLabel}:${matchedRef.commit})`,
+          signature: matchedFp.signature,
           status: 'OTHER_BRANCH',
           callers: [],
-          codegraph_hint: `git show ${refDisplay}:${commitFp.file_path}`,
+          codegraph_hint: `git show ${matchedRef.commit}:./${cleanFpPath}`,
         };
       }
     }
@@ -1230,9 +1333,9 @@ export function verifyMemoryFreshness(
         overall_status: 'OTHER_BRANCH',
         confidence_tag: '[置信度: MID (50–80%) · OTHER_BRANCH]',
         commit_match: false,
-        recorded_commit: memory.created_commit,
+        recorded_commit: resolvedCommitRef,
         current_commit: currentCommit,
-        recorded_branch: branchLabel,
+        recorded_branch: resolvedBranchLabel || 'other-branch',
         current_branch: currentBranch,
         branch_verified_count: branchVerifiedCount,
         verified_count: verifiedCount,

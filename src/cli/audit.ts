@@ -13,6 +13,7 @@ export interface AuditOptions {
   includeGlobal?: boolean;
   globalHomeDir?: string;
   tokenBudgetLimit?: number;
+  skillBudgetLimit?: number;
   overlapThreshold?: number;
 }
 
@@ -55,6 +56,7 @@ export interface AuditReport {
   workspaceRoot: string;
   includeGlobal: boolean;
   tokenBudgetLimit: number;
+  skillBudgetLimit: number;
   files: AuditedFileMetric[];
   budgetViolations: AuditedFileMetric[];
   domainLeaks: DomainLeakWarning[];
@@ -312,9 +314,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
       ? options.tokenBudgetLimit
       : tokenBudgetLimit + baseSeedTokens + MAX_TOOLS_CATALOG_TOKENS;
   const skillBudgetLimit =
-    options.tokenBudgetLimit !== undefined
-      ? options.tokenBudgetLimit
-      : Math.max(tokenBudgetLimit * 2, 3000);
+    options.skillBudgetLimit ?? Math.max(tokenBudgetLimit * 2, 3000);
   const overlapThreshold = options.overlapThreshold ?? 0.25;
 
   const entries = discoverAuditableFiles(root, includeGlobal, globalHomeDir);
@@ -498,6 +498,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     workspaceRoot: root,
     includeGlobal,
     tokenBudgetLimit,
+    skillBudgetLimit,
     files,
     budgetViolations,
     domainLeaks,
@@ -514,7 +515,7 @@ export function renderAuditReport(report: AuditReport): string {
   lines.push('╰──────────────────────────────────────────────────────────────────────────╯');
   lines.push(`📦 Workspace : ${report.workspaceRoot}`);
   lines.push(`🌐 Scope     : ${report.includeGlobal ? 'Workspace + Global (~/.gemini, ~/.claude, ~/.cursor)' : 'Workspace Only (pass --global to include user-level configs)'}`);
-  lines.push(`🛡️  Budget Cap: ${report.tokenBudgetLimit} tokens per always-on rule file`);
+  lines.push(`🛡️  Budget Cap: ${report.tokenBudgetLimit} tokens per always-on rule file (${report.skillBudgetLimit} tokens per on-demand SKILL.md)`);
   lines.push('');
 
   lines.push(`├── 📄 Scanned Rule & Skill Assets (${report.files.length} files)`);
@@ -603,6 +604,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     includeGlobal: options.includeGlobal ?? true,
     globalHomeDir: options.globalHomeDir,
     tokenBudgetLimit: options.tokenBudgetLimit,
+    skillBudgetLimit: options.skillBudgetLimit,
     overlapThreshold: options.overlapThreshold,
   });
 

@@ -590,6 +590,78 @@ function resolveAuditorCurrentBranch() {
 
 const auditorCurrentBranch = resolveAuditorCurrentBranch();
 
+const gitTreeCache = new Map();
+
+function listGitTreeRelativeFiles(ref) {
+  if (gitTreeCache.has(ref)) return gitTreeCache.get(ref);
+  try {
+    const treeRes = spawnSync('git', ['ls-tree', '-r', '--name-only', ref, './'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+    if (treeRes.status === 0 && typeof treeRes.stdout === 'string') {
+      const files = treeRes.stdout
+        .split(/\r?\n/)
+        .map((f) => f.trim().replace(/\\/g, '/').replace(/^\.\/+/, ''))
+        .filter(Boolean);
+      gitTreeCache.set(ref, files);
+      return files;
+    }
+  } catch {}
+  gitTreeCache.set(ref, []);
+  return [];
+}
+
+function discoverAuditorDescendantRefs(baseSha, limit = 8) {
+  try {
+    const res = spawnSync(
+      'git',
+      [
+        'for-each-ref',
+        '--contains',
+        baseSha,
+        '--sort=-committerdate',
+        '--format=%(objectname:short=12)|%(refname:short)',
+        'refs/heads',
+        'refs/remotes',
+      ],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 2000,
+      }
+    );
+    if (res.status !== 0 || typeof res.stdout !== 'string') return [];
+    const headRes = spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    const headSha = headRes.status === 0 && headRes.stdout ? headRes.stdout.trim() : '';
+    const refs = [];
+    const seen = new Set();
+    for (const rawLine of res.stdout.split(/\r?\n/)) {
+      if (refs.length >= limit) break;
+      const line = rawLine.trim();
+      if (!line) continue;
+      const sep = line.indexOf('|');
+      if (sep === -1) continue;
+      const sha = line.slice(0, sep).trim();
+      const branch = line.slice(sep + 1).trim();
+      if (!sha || !branch || branch === 'HEAD' || branch.endsWith('/HEAD')) continue;
+      if (headSha && (sha.startsWith(headSha) || headSha.startsWith(sha))) continue;
+      if (sha.startsWith(baseSha) || baseSha.startsWith(sha)) continue;
+      if (seen.has(sha)) continue;
+      seen.add(sha);
+      refs.push(sha);
+    }
+    return refs;
+  } catch {
+    return [];
+  }
+}
+
 function checkSymbolAtParallelBranchCommit(
   commitSha,
   createdBranch,
@@ -600,11 +672,11 @@ function checkSymbolAtParallelBranchCommit(
   if (!fileCandidate || fileCandidate === '(unlocated)' || fileCandidate === '(unrecorded)') {
     return false;
   }
-  const cleanRel = fileCandidate.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+  const cleanRel = fileCandidate.replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '');
 
-  const checkGitRef = (ref) => {
+  const checkGitRefWithPath = (ref, relPath) => {
     try {
-      const showRes = spawnSync('git', ['show', `${ref}:${cleanRel}`], {
+      const showRes = spawnSync('git', ['show', `${ref}:./${relPath}`], {
         cwd: root,
         encoding: 'utf8',
         timeout: 2000,
@@ -619,6 +691,20 @@ function checkSymbolAtParallelBranchCommit(
     }
   };
 
+  const checkGitRef = (ref) => {
+    if (checkGitRefWithPath(ref, cleanRel)) return true;
+    const lowerTarget = cleanRel.toLowerCase();
+    const treeFiles = listGitTreeRelativeFiles(ref);
+    for (const tf of treeFiles) {
+      const lowerTf = tf.toLowerCase();
+      if (tf !== cleanRel && (lowerTf === lowerTarget || lowerTf.endsWith(`/${lowerTarget}`))) {
+        if (checkGitRefWithPath(ref, tf)) return true;
+      }
+    }
+    return false;
+  };
+
+  let validBaseSha = '';
   if (commitSha && commitSha !== 'uncommitted' && /^[0-9a-f]{4,40}$/i.test(String(commitSha).trim())) {
     const sha = String(commitSha).trim();
     try {
@@ -628,6 +714,7 @@ function checkSymbolAtParallelBranchCommit(
         timeout: 1500,
       });
       if (catRes.status === 0) {
+        validBaseSha = sha;
         const ancRes = spawnSync('git', ['merge-base', '--is-ancestor', sha, 'HEAD'], {
           cwd: root,
           encoding: 'utf8',
@@ -641,23 +728,33 @@ function checkSymbolAtParallelBranchCommit(
   }
 
   const branchClean = String(createdBranch || '').trim();
+  const hasExplicitAuditorBranch = Boolean(branchClean && branchClean !== 'HEAD');
   if (
-    branchClean &&
-    branchClean !== 'HEAD' &&
+    hasExplicitAuditorBranch &&
     branchClean !== auditorCurrentBranch &&
     !branchClean.includes('..') &&
     !branchClean.startsWith('-')
   ) {
-    try {
-      const branchCat = spawnSync('git', ['cat-file', '-e', `${branchClean}^{commit}`], {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: 1500,
-      });
-      if (branchCat.status === 0 && checkGitRef(branchClean)) {
+    for (const refCandidate of [branchClean, `origin/${branchClean}`]) {
+      try {
+        const branchCat = spawnSync('git', ['cat-file', '-e', `${refCandidate}^{commit}`], {
+          cwd: root,
+          encoding: 'utf8',
+          timeout: 1500,
+        });
+        if (branchCat.status === 0 && checkGitRef(refCandidate)) {
+          return true;
+        }
+      } catch {}
+    }
+  }
+
+  if (!hasExplicitAuditorBranch && validBaseSha) {
+    for (const descSha of discoverAuditorDescendantRefs(validBaseSha, 8)) {
+      if (checkGitRef(descSha)) {
         return true;
       }
-    } catch {}
+    }
   }
 
   return false;
@@ -723,32 +820,53 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
     return { exists: false, file: normalizedHint };
   }
 
-  // Fallback: search non-test source files in workspace
-  const srcDirs = ['src', 'lib'];
-  for (const sd of srcDirs) {
-    const fullSd = path.join(root, sd);
-    if (!fs.existsSync(fullSd)) continue;
-    const stack = [fullSd];
-    while (stack.length > 0) {
-      const current = stack.pop();
-      for (const ent of fs.readdirSync(current, { withFileTypes: true })) {
-        const entPath = path.join(current, ent.name);
-        if (ent.isDirectory()) {
-          if (!['node_modules', '.git', 'dist', 'build', '.evo', 'tests', '__tests__'].includes(ent.name)) {
-            stack.push(entPath);
-          }
-        } else if (
-          ent.isFile() &&
-          /\.(?:ts|js|mjs|cjs|c|h|cpp|py)$/i.test(ent.name) &&
-          !/\.(?:test|spec)\.[a-z0-9]+$/i.test(ent.name)
-        ) {
-          try {
-            const code = stripCodeComments(fs.readFileSync(entPath, 'utf8'));
-            if (hasSymbolIdentifier(code, symbolName)) {
-              return { exists: true, file: path.relative(root, entPath).replace(/\\/g, '/') };
-            }
-          } catch {}
+  // Fallback: search non-test source files across workspace (supporting C/embedded layouts as well as src/lib)
+  const ignoredDirs = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    'build',
+    '.evo',
+    '.codegraph',
+    '.agents',
+    '.claude',
+    '.cursor',
+    '.windsurf',
+    '.roo',
+    '.gemini',
+    'templates',
+    'tests',
+    '__tests__',
+  ]);
+  const stack = [root];
+  let scannedSourceFiles = 0;
+  while (stack.length > 0 && scannedSourceFiles < 500) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (scannedSourceFiles >= 500) break;
+      const entPath = path.join(current, ent.name);
+      if (ent.isDirectory()) {
+        if (!ignoredDirs.has(ent.name)) {
+          stack.push(entPath);
         }
+      } else if (
+        ent.isFile() &&
+        /\.(?:ts|tsx|js|jsx|mjs|cjs|c|h|cpp|hpp|py|rs|go|java|cs)$/i.test(ent.name) &&
+        !/\.(?:test|spec)\.[a-z0-9]+$/i.test(ent.name)
+      ) {
+        scannedSourceFiles++;
+        try {
+          const code = stripCodeComments(fs.readFileSync(entPath, 'utf8'));
+          if (hasSymbolIdentifier(code, symbolName)) {
+            return { exists: true, file: path.relative(root, entPath).replace(/\\/g, '/') };
+          }
+        } catch {}
       }
     }
   }

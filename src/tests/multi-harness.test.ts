@@ -1029,8 +1029,8 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       assert.ok(vscodeRestored.servers.filesystem);
 
       // Verify removeMcpJson cleans parsed.servers['evo-kernel'] written by runVirtualize
-      assert.equal(removeMcpJson(path.join(ws, '.vscode', 'mcp.json')), true);
-      const vscodeCleaned = JSON.parse(fs.readFileSync(path.join(ws, '.vscode', 'mcp.json'), 'utf8'));
+      assert.equal(vscodeRestored.servers['evo-kernel'], undefined, 'Auto-injected evo-kernel must be removed on --restore');
+      const vscodeCleaned = vscodeRestored;
       assert.equal(vscodeCleaned.servers['evo-kernel'], undefined);
       assert.ok(vscodeCleaned.servers.filesystem);
 
@@ -1075,6 +1075,73 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
         assert.equal(ocSrv?.config.command, 'npx');
         assert.deepEqual(ocSrv?.config.args, ['-y', 'opencode-str-mcp']);
         assert.deepEqual(ocSrv?.config.env, { OC_KEY: 'val' });
+        // Also verify removeMcpJson cleans servers['evo-kernel'] on a virtualized .vscode/mcp.json, and verify quoted TOML keys + pre-existing evo-kernel preservation
+        const ws3 = createTempWorkspace();
+        try {
+          fs.mkdirSync(path.join(ws3, '.vscode'), { recursive: true });
+          fs.writeFileSync(
+            path.join(ws3, '.vscode', 'mcp.json'),
+            JSON.stringify({ servers: { vsc_only: { type: 'stdio', command: 'npx', args: ['-y', 'vsc-mcp'] } } }),
+            'utf8'
+          );
+          fs.writeFileSync(
+            path.join(ws3, '.mcp.json'),
+            JSON.stringify({
+              mcpServers: {
+                'evo-kernel': { command: 'node', args: ['./scripts/boot-mcp.mjs'] },
+                'kept-peer': { command: 'npx', args: ['-y', 'peer-mcp'] },
+              },
+            }),
+            'utf8'
+          );
+          fs.mkdirSync(path.join(ws3, '.codex'), { recursive: true });
+          fs.writeFileSync(
+            path.join(ws3, '.codex', 'config.toml'),
+            [
+              '[mcp_servers."github.enterprise"]',
+              'command = "npx"',
+              'args = ["-y", "@org/ghe-mcp"]',
+              '',
+              '[mcp_servers."github.enterprise".env]',
+              'GHE_HOST = "ghe.internal"',
+              '',
+              "[mcp_servers.'quoted-single']",
+              'command = "node"',
+              'args = ["single.mjs"]',
+              '',
+            ].join('\n'),
+            'utf8'
+          );
+          const v3 = runVirtualize(ws3, { dryRun: false });
+          assert.equal(v3.servers.length, 4);
+          assert.ok(v3.servers.some((s) => s.name === 'github.enterprise'));
+          assert.ok(v3.servers.some((s) => s.name === 'quoted-single'));
+          const gheSrv = v3.servers.find((s) => s.name === 'github.enterprise');
+          assert.deepEqual(gheSrv?.config.env, { GHE_HOST: 'ghe.internal' });
+
+          // Verify removeMcpJson cleans parsed.servers['evo-kernel'] written into .vscode/mcp.json
+          const vscCopy = path.join(ws3, '.vscode', 'mcp-copy.json');
+          fs.copyFileSync(path.join(ws3, '.vscode', 'mcp.json'), vscCopy);
+          assert.equal(removeMcpJson(vscCopy), true);
+
+          // Restore ws3: .vscode/mcp.json and .codex/config.toml had evo-kernel auto-injected -> removed; .mcp.json already had evo-kernel -> preserved!
+          runVirtualize(ws3, { restore: true });
+          const vsc3After = JSON.parse(fs.readFileSync(path.join(ws3, '.vscode', 'mcp.json'), 'utf8'));
+          assert.equal(vsc3After.servers['evo-kernel'], undefined);
+          assert.ok(vsc3After.servers.vsc_only);
+
+          const mcp3After = JSON.parse(fs.readFileSync(path.join(ws3, '.mcp.json'), 'utf8'));
+          assert.ok(mcp3After.mcpServers['evo-kernel'], 'Pre-existing evo-kernel must be preserved on --restore');
+          assert.ok(mcp3After.mcpServers['kept-peer']);
+
+          const codex3After = fs.readFileSync(path.join(ws3, '.codex', 'config.toml'), 'utf8');
+          assert.doesNotMatch(codex3After, /evo-kernel/, 'Auto-injected evo-kernel must be removed from .codex/config.toml on --restore');
+          assert.match(codex3After, /\[mcp_servers\."github\.enterprise"\]/);
+          assert.match(codex3After, /\[mcp_servers\."github\.enterprise"\.env\]/);
+          assert.match(codex3After, /\[mcp_servers\.'quoted-single'\]/);
+        } finally {
+          fs.rmSync(ws3, { recursive: true, force: true });
+        }
       } finally {
         fs.rmSync(ws2, { recursive: true, force: true });
       }

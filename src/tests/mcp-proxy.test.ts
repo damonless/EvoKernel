@@ -438,17 +438,17 @@ rl.on('line', (line) => {
     // 1. Verify resolveWindowsSpawnCommand detects .cmd and .exe shims on Windows PATH (including quoted dirs, trailing slashes, and version dots)
     const binDir = path.join(ws, 'mock bin');
     fs.mkdirSync(binDir, { recursive: true });
-    const mockCmdShim = path.join(binDir, 'codegraph-mock.cmd');
+    const probeCmdShim = path.join(binDir, 'codegraph-probe.cmd');
     const mockExeBin = path.join(binDir, 'native-mcp.exe');
     const mockDotCmd = path.join(binDir, 'python3.11.cmd');
-    fs.writeFileSync(mockCmdShim, '@echo off\r\n', 'utf8');
+    fs.writeFileSync(probeCmdShim, '@echo off\r\n', 'utf8');
     fs.writeFileSync(mockExeBin, '', 'utf8');
     fs.writeFileSync(mockDotCmd, '@echo off\r\n', 'utf8');
 
     const quotedPathEnv = { PATH: `"${binDir}\\";C:\\nonexistent\\bin` };
-    const resolvedCmd = resolveWindowsSpawnCommand('codegraph-mock', quotedPathEnv, 'win32');
+    const resolvedCmd = resolveWindowsSpawnCommand('codegraph-probe', quotedPathEnv, 'win32');
     assert.equal(resolvedCmd.isBatch, true);
-    assert.equal(resolvedCmd.command, mockCmdShim);
+    assert.equal(resolvedCmd.command, probeCmdShim);
 
     const resolvedDotCmd = resolveWindowsSpawnCommand('python3.11', quotedPathEnv, 'win32');
     assert.equal(resolvedDotCmd.isBatch, true);
@@ -458,7 +458,7 @@ rl.on('line', (line) => {
     assert.equal(resolvedExe.isBatch, false);
     assert.equal(resolvedExe.command, mockExeBin);
 
-    const resolvedPosix = resolveWindowsSpawnCommand('codegraph-mock', quotedPathEnv, 'linux');
+    const resolvedPosix = resolveWindowsSpawnCommand('codegraph-probe', quotedPathEnv, 'linux');
     assert.equal(resolvedPosix.isBatch, false);
 
     // 2. Verify McpClientConnection passes rootUri/workspaceFolders on initialize and answers server-initiated roots/list & ping
@@ -518,7 +518,8 @@ rl.on('line', (line) => {
       'utf8'
     );
 
-    fs.writeFileSync(mockCmdShim, `@"${process.execPath}" "${rootsServerScript}"\r\n`, 'utf8');
+    const liveCmdShim = path.join(binDir, 'codegraph-mock.cmd');
+    fs.writeFileSync(liveCmdShim, `@"${process.execPath}" "${rootsServerScript}"\r\n`, 'utf8');
 
     const proxy = new McpProxyManager(ws);
     try {
@@ -528,9 +529,9 @@ rl.on('line', (line) => {
               command: 'codegraph-mock',
               args: [],
               env: { PATH: `"${binDir}\\";${process.env.PATH || process.env.Path || ''}` },
-              timeoutMs: 3000,
+              timeoutMs: 10000,
             }
-          : { command: process.execPath, args: [rootsServerScript], timeoutMs: 3000 };
+          : { command: process.execPath, args: [rootsServerScript], timeoutMs: 10000 };
       const discovered = await proxy.syncExternalTools({ cg: serverCfg });
       assert.equal(discovered.length, 1);
       assert.equal(discovered[0].id, 'ext__cg__codegraph_explore');

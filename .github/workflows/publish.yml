@@ -26,7 +26,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js 22 (Registry: https://registry.npmjs.org)
+      - name: "Setup Node.js 22 (npmjs.org)"
         uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -41,4 +41,5 @@ jobs:
       - name: Publish Package to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --tag ${{ github.event.inputs.tag || 'latest' }}
+          NPM_DIST_TAG: ${{ inputs.tag || 'latest' }}
+        run: npm publish --access public --tag "$NPM_DIST_TAG"

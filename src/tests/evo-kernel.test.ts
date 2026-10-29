@@ -3760,6 +3760,146 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         'Always-On rule file (~2,200 tokens > 1,500 limit) must still trigger budgetViolations'
       );
       assert.equal(ruleBloatFindings[0].budgetLimit, 1500);
+      // Verify Defect 3 (Issue #17): passing options.tokenBudgetLimit (e.g. 1800) does NOT collapse skillBudgetLimit below Math.max(tokenBudgetLimit * 2, 3000), unless skillBudgetLimit is explicitly passed
+      const auditCustomRuleBudget = runAudit(ws, { includeGlobal: false, tokenBudgetLimit: 1800 });
+      const skillWith1800RuleBudget = auditCustomRuleBudget.files.find(
+        (f) => f.displayPath.includes('SKILL.md') || f.fullPath.includes('SKILL.md')
+      );
+      assert.ok(skillWith1800RuleBudget);
+      assert.equal(skillWith1800RuleBudget.budgetLimit, 3600);
+      assert.equal(skillWith1800RuleBudget.overBudget, false);
+
+      const auditExplicitSkillBudget = runAudit(ws, {
+        includeGlobal: false,
+        tokenBudgetLimit: 1800,
+        skillBudgetLimit: 1800,
+      });
+      const skillWithExplicit1800 = auditExplicitSkillBudget.files.find(
+        (f) => f.displayPath.includes('SKILL.md') || f.fullPath.includes('SKILL.md')
+      );
+      assert.ok(skillWithExplicit1800);
+      assert.equal(skillWithExplicit1800.budgetLimit, 1800);
+      assert.equal(skillWithExplicit1800.overBudget, true);
+
+      // Verify Defects 1 & 2 (Issue #17): Subdirectory monorepo workspace (.git at parent, .evo in packages/firmware),
+      // git show <ref>:./<path>, NTFS/Git case drift recovery, and legacy pre-commit created_commit lag without created_branch
+      const monoRoot = createTempWorkspace();
+      const subWs = path.join(monoRoot, 'packages', 'firmware');
+      try {
+        fs.mkdirSync(path.join(subWs, 'UPS'), { recursive: true });
+        fs.mkdirSync(path.join(subWs, 'MODULE', 'ModuleWiFi'), { recursive: true });
+        spawnSync('git', ['init', '-b', 'main'], { cwd: monoRoot, encoding: 'utf8' });
+        spawnSync('git', ['config', 'user.email', 'test@evokernel.dev'], { cwd: monoRoot, encoding: 'utf8' });
+        spawnSync('git', ['config', 'user.name', 'EvoKernel Test'], { cwd: monoRoot, encoding: 'utf8' });
+
+        fs.writeFileSync(
+          path.join(subWs, 'UPS', 'CommonLoop.c'),
+          'int UPS_CommonLoop(int v) {\n  return v + 1;\n}\n',
+          'utf8'
+        );
+        spawnSync('git', ['add', '.'], { cwd: monoRoot, encoding: 'utf8' });
+        spawnSync('git', ['commit', '-m', 'chore: initial monorepo commit'], { cwd: monoRoot, encoding: 'utf8' });
+
+        // Checkout sibling branch feat/ups-wifi
+        spawnSync('git', ['checkout', '-b', 'feat/ups-wifi'], { cwd: monoRoot, encoding: 'utf8' });
+        fs.writeFileSync(
+          path.join(subWs, 'UPS', 'TaskModeSwitch.c'),
+          'int UPS_TaskModeSwitch(int mode) {\n  return mode * 2;\n}\n',
+          'utf8'
+        );
+        fs.writeFileSync(
+          path.join(subWs, 'MODULE', 'ModuleWiFi', 'WiFi_Service.c'),
+          'int WiFi_InitService(int ch) {\n  return ch + 10;\n}\n',
+          'utf8'
+        );
+
+        // Propose a memory BEFORE git commit (simulating pre-commit created_commit lag)
+        const subDispatcher = new EvoMcpDispatcher(subWs);
+        const subProp = subDispatcher.handleToolCall('evo_propose', {
+          workspace: subWs,
+          kind: 'memory',
+          id: 'mem-subdir-ups-wifi',
+          title: 'Subdirectory UPS Mode Switch & WiFi Service Guard',
+          l0_summary: 'Subdirectory firmware mode switch and WiFi init guard.',
+          symptom: 'Mode switch resets WiFi channel in subdirectory firmware.',
+          root_cause: 'UPS_TaskModeSwitch reinitializes WiFi_InitService.',
+          solution: 'Check UPS_CommonLoop state before calling UPS_TaskModeSwitch.',
+          target_symbols: [
+            { file_path: 'UPS/CommonLoop.c', symbol_name: 'UPS_CommonLoop' },
+            { file_path: 'UPS/TaskModeSwitch.c', symbol_name: 'UPS_TaskModeSwitch' },
+            { file_path: 'MODULE/ModuleWiFi/WiFi_Service.c', symbol_name: 'WiFi_InitService' },
+          ],
+        });
+        assert.equal(subProp.isError, undefined, subProp.content[0]?.text);
+        subDispatcher.close();
+
+        // Simulate legacy memory without created_branch and historical wrong-case file_path ('ModuleWifi' lowercase 'f')
+        const memMdPath = path.join(subWs, '.evo', 'memories', 'mem-subdir-ups-wifi.md');
+        let memMdRaw = fs.readFileSync(memMdPath, 'utf8');
+        memMdRaw = memMdRaw.replace(/^created_branch:.*\r?\n/m, '');
+        memMdRaw = memMdRaw.replace(/MODULE\/ModuleWiFi\/WiFi_Service\.c/g, 'MODULE/ModuleWifi/WiFi_Service.c');
+        fs.writeFileSync(memMdPath, memMdRaw, 'utf8');
+
+        // Commit the new C files on feat/ups-wifi (excluding .evo so switching back to main keeps .evo in subWs)
+        spawnSync('git', ['add', 'packages/firmware/UPS', 'packages/firmware/MODULE'], {
+          cwd: monoRoot,
+          encoding: 'utf8',
+        });
+        spawnSync('git', ['commit', '-m', 'feat(firmware): add UPS mode switch and WiFi service'], {
+          cwd: monoRoot,
+          encoding: 'utf8',
+        });
+
+        // Switch back to main (where TaskModeSwitch.c and ModuleWiFi/ do NOT exist in working tree)
+        spawnSync('git', ['checkout', 'main'], { cwd: monoRoot, encoding: 'utf8' });
+
+        const subStorage = new EvoStorage(subWs);
+        const subMem = subStorage.getMemory('mem-subdir-ups-wifi')!;
+        assert.ok(subMem);
+        assert.equal(subMem.created_branch, undefined);
+
+        const subReport = verifyMemoryFreshness(subWs, subMem);
+        assert.equal(
+          subReport.overall_status,
+          'OTHER_BRANCH',
+          `Subdirectory multi-branch memory must verify as OTHER_BRANCH via git show <ref>:./<path> + ls-tree case fallback + descendant branch discovery, got ${subReport.overall_status}: ${JSON.stringify(subReport.checks)}`
+        );
+        assert.equal(subReport.verified_count, 1);
+        assert.equal(subReport.branch_verified_count, 2);
+
+        const subInspectDispatcher = new EvoMcpDispatcher(subWs);
+        const subInspect = subInspectDispatcher.handleToolCall('evo_inspect', {
+          workspace: subWs,
+          id: 'mem-subdir-ups-wifi',
+          tier: 'L2',
+        });
+        assert.match(subInspect.content[0].text, /git show [0-9a-f]{7,12}:\.\//);
+        subInspectDispatcher.close();
+
+        // Also run agy-config-auditor in the subdirectory firmware workspace (no src/ or lib/ dirs!)
+        const subAuditorRun = spawnSync(
+          process.execPath,
+          [path.join(repoRoot, '.evo', 'tools', 'agy-config-auditor', 'run.mjs')],
+          {
+            cwd: subWs,
+            env: { ...process.env, EVO_WORKSPACE: subWs, HOME: fakeGlobal, USERPROFILE: fakeGlobal },
+            encoding: 'utf8',
+          }
+        );
+        const subAuditorJson = JSON.parse(subAuditorRun.stdout.trim());
+        assert.equal(
+          subAuditorJson.summary.broken_memory_symbols,
+          0,
+          `agy-config-auditor must pass with 0 broken_memory_symbols in subdirectory C workspace, got: ${subAuditorRun.stdout}`
+        );
+      } finally {
+        try {
+          fs.rmSync(monoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        } catch {
+          // ignore transient Windows git lock
+        }
+      }
+
       const refactorPlan = runRefactor(ws, { includeGlobal: false });
       assert.ok(
         refactorPlan.stages[2].actions.some(

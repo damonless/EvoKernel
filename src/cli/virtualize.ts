@@ -16,6 +16,7 @@ export interface VirtualizedServerOrigin {
   relPath: string;
   format: 'mcpServers' | 'vscodeServers' | 'opencodeMcp' | 'codexToml';
   rawEntry?: unknown;
+  injectedEvoKernel?: boolean;
 }
 
 export interface VirtualizedServerEntry {
@@ -165,6 +166,92 @@ function parseTomlQuotedString(raw: string): string | undefined {
   return m[2];
 }
 
+function parseCodexMcpHeader(header: string): { name: string; isEnv: boolean } | null {
+  const trimmed = header.trim();
+  const bareMatch = trimmed.match(/^mcp_servers\.([a-zA-Z0-9_-]+)(\.env)?$/);
+  if (bareMatch) {
+    return { name: bareMatch[1], isEnv: Boolean(bareMatch[2]) };
+  }
+  const dblMatch = trimmed.match(/^mcp_servers\."((?:[^"\\]|\\.)+)"(\.env)?$/);
+  if (dblMatch) {
+    const unescaped = dblMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    return { name: unescaped, isEnv: Boolean(dblMatch[2]) };
+  }
+  const sglMatch = trimmed.match(/^mcp_servers\.'([^']+)'(\.env)?$/);
+  if (sglMatch) {
+    return { name: sglMatch[1], isEnv: Boolean(sglMatch[2]) };
+  }
+  return null;
+}
+
+function formatCodexTomlKey(name: string): string {
+  return /^[a-zA-Z0-9_-]+$/.test(name) ? name : JSON.stringify(name);
+}
+
+function hasEvoKernelInCodexToml(content: string): boolean {
+  const lines = content.split(/\r?\n/);
+  let bracketDepth = 0;
+  for (const line of lines) {
+    const clean = stripTomlInlineComment(line).trim();
+    if (bracketDepth === 0) {
+      const hdrMatch = clean.match(/^\[{1,2}([^\]]+)\]{1,2}$/);
+      if (hdrMatch) {
+        const parsed = parseCodexMcpHeader(hdrMatch[1]);
+        if (parsed && parsed.name === 'evo-kernel' && !parsed.isEnv) {
+          return true;
+        }
+        continue;
+      }
+    }
+    bracketDepth = Math.max(0, bracketDepth + countTomlOpenDelta(line));
+  }
+  return false;
+}
+
+function stripEvoKernelFromCodexToml(content: string): string {
+  const lines = content.split(/\r?\n/);
+  interface TomlSection {
+    header: string;
+    startLine: number;
+    endLine: number;
+  }
+  const sections: TomlSection[] = [];
+  let bracketDepth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const clean = stripTomlInlineComment(lines[i]).trim();
+    if (bracketDepth === 0) {
+      const hdrMatch = clean.match(/^\[{1,2}([^\]]+)\]{1,2}$/);
+      if (hdrMatch) {
+        if (sections.length > 0) {
+          let prevEnd = i;
+          while (
+            prevEnd > sections[sections.length - 1].startLine + 1 &&
+            lines[prevEnd - 1].trim().startsWith('#')
+          ) {
+            prevEnd--;
+          }
+          sections[sections.length - 1].endLine = prevEnd;
+        }
+        sections.push({ header: hdrMatch[1].trim(), startLine: i, endLine: lines.length });
+        continue;
+      }
+    }
+    bracketDepth = Math.max(0, bracketDepth + countTomlOpenDelta(lines[i]));
+  }
+
+  const removedIndices = new Set<number>();
+  for (const sec of sections) {
+    const parsed = parseCodexMcpHeader(sec.header);
+    if (parsed && parsed.name === 'evo-kernel') {
+      for (let idx = sec.startLine; idx < sec.endLine; idx++) {
+        removedIndices.add(idx);
+      }
+    }
+  }
+  if (removedIndices.size === 0) return content;
+  return lines.filter((_, idx) => !removedIndices.has(idx)).join('\n');
+}
+
 function parseCodexTomlMcpServers(content: string): Array<{
   name: string;
   config: ExternalMcpServerConfig;
@@ -212,23 +299,17 @@ function parseCodexTomlMcpServers(content: string): Array<{
   >();
 
   for (const sec of sections) {
-    const mainMatch = sec.header.match(/^mcp_servers\.([a-zA-Z0-9_-]+)$/);
-    if (mainMatch) {
-      const name = mainMatch[1];
-      if (!name || name === 'evo-kernel') continue;
-      const cur = grouped.get(name) || {};
-      cur.mainSection = sec;
-      grouped.set(name, cur);
-      continue;
-    }
-    const envMatch = sec.header.match(/^mcp_servers\.([a-zA-Z0-9_-]+)\.env$/);
-    if (envMatch) {
-      const name = envMatch[1];
-      if (!name || name === 'evo-kernel') continue;
-      const cur = grouped.get(name) || {};
+    const parsedHdr = parseCodexMcpHeader(sec.header);
+    if (!parsedHdr) continue;
+    const { name, isEnv } = parsedHdr;
+    if (!name || name === 'evo-kernel') continue;
+    const cur = grouped.get(name) || {};
+    if (isEnv) {
       cur.envSection = sec;
-      grouped.set(name, cur);
+    } else {
+      cur.mainSection = sec;
     }
+    grouped.set(name, cur);
   }
 
   const results: Array<{
@@ -361,6 +442,7 @@ export function runVirtualize(
       const content = fs.readFileSync(target.configPath, 'utf8');
       const parsedBlocks = parseCodexTomlMcpServers(content);
       if (parsedBlocks.length === 0) continue;
+      const hadEvoKernel = hasEvoKernelInCodexToml(content);
 
       for (const blk of parsedBlocks) {
         const existing = discoveredMap.get(blk.name);
@@ -369,6 +451,7 @@ export function runVirtualize(
           relPath: target.relPath,
           format: 'codexToml',
           rawEntry: blk.rawBlock,
+          injectedEvoKernel: !hadEvoKernel,
         };
         if (existing) {
           existing.origins.push(origin);
@@ -393,7 +476,7 @@ export function runVirtualize(
           }
         }
         let updated = lines.filter((_, idx) => !removedIndices.has(idx)).join('\n');
-        if (!updated.includes('[mcp_servers.evo-kernel]')) {
+        if (!hasEvoKernelInCodexToml(updated)) {
           const argsToml = JSON.stringify(evoLaunch.args);
           const evoBlock = `[mcp_servers.evo-kernel]\ncommand = "${evoLaunch.command.replace(/\\/g, '/')}"\nargs = ${argsToml}\n`;
           updated = updated.trim() ? `${updated.trim()}\n\n${evoBlock}` : evoBlock;
@@ -432,6 +515,7 @@ export function runVirtualize(
     }
 
     const record = { ...(serversObj as Record<string, unknown>) };
+    const hadEvoKernel = Boolean(record['evo-kernel']);
     let fileTouched = false;
 
     for (const [serverName, rawDef] of Object.entries(record)) {
@@ -446,6 +530,7 @@ export function runVirtualize(
         relPath: target.relPath,
         format: effectiveFormat,
         rawEntry: rawDef,
+        injectedEvoKernel: !hadEvoKernel,
       };
 
       const existing = discoveredMap.get(serverName);
@@ -581,6 +666,7 @@ function runRestoreVirtualized(
 
   const restoredEntries: VirtualizedServerEntry[] = [];
   const modifiedSet = new Set<string>();
+  const injectedEvoByFile = new Map<string, VirtualizedServerOrigin['format']>();
 
   for (const name of allServerNames) {
     const cfg = poolServers[name] || evoConfig.externalServers?.[name];
@@ -606,17 +692,21 @@ function runRestoreVirtualized(
 
     for (const origin of origins) {
       modifiedSet.add(origin.relPath);
+      if (origin.injectedEvoKernel) {
+        injectedEvoByFile.set(origin.configPath, origin.format);
+      }
       if (dryRun) continue;
 
       if (origin.format === 'codexToml') {
         const existingToml = fs.existsSync(origin.configPath)
           ? fs.readFileSync(origin.configPath, 'utf8')
           : '';
-        if (!existingToml.includes(`[mcp_servers.${name}]`)) {
+        const alreadyPresent = parseCodexTomlMcpServers(existingToml).some((s) => s.name === name);
+        if (!alreadyPresent) {
           const block =
             typeof origin.rawEntry === 'string' && origin.rawEntry.trim()
               ? origin.rawEntry.trim()
-              : `[mcp_servers.${name}]\ncommand = "${cfg.command}"\nargs = ${JSON.stringify(cfg.args || [])}`;
+              : `[mcp_servers.${formatCodexTomlKey(name)}]\ncommand = "${cfg.command}"\nargs = ${JSON.stringify(cfg.args || [])}`;
           const nextToml = existingToml.trim() ? `${existingToml.trim()}\n\n${block}\n` : `${block}\n`;
           fs.mkdirSync(path.dirname(origin.configPath), { recursive: true });
           fs.writeFileSync(origin.configPath, nextToml, 'utf8');
@@ -656,6 +746,38 @@ function runRestoreVirtualized(
   }
 
   if (!dryRun) {
+    for (const [configPath, format] of injectedEvoByFile.entries()) {
+      if (!fs.existsSync(configPath)) continue;
+      if (format === 'codexToml') {
+        const rawToml = fs.readFileSync(configPath, 'utf8');
+        const cleanedToml = stripEvoKernelFromCodexToml(rawToml);
+        if (cleanedToml !== rawToml) {
+          fs.writeFileSync(configPath, cleanedToml.trim() ? `${cleanedToml.trim()}\n` : '', 'utf8');
+        }
+      } else {
+        const doc = readJsonSafe(configPath);
+        if (!doc) continue;
+        const containerKey =
+          format === 'vscodeServers'
+            ? 'servers'
+            : format === 'opencodeMcp'
+              ? 'mcp'
+              : 'mcpServers';
+        const container = doc[containerKey];
+        if (
+          container &&
+          typeof container === 'object' &&
+          !Array.isArray(container) &&
+          'evo-kernel' in (container as Record<string, unknown>)
+        ) {
+          const nextContainer = { ...(container as Record<string, unknown>) };
+          delete nextContainer['evo-kernel'];
+          doc[containerKey] = nextContainer;
+          writeJsonAtomic(configPath, doc);
+        }
+      }
+    }
+
     if (fs.existsSync(poolPath)) {
       fs.unlinkSync(poolPath);
     }
