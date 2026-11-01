@@ -12,7 +12,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#zero-dependency-architecture)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#1-why-a-fixed-5-tool-meta-mcp-gateway)
-[![Tests](https://img.shields.io/badge/tests-239%20passed%20%7C%2010%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
+[![Tests](https://img.shields.io/badge/tests-242%20passed%20%7C%2010%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 [![Harnesses](https://img.shields.io/badge/10%20Harnesses-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Cline%20%7C%20Roo%20%7C%20Copilot%20%7C%20Codex%20%7C%20OpenCode%20%7C%20Gemini%20%7C%20Antigravity-8A2BE2?style=flat-square)](#-10-agent-harness-matrix)
 
 **[English](README.md) · [简体中文](README.zh-CN.md)**
@@ -298,7 +298,7 @@ node ./dist/cli/index.js doctor
 │   ├── [NODE] evo-release-preflight (runs: 8 | pass: 100%) — Audits multi-manifest parity and build freshness.
 │   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
 │   └── [NODE] workspace-metrics-scanner (runs: 9 | pass: 100%) — Scans file counts, LOC, and extension distribution.
-└── 🧠 Episodic Memories (9 troubleshooting experiences | 9 VERIFIED · 0 STALE)
+└── 🧠 Episodic Memories (10 troubleshooting experiences | 10 VERIFIED · 0 STALE)
     ├── [VERIFIED] audit-broken-refs-and-hook-param-fix (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] codex-hooks-corrupt-file-unlink (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] git-fix-387153f (confidence: HIGH | symbols: 3/3 fresh)
@@ -307,6 +307,7 @@ node ./dist/cli/index.js doctor
     ├── [VERIFIED] issue-8-workspace-isolation-and-atomic-compact (confidence: HIGH | symbols: 5/5 fresh)
     ├── [VERIFIED] issues-10-11-12-audit-hook-and-cross-lang-recall (confidence: HIGH | symbols: 7/7 fresh)
     ├── [VERIFIED] multi-harness-cascaded-detection-and-reversible-teardown (confidence: HIGH | symbols: 8/8 fresh)
+    ├── [VERIFIED] open-idle-pipe-stdin-hang-fix (confidence: HIGH | symbols: 2/2 fresh)
     └── [VERIFIED] worktree-probe-score-improvement (confidence: HIGH | symbols: 2/2 fresh)
 ```
 
@@ -334,14 +335,14 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-All 10 test suites (239 tests) pass in ~19 seconds:
+All 10 test suites (242 tests) pass in ~19 seconds:
 1. `dist/tests/bootstrap.test.js`: Bootstrap Cold-Start Expansion Suite (22 tests)
 2. `dist/tests/deliverable-inspector.test.js`: Zero-Dependency Deliverable Canonical Consumer-Reader Suite (33 tests)
 3. `dist/tests/evo-kernel.test.js`: Core Gatekeeper, Sandbox, AST Cognitive Memory, and Invariants Suite (27 tests)
 4. `dist/tests/harness2-borrowings.test.js`: Wave 2B Causal Telemetry, Outcome Attribution & Anti-Confounding Suite (30 tests)
 5. `dist/tests/harness2-wave1.test.js`: Wave 1 Harness & Hook Hardening Suite (20 tests)
 6. `dist/tests/harness2-wave4-audit.test.js`: Wave 4 Multi-Harness Silent-Failure Audit Matrix Suite (33 tests)
-7. `dist/tests/hook.test.js`: Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience Suite (24 tests)
+7. `dist/tests/hook.test.js`: Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience Suite (27 tests)
 8. `dist/tests/mcp-proxy.test.js`: Downstream MCP Proxy Virtualization Suite (10 tests)
 9. `dist/tests/multi-harness.test.js`: Multi-Agent Harness Matrix Suite (14 tests)
 10. `dist/tests/optimize.test.js`: Wave 2C Offline Git Worktree Optimization Engine Suite (16 tests)

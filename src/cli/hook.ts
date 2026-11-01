@@ -263,10 +263,11 @@ function resolvePayload(options: HookOptions): Record<string, unknown> {
       return {};
     }
   }
+  const isTestProcess = Boolean(process.argv[1]?.includes('.test.'));
   if (
     options.stdinData === undefined &&
     !process.stdin.isTTY &&
-    !process.argv[1]?.endsWith('.test.js')
+    !isTestProcess
   ) {
     try {
       const stat = fs.fstatSync(0);

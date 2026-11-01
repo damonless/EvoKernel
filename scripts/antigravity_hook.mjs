@@ -90,7 +90,7 @@ export function normalizePath(val) {
   return normalizeTranscriptString(val).replace(/[\\/]+/g, '/');
 }
 
-function readStdinJson(timeoutMs = 50) {
+function readStdinJson(initialTimeoutMs = 200, chunkTimeoutMs = 300) {
   try {
     if (process.stdin.isTTY) return Promise.resolve({});
     const stat = fs.fstatSync(0);
@@ -106,11 +106,12 @@ function readStdinJson(timeoutMs = 50) {
   return new Promise((resolve) => {
     let data = '';
     let settled = false;
+    let timer = null;
 
     function finish(raw) {
       if (!settled) {
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         try { process.stdin.pause(); } catch {}
         try { process.stdin.destroy(); } catch {}
         try {
@@ -121,9 +122,9 @@ function readStdinJson(timeoutMs = 50) {
       }
     }
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       finish(data);
-    }, timeoutMs);
+    }, initialTimeoutMs);
 
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => {
@@ -132,13 +133,17 @@ function readStdinJson(timeoutMs = 50) {
         const parsed = JSON.parse(data.trim());
         if (!settled) {
           settled = true;
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
           try { process.stdin.pause(); } catch {}
           try { process.stdin.destroy(); } catch {}
           resolve(parsed);
         }
       } catch {
-        // waiting for more chunks
+        // Multi-chunk stream: reset timer so subsequent chunks are received
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          finish(data);
+        }, chunkTimeoutMs);
       }
     });
 

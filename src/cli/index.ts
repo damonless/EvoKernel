@@ -61,7 +61,10 @@ Options:
 `);
 }
 
-export function readStdinTextWithTimeout(timeoutMs: number = 50): Promise<string> {
+export function readStdinTextWithTimeout(
+  initialTimeoutMs: number = 200,
+  chunkTimeoutMs: number = 300
+): Promise<string> {
   return new Promise((resolve) => {
     try {
       if (process.stdin.isTTY) {
@@ -78,20 +81,21 @@ export function readStdinTextWithTimeout(timeoutMs: number = 50): Promise<string
 
     let data = '';
     let settled = false;
+    let timer: NodeJS.Timeout | null = null;
 
     function finish(res: string): void {
       if (!settled) {
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         try { process.stdin.pause(); } catch {}
         try { process.stdin.destroy(); } catch {}
         resolve(res);
       }
     }
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       finish(data.trim());
-    }, timeoutMs);
+    }, initialTimeoutMs);
 
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk: string) => {
@@ -100,7 +104,12 @@ export function readStdinTextWithTimeout(timeoutMs: number = 50): Promise<string
         JSON.parse(data.trim());
         finish(data.trim());
       } catch {
-        // waiting for more chunks
+        // Chunk arrived but JSON incomplete: data is actively streaming.
+        // Reset timer so slow/large multi-chunk streams are not prematurely cut off.
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          finish(data.trim());
+        }, chunkTimeoutMs);
       }
     });
 
@@ -408,8 +417,10 @@ export function runCli(argv: string[]): void {
       const event = parseHookEvent(args);
       const payload = parseHookPayloadArg(args);
 
-      if (!process.stdin.isTTY && !process.argv[1]?.endsWith('.test.js') && !payload) {
-        return readStdinTextWithTimeout(50).then((stdinData) => {
+      const isTestProcess = Boolean(process.argv[1]?.includes('.test.'));
+
+      if (!process.stdin.isTTY && !isTestProcess && !payload) {
+        return readStdinTextWithTimeout().then((stdinData) => {
           const result = runHook(event, {
             workspaceRoot,
             payload,
@@ -421,6 +432,9 @@ export function runCli(argv: string[]): void {
           if (result.exitCode !== 0) {
             process.exit(result.exitCode);
           }
+        }).catch((err) => {
+          console.error(err);
+          process.exit(1);
         });
       }
 
@@ -501,6 +515,13 @@ export function runCli(argv: string[]): void {
   }
 }
 
-if (!process.argv[1]?.endsWith('.test.js')) {
+const isDirectRun =
+  Boolean(process.argv[1]) &&
+  !process.argv[1].includes('.test.') &&
+  (path.resolve(process.argv[1]).toLowerCase() ===
+    path.resolve(import.meta.filename).toLowerCase() ||
+    /(?:^|[\\/])(?:evo|evokernel|evo-kernel)(?:\.js|\.cmd)?$/i.test(process.argv[1]));
+
+if (isDirectRun) {
   runCli(process.argv);
 }

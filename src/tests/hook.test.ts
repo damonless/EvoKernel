@@ -1087,6 +1087,65 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const parsed = JSON.parse(stdout.trim());
     assert.equal(parsed.decision, 'allow');
   });
+
+  test('40. Dimension 8: CLI hook subprocess receives multi-chunk JSON delayed by >50ms without truncation', async () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const child = spawn(process.execPath, [cliEntry, 'hook', 'post-tool', '--workspace', ws], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    let stdout = '';
+    child.stdout?.on('data', (d) => { stdout += d; });
+
+    child.stdin?.write('{"tool_name":');
+    await new Promise((r) => setTimeout(r, 80));
+    child.stdin?.write('"edit_file","tool_input":{"path":"src/multi-chunk.ts"}}');
+    child.stdin?.end();
+
+    const code = await new Promise<number | null>((resolve) => {
+      child.on('close', resolve);
+    });
+    assert.equal(code, 0);
+  });
+
+  test('41. Dimension 8: scripts/antigravity_hook.mjs receives multi-chunk JSON delayed by >50ms', async () => {
+    const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
+    const child = spawn(process.execPath, [hookScript, 'Stop'], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    let stdout = '';
+    child.stdout?.on('data', (d) => { stdout += d; });
+
+    child.stdin?.write('{"conversationId":');
+    await new Promise((r) => setTimeout(r, 80));
+    child.stdin?.write('"conv-multi-chunk-id"}');
+    child.stdin?.end();
+
+    const code = await new Promise<number | null>((resolve) => {
+      child.on('close', resolve);
+    });
+    assert.equal(code, 0);
+    const parsed = JSON.parse(stdout.trim());
+    assert.equal(parsed.decision, 'allow');
+  });
+
+  test('42. Dimension 8: CLI hook subprocess handles delayed initial stdin write (parent waits 80ms before first byte)', async () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const child = spawn(process.execPath, [cliEntry, 'hook', 'post-tool', '--workspace', ws], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    let stdout = '';
+    child.stdout?.on('data', (d) => { stdout += d; });
+
+    await new Promise((r) => setTimeout(r, 80));
+    child.stdin?.write(JSON.stringify({ tool_name: 'delayed_tool', tool_input: { path: 'foo.ts' } }));
+    child.stdin?.end();
+
+    const code = await new Promise<number | null>((resolve) => {
+      child.on('close', resolve);
+    });
+    assert.equal(code, 0);
+  });
 });
+
 
 

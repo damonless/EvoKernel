@@ -12,7 +12,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#零依赖原生架构)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#1-为什么采用固定-5-工具的元-mcp-网关)
-[![Tests](https://img.shields.io/badge/tests-239%20通过%20%7C%2010%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
+[![Tests](https://img.shields.io/badge/tests-242%20通过%20%7C%2010%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 [![Harnesses](https://img.shields.io/badge/10%20Harnesses-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Cline%20%7C%20Roo%20%7C%20Copilot%20%7C%20Codex%20%7C%20OpenCode%20%7C%20Gemini%20%7C%20Antigravity-8A2BE2?style=flat-square)](#-10-大智能体接入矩阵-10-agent-harness-matrix)
 
 **[English](README.md) · [简体中文](README.zh-CN.md)**
@@ -298,7 +298,7 @@ node ./dist/cli/index.js doctor
 │   ├── [NODE] evo-release-preflight (runs: 8 | pass: 100%) — Audits multi-manifest parity and build freshness.
 │   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
 │   └── [NODE] workspace-metrics-scanner (runs: 9 | pass: 100%) — Scans file counts, LOC, and extension distribution.
-└── 🧠 Episodic Memories (9 troubleshooting experiences | 9 VERIFIED · 0 STALE)
+└── 🧠 Episodic Memories (10 troubleshooting experiences | 10 VERIFIED · 0 STALE)
     ├── [VERIFIED] audit-broken-refs-and-hook-param-fix (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] codex-hooks-corrupt-file-unlink (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] git-fix-387153f (confidence: HIGH | symbols: 3/3 fresh)
@@ -307,6 +307,7 @@ node ./dist/cli/index.js doctor
     ├── [VERIFIED] issue-8-workspace-isolation-and-atomic-compact (confidence: HIGH | symbols: 5/5 fresh)
     ├── [VERIFIED] issues-10-11-12-audit-hook-and-cross-lang-recall (confidence: HIGH | symbols: 7/7 fresh)
     ├── [VERIFIED] multi-harness-cascaded-detection-and-reversible-teardown (confidence: HIGH | symbols: 8/8 fresh)
+    ├── [VERIFIED] open-idle-pipe-stdin-hang-fix (confidence: HIGH | symbols: 2/2 fresh)
     └── [VERIFIED] worktree-probe-score-improvement (confidence: HIGH | symbols: 2/2 fresh)
 ```
 
@@ -334,14 +335,14 @@ EvoKernel 拥有纯原生的测试套件，由 Node 原生测试运行器（`nod
 node ./scripts/test.mjs
 ```
 
-全量 10 大测试套件（239 个测试用例）在 ~19 秒内全数通过：
+全量 10 大测试套件（242 个测试用例）在 ~19 秒内全数通过：
 1. `dist/tests/bootstrap.test.js`: 冷启动技术栈探测与 Git Fix 基因挖掘套件 (22 tests)
 2. `dist/tests/deliverable-inspector.test.js`: 零依赖交付物规范化解析与缺陷审查套件 (33 tests)
 3. `dist/tests/evo-kernel.test.js`: 核心门禁、沙盒、AST 认知记忆与核心规范套件 (27 tests)
 4. `dist/tests/harness2-borrowings.test.js`: 因果归因三态遥测与防混杂门禁套件 (30 tests)
 5. `dist/tests/harness2-wave1.test.js`: 第一波宿主与生命周期钩子加固套件 (20 tests)
 6. `dist/tests/harness2-wave4-audit.test.js`: 多宿主静默失败矩阵审计与防御套件 (33 tests)
-7. `dist/tests/hook.test.js`: 通用钩子路由与空管道 Stdin 非阻塞弹性套件 (24 tests)
+7. `dist/tests/hook.test.js`: 通用钩子路由与空管道 Stdin 非阻塞弹性套件 (27 tests)
 8. `dist/tests/mcp-proxy.test.js`: 下游 MCP 动态虚拟化代理握手与路由套件 (10 tests)
 9. `dist/tests/multi-harness.test.js`: 10 大智能体宿主无损配置合并与隐身排除套件 (14 tests)
 10. `dist/tests/optimize.test.js`: 离线 Git Worktree 演化优化引擎套件 (16 tests)
