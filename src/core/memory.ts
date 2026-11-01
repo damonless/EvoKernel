@@ -10,6 +10,8 @@ import type {
   SymbolKind,
   TopologyAnchor,
 } from './types.js';
+import { EvoStorage } from './storage.js';
+import { EvoTelemetry } from './telemetry.js';
 
 const SOURCE_EXTENSIONS = new Set([
   '.ts',
@@ -1434,5 +1436,130 @@ export function extractSymbolsFromGitCommit(
   }
 
   return targets;
+}
+
+export function refreshMemories(
+  workspaceRoot: string,
+  targetIds?: string[]
+): {
+  refreshed: string[];
+  skippedMissing: Array<{ id: string; missingSymbols: string[] }>;
+  unchanged: string[];
+} {
+  const root = path.resolve(workspaceRoot);
+  const storage = new EvoStorage(root);
+  storage.ensureInitialized();
+  const currentCommit = resolveCurrentGitCommit(root);
+  const currentBranch = resolveCurrentGitBranch(root);
+
+  let memories = storage.listMemories();
+  if (targetIds && targetIds.length > 0) {
+    const filterSet = new Set(targetIds);
+    memories = memories.filter((m) => filterSet.has(m.id));
+  }
+
+  const refreshed: string[] = [];
+  const skippedMissing: Array<{ id: string; missingSymbols: string[] }> = [];
+  const unchanged: string[] = [];
+
+  let telemetry: EvoTelemetry | null = null;
+  try {
+    for (const memory of memories) {
+      const targetKeys =
+        Object.keys(memory.ast_fingerprints).length > 0
+          ? Object.keys(memory.ast_fingerprints)
+          : memory.target_symbols;
+
+      const missingSymbols: string[] = [];
+      const newFingerprints: Record<string, SymbolFingerprint> = {};
+
+      for (const symKey of targetKeys) {
+        const recorded: SymbolFingerprint = memory.ast_fingerprints[symKey] || {
+          symbol: symKey,
+          file_path: '(unrecorded)',
+          kind: 'function',
+          start_line: 0,
+          end_line: 0,
+          signature: symKey,
+          ast_hash: '',
+        };
+
+        const parsed = parseSymbolTarget(symKey);
+        const fastQuery =
+          !parsed.fileHint &&
+          !parsed.isWholeFile &&
+          recorded.file_path &&
+          recorded.file_path !== '(unrecorded)'
+            ? `${recorded.file_path}#${symKey}`
+            : symKey;
+
+        const liveRaw = extractSymbolFingerprint(root, fastQuery);
+        if (!liveRaw) {
+          missingSymbols.push(symKey);
+        } else {
+          newFingerprints[symKey] = {
+            ...liveRaw,
+            symbol: symKey,
+          };
+        }
+      }
+
+      // Safety Guard: If ANY symbol in the memory returns null (truly deleted/missing in the current workspace),
+      // do NOT overwrite that memory — push { id: memory.id, missingSymbols } into skippedMissing so genuine
+      // symbol deletions are never masked!
+      if (missingSymbols.length > 0) {
+        skippedMissing.push({ id: memory.id, missingSymbols });
+        continue;
+      }
+
+      let differs = false;
+      if (memory.created_commit !== currentCommit) differs = true;
+      if (memory.created_branch !== currentBranch) differs = true;
+
+      const existingKeys = Object.keys(memory.ast_fingerprints);
+      if (existingKeys.length !== targetKeys.length) {
+        differs = true;
+      } else {
+        for (const symKey of targetKeys) {
+          const oldFp = memory.ast_fingerprints[symKey];
+          const liveFp = newFingerprints[symKey];
+          if (
+            !oldFp ||
+            oldFp.ast_hash !== liveFp.ast_hash ||
+            oldFp.start_line !== liveFp.start_line ||
+            oldFp.end_line !== liveFp.end_line ||
+            oldFp.file_path !== liveFp.file_path ||
+            oldFp.signature !== liveFp.signature ||
+            oldFp.kind !== liveFp.kind
+          ) {
+            differs = true;
+            break;
+          }
+        }
+      }
+
+      if (differs) {
+        memory.ast_fingerprints = newFingerprints;
+        memory.created_commit = currentCommit;
+        memory.created_branch = currentBranch;
+        memory.updated_at = new Date().toISOString();
+        storage.saveMemory(memory);
+        refreshed.push(memory.id);
+      } else {
+        unchanged.push(memory.id);
+      }
+    }
+
+    if (refreshed.length > 0) {
+      telemetry = new EvoTelemetry(storage);
+      telemetry.syncFromDisk();
+    }
+  } finally {
+    if (telemetry) {
+      telemetry.close();
+    }
+  }
+
+  return { refreshed, skippedMissing, unchanged };
 }
 

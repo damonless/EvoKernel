@@ -15,6 +15,7 @@ import {
   parseHarnessTargets,
   pruneEmptyDirs,
   removeMarkerBlock,
+  syncDeclaredPreToolHooks,
   upsertMarkerBlock,
 } from './harness.js';
 
@@ -39,6 +40,7 @@ export interface InitOptions {
 }
 
 export const MAX_TOOLS_CATALOG_TOKENS = 350;
+const MAX_WORKFLOW_TOKENS = 130;
 
 export function formatToolsCatalogMarkdown(storage: EvoStorage, _coreDigest: string = ''): string {
   const tools = storage.listTools();
@@ -48,24 +50,86 @@ export function formatToolsCatalogMarkdown(storage: EvoStorage, _coreDigest: str
       (r) => !r.core && (!r.scope_glob || r.scope_glob.trim() === '**/*' || r.scope_glob.trim() === '*')
     );
   const skills = storage.listSkills();
-  const workflowItems = [
-    ...universalScopedRules.map((r) => `\`[rule] ${r.id}\``),
-    ...skills.map((s) => `\`[skill] ${s.id}\``),
-  ];
 
-  if (tools.length === 0 && workflowItems.length === 0) return '';
+  if (tools.length === 0 && universalScopedRules.length === 0 && skills.length === 0) return '';
 
+  const cuedSkills = skills.filter((s) => s.trigger_cue && s.trigger_cue.trim().length > 0);
+  const uncuedSkills = skills.filter((s) => !s.trigger_cue || !s.trigger_cue.trim().length);
+
+  function buildCompactLine(items: string[], maxBudget: number): string | null {
+    if (items.length === 0) return null;
+    const visible = [...items];
+    while (visible.length > 0) {
+      const suffix =
+        visible.length < items.length
+          ? ` (+${items.length - visible.length} more via evo_search)`
+          : '';
+      const line = `- On-demand rules/skills (inspect via \`evo_inspect\`): ${visible.join(', ')}${suffix}`;
+      if (estimateTokens(line) <= maxBudget) {
+        return line;
+      }
+      visible.pop();
+    }
+    const minimalSuffix = `- On-demand rules/skills (inspect via \`evo_inspect\`): (+${items.length} more via evo_search)`;
+    if (estimateTokens(minimalSuffix) <= maxBudget) {
+      return minimalSuffix;
+    }
+    return null;
+  }
+
+  let bestWorkflowLines: string[] = [];
+
+  for (let k = cuedSkills.length; k >= 0; k--) {
+    const candidateCued = cuedSkills.slice(0, k);
+    const overflowCued = cuedSkills.slice(k);
+
+    const cuedLines = candidateCued.map((s) => {
+      const cue = s.trigger_cue!.trim().replace(/^when\s+/i, '').replace(/\.+$/, '');
+      return `- When ${cue} -> \`evo_inspect("${s.id}", "L2")\``;
+    });
+
+    const compactItems: string[] = [
+      ...universalScopedRules.map((r) => `\`[rule] ${r.id}\``),
+      ...uncuedSkills.map((s) => `\`[skill] ${s.id}\``),
+      ...overflowCued.map((s) => `\`[skill] ${s.id}\``),
+    ];
+
+    if (compactItems.length === 0) {
+      const totalTokens = cuedLines.length > 0 ? estimateTokens(cuedLines.join('\n')) : 0;
+      if (totalTokens <= MAX_WORKFLOW_TOKENS) {
+        bestWorkflowLines = cuedLines;
+        break;
+      }
+    } else {
+      const cuedTokens = cuedLines.length > 0 ? estimateTokens(cuedLines.join('\n')) : 0;
+      const remainingForCompact = MAX_WORKFLOW_TOKENS - cuedTokens;
+      if (remainingForCompact >= 10) {
+        const compactLine = buildCompactLine(compactItems, remainingForCompact);
+        if (compactLine) {
+          const candidateLines = [...cuedLines, compactLine];
+          if (estimateTokens(candidateLines.join('\n')) <= MAX_WORKFLOW_TOKENS) {
+            bestWorkflowLines = candidateLines;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  const workflowLines = bestWorkflowLines;
+  const actualWorkflowTokens =
+    workflowLines.length > 0 ? estimateTokens(workflowLines.join('\n')) : 0;
   const toolBudgetCap =
-    workflowItems.length > 0 ? MAX_TOOLS_CATALOG_TOKENS - 90 : MAX_TOOLS_CATALOG_TOKENS;
+    MAX_TOOLS_CATALOG_TOKENS - Math.min(MAX_WORKFLOW_TOKENS, actualWorkflowTokens);
 
-  const detailedLines: string[] = [];
-  const remainingIds: string[] = [];
+  const detailedToolLines: string[] = [];
+  const remainingToolIds: string[] = [];
 
   for (let i = 0; i < tools.length; i++) {
     const t = tools[i];
     const line = `- \`[tool] ${t.id}\`: ${t.l0_summary}`;
     const candidateLines = [
-      ...detailedLines,
+      ...detailedToolLines,
       line,
       ...(i < tools.length - 1
         ? [
@@ -77,52 +141,41 @@ export function formatToolsCatalogMarkdown(storage: EvoStorage, _coreDigest: str
         : []),
     ];
     if (
-      detailedLines.length < 6 &&
+      detailedToolLines.length < 6 &&
       estimateTokens(candidateLines.join('\n')) <= toolBudgetCap
     ) {
-      detailedLines.push(line);
+      detailedToolLines.push(line);
     } else {
-      remainingIds.push(t.id);
+      remainingToolIds.push(...tools.slice(i).map((x) => x.id));
+      break;
     }
   }
 
-  if (remainingIds.length > 0) {
-    const overflowIds = [...remainingIds];
+  if (remainingToolIds.length > 0) {
+    const overflowIds = [...remainingToolIds];
     while (overflowIds.length > 0) {
       const suffix =
-        overflowIds.length < remainingIds.length
-          ? ` (+${remainingIds.length - overflowIds.length} more via evo_search)`
+        overflowIds.length < remainingToolIds.length
+          ? ` (+${remainingToolIds.length - overflowIds.length} more via evo_search)`
           : '';
       const overflowLine = `- Additional tools via \`evo_run\`: ${overflowIds
         .map((id) => `\`${id}\``)
         .join(', ')}${suffix}`;
-      const candidateCatalog = [...detailedLines, overflowLine].join('\n');
+      const candidateCatalog = [...detailedToolLines, overflowLine].join('\n');
       if (estimateTokens(candidateCatalog) <= toolBudgetCap) {
-        detailedLines.push(overflowLine);
+        detailedToolLines.push(overflowLine);
         break;
       }
       overflowIds.pop();
     }
   }
 
-  if (workflowItems.length > 0) {
-    const visibleWorkflow = [...workflowItems];
-    while (visibleWorkflow.length > 0) {
-      const wfSuffix =
-        visibleWorkflow.length < workflowItems.length
-          ? ` (+${workflowItems.length - visibleWorkflow.length} more via evo_search)`
-          : '';
-      const wfLine = `- On-demand rules/skills (inspect via \`evo_inspect\`): ${visibleWorkflow.join(', ')}${wfSuffix}`;
-      const candidateCatalog = [...detailedLines, wfLine].join('\n');
-      if (estimateTokens(candidateCatalog) <= MAX_TOOLS_CATALOG_TOKENS) {
-        detailedLines.push(wfLine);
-        break;
-      }
-      visibleWorkflow.pop();
-    }
+  const finalLines = [...detailedToolLines, ...workflowLines];
+  while (finalLines.length > 0 && estimateTokens(finalLines.join('\n')) > MAX_TOOLS_CATALOG_TOKENS) {
+    finalLines.pop();
   }
 
-  return detailedLines.join('\n');
+  return finalLines.join('\n');
 }
 
 export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
@@ -214,6 +267,12 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
     } catch {
       // Ignore sync errors on read-only paths
     }
+  }
+
+  try {
+    syncDeclaredPreToolHooks(workspaceRoot);
+  } catch {
+    // Ignore hook sync errors during rule block sync
   }
 
   return updated;

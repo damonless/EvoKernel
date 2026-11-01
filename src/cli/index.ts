@@ -8,6 +8,7 @@ import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from '
 import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from './visualizer.js';
 import { parseHookEvent, parseHookPayloadArg, runHook } from './hook.js';
 import { renderVirtualizeReport, runVirtualize } from './virtualize.js';
+import { runOptimizeCli } from './optimize.js';
 import { startMcpStdioServer } from '../mcp/server.js';
 import {
   EvoStorage,
@@ -15,7 +16,7 @@ import {
   isPluginOrExtensionInstallDir,
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { verifyMemoryFreshness } from '../core/memory.js';
+import { refreshMemories, verifyMemoryFreshness } from '../core/memory.js';
 
 function printHelp(): void {
   console.log(`
@@ -32,14 +33,16 @@ Commands:
                       Cold-start repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories (default: 50, up to 500)
   virtualize [--dry-run] [--restore] [--global]
                       One-click fold third-party stdio MCPs from host configs into .evo/mcp-pool.json (0 schema bloat)
-  memory [verify]     Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
+  memory [verify|refresh] Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
   audit [--global] [--token-budget <N>] [--skill-budget <N>]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
   refactor [--apply] [--token-budget <N>] [--skill-budget <N>]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
   tree                Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/)
   stats               Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings
   mcp                 Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
   hook <event> [--event <name>]
-                      Universal lifecycle hook router (post-tool | stop | pre-commit) for anti-forgetting evolution enforcement and git pre-commit audit
+                      Universal lifecycle hook router (pre-tool | post-tool | stop | pre-commit) for anti-forgetting evolution enforcement and git pre-commit audit
+  optimize [--dim inv|dom|both] [-k <N>] [--proposer-cmd <cmd>] [--probe-cmd <cmd>] [--apply]
+                      Offline Git worktree optimization cycle (trajectories & deliverables -> proposals -> isolated probe)
   doctor              Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and sandbox self-tests
   uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
 `);
@@ -195,7 +198,9 @@ export function runCli(argv: string[]): void {
   if (fs.existsSync(path.join(globalDir, '.evo'))) {
     ensureGlobalFallbackSeeded(globalDir);
   }
-  const isLocalMutationCmd = ['init', 'bootstrap', 'virtualize', 'audit', 'refactor', 'uninstall'].includes(cmd);
+  const isLocalMutationCmd =
+    ['init', 'bootstrap', 'virtualize', 'audit', 'refactor', 'optimize', 'hook', 'uninstall'].includes(cmd) ||
+    ((cmd === 'memory' || cmd === 'memories') && (args.includes('refresh') || args.includes('--refresh')));
   const workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
 
   switch (cmd) {
@@ -255,6 +260,10 @@ export function runCli(argv: string[]): void {
 
     case 'memory':
     case 'memories': {
+      if (args[1] === 'refresh' || args.includes('--refresh')) {
+        const targetIds = args.slice(1).filter((a) => !a.startsWith('-') && a !== 'refresh');
+        refreshMemories(workspaceRoot, targetIds.length > 0 ? targetIds : undefined);
+      }
       console.log(renderMemoryVerifyReport(workspaceRoot));
       break;
     }
@@ -300,6 +309,11 @@ export function runCli(argv: string[]): void {
       if (result.exitCode !== 0) {
         process.exit(result.exitCode);
       }
+      break;
+    }
+
+    case 'optimize': {
+      runOptimizeCli(args, workspaceRoot);
       break;
     }
 

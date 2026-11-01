@@ -1,5 +1,8 @@
 ---
 id: bug-to-guardrail-sop
+name: bug-to-guardrail-sop
+description: "Route concrete bugs to Episodic Memory and abstract reusable methodologies 1-level-up into SSOT-decoupled Rules or Tools."
+trigger_cue: "When distilling a diagnosed bug into an episodic memory or SSOT-decoupled guardrail rule"
 title: "Closed-Loop Bug to 1-Level-Up Guardrail & Cognitive Memory SOP"
 l0_summary: "Route concrete bugs to Episodic Memory and abstract reusable methodologies 1-level-up into SSOT-decoupled Rules or Tools."
 tags: ["debugging","evolution","guardrail","memory","abstraction","ssot","clause-preservation"]

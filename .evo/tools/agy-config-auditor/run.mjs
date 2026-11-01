@@ -54,12 +54,101 @@ function parseFrontmatter(raw) {
   const body = match[2];
   const meta = {};
 
-  for (const line of yamlBlock.split(/\r?\n/)) {
+  const lines = yamlBlock.split(/\r?\n/);
+  let currentKey = null;
+  let currentList = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const listMatch = line.match(/^\s*-\s+(.*)$/);
+    if (listMatch && currentKey) {
+      if (!currentList) {
+        currentList = [];
+        meta[currentKey] = currentList;
+      }
+      let val = listMatch[1].trim();
+      if (val.length >= 2 && val.startsWith("'") && val.endsWith("'")) {
+        val = val.slice(1, -1).replace(/''/g, "'");
+      } else if (val.startsWith('"') && val.endsWith('"')) {
+        try {
+          val = JSON.parse(val);
+        } catch {
+          val = val.slice(1, -1);
+        }
+      }
+      currentList.push(val);
+      continue;
+    }
+
+    currentKey = null;
+    currentList = null;
+
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
     const rawVal = line.slice(colonIdx + 1).trim();
     if (!key) continue;
+
+    currentKey = key;
+
+    const isBlockScalar =
+      rawVal === '>' || rawVal === '>-' || rawVal === '|' || rawVal === '|+' || rawVal === '|-';
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : '';
+    const nextIsIndentedText =
+      rawVal === '' &&
+      /^([ \t]{2,}|\t)[^\s-]/.test(nextLine);
+
+    if (isBlockScalar || nextIsIndentedText) {
+      const indentedLines = [];
+      let minIndent = null;
+      let j = i + 1;
+      while (j < lines.length) {
+        const candidate = lines[j];
+        if (candidate.trim() === '') {
+          indentedLines.push('');
+          j++;
+          continue;
+        }
+        const indentMatch = candidate.match(/^([ \t]+)(.*)$/);
+        if (!indentMatch || indentMatch[1].length < 2) {
+          break;
+        }
+        const indentLen = indentMatch[1].length;
+        if (minIndent === null || indentLen < minIndent) {
+          minIndent = indentLen;
+        }
+        indentedLines.push(candidate);
+        j++;
+      }
+
+      if (indentedLines.length > 0) {
+        i = j - 1;
+        const stripIndent = minIndent || 2;
+        const stripped = indentedLines.map((l) =>
+          l.length >= stripIndent ? l.slice(stripIndent) : l.trimStart()
+        );
+        const isFolded = rawVal.startsWith('>');
+        const isLiteral = rawVal.startsWith('|');
+        if (isFolded) {
+          meta[key] = stripped.join(' ').trim();
+        } else if (isLiteral) {
+          meta[key] = stripped.join('\n').trim();
+        } else {
+          meta[key] = stripped.join(' ').trim();
+        }
+        continue;
+      }
+    }
+
+    if (rawVal === '') {
+      continue;
+    }
+
+    if (rawVal.length >= 2 && rawVal.startsWith("'") && rawVal.endsWith("'")) {
+      meta[key] = rawVal.slice(1, -1).replace(/''/g, "'");
+      continue;
+    }
+
     try {
       meta[key] = JSON.parse(rawVal);
     } catch {
@@ -145,6 +234,10 @@ const ALLOWED_META_IDENTIFIERS = new Set([
   'root_cause',
   'merged_proposal',
   'target_ids',
+  'trigger_cue',
+  'confidence',
+  'contrastive_evidence',
+  'hook_trigger',
   'TypeScript',
   'JavaScript',
   'PowerShell',
@@ -1030,6 +1123,85 @@ if (fs.existsSync(globalEvoDir)) {
             });
           }
         }
+        const locManifest = path.join(localToolsDir, ent.name, 'manifest.json');
+        const globManifest = path.join(globalToolsDir, ent.name, 'manifest.json');
+        if (fs.existsSync(locManifest) && fs.existsSync(globManifest)) {
+          try {
+            const locObj = JSON.parse(fs.readFileSync(locManifest, 'utf8'));
+            const globObj = JSON.parse(fs.readFileSync(globManifest, 'utf8'));
+            const normLoc = {
+              id: locObj.id,
+              runtime: locObj.runtime,
+              l0_summary: locObj.l0_summary,
+              hook_trigger: locObj.hook_trigger,
+            };
+            const normGlob = {
+              id: globObj.id,
+              runtime: globObj.runtime,
+              l0_summary: globObj.l0_summary,
+              hook_trigger: globObj.hook_trigger,
+            };
+            if (JSON.stringify(normLoc) !== JSON.stringify(normGlob)) {
+              splitBrainDivergences.push({
+                capability: 'tool-manifest',
+                id: ent.name,
+                local_path: path.relative(root, locManifest).replace(/\\/g, '/'),
+                global_path: globManifest,
+                reason: 'Tool manifest metadata diverges between local and global trees.',
+              });
+            }
+          } catch (err) {
+            splitBrainDivergences.push({
+              capability: 'tool-manifest',
+              id: ent.name,
+              local_path: path.relative(root, locManifest).replace(/\\/g, '/'),
+              global_path: globManifest,
+              reason: `Failed to parse tool manifest JSON: ${err.message}`,
+            });
+          }
+        }
+      }
+    }
+  }
+}
+
+// -------------------------------------------------------------------------
+// Audit 5: Skill Frontmatter Integrity Audit
+// -------------------------------------------------------------------------
+const skillFrontmatterViolations = [];
+const scannedSkillDirs = new Set();
+const skillDirsToScan = [
+  path.join(root, '.evo', 'skills'),
+  path.join(root, 'skills'),
+];
+for (const parentDir of skillDirsToScan) {
+  if (!fs.existsSync(parentDir)) continue;
+  for (const ent of fs.readdirSync(parentDir, { withFileTypes: true })) {
+    if (ent.isDirectory()) {
+      const skillFile = path.join(parentDir, ent.name, 'SKILL.md');
+      const relPath = path.relative(root, skillFile).replace(/\\/g, '/');
+      if (scannedSkillDirs.has(relPath)) continue;
+      scannedSkillDirs.add(relPath);
+      if (fs.existsSync(skillFile)) {
+        const raw = fs.readFileSync(skillFile, 'utf8');
+        const { meta } = parseFrontmatter(raw);
+        const folderName = ent.name;
+        const nameVal = String(meta.name || '').trim().replace(/^['"]|['"]$/g, '');
+        const descVal = String(meta.description || '').trim().replace(/^['"]|['"]$/g, '');
+        const issues = [];
+        if (nameVal !== folderName) {
+          issues.push(`meta.name '${nameVal}' does not match directory name '${folderName}'`);
+        }
+        if (!descVal) {
+          issues.push('meta.description is missing or empty');
+        }
+        if (issues.length > 0) {
+          skillFrontmatterViolations.push({
+            skill: folderName,
+            file: relPath,
+            issues,
+          });
+        }
       }
     }
   }
@@ -1042,7 +1214,8 @@ const totalViolations =
   budgetViolations.length +
   gateViolations.length +
   brokenSymbols.length +
-  splitBrainDivergences.length;
+  splitBrainDivergences.length +
+  skillFrontmatterViolations.length;
 
 const overallStatus = totalViolations === 0 ? 'HEALTHY' : 'UNHEALTHY';
 
@@ -1089,12 +1262,16 @@ if (isSelfTest) {
         checked: true,
         divergences: splitBrainDivergences.length,
       },
+      skills: {
+        violations: skillFrontmatterViolations.length,
+      },
     },
     summary: {
       budget_violations: budgetViolations.length,
       gate1_5_violations: gateViolations.length,
       broken_memory_symbols: brokenSymbols.length,
       split_brain_conflicts: splitBrainDivergences.length,
+      skill_frontmatter_violations: skillFrontmatterViolations.length,
     },
   };
   console.log(JSON.stringify(result, null, 2));
@@ -1110,11 +1287,13 @@ const finalReport = {
     gate1_5_violations: gateViolations.length,
     broken_memory_symbols: brokenSymbols.length,
     split_brain_conflicts: splitBrainDivergences.length,
+    skill_frontmatter_violations: skillFrontmatterViolations.length,
   },
   token_budget_audit: tokenAudit,
   gate1_5_audit: ruleAuditResults,
   memory_symbols_audit: memoryAuditResults,
   split_brain_audit: splitBrainDivergences,
+  skill_frontmatter_audit: skillFrontmatterViolations,
 };
 
 console.log(JSON.stringify(finalReport, null, 2));

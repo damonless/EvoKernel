@@ -1,12 +1,21 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { EvoStorage, estimateTokens, sanitizeId } from '../core/storage.js';
+import {
+  EvoStorage,
+  estimateTokens,
+  parseFrontmatter,
+  sanitizeId,
+} from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { EvoGatekeeper, auditRuleGate1_5 } from '../core/gatekeeper.js';
+import {
+  EvoGatekeeper,
+  auditRuleGate1_5,
+  validateCapabilityReferences,
+} from '../core/gatekeeper.js';
 import type { Gate1_5Violation } from '../core/gatekeeper.js';
 import { renderManagedBlock } from '../templates/meta-rule.js';
-import { MAX_TOOLS_CATALOG_TOKENS, runInit } from './init.js';
+import { MAX_TOOLS_CATALOG_TOKENS, runInit, syncManagedRuleBlocks } from './init.js';
 import type { EvoRule, EvoSkill, ProposalPayload } from '../core/types.js';
 
 export interface AuditOptions {
@@ -52,6 +61,28 @@ export interface GateViolationWarning {
   violations: Gate1_5Violation[];
 }
 
+export interface SurfaceViolation {
+  harness: string;
+  displayPath: string;
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+}
+
+export interface BrokenCapabilityRef {
+  scope: 'workspace' | 'global';
+  displayPath: string;
+  missingIds: string[];
+}
+
+export interface ContestedCapability {
+  id: string;
+  kind: string;
+  helped_count: number;
+  hurt_count: number;
+  contested_count: number;
+}
+
 export interface AuditReport {
   workspaceRoot: string;
   includeGlobal: boolean;
@@ -62,6 +93,9 @@ export interface AuditReport {
   domainLeaks: DomainLeakWarning[];
   redundancyOverlaps: RedundancyOverlap[];
   gateViolations: GateViolationWarning[];
+  brokenCapabilityRefs: Array<{ scope: 'workspace' | 'global'; displayPath: string; missingIds: string[] }>;
+  surfaceViolations: Array<{ harness: string; displayPath: string; severity: 'error' | 'warning'; code: string; message: string }>;
+  contestedCapabilities: Array<{ id: string; kind: string; helped_count: number; hurt_count: number; contested_count: number }>;
   healthy: boolean;
 }
 
@@ -123,8 +157,14 @@ const DOMAIN_LEAK_PATTERNS: Array<{
 export const EVO_RULE_ARCHITECT_PROPOSAL: ProposalPayload = {
   kind: 'skill',
   id: 'evo-rule-architect',
+  name: 'evo-rule-architect',
+  description:
+    'Audits bloated CLAUDE.md/GEMINI.md/AGENTS.md and coupled skills, decoupling them into L0 seeds and L1/L2 scoped assets.',
+  trigger_cue:
+    'When auditing bloated rule files (>1,500 tokens), global domain leaks, or duplicated skills',
   title: 'Legacy Rule & Skill Decoupling Architect (4-Stage Refactoring SOP)',
-  l0_summary: 'Audits bloated CLAUDE.md/GEMINI.md/AGENTS.md and coupled skills, decoupling them into L0 seeds and L1/L2 scoped assets.',
+  l0_summary:
+    'Audits bloated CLAUDE.md/GEMINI.md/AGENTS.md and coupled skills, decoupling them into L0 seeds and L1/L2 scoped assets.',
   tags: ['architecture', 'refactoring', 'rules', 'skills', 'context-hygiene', 'audit'],
   origin: 'bootstrap',
   l1_contract: [
@@ -223,11 +263,15 @@ function discoverAuditableFiles(
   // 2. Workspace skill files
   for (const skillDir of [
     path.join(workspaceRoot, '.agents', 'skills'),
+    path.join(workspaceRoot, '.codex', 'skills'),
+    path.join(workspaceRoot, '.gemini', 'skills'),
     path.join(workspaceRoot, '.claude', 'skills'),
     path.join(workspaceRoot, '.cursor', 'skills'),
     path.join(workspaceRoot, '.windsurf', 'skills'),
     path.join(workspaceRoot, '.roo', 'skills'),
     path.join(workspaceRoot, '.evo', 'skills'),
+    path.join(workspaceRoot, 'skills'),
+    path.join(workspaceRoot, '.opencode', 'skills'),
   ]) {
     for (const f of collectMarkdownFiles(skillDir, 2)) {
       addFile('workspace', 'skill', f, workspaceRoot);
@@ -299,6 +343,278 @@ function tokenizeContentForOverlap(text: string): Set<string> {
     'tool',
   ]);
   return new Set(matches.filter((w) => !stopWords.has(w)));
+}
+
+export function auditHarnessSurfaces(workspaceRoot: string): SurfaceViolation[] {
+  const violations: SurfaceViolation[] = [];
+  const root = path.resolve(workspaceRoot);
+
+  // 1. Codex AGENTS.md length check
+  const agentsPath = path.join(root, 'AGENTS.md');
+  if (fs.existsSync(agentsPath)) {
+    try {
+      const raw = fs.readFileSync(agentsPath, 'utf8');
+      const byteLen = Buffer.byteLength(raw, 'utf8');
+      if (byteLen > 32768) {
+        violations.push({
+          harness: 'codex',
+          displayPath: 'AGENTS.md',
+          severity: 'error',
+          code: 'CODEX_AGENTS_32KB_TRUNCATION',
+          message: `AGENTS.md is ${byteLen} bytes (> 32,768 bytes) and will be silently truncated by OpenAI Codex CLI.`,
+        });
+      } else if (fs.existsSync(path.join(root, '.codex')) && raw.length > 8000) {
+        violations.push({
+          harness: 'codex',
+          displayPath: 'AGENTS.md',
+          severity: 'warning',
+          code: 'CODEX_AGENTS_8K_ADVISORY',
+          message: `AGENTS.md is ${raw.length} characters (> 8,000 characters advisory limit on Codex).`,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. Codex .codex/hooks.json schema check
+  const codexHooksPath = path.join(root, '.codex', 'hooks.json');
+  if (fs.existsSync(codexHooksPath)) {
+    try {
+      const raw = fs.readFileSync(codexHooksPath, 'utf8');
+      let parsed: any;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        violations.push({
+          harness: 'codex',
+          displayPath: '.codex/hooks.json',
+          severity: 'error',
+          code: 'CODEX_HOOKS_SCHEMA_INVALID',
+          message: '.codex/hooks.json contains invalid JSON.',
+        });
+        parsed = null;
+      }
+      if (parsed) {
+        const VALID_CODEX_HOOK_EVENTS = new Set([
+          'PreToolUse',
+          'PostToolUse',
+          'PermissionRequest',
+          'PreCompact',
+          'PostCompact',
+          'SessionStart',
+          'SubagentStart',
+          'SubagentStop',
+          'UserPromptSubmit',
+          'Stop',
+        ]);
+        let invalid = false;
+        let reason = '';
+        if (
+          !parsed ||
+          typeof parsed !== 'object' ||
+          Array.isArray(parsed) ||
+          !parsed.hooks ||
+          typeof parsed.hooks !== 'object' ||
+          Array.isArray(parsed.hooks) ||
+          Object.keys(parsed.hooks).length === 0
+        ) {
+          invalid = true;
+          reason = 'Top-level "hooks" must be a non-empty object.';
+        } else {
+          for (const ev of Object.keys(parsed.hooks)) {
+            if (!VALID_CODEX_HOOK_EVENTS.has(ev)) {
+              invalid = true;
+              reason = `Hook event "${ev}" is not a recognized PascalCase event.`;
+              break;
+            }
+            const list = parsed.hooks[ev];
+            if (!Array.isArray(list)) {
+              invalid = true;
+              reason = `Hook event "${ev}" must map to an array of matcher entries.`;
+              break;
+            }
+            for (const entry of list) {
+              if (
+                !entry ||
+                typeof entry !== 'object' ||
+                !Array.isArray(entry.hooks) ||
+                entry.hooks.length === 0
+              ) {
+                invalid = true;
+                reason = `Each entry in "${ev}" must contain a non-empty "hooks" array.`;
+                break;
+              }
+              for (const h of entry.hooks) {
+                if (h?.type !== 'command' || typeof h?.command !== 'string' || !h.command.trim()) {
+                  invalid = true;
+                  reason = `Hook entry must have type: "command" and non-empty string "command" (found type: "${h?.type}").`;
+                  break;
+                }
+              }
+              if (invalid) break;
+            }
+            if (invalid) break;
+          }
+        }
+        if (invalid) {
+          violations.push({
+            harness: 'codex',
+            displayPath: '.codex/hooks.json',
+            severity: 'error',
+            code: 'CODEX_HOOKS_SCHEMA_INVALID',
+            message: reason,
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Host Skill Frontmatter Silent-Drop Checks
+  const skillDirs: Array<{ harness: string; dir: string; type: 'codex' | 'host' | 'evo' }> = [
+    { harness: 'codex', dir: path.join(root, '.agents', 'skills'), type: 'codex' },
+    { harness: 'codex', dir: path.join(root, '.codex', 'skills'), type: 'codex' },
+    { harness: 'gemini', dir: path.join(root, '.gemini', 'skills'), type: 'host' },
+    { harness: 'opencode', dir: path.join(root, '.opencode', 'skills'), type: 'host' },
+    { harness: 'claude', dir: path.join(root, '.claude', 'skills'), type: 'host' },
+    { harness: 'cursor', dir: path.join(root, '.cursor', 'skills'), type: 'host' },
+    { harness: 'windsurf', dir: path.join(root, '.windsurf', 'skills'), type: 'host' },
+    { harness: 'roo', dir: path.join(root, '.roo', 'skills'), type: 'host' },
+    { harness: 'root', dir: path.join(root, 'skills'), type: 'host' },
+    { harness: 'evo', dir: path.join(root, '.evo', 'skills'), type: 'evo' },
+  ];
+
+  for (const { harness, dir, type } of skillDirs) {
+    if (!fs.existsSync(dir)) continue;
+    for (const f of collectMarkdownFiles(dir, 2)) {
+      if (path.basename(f) !== 'SKILL.md') continue;
+      const dirName = path.basename(path.dirname(f));
+      const relPath = path.relative(root, f).replace(/\\/g, '/');
+      try {
+        const raw = fs.readFileSync(f, 'utf8');
+        const { meta } = parseFrontmatter(raw);
+        const name = meta.name !== undefined && meta.name !== null ? String(meta.name).trim() : undefined;
+        const desc = meta.description !== undefined && meta.description !== null ? String(meta.description).trim() : '';
+
+        if (type === 'codex') {
+          if (!desc) {
+            violations.push({
+              harness,
+              displayPath: relPath,
+              severity: 'error',
+              code: 'SKILL_MISSING_DESCRIPTION',
+              message: `Codex skill ${relPath} is missing non-empty "description" frontmatter.`,
+            });
+          }
+          if (name !== undefined && name !== dirName) {
+            violations.push({
+              harness,
+              displayPath: relPath,
+              severity: 'error',
+              code: 'CODEX_SKILL_NAME_MISMATCH',
+              message: `Codex skill frontmatter name "${name}" does not match directory name "${dirName}".`,
+            });
+          }
+        } else if (type === 'host') {
+          if (!desc || name !== dirName) {
+            violations.push({
+              harness,
+              displayPath: relPath,
+              severity: 'error',
+              code: 'SKILL_FRONTMATTER_SILENT_DROP',
+              message: `Host skill ${relPath} requires both non-empty "description" and "name: ${dirName}" (found name: "${name || ''}", desc: "${desc}"). Missing fields will cause the host to silently drop the skill.`,
+            });
+          }
+        } else if (type === 'evo') {
+          if (name !== undefined && name !== dirName) {
+            violations.push({
+              harness,
+              displayPath: relPath,
+              severity: 'error',
+              code: 'EVO_SKILL_NAME_MISMATCH',
+              message: `Internal EvoKernel skill frontmatter name "${name}" does not match directory "${dirName}".`,
+            });
+          }
+          if (!name || !desc) {
+            violations.push({
+              harness,
+              displayPath: relPath,
+              severity: 'warning',
+              code: 'EVO_SKILL_LEGACY_FRONTMATTER',
+              message: `Internal EvoKernel skill ${relPath} uses legacy frontmatter without name/description (will be auto-backfilled by evo refactor --apply).`,
+            });
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  // 4. Jinja Template Brace Hazard Check
+  function scanJinjaFiles(currentDir: string, depth = 0): string[] {
+    if (depth > 3 || !fs.existsSync(currentDir)) return [];
+    const results: string[] = [];
+    for (const ent of fs.readdirSync(currentDir, { withFileTypes: true })) {
+      if (ent.name === 'node_modules' || ent.name === '.git' || ent.name === 'dist') continue;
+      const full = path.join(currentDir, ent.name);
+      if (ent.isDirectory()) {
+        results.push(...scanJinjaFiles(full, depth + 1));
+      } else if (ent.isFile()) {
+        const lower = ent.name.toLowerCase();
+        if (lower.endsWith('.j2') || lower.endsWith('.jinja') || lower.endsWith('.jinja2')) {
+          results.push(full);
+        }
+      }
+    }
+    return results;
+  }
+
+  for (const jf of scanJinjaFiles(root)) {
+    try {
+      const raw = fs.readFileSync(jf, 'utf8');
+      const relPath = path.relative(root, jf).replace(/\\/g, '/');
+      const cleaned = raw.replace(/\s*\{\{\s*instruction\s*\}\}\s*$/, '');
+      if (/(?<!\$)\{\{|\{%|\{#/.test(cleaned)) {
+        violations.push({
+          harness: 'template',
+          displayPath: relPath,
+          severity: 'error',
+          code: 'JINJA_UNESCAPED_BRACE',
+          message: `Jinja template ${relPath} contains unescaped {{, {%, or {# tags. Use \${{ to escape GitHub Actions or tool expressions.`,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 5. OpenCode markdown/prompt files check
+  const opencodeDir = path.join(root, '.opencode');
+  if (fs.existsSync(opencodeDir)) {
+    for (const f of collectMarkdownFiles(opencodeDir, 3)) {
+      try {
+        const raw = fs.readFileSync(f, 'utf8');
+        const relPath = path.relative(root, f).replace(/\\/g, '/');
+        const strippedFences = raw.replace(/```[\s\S]*?```/g, '');
+        if (/(?:\{%|\{#)/.test(strippedFences)) {
+          violations.push({
+            harness: 'opencode',
+            displayPath: relPath,
+            severity: 'warning',
+            code: 'OPENCODE_TEMPLATE_TAG_ADVISORY',
+            message: `OpenCode prompt file ${relPath} contains Jinja tag {% or {# outside fenced code blocks.`,
+          });
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return violations;
 }
 
 export function runAudit(workspaceRoot: string, options: AuditOptions = {}): AuditReport {
@@ -488,11 +804,124 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     }
   }
 
+  const brokenCapabilityRefs: BrokenCapabilityRef[] = [];
+  if (fs.existsSync(localStorage.rulesDir)) {
+    const localRules = localStorage.listRules();
+    for (const rule of localRules) {
+      const extraKnown = new Set([rule.id, ...(rule.supersedes_id ? [rule.supersedes_id] : [])]);
+      const missing = validateCapabilityReferences(rule.content || '', localStorage, extraKnown);
+      if (missing.length > 0) {
+        const coreCandidate = path.join(localStorage.rulesDir, `${rule.id}.md`);
+        const scopedCandidate = path.join(localStorage.rulesDir, 'scoped', `${rule.id}.md`);
+        const actualPath = fs.existsSync(scopedCandidate)
+          ? scopedCandidate
+          : fs.existsSync(coreCandidate)
+            ? coreCandidate
+            : (rule.core ? coreCandidate : scopedCandidate);
+        const rel = path.relative(root, actualPath).replace(/\\/g, '/');
+        brokenCapabilityRefs.push({
+          scope: 'workspace',
+          displayPath: rel,
+          missingIds: missing,
+        });
+      }
+    }
+  }
+  if (fs.existsSync(localStorage.skillsDir)) {
+    const localSkills = localStorage.listSkills();
+    for (const skill of localSkills) {
+      const extraKnown = new Set([skill.id, ...(skill.supersedes_id ? [skill.supersedes_id] : [])]);
+      const skillContent = [skill.l1_contract, skill.l2_sop].filter(Boolean).join('\n');
+      const missing = validateCapabilityReferences(skillContent, localStorage, extraKnown);
+      if (missing.length > 0) {
+        const skillPath = path.join(localStorage.skillsDir, skill.id, 'SKILL.md');
+        const rel = path.relative(root, skillPath).replace(/\\/g, '/');
+        brokenCapabilityRefs.push({
+          scope: 'workspace',
+          displayPath: rel,
+          missingIds: missing,
+        });
+      }
+    }
+  }
+
+  if (includeGlobal) {
+    const globalRoot = process.env.EVO_GLOBAL_DIR
+      ? path.resolve(process.env.EVO_GLOBAL_DIR)
+      : path.join(globalHomeDir, '.evo', 'global');
+    const globalStorage = new EvoStorage(globalRoot);
+    if (fs.existsSync(globalStorage.rulesDir)) {
+      const globalRules = globalStorage.listRules();
+      for (const rule of globalRules) {
+        const extraKnown = new Set([rule.id, ...(rule.supersedes_id ? [rule.supersedes_id] : [])]);
+        const missing = validateCapabilityReferences(rule.content || '', globalStorage, extraKnown);
+        if (missing.length > 0) {
+          const coreCandidate = path.join(globalStorage.rulesDir, `${rule.id}.md`);
+          const scopedCandidate = path.join(globalStorage.rulesDir, 'scoped', `${rule.id}.md`);
+          const actualPath = fs.existsSync(scopedCandidate)
+            ? scopedCandidate
+            : fs.existsSync(coreCandidate)
+              ? coreCandidate
+              : (rule.core ? coreCandidate : scopedCandidate);
+          const rel = path.relative(globalHomeDir, actualPath).replace(/\\/g, '/');
+          brokenCapabilityRefs.push({
+            scope: 'global',
+            displayPath: `~/${rel}`,
+            missingIds: missing,
+          });
+        }
+      }
+    }
+    if (fs.existsSync(globalStorage.skillsDir)) {
+      const globalSkills = globalStorage.listSkills();
+      for (const skill of globalSkills) {
+        const extraKnown = new Set([skill.id, ...(skill.supersedes_id ? [skill.supersedes_id] : [])]);
+        const skillContent = [skill.l1_contract, skill.l2_sop].filter(Boolean).join('\n');
+        const missing = validateCapabilityReferences(skillContent, globalStorage, extraKnown);
+        if (missing.length > 0) {
+          const skillPath = path.join(globalStorage.skillsDir, skill.id, 'SKILL.md');
+          const rel = path.relative(globalHomeDir, skillPath).replace(/\\/g, '/');
+          brokenCapabilityRefs.push({
+            scope: 'global',
+            displayPath: `~/${rel}`,
+            missingIds: missing,
+          });
+        }
+      }
+    }
+  }
+
+  const surfaceViolations = auditHarnessSurfaces(root);
+
+  const contestedCapabilities: ContestedCapability[] = [];
+  if (fs.existsSync(localStorage.evoDir)) {
+    const telemetry = new EvoTelemetry(localStorage);
+    try {
+      const telMap = telemetry.getTelemetryMap();
+      for (const record of telMap.values()) {
+        const totalOutcomes = record.helped_count + record.hurt_count + record.contested_count;
+        if (totalOutcomes >= 2 && (record.hurt_count + record.contested_count) > record.helped_count) {
+          contestedCapabilities.push({
+            id: record.id,
+            kind: record.kind,
+            helped_count: record.helped_count,
+            hurt_count: record.hurt_count,
+            contested_count: record.contested_count,
+          });
+        }
+      }
+    } finally {
+      telemetry.close();
+    }
+  }
+
   const healthy =
     budgetViolations.length === 0 &&
     domainLeaks.length === 0 &&
     redundancyOverlaps.length === 0 &&
-    gateViolations.length === 0;
+    gateViolations.length === 0 &&
+    brokenCapabilityRefs.length === 0 &&
+    !surfaceViolations.some((v) => v.severity === 'error');
 
   return {
     workspaceRoot: root,
@@ -504,6 +933,9 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     domainLeaks,
     redundancyOverlaps,
     gateViolations,
+    brokenCapabilityRefs,
+    surfaceViolations,
+    contestedCapabilities,
     healthy,
   };
 }
@@ -554,21 +986,55 @@ export function renderAuditReport(report: AuditReport): string {
     }
   }
 
-  lines.push(`└── 🔄 Rule/Skill Redundancy Overlaps (${report.redundancyOverlaps.length} detected)`);
+  lines.push(`├── 🔄 Rule/Skill Redundancy Overlaps (${report.redundancyOverlaps.length} detected)`);
   if (report.redundancyOverlaps.length === 0) {
-    lines.push('    └── None — Low Jaccard overlap across rules and skills.');
+    lines.push('│   └── None — Low Jaccard overlap across rules and skills.');
   } else {
     for (const ov of report.redundancyOverlaps) {
       lines.push(
-        `    ├── [OVERLAP ${(ov.similarity * 100).toFixed(0)}%] ${ov.fileA} <-> ${ov.fileB} (shared: ${ov.sharedTerms.join(', ')})`
+        `│   ├── [OVERLAP ${(ov.similarity * 100).toFixed(0)}%] ${ov.fileA} <-> ${ov.fileB} (shared: ${ov.sharedTerms.join(', ')})`
       );
-      lines.push(`    │      └─ Action: ${ov.recommendation}`);
+      lines.push(`│   │      └─ Action: ${ov.recommendation}`);
+    }
+  }
+
+  lines.push(`├── 🔗 Broken Capability References (${report.brokenCapabilityRefs.length} detected)`);
+  if (report.brokenCapabilityRefs.length === 0) {
+    lines.push('│   └── None — All referenced rules, skills, tools, and memories exist.');
+  } else {
+    for (const bcr of report.brokenCapabilityRefs) {
+      lines.push(
+        `│   ├── [${bcr.scope.toUpperCase()}] ${bcr.displayPath} -> missing: ${bcr.missingIds.join(', ')}`
+      );
+    }
+  }
+
+  lines.push(`├── 🌐 Multi-Harness Surface Violations (${report.surfaceViolations.length} detected)`);
+  if (report.surfaceViolations.length === 0) {
+    lines.push('│   └── None — All harness surface configurations and skills are valid.');
+  } else {
+    for (const sv of report.surfaceViolations) {
+      const badge = sv.severity === 'error' ? '❌ ERROR' : '⚠️ WARN';
+      lines.push(
+        `│   ├── [${sv.harness.toUpperCase()}:${badge}] ${sv.displayPath}: [${sv.code}] ${sv.message}`
+      );
+    }
+  }
+
+  lines.push(`└── ⚔️  Contested Capabilities (${report.contestedCapabilities.length} detected)`);
+  if (report.contestedCapabilities.length === 0) {
+    lines.push('    └── None — No capabilities have contested/hurt exceeding helped.');
+  } else {
+    for (const cc of report.contestedCapabilities) {
+      lines.push(
+        `    ├── [CONTESTED:${cc.kind.toUpperCase()}] ${cc.id} (${cc.hurt_count + cc.contested_count} hurt/contested vs ${cc.helped_count} helped)`
+      );
     }
   }
 
   lines.push('');
   if (report.healthy) {
-    lines.push('✨ Audit Status: HEALTHY (Zero budget bloat, zero domain leaks, zero redundant coupling, zero Gate 1.5 violations).');
+    lines.push('✨ Audit Status: HEALTHY (Zero budget bloat, zero domain leaks, zero redundant coupling, zero Gate 1.5 violations, zero broken capability refs, zero surface errors).');
   } else {
     lines.push(
       '💡 Next Step: Run `evo refactor` (or `evo refactor --apply`) to execute the 4-stage decoupling workflow via `evo-rule-architect`.'
@@ -636,6 +1102,13 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     ),
   ];
 
+  const localStorage = new EvoStorage(root);
+  const contestedCoreRules = audit.contestedCapabilities.filter((c) => {
+    if (c.kind !== 'rule') return false;
+    const rule = localStorage.getRule(c.id);
+    return rule && rule.core;
+  });
+
   const stage3Actions = [
     ...audit.domainLeaks
       .filter((l) => l.scope === 'workspace')
@@ -653,7 +1126,34 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
       (g) =>
         `Remediate Gate 1.5 violation(s) [${g.violations.map((v) => v.code).join(', ')}] in ${g.displayPath} (rule: ${g.ruleId}).`
     ),
+    ...contestedCoreRules.map(
+      (c) =>
+        `Demote contested core rule '${c.id}' (${c.hurt_count + c.contested_count} hurt/contested vs ${c.helped_count} helped) to .evo/rules/scoped/ (core: false).`
+    ),
   ];
+
+  const skillFrontmatterViolations = audit.surfaceViolations.filter(
+    (v) =>
+      v.code === 'SKILL_FRONTMATTER_SILENT_DROP' ||
+      v.code === 'SKILL_MISSING_DESCRIPTION' ||
+      v.code === 'CODEX_SKILL_NAME_MISMATCH' ||
+      v.code === 'EVO_SKILL_NAME_MISMATCH' ||
+      v.code === 'EVO_SKILL_LEGACY_FRONTMATTER'
+  );
+
+  const stage4Actions = [
+    ...audit.redundancyOverlaps.map((o) => o.recommendation),
+    ...skillFrontmatterViolations.map(
+      (v) => `Auto-backfill missing frontmatter (name/description) on ${v.displayPath}`
+    ),
+  ];
+
+  const stage4Targets = Array.from(
+    new Set([
+      ...audit.redundancyOverlaps.map((o) => `${o.fileA} <-> ${o.fileB}`),
+      ...skillFrontmatterViolations.map((v) => v.displayPath),
+    ])
+  );
 
   const stages: RefactorStageAction[] = [
     {
@@ -680,7 +1180,9 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     {
       stage: 3,
       title: '局部下沉与 Scoped 拆分 (Local Demotion & Scoped Splitting)',
-      targets: uniqueLocalTargets,
+      targets: Array.from(
+        new Set([...uniqueLocalTargets, ...contestedCoreRules.map((c) => `.evo/rules/${c.id}.md`)])
+      ),
       actions:
         stage3Actions.length > 0
           ? Array.from(new Set(stage3Actions))
@@ -689,10 +1191,10 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     {
       stage: 4,
       title: '局部技能 STE-Lite 化 (Local Skill STE-Lite Conversion)',
-      targets: audit.redundancyOverlaps.map((o) => `${o.fileA} <-> ${o.fileB}`),
+      targets: stage4Targets,
       actions:
-        audit.redundancyOverlaps.length > 0
-          ? audit.redundancyOverlaps.map((o) => o.recommendation)
+        stage4Actions.length > 0
+          ? Array.from(new Set(stage4Actions))
           : ['Local skills have no redundant overlap with AGENTS.md.'],
     },
   ];
@@ -805,6 +1307,75 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
       if (fs.existsSync(globalStorage.rulesDir)) {
         remediateRuleGateViolations(globalStorage, globalGateViolations);
       }
+    }
+
+    // 3. Auto-backfill missing skill frontmatter
+    const skillDirs: string[] = [
+      path.join(root, '.agents', 'skills'),
+      path.join(root, '.codex', 'skills'),
+      path.join(root, '.gemini', 'skills'),
+      path.join(root, '.opencode', 'skills'),
+      path.join(root, '.claude', 'skills'),
+      path.join(root, '.cursor', 'skills'),
+      path.join(root, '.windsurf', 'skills'),
+      path.join(root, '.roo', 'skills'),
+      path.join(root, 'skills'),
+      path.join(root, '.evo', 'skills'),
+    ];
+    for (const sDir of skillDirs) {
+      if (!fs.existsSync(sDir)) continue;
+      for (const f of collectMarkdownFiles(sDir, 2)) {
+        if (path.basename(f) !== 'SKILL.md') continue;
+        const dirName = path.basename(path.dirname(f));
+        try {
+          const raw = fs.readFileSync(f, 'utf8');
+          const { meta, body } = parseFrontmatter(raw);
+          let changed = false;
+          const currentName = meta.name !== undefined && meta.name !== null ? String(meta.name).trim() : '';
+          const currentDesc = meta.description !== undefined && meta.description !== null ? String(meta.description).trim() : '';
+          if (!currentName || currentName !== dirName) {
+            meta.name = dirName;
+            changed = true;
+          }
+          if (!currentDesc) {
+            const fallback =
+              typeof meta.title === 'string' && meta.title.trim()
+                ? meta.title.trim()
+                : typeof meta.l0_summary === 'string' && meta.l0_summary.trim()
+                  ? meta.l0_summary.trim()
+                  : `${dirName} skill instructions.`;
+            meta.description = fallback;
+            changed = true;
+          }
+          if (changed) {
+            const lines: string[] = ['---'];
+            for (const [k, v] of Object.entries(meta)) {
+              lines.push(`${k}: ${JSON.stringify(v)}`);
+            }
+            lines.push('---');
+            lines.push(body.startsWith('\n') ? body.slice(1) : body);
+            fs.writeFileSync(f, lines.join('\n'), 'utf8');
+            const rel = path.relative(root, f).replace(/\\/g, '/');
+            appliedChanges.push(`Auto-backfilled skill frontmatter on ${rel}`);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    // 4. Demote contested core rules to scoped
+    for (const c of contestedCoreRules) {
+      const rule = storage.getRule(c.id);
+      if (rule && rule.core) {
+        rule.core = false;
+        rule.updated_at = now;
+        storage.saveRule(rule);
+        appliedChanges.push(`Demoted contested core rule '${rule.id}' to scoped (core: false)`);
+      }
+    }
+    if (contestedCoreRules.length > 0) {
+      syncManagedRuleBlocks(root);
     }
   }
 

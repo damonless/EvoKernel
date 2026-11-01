@@ -1,7 +1,10 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type {
+  ConfidenceLevel,
+  EvoHookTrigger,
   EvoMemory,
   EvoRule,
   EvoSkill,
@@ -35,7 +38,7 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\/Users\/[A-Za-z0-9_.-]+\/|\/home\/[A-Za-z0-9_.-]+\//, reason: 'Hardcoded user-specific Unix absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
 ];
 
-function stripCaseAnchorLines(text: string): string {
+export function stripCaseAnchorLines(text: string): string {
   const lines = text.split(/\r?\n/);
   const result: string[] = [];
   let inCaseAnchorSection = false;
@@ -104,6 +107,10 @@ const ALLOWED_META_IDENTIFIERS = new Set([
   'target_symbols',
   'transfer_scenarios',
   'supersedes_id',
+  'trigger_cue',
+  'confidence',
+  'contrastive_evidence',
+  'hook_trigger',
   'script_code',
   'self_test_args',
   'input_schema',
@@ -175,6 +182,187 @@ export function detectCoupledIdentifiersInRule(text: string): string[] {
     }
   }
   return Array.from(found);
+}
+
+function getBundledSeedEvoDir(): string | null {
+  try {
+    const currentFile = fileURLToPath(import.meta.url);
+    let curDir = path.dirname(currentFile);
+    for (let i = 0; i < 5; i++) {
+      const candidate = path.join(curDir, 'templates', 'seed-evo');
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+      const parent = path.dirname(curDir);
+      if (parent === curDir) break;
+      curDir = parent;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function getGlobalEvoDir(): string | null {
+  if (process.env.EVO_GLOBAL_DIR && fs.existsSync(process.env.EVO_GLOBAL_DIR)) {
+    return path.resolve(process.env.EVO_GLOBAL_DIR);
+  }
+  const defaultGlobal = path.join(os.homedir(), '.evo', 'global', '.evo');
+  if (fs.existsSync(defaultGlobal)) {
+    return defaultGlobal;
+  }
+  const altGlobal = path.join(os.homedir(), '.evo', 'global');
+  if (fs.existsSync(altGlobal)) {
+    return altGlobal;
+  }
+  return null;
+}
+
+const IGNORED_REF_SET = new Set([
+  'all',
+  'rule',
+  'rules',
+  'skill',
+  'skills',
+  'tool',
+  'tools',
+  'memory',
+  'memories',
+  'l0',
+  'l1',
+  'l2',
+  'scoped',
+  'archive',
+  'archived',
+  'templates',
+  'seed-evo',
+  'global',
+  'workspace',
+  'example',
+  'sample',
+  'placeholder',
+  'unknown',
+  'temp',
+]);
+
+const PLACEHOLDER_PREFIXES = [
+  'example-',
+  'sample-',
+  'my-',
+  'foo-',
+  'bar-',
+  'test-',
+  'dummy-',
+  'old-',
+  'legacy-',
+  'target-',
+  'your-',
+  'some-',
+  'new-',
+];
+
+function isIgnoredCapabilityRef(id: string): boolean {
+  const lower = id.toLowerCase();
+  if (lower.startsWith('ext__')) return true;
+  if (IGNORED_REF_SET.has(lower)) return true;
+  for (const prefix of PLACEHOLDER_PREFIXES) {
+    if (lower.startsWith(prefix) || lower.startsWith(prefix.replace('-', '_'))) return true;
+  }
+  return false;
+}
+
+export function scanCapabilityReferences(text: string): string[] {
+  if (!text) return [];
+  const cleaned = stripCaseAnchorLines(text);
+  const found = new Set<string>();
+
+  const patterns = [
+    /\bevo_run\(\s*\{?\s*(?:tool_id\s*:\s*)?["']([a-z0-9][a-z0-9_-]*)["']/gi,
+    /\bevo_inspect\(\s*\{?\s*(?:id\s*:\s*)?["']([a-z0-9][a-z0-9_-]*)["']/gi,
+    /\btool_id\s*:\s*["']([a-z0-9][a-z0-9_-]*)["']/gi,
+    /\.evo\/(?:tools|skills|rules)(?:\/scoped)?\/([a-z0-9][a-z0-9_-]*?)(?:\.md(?=[^a-z0-9_-]|$)|(?=[^a-z0-9_-]|$))/gi,
+  ];
+
+  for (const regex of patterns) {
+    for (const match of cleaned.matchAll(regex)) {
+      const id = match[1];
+      if (id && !isIgnoredCapabilityRef(id)) {
+        found.add(id);
+      }
+    }
+  }
+
+  return Array.from(found);
+}
+
+function capabilityExistsInDirectory(dir: string, id: string): boolean {
+  if (!fs.existsSync(dir)) return false;
+  const candidates = [dir];
+  const dotEvo = path.join(dir, '.evo');
+  if (fs.existsSync(dotEvo)) {
+    candidates.push(dotEvo);
+  }
+  for (const c of candidates) {
+    if (
+      fs.existsSync(path.join(c, 'rules', `${id}.md`)) ||
+      fs.existsSync(path.join(c, 'rules', 'scoped', `${id}.md`)) ||
+      fs.existsSync(path.join(c, 'skills', id)) ||
+      fs.existsSync(path.join(c, 'skills', id, 'SKILL.md')) ||
+      fs.existsSync(path.join(c, 'tools', id)) ||
+      fs.existsSync(path.join(c, 'tools', id, 'manifest.json')) ||
+      fs.existsSync(path.join(c, 'memories', `${id}.md`))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function validateCapabilityReferences(
+  text: string,
+  storage: EvoStorage,
+  extraKnownIds?: ReadonlySet<string>
+): string[] {
+  const referencedIds = scanCapabilityReferences(text);
+  if (referencedIds.length === 0) return [];
+
+  const missing: string[] = [];
+  const seedEvoDir = getBundledSeedEvoDir();
+  const globalEvoDir = getGlobalEvoDir();
+
+  for (const rawId of referencedIds) {
+    const id = sanitizeId(rawId);
+    if (!id || isIgnoredCapabilityRef(id)) continue;
+
+    // 0. Extra known IDs (e.g. self or supersedes_id)
+    if (extraKnownIds && (extraKnownIds.has(id) || extraKnownIds.has(rawId))) {
+      continue;
+    }
+
+    // Tier (a): Active storage
+    if (
+      storage.getRule(id) ||
+      storage.getSkill(id) ||
+      storage.getTool(id) ||
+      storage.getMemory(id)
+    ) {
+      continue;
+    }
+
+    // Tier (b): Global fallback
+    if (globalEvoDir && capabilityExistsInDirectory(globalEvoDir, id)) {
+      continue;
+    }
+
+    // Tier (c): Bundled seed-evo
+    if (seedEvoDir && capabilityExistsInDirectory(seedEvoDir, id)) {
+      continue;
+    }
+
+    missing.push(rawId);
+  }
+
+  return missing;
 }
 
 function redactUserPaths(text: string): string {
@@ -508,13 +696,470 @@ export function compareRuleClauses(
 }
 
 
+const NON_ASCII_SENTINEL = 128;
+
+function addCharWithCase(set: Set<number>, code: number): void {
+  set.add(code);
+  if (code >= 65 && code <= 90) {
+    set.add(code + 32); // lowercase
+  } else if (code >= 97 && code <= 122) {
+    set.add(code - 32); // uppercase
+  }
+}
+
+function parseCharClass(raw: string): Set<number> {
+  const isNegated = raw.startsWith('^');
+  const inner = isNegated ? raw.slice(1) : raw;
+  const positive = new Set<number>();
+  let hasSpecialSentinel = false;
+
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === '\\' && i + 1 < inner.length) {
+      i++;
+      const esc = inner[i];
+      if (esc === 'd') {
+        for (let c = 48; c <= 57; c++) positive.add(c);
+      } else if (esc === 'D') {
+        hasSpecialSentinel = true;
+        for (let c = 0; c < 128; c++) if (c < 48 || c > 57) positive.add(c);
+      } else if (esc === 'w') {
+        for (let c = 48; c <= 57; c++) positive.add(c);
+        for (let c = 65; c <= 90; c++) positive.add(c);
+        for (let c = 97; c <= 122; c++) positive.add(c);
+        positive.add(95); // '_'
+      } else if (esc === 'W') {
+        hasSpecialSentinel = true;
+        for (let c = 0; c < 128; c++) {
+          if (!((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95)) {
+            positive.add(c);
+          }
+        }
+      } else if (esc === 's') {
+        [32, 9, 10, 13, 12, 11].forEach((c) => positive.add(c));
+      } else if (esc === 'S') {
+        hasSpecialSentinel = true;
+        for (let c = 0; c < 128; c++) {
+          if (![32, 9, 10, 13, 12, 11].includes(c)) positive.add(c);
+        }
+      } else {
+        addCharWithCase(positive, esc.charCodeAt(0));
+      }
+      continue;
+    }
+
+    if (i + 2 < inner.length && inner[i + 1] === '-' && inner[i + 2] !== ']') {
+      const start = ch.charCodeAt(0);
+      const end = inner[i + 2].charCodeAt(0);
+      i += 2;
+      const min = Math.min(start, end);
+      const max = Math.max(start, end);
+      for (let c = min; c <= max; c++) {
+        addCharWithCase(positive, c);
+      }
+      continue;
+    }
+
+    addCharWithCase(positive, ch.charCodeAt(0));
+  }
+
+  const result = new Set<number>();
+  if (isNegated) {
+    result.add(NON_ASCII_SENTINEL);
+    for (let c = 0; c < 128; c++) {
+      if (!positive.has(c)) {
+        result.add(c);
+      }
+    }
+  } else {
+    for (const c of positive) result.add(c);
+    if (hasSpecialSentinel) result.add(NON_ASCII_SENTINEL);
+  }
+  return result;
+}
+
+interface RegexAtom {
+  chars: Set<number>;
+  optional: boolean;
+}
+
+function splitBranches(pattern: string): string[] {
+  let inClass = false;
+  let parenDepth = 0;
+  const branches: string[] = [];
+  let currentBranch = '';
+
+  for (let j = 0; j < pattern.length; j++) {
+    const c = pattern[j];
+    if (c === '\\') {
+      currentBranch += c;
+      if (j + 1 < pattern.length) {
+        currentBranch += pattern[++j];
+      }
+      continue;
+    }
+    if (c === '[' && !inClass) {
+      inClass = true;
+      currentBranch += c;
+      continue;
+    }
+    if (c === ']' && inClass) {
+      inClass = false;
+      currentBranch += c;
+      continue;
+    }
+    if (inClass) {
+      currentBranch += c;
+      continue;
+    }
+    if (c === '(') {
+      parenDepth++;
+      currentBranch += c;
+      continue;
+    }
+    if (c === ')') {
+      if (parenDepth > 0) parenDepth--;
+      currentBranch += c;
+      continue;
+    }
+    if (c === '|' && parenDepth === 0) {
+      branches.push(currentBranch);
+      currentBranch = '';
+      continue;
+    }
+    currentBranch += c;
+  }
+  branches.push(currentBranch);
+  return branches;
+}
+
+function parseBranchAtoms(branch: string): { atoms: RegexAtom[]; nullable: boolean } {
+  const atoms: RegexAtom[] = [];
+  let i = 0;
+
+  while (i < branch.length) {
+    const ch = branch[i];
+
+    // Anchors: skip zero-width
+    if (ch === '^' || ch === '$') {
+      i++;
+      continue;
+    }
+    if (ch === '\\' && i + 1 < branch.length && (branch[i + 1] === 'b' || branch[i + 1] === 'B')) {
+      i += 2;
+      continue;
+    }
+
+    let atomChars = new Set<number>();
+    let subGroupNullable = false;
+
+    if (ch === '\\' && i + 1 < branch.length) {
+      i++;
+      const esc = branch[i];
+      i++;
+      if (esc === 'd') {
+        for (let c = 48; c <= 57; c++) atomChars.add(c);
+      } else if (esc === 'D') {
+        atomChars.add(NON_ASCII_SENTINEL);
+        for (let c = 0; c < 128; c++) if (c < 48 || c > 57) atomChars.add(c);
+      } else if (esc === 'w') {
+        for (let c = 48; c <= 57; c++) atomChars.add(c);
+        for (let c = 65; c <= 90; c++) atomChars.add(c);
+        for (let c = 97; c <= 122; c++) atomChars.add(c);
+        atomChars.add(95);
+      } else if (esc === 'W') {
+        atomChars.add(NON_ASCII_SENTINEL);
+        for (let c = 0; c < 128; c++) {
+          if (!((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95)) {
+            atomChars.add(c);
+          }
+        }
+      } else if (esc === 's') {
+        [32, 9, 10, 13, 12, 11].forEach((c) => atomChars.add(c));
+      } else if (esc === 'S') {
+        atomChars.add(NON_ASCII_SENTINEL);
+        for (let c = 0; c < 128; c++) {
+          if (![32, 9, 10, 13, 12, 11].includes(c)) atomChars.add(c);
+        }
+      } else if (esc === 'n') {
+        atomChars.add(10);
+      } else if (esc === 'r') {
+        atomChars.add(13);
+      } else if (esc === 't') {
+        atomChars.add(9);
+      } else {
+        addCharWithCase(atomChars, esc.charCodeAt(0));
+      }
+    } else if (ch === '.') {
+      i++;
+      atomChars.add(NON_ASCII_SENTINEL);
+      for (let c = 0; c < 128; c++) atomChars.add(c);
+    } else if (ch === '[') {
+      const start = i + 1;
+      let end = start;
+      let escaped = false;
+      while (end < branch.length) {
+        if (escaped) {
+          escaped = false;
+          end++;
+          continue;
+        }
+        if (branch[end] === '\\') {
+          escaped = true;
+          end++;
+          continue;
+        }
+        if (branch[end] === ']' && end > start) {
+          break;
+        }
+        end++;
+      }
+      const rawClass = branch.slice(start, end);
+      atomChars = parseCharClass(rawClass);
+      i = end + 1;
+    } else if (ch === '(') {
+      let depth = 1;
+      const start = i + 1;
+      let end = start;
+      let inSubClass = false;
+      while (end < branch.length && depth > 0) {
+        const sc = branch[end];
+        if (sc === '\\' && end + 1 < branch.length) {
+          end += 2;
+          continue;
+        }
+        if (sc === '[' && !inSubClass) inSubClass = true;
+        else if (sc === ']' && inSubClass) inSubClass = false;
+        else if (!inSubClass) {
+          if (sc === '(') depth++;
+          else if (sc === ')') depth--;
+        }
+        if (depth === 0) break;
+        end++;
+      }
+      const subInner = branch.slice(start, end).replace(/^\?(?::|<[^>]+>)/, '');
+      const subBranches = splitBranches(subInner);
+      for (const sb of subBranches) {
+        const parsed = parseBranchAtoms(sb);
+        if (parsed.nullable) {
+          subGroupNullable = true;
+        }
+        for (const a of parsed.atoms) {
+          for (const c of a.chars) {
+            atomChars.add(c);
+          }
+          if (!a.optional) break;
+        }
+      }
+      i = end + 1;
+    } else {
+      addCharWithCase(atomChars, ch.charCodeAt(0));
+      i++;
+    }
+
+    let optional = subGroupNullable;
+    if (i < branch.length) {
+      if (branch[i] === '?') {
+        optional = true;
+        i++;
+        if (i < branch.length && branch[i] === '?') i++;
+      } else if (branch[i] === '{') {
+        const qm = branch.slice(i).match(/^\{(\d+)(?:,(\d*))?\}\??/);
+        if (qm) {
+          if (qm[1] === '0' && (qm[2] === undefined || qm[2] === '0' || qm[2] === '1')) {
+            optional = true;
+          }
+          i += qm[0].length;
+        }
+      }
+    }
+
+    atoms.push({ chars: atomChars, optional });
+  }
+
+  const nullable = atoms.length === 0 || atoms.every((a) => a.optional);
+  return { atoms, nullable };
+}
+
+function hasAmbiguousOrOverlappingGroup(inner: string): boolean {
+  if (/^\?(?:=|!|<=|<!)/.test(inner)) return true;
+
+  const cleanInner = inner.replace(/^\?(?::|<[^>]+>)/, '');
+
+  if (hasInnerRepetitionQuantifier(cleanInner)) return true;
+
+  const branches = splitBranches(cleanInner);
+  const parsedBranches: RegexAtom[][] = [];
+  const branchStartSets: Set<number>[] = [];
+
+  for (const branch of branches) {
+    if (branch.trim() === '') return true;
+    const { atoms, nullable } = parseBranchAtoms(branch);
+    if (nullable) return true;
+    parsedBranches.push(atoms);
+
+    const startSet = new Set<number>();
+    for (const a of atoms) {
+      for (const c of a.chars) startSet.add(c);
+      if (!a.optional) break;
+    }
+    branchStartSets.push(startSet);
+  }
+
+  if (branches.length >= 2) {
+    for (let a = 0; a < branchStartSets.length; a++) {
+      for (let b = a + 1; b < branchStartSets.length; b++) {
+        for (const code of branchStartSets[a]) {
+          if (branchStartSets[b].has(code)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  const groupStartSet = new Set<number>();
+  for (const s of branchStartSets) {
+    for (const c of s) groupStartSet.add(c);
+  }
+
+  for (const atoms of parsedBranches) {
+    for (let idx = 0; idx < atoms.length; idx++) {
+      if (!atoms[idx].optional) continue;
+
+      const followSet = new Set<number>();
+      let reachesEnd = true;
+
+      for (let m = idx + 1; m < atoms.length; m++) {
+        for (const c of atoms[m].chars) followSet.add(c);
+        if (!atoms[m].optional) {
+          reachesEnd = false;
+          break;
+        }
+      }
+
+      if (reachesEnd) {
+        for (const c of groupStartSet) followSet.add(c);
+      }
+
+      for (const c of atoms[idx].chars) {
+        if (followSet.has(c)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+export function hasUnsafeHookRegex(pattern: string): boolean {
+  let inCharClass = false;
+  const parenStack: number[] = [];
+
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '\\') {
+      i++;
+      continue;
+    }
+    if (ch === '[' && !inCharClass) {
+      inCharClass = true;
+      continue;
+    }
+    if (ch === ']' && inCharClass) {
+      inCharClass = false;
+      continue;
+    }
+    if (inCharClass) {
+      continue;
+    }
+
+    if (ch === '(') {
+      parenStack.push(i);
+    } else if (ch === ')' && parenStack.length > 0) {
+      const openIdx = parenStack.pop()!;
+      const rest = pattern.slice(i + 1);
+
+      let isRepeated = false;
+      const quantMatch = rest.match(/^(\+|\*|\{(\d+)(?:,(\d*))?\})\??/);
+      if (quantMatch) {
+        if (quantMatch[1] === '+' || quantMatch[1] === '*') {
+          isRepeated = true;
+        } else if (quantMatch[2] !== undefined) {
+          const maxStr = quantMatch[3];
+          if (maxStr === undefined) {
+            const m = parseInt(quantMatch[2], 10);
+            if (m > 1) isRepeated = true;
+          } else if (maxStr === '') {
+            isRepeated = true;
+          } else {
+            const n = parseInt(maxStr, 10);
+            if (n > 1) isRepeated = true;
+          }
+        }
+      }
+
+      if (isRepeated) {
+        const inner = pattern.slice(openIdx + 1, i);
+        if (hasAmbiguousOrOverlappingGroup(inner)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function hasInnerRepetitionQuantifier(inner: string): boolean {
+  let inClass = false;
+  for (let j = 0; j < inner.length; j++) {
+    const c = inner[j];
+    if (c === '\\') {
+      j++;
+      continue;
+    }
+    if (c === '[' && !inClass) {
+      inClass = true;
+      continue;
+    }
+    if (c === ']' && inClass) {
+      inClass = false;
+      continue;
+    }
+    if (inClass) continue;
+
+    if (c === '+' || c === '*') {
+      return true;
+    }
+    if (c === '{') {
+      const qm = inner.slice(j).match(/^\{(\d+)(?:,(\d*))?\}/);
+      if (qm) {
+        if (qm[2] === undefined) {
+          if (parseInt(qm[1], 10) > 1) return true;
+        } else if (qm[2] === '') {
+          return true;
+        } else {
+          if (parseInt(qm[2], 10) > 1) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 export interface EvaluateOptions {
   dryRun?: boolean;
   excludeIdsFromBudgetAndSim?: string[];
   preservedCreatedAt?: string;
   inheritedTransferScenarios?: string[];
   supersededRules?: EvoRule[];
+  extraKnownIds?: Iterable<string>;
+  bypassConfoundedCheck?: boolean;
 }
+
+export type GatekeeperEvaluateOptions = EvaluateOptions;
 
 export class EvoGatekeeper {
   private readonly storage: EvoStorage;
@@ -626,6 +1271,237 @@ export class EvoGatekeeper {
           gate_failed: 'SCHEMA_SECURITY',
           error_code: 'ERR_SECURITY_VIOLATION',
           message: `Security gate blocked proposal: ${rule.reason}`,
+        };
+      }
+    }
+
+    // Prompt-Injection / Directive Tripwire (Gate 1 for rule/skill)
+    if (rawProposal.kind === 'rule' || rawProposal.kind === 'skill') {
+      const textToAudit =
+        rawProposal.kind === 'rule'
+          ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${resolvedRuleContent}`
+          : `${rawProposal.title}\n${rawProposal.l0_summary}\n${rawProposal.trigger_cue || ''}\n${resolvedSkillL1}\n${resolvedSkillL2}`;
+      const strippedAuditText = stripCaseAnchorLines(textToAudit)
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/`[^`]*`/g, '');
+      const PROMPT_INJECTION_REGEX =
+        /\b(?:ignore\s+(?:all\s+)?previous\s+instructions|disregard\s+(?:all\s+)?system\s+prompts?|dangerously-skip-permissions|bypass\s+safety\s+guardrails?)\b/i;
+      if (PROMPT_INJECTION_REGEX.test(strippedAuditText)) {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_SECURITY_VIOLATION',
+          message:
+            'Security gate blocked proposal: detected prompt-injection override or directive tripwire pattern.',
+        };
+      }
+    }
+
+    // trigger_cue validation (Gate 1)
+    if (rawProposal.trigger_cue !== undefined) {
+      if (
+        typeof rawProposal.trigger_cue !== 'string' ||
+        rawProposal.trigger_cue.includes('\n') ||
+        rawProposal.trigger_cue.includes('\r') ||
+        rawProposal.trigger_cue.trim().length === 0 ||
+        rawProposal.trigger_cue.length > 120
+      ) {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message: 'trigger_cue must be a non-empty single-line string <= 120 characters.',
+        };
+      }
+    }
+
+    // hook_trigger validation (Gate 1)
+    if (rawProposal.hook_trigger !== undefined) {
+      if (rawProposal.kind !== 'tool') {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message: 'hook_trigger is only valid on tool proposals.',
+        };
+      }
+      const ht = rawProposal.hook_trigger;
+      if (!ht || typeof ht !== 'object') {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message: 'hook_trigger must be an object.',
+        };
+      }
+      if (ht.event !== 'pre-tool' && ht.event !== 'post-tool') {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message: "hook_trigger event must be 'pre-tool' or 'post-tool'.",
+        };
+      }
+      if (ht.tools !== undefined) {
+        if (
+          !Array.isArray(ht.tools) ||
+          ht.tools.length === 0 ||
+          ht.tools.some((t) => typeof t !== 'string' || !t.trim())
+        ) {
+          return {
+            passed: false,
+            gate_failed: 'SCHEMA_SECURITY',
+            error_code: 'ERR_INVALID_SCHEMA',
+            message: 'hook_trigger tools must be a non-empty array of non-empty strings.',
+          };
+        }
+      }
+      if (ht.file_glob !== undefined) {
+        if (typeof ht.file_glob !== 'string' || !ht.file_glob.trim() || ht.file_glob.length > 120) {
+          return {
+            passed: false,
+            gate_failed: 'SCHEMA_SECURITY',
+            error_code: 'ERR_INVALID_SCHEMA',
+            message: 'hook_trigger file_glob must be a non-empty string <= 120 characters.',
+          };
+        }
+      }
+      if (ht.block_on_failure !== undefined && typeof ht.block_on_failure !== 'boolean') {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message: 'hook_trigger block_on_failure must be a boolean.',
+        };
+      }
+      if (ht.error_signature !== undefined) {
+        if (typeof ht.error_signature !== 'string' || ht.error_signature.length > 160) {
+          return {
+            passed: false,
+            gate_failed: 'SCHEMA_SECURITY',
+            error_code: 'ERR_INVALID_SCHEMA',
+            message: 'hook_trigger error_signature must be a string <= 160 characters.',
+          };
+        }
+        if (hasUnsafeHookRegex(ht.error_signature)) {
+          return {
+            passed: false,
+            gate_failed: 'SCHEMA_SECURITY',
+            error_code: 'ERR_INVALID_SCHEMA',
+            message: 'hook_trigger error_signature contains a potential ReDoS nested-quantifier or ambiguous alternation pattern.',
+          };
+        }
+        try {
+          new RegExp(ht.error_signature);
+        } catch {
+          return {
+            passed: false,
+            gate_failed: 'SCHEMA_SECURITY',
+            error_code: 'ERR_INVALID_SCHEMA',
+            message: 'hook_trigger error_signature is not a valid regular expression.',
+          };
+        }
+      }
+    }
+
+    // confidence & contrastive_evidence schema validation (Gate 1)
+    if (rawProposal.confidence !== undefined) {
+      if (!['high', 'medium', 'low', 'confounded'].includes(rawProposal.confidence)) {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message: "confidence must be one of 'high', 'medium', 'low', 'confounded'.",
+        };
+      }
+    }
+
+    if (rawProposal.contrastive_evidence !== undefined) {
+      if (
+        typeof rawProposal.contrastive_evidence !== 'string' ||
+        rawProposal.contrastive_evidence.trim().length < 12
+      ) {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_INVALID_SCHEMA',
+          message: 'contrastive_evidence must be a string of at least 12 characters.',
+        };
+      }
+    }
+
+    // Cross-Capability Reference Integrity Gate (Gate 1)
+    if (rawProposal.kind === 'rule' || rawProposal.kind === 'skill') {
+      const proposalTextForRefs =
+        rawProposal.kind === 'rule'
+          ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${resolvedRuleContent}`
+          : `${rawProposal.title}\n${rawProposal.l0_summary}\n${rawProposal.trigger_cue || ''}\n${resolvedSkillL1}\n${resolvedSkillL2}`;
+      const extraKnown = new Set<string>();
+      if (options?.extraKnownIds) {
+        for (const id of options.extraKnownIds) {
+          extraKnown.add(id);
+          extraKnown.add(sanitizeId(id));
+        }
+      }
+      extraKnown.add(cleanId);
+      if (rawProposal.supersedes_id) {
+        extraKnown.add(sanitizeId(rawProposal.supersedes_id));
+      }
+      const brokenRefs = validateCapabilityReferences(
+        proposalTextForRefs,
+        this.storage,
+        extraKnown
+      );
+      if (brokenRefs.length > 0) {
+        return {
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_BROKEN_CAPABILITY_REF',
+          message: `Broken capability reference integrity: proposal references missing capability ID(s) [${brokenRefs.join(', ')}] not found in workspace .evo, global fallback, or seed-evo library.`,
+        };
+      }
+    }
+
+    // =========================================================================
+    // GATE 1.5: CAUSAL ATTRIBUTION & ABSTRACTION GATE
+    // =========================================================================
+    if (rawProposal.kind === 'rule' || rawProposal.kind === 'skill') {
+      if (rawProposal.confidence === 'confounded' && rawProposal.origin !== 'compacted') {
+        return {
+          passed: false,
+          gate_failed: 'ABSTRACTION_GATE',
+          error_code: 'ERR_CONFOUNDED_CAUSATION',
+          message:
+            "Causal attribution gate blocked proposal: confidence is 'confounded'. When multiple causal factors or unisolated variables are present, crystallize as kind: 'memory' instead of elevating to a rule or skill, or omit crystallization until causation is isolated.",
+        };
+      }
+
+      const hadCommandError =
+        (rawProposal as unknown as Record<string, unknown>).had_command_error === 'true' ||
+        (rawProposal as unknown as Record<string, unknown>).had_command_error === true ||
+        this.telemetry.getSessionFlag('had_command_error') === 'true';
+      const unproposedEditCount = Math.max(
+        parseInt(String((rawProposal as unknown as Record<string, unknown>).unproposed_edit_count || '0'), 10),
+        parseInt(this.telemetry.getSessionFlag('unproposed_edit_count') || '0', 10)
+      );
+
+      const bypassImplicitConfounded =
+        options?.bypassConfoundedCheck === true ||
+        rawProposal.origin === 'compacted' ||
+        rawProposal.origin === 'optimized';
+
+      if (
+        !bypassImplicitConfounded &&
+        hadCommandError &&
+        unproposedEditCount >= 4 &&
+        !(rawProposal.contrastive_evidence && rawProposal.contrastive_evidence.trim().length >= 12)
+      ) {
+        return {
+          passed: false,
+          gate_failed: 'ABSTRACTION_GATE',
+          error_code: 'ERR_CONFOUNDED_CAUSATION',
+          message:
+            "Causal attribution gate blocked proposal: the session encountered command errors alongside multiple unproposed edits (>=4 edits), creating high confounding risk. Provide 'contrastive_evidence' (>= 12 characters explaining before-vs-after causal isolation) or downgrade this proposal to kind: 'memory'.",
         };
       }
     }
@@ -801,7 +1677,14 @@ export class EvoGatekeeper {
     }
 
     if (rawProposal.kind === 'tool') {
-      const runtime = rawProposal.runtime || 'node';
+      const existingTool = this.storage.getTool(cleanId);
+      const supersededTool = rawProposal.supersedes_id
+        ? this.storage.getTool(sanitizeId(rawProposal.supersedes_id))
+        : null;
+      const baseTool = existingTool ?? supersededTool ?? undefined;
+      const runtime = rawProposal.runtime ?? baseTool?.runtime ?? 'node';
+      const effectiveSelfTestArgs = rawProposal.self_test_args ?? baseTool?.self_test_args ?? {};
+      const effectiveTimeoutMs = rawProposal.timeout_ms ?? baseTool?.timeout_ms ?? config.sandboxTimeoutMs;
       const scriptCode = (rawProposal.script_code || '').trim();
       if (!scriptCode || scriptCode.length < 20) {
         return {
@@ -829,10 +1712,10 @@ export class EvoGatekeeper {
         const dryRun = executeSandboxedScript(
           runtime,
           tmpScript,
-          rawProposal.self_test_args || {},
+          effectiveSelfTestArgs,
           {
             cwd: this.storage.rootDir,
-            timeoutMs: rawProposal.timeout_ms || config.sandboxTimeoutMs,
+            timeoutMs: effectiveTimeoutMs,
             selfTest: true,
           }
         );
@@ -1057,14 +1940,26 @@ export class EvoGatekeeper {
              supersededRuleFromStorage?.transfer_scenarios ||
              options?.inheritedTransferScenarios);
 
+      const correctionMetadata =
+        this.telemetry.getSessionFlag('user_correction_detected') === 'true' ||
+        this.telemetry.getSessionFlag('had_command_error') === 'true'
+          ? { superseded_after_correction: true }
+          : undefined;
+
       if (existing) {
-        this.storage.archiveCapability(cleanId, 'rule', 'Updated by same-ID proposal');
+        this.storage.archiveCapability(
+          cleanId,
+          'rule',
+          'Updated by same-ID proposal',
+          correctionMetadata
+        );
       }
       if (rawProposal.supersedes_id && sanitizeId(rawProposal.supersedes_id) !== cleanId) {
         this.storage.archiveCapability(
           rawProposal.supersedes_id,
           'rule',
-          `Superseded by ${cleanId}`
+          `Superseded by ${cleanId}`,
+          correctionMetadata
         );
       }
 
@@ -1082,6 +1977,12 @@ export class EvoGatekeeper {
         transfer_scenarios: inheritedTransferScenarios && inheritedTransferScenarios.length > 0
           ? inheritedTransferScenarios
           : undefined,
+        confidence:
+          rawProposal.confidence || existing?.confidence || supersededRuleFromStorage?.confidence,
+        contrastive_evidence:
+          rawProposal.contrastive_evidence ||
+          existing?.contrastive_evidence ||
+          supersededRuleFromStorage?.contrastive_evidence,
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -1135,27 +2036,56 @@ export class EvoGatekeeper {
       }
 
       const existing = this.storage.getSkill(cleanId);
+      const supersededSkill = rawProposal.supersedes_id
+        ? this.storage.getSkill(sanitizeId(rawProposal.supersedes_id))
+        : null;
       const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
+      const correctionMetadata =
+        this.telemetry.getSessionFlag('user_correction_detected') === 'true' ||
+        this.telemetry.getSessionFlag('had_command_error') === 'true'
+          ? { superseded_after_correction: true }
+          : undefined;
+
       if (existing) {
-        this.storage.archiveCapability(cleanId, 'skill', 'Updated by same-ID proposal');
+        this.storage.archiveCapability(
+          cleanId,
+          'skill',
+          'Updated by same-ID proposal',
+          correctionMetadata
+        );
       }
       if (rawProposal.supersedes_id && sanitizeId(rawProposal.supersedes_id) !== cleanId) {
         this.storage.archiveCapability(
           rawProposal.supersedes_id,
           'skill',
-          `Superseded by ${cleanId}`
+          `Superseded by ${cleanId}`,
+          correctionMetadata
         );
       }
 
       const skillObj: EvoSkill = {
         id: cleanId,
         title: rawProposal.title.trim(),
+        name: rawProposal.name || cleanId,
+        description: rawProposal.description || rawProposal.l0_summary.trim(),
         l0_summary: rawProposal.l0_summary.trim(),
         l1_contract: l1,
         l2_sop: l2,
-        tags: rawProposal.tags || [],
+        tags: Array.isArray(rawProposal.tags)
+          ? rawProposal.tags
+          : (existing?.tags ?? supersededSkill?.tags ?? []),
         origin: rawProposal.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
+        trigger_cue:
+          rawProposal.trigger_cue !== undefined
+            ? rawProposal.trigger_cue.trim()
+            : (existing?.trigger_cue || supersededSkill?.trigger_cue),
+        confidence:
+          rawProposal.confidence || existing?.confidence || supersededSkill?.confidence,
+        contrastive_evidence:
+          rawProposal.contrastive_evidence !== undefined
+            ? rawProposal.contrastive_evidence.trim()
+            : (existing?.contrastive_evidence || supersededSkill?.contrastive_evidence),
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -1174,7 +2104,12 @@ export class EvoGatekeeper {
     }
 
     if (rawProposal.kind === 'tool') {
-      const runtime = rawProposal.runtime || 'node';
+      const existing = this.storage.getTool(cleanId);
+      const supersededTool = rawProposal.supersedes_id
+        ? this.storage.getTool(sanitizeId(rawProposal.supersedes_id))
+        : undefined;
+      const baseTool = existing ?? supersededTool;
+      const runtime = rawProposal.runtime ?? baseTool?.runtime ?? 'node';
       const scriptCode = (rawProposal.script_code || '').trim();
 
       if (options?.dryRun) {
@@ -1185,19 +2120,30 @@ export class EvoGatekeeper {
         };
       }
 
-      const existing = this.storage.getTool(cleanId);
       const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
       const toolTags = Array.isArray(rawProposal.tags)
         ? rawProposal.tags.map((t) => String(t).trim()).filter(Boolean)
-        : (existing?.tags || []);
+        : (baseTool?.tags || []);
+      const correctionMetadata =
+        this.telemetry.getSessionFlag('user_correction_detected') === 'true' ||
+        this.telemetry.getSessionFlag('had_command_error') === 'true'
+          ? { superseded_after_correction: true }
+          : undefined;
+
       if (existing) {
-        this.storage.archiveCapability(cleanId, 'tool', 'Updated by same-ID proposal');
+        this.storage.archiveCapability(
+          cleanId,
+          'tool',
+          'Updated by same-ID proposal',
+          correctionMetadata
+        );
       }
       if (rawProposal.supersedes_id && sanitizeId(rawProposal.supersedes_id) !== cleanId) {
         this.storage.archiveCapability(
           rawProposal.supersedes_id,
           'tool',
-          `Superseded by ${cleanId}`
+          `Superseded by ${cleanId}`,
+          correctionMetadata
         );
       }
 
@@ -1207,12 +2153,13 @@ export class EvoGatekeeper {
         l0_summary: rawProposal.l0_summary.trim(),
         runtime,
         entry_script: `run${getExtensionForRuntime(runtime)}`,
-        input_schema: rawProposal.input_schema || { type: 'object', properties: {} },
-        self_test_args: rawProposal.self_test_args || {},
-        timeout_ms: rawProposal.timeout_ms || config.sandboxTimeoutMs,
+        input_schema: rawProposal.input_schema ?? baseTool?.input_schema ?? { type: 'object', properties: {} },
+        self_test_args: rawProposal.self_test_args ?? baseTool?.self_test_args ?? {},
+        timeout_ms: rawProposal.timeout_ms ?? baseTool?.timeout_ms ?? config.sandboxTimeoutMs,
         tags: toolTags.length > 0 ? toolTags : undefined,
         origin: rawProposal.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
+        hook_trigger: rawProposal.hook_trigger ?? baseTool?.hook_trigger,
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -1269,14 +2216,26 @@ export class EvoGatekeeper {
 
       const existing = this.storage.getMemory(cleanId);
       const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
+      const correctionMetadata =
+        this.telemetry.getSessionFlag('user_correction_detected') === 'true' ||
+        this.telemetry.getSessionFlag('had_command_error') === 'true'
+          ? { superseded_after_correction: true }
+          : undefined;
+
       if (existing) {
-        this.storage.archiveCapability(cleanId, 'memory', 'Updated by same-ID proposal');
+        this.storage.archiveCapability(
+          cleanId,
+          'memory',
+          'Updated by same-ID proposal',
+          correctionMetadata
+        );
       }
       if (rawProposal.supersedes_id && sanitizeId(rawProposal.supersedes_id) !== cleanId) {
         this.storage.archiveCapability(
           rawProposal.supersedes_id,
           'memory',
-          `Superseded by ${cleanId}`
+          `Superseded by ${cleanId}`,
+          correctionMetadata
         );
       }
 

@@ -560,7 +560,7 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
         scope_glob: 'src/**/*.ts',
         core: true,
         content: 'Ensure all agent harness configs stay in sync.',
-      });
+      } as any);
 
       // Run syncManagedRuleBlocks
       const syncedFiles = syncManagedRuleBlocks(ws);
@@ -724,7 +724,7 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
         scope_glob: '**/*',
         core: true,
         content: 'Rule body',
-      });
+      } as any);
 
       const synced = syncManagedRuleBlocks(ws);
       assert.ok(synced.includes('docs/CUSTOM_AGENT.md'));

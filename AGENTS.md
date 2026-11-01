@@ -33,8 +33,11 @@ Whenever ANY of the following occurs in this session, you MUST call `evo_propose
 
 ### 5. 已注册受控微工具目录 (Registered Micro-Tools via `evo_run`)
 - `[tool] agy-config-auditor`: Audits host rule token budgets, Gate 1.5 rule compliance, memory AST symbols, and local/global split-brain divergence.
+- `[tool] deliverable-canonical-inspector`: Zero-dep canonical reader & defect detector for .xlsx, .docx, .pptx, .csv, .json, and .md deliverable artifacts.
 - `[tool] evo-release-preflight`: Audits multi-manifest bootstrap parity, seed-evo sync, dist build freshness, and CodeGraph index state before commit.
 - `[tool] git-hotspot-analyzer`: Identifies top 10 most frequently modified files in recent git history to pinpoint fragile modules.
 - `[tool] workspace-metrics-scanner`: Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.
-- On-demand rules/skills (inspect via `evo_inspect`): `[skill] bug-to-guardrail-sop`, `[skill] evo-dev-verification-sop`, `[skill] evo-rule-architect`
+- When distilling a diagnosed bug into an episodic memory or SSOT-decoupled guardrail rule -> `evo_inspect("bug-to-guardrail-sop", "L2")`
+- When modifying EvoKernel core modules, running TDD verification, or preparing a release -> `evo_inspect("evo-dev-verification-sop", "L2")`
+- When auditing bloated rule files (>1,500 tokens), global domain leaks, or duplicated skills -> `evo_inspect("evo-rule-architect", "L2")`
 <!-- EVO:END -->

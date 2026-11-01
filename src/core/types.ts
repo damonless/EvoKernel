@@ -1,5 +1,28 @@
 export type EvoKind = 'rule' | 'skill' | 'tool' | 'memory';
 
+export type CapabilityKind = EvoKind;
+
+export type ConfidenceLevel = 'high' | 'medium' | 'low' | 'confounded';
+
+export type CapabilityOutcome = 'helped' | 'hurt' | 'contested' | 'neutral';
+
+export type EvoHookTriggerEvent = 'pre-tool' | 'post-tool';
+
+export interface EvoHookTrigger {
+  event: EvoHookTriggerEvent;
+  tools?: string[];
+  file_glob?: string;
+  error_signature?: string;
+  block_on_failure?: boolean;
+}
+
+export interface RecalledCapabilityEntry {
+  id: string;
+  kind: CapabilityKind;
+  tier: 'LOCAL' | 'GLOBAL';
+  ts: string;
+}
+
 export type ScriptRuntime = 'node' | 'python' | 'powershell' | 'bash';
 
 export type SymbolKind =
@@ -122,6 +145,8 @@ export interface EvoRule {
   origin: string;
   supersedes_id?: string;
   transfer_scenarios?: string[];
+  confidence?: ConfidenceLevel;
+  contrastive_evidence?: string;
   created_at: string;
   updated_at: string;
 }
@@ -129,12 +154,17 @@ export interface EvoRule {
 export interface EvoSkill {
   id: string;
   title: string;
+  name?: string;
+  description?: string;
   l0_summary: string;
   l1_contract: string;
   l2_sop: string;
   tags: string[];
   origin: string;
   supersedes_id?: string;
+  trigger_cue?: string;
+  confidence?: ConfidenceLevel;
+  contrastive_evidence?: string;
   created_at: string;
   updated_at: string;
 }
@@ -151,6 +181,7 @@ export interface EvoToolManifest {
   tags?: string[];
   origin: string;
   supersedes_id?: string;
+  hook_trigger?: EvoHookTrigger;
   created_at: string;
   updated_at: string;
 }
@@ -165,9 +196,15 @@ export interface ProposalPayload {
   kind: EvoKind;
   id: string;
   title: string;
+  name?: string;
+  description?: string;
   l0_summary: string;
   origin?: string;
   supersedes_id?: string;
+  trigger_cue?: string;
+  confidence?: ConfidenceLevel;
+  contrastive_evidence?: string;
+  hook_trigger?: EvoHookTrigger;
   // For rules:
   scope_glob?: string;
   core?: boolean;
@@ -195,11 +232,15 @@ export interface ProposalPayload {
 export interface TelemetryRecord {
   id: string;
   kind: EvoKind;
+  title?: string;
   l0_summary: string;
   scope_glob: string;
   hit_count: number;
   success_count: number;
   fail_count: number;
+  helped_count: number;
+  hurt_count: number;
+  contested_count: number;
   tokens_saved: number;
   last_used_at: string;
   created_at: string;
@@ -231,6 +272,8 @@ export interface GatekeeperResult {
   error_code?:
     | 'ERR_INVALID_SCHEMA'
     | 'ERR_SECURITY_VIOLATION'
+    | 'ERR_BROKEN_CAPABILITY_REF'
+    | 'ERR_CONFOUNDED_CAUSATION'
     | 'ERR_GLOBAL_MEMORY_FORBIDDEN'
     | 'ERR_SCOPE_TOO_NARROW'
     | 'ERR_POINT_BUG_CASE_LOG'

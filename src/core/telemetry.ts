@@ -1,7 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { EvoKind, SearchHit, TelemetryRecord } from './types.js';
+import type {
+  CapabilityKind,
+  CapabilityOutcome,
+  EvoKind,
+  RecalledCapabilityEntry,
+  SearchHit,
+  TelemetryRecord,
+} from './types.js';
 import { EvoStorage } from './storage.js';
 import { verifyMemoryFreshness } from './memory.js';
 
@@ -420,6 +427,9 @@ export class EvoTelemetry {
         hit_count INTEGER NOT NULL DEFAULT 0,
         success_count INTEGER NOT NULL DEFAULT 0,
         fail_count INTEGER NOT NULL DEFAULT 0,
+        helped_count INTEGER NOT NULL DEFAULT 0,
+        hurt_count INTEGER NOT NULL DEFAULT 0,
+        contested_count INTEGER NOT NULL DEFAULT 0,
         tokens_saved INTEGER NOT NULL DEFAULT 0,
         last_used_at TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -456,6 +466,22 @@ export class EvoTelemetry {
         updated_at TEXT NOT NULL
       );
     `);
+
+    try {
+      this.db.exec('ALTER TABLE telemetry ADD COLUMN helped_count INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE telemetry ADD COLUMN hurt_count INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE telemetry ADD COLUMN contested_count INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // column already exists
+    }
 
     if (this.forceFallback) {
       this.fts5Enabled = false;
@@ -588,16 +614,17 @@ export class EvoTelemetry {
         const cjkKw = extractCjkBigrams(`${r.title} ${r.l0_summary} ${r.content}`).join(' ');
         const kw = `${idTokens} ${r.scope_glob} ${cjkKw}`.trim();
         upsertFtsRow(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
-        upsertTelemetry.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, now, r.created_at);
+        upsertTelemetry.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, now, r.created_at || now);
       }
 
       for (const s of skills) {
         const idTokens = s.id.replace(/[-_]+/g, ' ');
-        const bodyText = `${s.l1_contract}\n${s.l2_sop}`;
-        const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary} ${s.l1_contract} ${s.l2_sop}`).join(' ');
-        const kw = `${idTokens} ${s.tags.join(' ')} ${cjkKw}`.trim();
+        const triggerCue = s.trigger_cue || '';
+        const bodyText = `${s.l1_contract}\n${s.l2_sop}\n${triggerCue}`.trim();
+        const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary} ${s.l1_contract} ${s.l2_sop} ${triggerCue}`).join(' ');
+        const kw = `${idTokens} ${s.tags.join(' ')} ${triggerCue} ${cjkKw}`.trim();
         upsertFtsRow(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
-        upsertTelemetry.run(s.id, 'skill', s.title, s.l0_summary, '**/*', now, s.created_at);
+        upsertTelemetry.run(s.id, 'skill', s.title, s.l0_summary, '**/*', now, s.created_at || now);
       }
 
       for (const t of tools) {
@@ -616,13 +643,15 @@ export class EvoTelemetry {
               `${k} ${k.replace(/[-_]+/g, ' ')} ${typeof v?.description === 'string' ? v.description : ''}`
           )
           .join(' ');
-        const schemaText = JSON.stringify(t.input_schema);
+        const schemaText = JSON.stringify(t.input_schema ?? (t as any).args_schema ?? {}) || '{}';
+        const toolTitle = t.title || t.id;
+        const toolSummary = t.l0_summary || toolTitle;
         const cjkKw = extractCjkBigrams(
-          `${t.title} ${t.l0_summary} ${tagsText} ${schemaPropsText}`
+          `${toolTitle} ${toolSummary} ${tagsText} ${schemaPropsText}`
         ).join(' ');
         const kw = `${idTokens} ${t.runtime} ${tagsText} ${schemaPropsText} ${cjkKw}`.trim();
-        upsertFtsRow(t.id, 'tool', t.title, t.l0_summary, kw, schemaText);
-        upsertTelemetry.run(t.id, 'tool', t.title, t.l0_summary, '**/*', now, t.created_at);
+        upsertFtsRow(t.id, 'tool', toolTitle, toolSummary, kw, schemaText);
+        upsertTelemetry.run(t.id, 'tool', toolTitle, toolSummary, '**/*', now, t.created_at || now);
       }
 
       // Index external tools into telemetry and FTS
@@ -635,7 +664,7 @@ export class EvoTelemetry {
         const kw = `${idTokens} external proxy mcp ${et.serverName} ${et.originalName} ${cjkKw}`.trim();
         const l0 = (et.description || `External MCP tool from ${et.serverName}`).slice(0, 140);
         upsertFtsRow(et.id, 'tool', et.title, l0, kw, schemaText);
-        upsertTelemetry.run(et.id, 'tool', et.title, l0, '**/*', now, et.cachedAt);
+        upsertTelemetry.run(et.id, 'tool', et.title, l0, '**/*', now, et.cachedAt || now);
       }
 
       for (const m of memories) {
@@ -656,19 +685,19 @@ export class EvoTelemetry {
         const bodyText = `${m.symptom}\n${m.root_cause}\n${m.solution}`;
         const scopeDisplay = m.target_symbols.slice(0, 3).join(', ') || '**/*';
         upsertFtsRow(m.id, 'memory', m.title, m.l0_summary, keywords, bodyText);
-        upsertTelemetry.run(m.id, 'memory', m.title, m.l0_summary, scopeDisplay, now, m.created_at);
+        upsertTelemetry.run(m.id, 'memory', m.title, m.l0_summary, scopeDisplay, now, m.created_at || now);
         upsertEpisodic.run(
           m.id,
           m.title,
           m.l0_summary,
-          m.created_commit,
+          m.created_commit || '',
           m.symptom,
           m.root_cause,
           m.solution,
           JSON.stringify(m.target_symbols),
           JSON.stringify(m.ast_fingerprints),
           now,
-          m.created_at
+          m.created_at || now
         );
       }
 
@@ -701,7 +730,8 @@ export class EvoTelemetry {
         const sql =
           kind === 'all'
             ? `
-              SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count, bm25(capability_fts) as rank
+              SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count,
+                     t.helped_count, t.hurt_count, t.contested_count, bm25(capability_fts) as rank
               FROM capability_fts f
               JOIN telemetry t ON f.id = t.id
               WHERE capability_fts MATCH ?
@@ -709,7 +739,8 @@ export class EvoTelemetry {
               LIMIT ?
             `
             : `
-              SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count, bm25(capability_fts) as rank
+              SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count,
+                     t.helped_count, t.hurt_count, t.contested_count, bm25(capability_fts) as rank
               FROM capability_fts f
               JOIN telemetry t ON f.id = t.id
               WHERE capability_fts MATCH ? AND f.kind = ?
@@ -737,8 +768,8 @@ export class EvoTelemetry {
       if (!query.trim()) {
         const fallbackSql =
           kind === 'all'
-            ? `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry ORDER BY hit_count DESC, created_at DESC LIMIT ?`
-            : `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, 0.0 as rank FROM telemetry WHERE kind = ? ORDER BY hit_count DESC, created_at DESC LIMIT ?`;
+            ? `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, helped_count, hurt_count, contested_count, 0.0 as rank FROM telemetry ORDER BY hit_count DESC, created_at DESC LIMIT ?`
+            : `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, helped_count, hurt_count, contested_count, 0.0 as rank FROM telemetry WHERE kind = ? ORDER BY hit_count DESC, created_at DESC LIMIT ?`;
         const stmt = this.db.prepare(fallbackSql);
         rows = (kind === 'all' ? stmt.all(fetchLimit) : stmt.all(kind, fetchLimit)) as Array<Record<string, unknown>>;
       } else {
@@ -773,6 +804,17 @@ export class EvoTelemetry {
       const rate = total > 0 ? `${((succ / total) * 100).toFixed(0)}%` : '100% (verified)';
       let rawScore = Math.abs(Number(r.rank || 0));
       if (rawScore === 0) rawScore = 1.0;
+      if (r._score === undefined) {
+        const helped = Number(r.helped_count || 0);
+        const hurt = Number(r.hurt_count || 0);
+        const contested = Number(r.contested_count || 0);
+        const outcomes = helped + hurt + contested;
+        if (outcomes >= 2 && (hurt + contested) > helped) {
+          rawScore *= 0.65;
+        } else if (helped >= 3 && hurt === 0 && contested === 0) {
+          rawScore *= 1.10;
+        }
+      }
 
       if (itemKind === 'memory') {
         const mem = this.storage.getMemory(id);
@@ -863,13 +905,15 @@ export class EvoTelemetry {
       kind === 'all'
         ? `
           SELECT f.id, f.kind, f.title, f.l0_summary, f.keywords, f.body,
-                 t.scope_glob, t.hit_count, t.success_count, t.fail_count
+                 t.scope_glob, t.hit_count, t.success_count, t.fail_count,
+                 t.helped_count, t.hurt_count, t.contested_count
           FROM capability_fts_fallback f
           JOIN telemetry t ON f.id = t.id
         `
         : `
           SELECT f.id, f.kind, f.title, f.l0_summary, f.keywords, f.body,
-                 t.scope_glob, t.hit_count, t.success_count, t.fail_count
+                 t.scope_glob, t.hit_count, t.success_count, t.fail_count,
+                 t.helped_count, t.hurt_count, t.contested_count
           FROM capability_fts_fallback f
           JOIN telemetry t ON f.id = t.id
           WHERE f.kind = ?
@@ -988,10 +1032,21 @@ export class EvoTelemetry {
       }
 
       if (totalScore > 0) {
+        const helped = Number(row.helped_count || 0);
+        const hurt = Number(row.hurt_count || 0);
+        const contested = Number(row.contested_count || 0);
+        const outcomes = helped + hurt + contested;
+        let outcomeMultiplier = 1.0;
+        if (outcomes >= 2 && (hurt + contested) > helped) {
+          outcomeMultiplier = 0.65;
+        } else if (helped >= 3 && hurt === 0 && contested === 0) {
+          outcomeMultiplier = 1.10;
+        }
+        const adjustedScore = totalScore * outcomeMultiplier;
         scored.push({
           ...row,
-          rank: -totalScore,
-          _score: totalScore,
+          rank: -adjustedScore,
+          _score: adjustedScore,
         });
       }
     }
@@ -1061,17 +1116,102 @@ export class EvoTelemetry {
       map.set(String(r.id), {
         id: String(r.id),
         kind: String(r.kind) as EvoKind,
-        l0_summary: String(r.l0_summary),
-        scope_glob: String(r.scope_glob),
+        title: String(r.title || r.id),
+        l0_summary: String(r.l0_summary || ''),
+        scope_glob: String(r.scope_glob || '**/*'),
         hit_count: Number(r.hit_count || 0),
         success_count: Number(r.success_count || 0),
         fail_count: Number(r.fail_count || 0),
+        helped_count: Number(r.helped_count || 0),
+        hurt_count: Number(r.hurt_count || 0),
+        contested_count: Number(r.contested_count || 0),
         tokens_saved: Number(r.tokens_saved || 0),
         last_used_at: String(r.last_used_at),
         created_at: String(r.created_at),
       });
     }
     return map;
+  }
+
+  public recordRecalledCapability(entry: {
+    id: string;
+    kind: CapabilityKind;
+    tier: 'LOCAL' | 'GLOBAL';
+  }): void {
+    const list = this.getRecalledCapabilities();
+    const targetId = entry.id.trim();
+    const existingIndex = list.findIndex((item) => item.id === targetId);
+    const newEntry: RecalledCapabilityEntry = {
+      id: targetId,
+      kind: entry.kind,
+      tier: entry.tier,
+      ts: new Date().toISOString(),
+    };
+    if (existingIndex >= 0) {
+      list.splice(existingIndex, 1);
+    }
+    list.push(newEntry);
+    const capped = list.slice(-50);
+    this.setSessionFlag('recalled_capabilities', JSON.stringify(capped));
+  }
+
+  public getRecalledCapabilities(): RecalledCapabilityEntry[] {
+    const raw = this.getSessionFlag('recalled_capabilities');
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed as RecalledCapabilityEntry[];
+      }
+    } catch {
+      // ignore malformed session flag
+    }
+    return [];
+  }
+
+  public clearRecalledCapabilities(): void {
+    this.db.prepare("DELETE FROM session_state WHERE key = 'recalled_capabilities'").run();
+  }
+
+  public recordCapabilityOutcome(id: string, outcome: CapabilityOutcome): void {
+    if (outcome === 'neutral') return;
+    const col =
+      outcome === 'helped'
+        ? 'helped_count'
+        : outcome === 'hurt'
+          ? 'hurt_count'
+          : outcome === 'contested'
+            ? 'contested_count'
+            : null;
+    if (!col) return;
+    const rawId = id.trim();
+    const cleanId = rawId.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+    const stmt = this.db.prepare(
+      `UPDATE telemetry SET ${col} = ${col} + 1 WHERE id = ? OR id = ?`
+    );
+    const res = stmt.run(rawId, cleanId);
+    if (res.changes === 0) {
+      const rule = this.storage.getRule(cleanId);
+      const skill = this.storage.getSkill(cleanId);
+      const tool = this.storage.getTool(cleanId);
+      const memory = this.storage.getMemory(cleanId);
+      const cap = rule || skill || tool || memory;
+      const kind = rule ? 'rule' : skill ? 'skill' : tool ? 'tool' : memory ? 'memory' : 'rule';
+      const title = cap?.title || cleanId;
+      const l0_summary = cap?.l0_summary || '';
+      const scope_glob = rule?.scope_glob || '';
+      const now = new Date().toISOString();
+      try {
+        const insertStmt = this.db.prepare(`
+          INSERT INTO telemetry (id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, tokens_saved, last_used_at, created_at, ${col})
+          VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, ?, ?, 1)
+          ON CONFLICT(id) DO UPDATE SET ${col} = ${col} + 1
+        `);
+        insertStmt.run(cleanId, kind, title, l0_summary, scope_glob, now, now);
+      } catch {
+        // Ignore fallback insert collision
+      }
+    }
   }
 
   public setSessionFlag(key: string, value: string): void {

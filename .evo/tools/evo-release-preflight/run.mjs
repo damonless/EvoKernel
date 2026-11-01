@@ -35,6 +35,7 @@ function normalizeDoc(content) {
   return content
     .replace(/\r\n/g, '\n')
     .replace(/^updated_at:\s*".*"$/m, 'updated_at: "<normalized>"')
+    .replace(/"updated_at":\s*"[^"]*"/g, '"updated_at": "<normalized>"')
     .trim();
 }
 
@@ -108,6 +109,16 @@ if (fs.existsSync(seedToolsDir) && fs.existsSync(localToolsDir)) {
     } else if (normalizeDoc(fs.readFileSync(seedRun, 'utf8')) !== normalizeDoc(fs.readFileSync(localRun, 'utf8'))) {
       seedDrift.push(`Tool drift between .evo/tools/${name}/run.mjs and templates/seed-evo/tools/${name}/run.mjs`);
     }
+
+    const seedManifest = path.join(seedToolsDir, name, 'manifest.json');
+    const localManifest = path.join(localToolsDir, name, 'manifest.json');
+    if (!fs.existsSync(seedManifest)) {
+      seedDrift.push(`Missing seed tool manifest: templates/seed-evo/tools/${name}/manifest.json`);
+    } else if (!fs.existsSync(localManifest)) {
+      seedDrift.push(`Missing local tool manifest: .evo/tools/${name}/manifest.json`);
+    } else if (normalizeDoc(fs.readFileSync(seedManifest, 'utf8')) !== normalizeDoc(fs.readFileSync(localManifest, 'utf8'))) {
+      seedDrift.push(`Tool manifest drift between .evo/tools/${name}/manifest.json and templates/seed-evo/tools/${name}/manifest.json`);
+    }
   }
 }
 
@@ -126,11 +137,37 @@ if (fs.existsSync(seedSkillsDir) && fs.existsSync(localSkillsDir)) {
     if (!fs.existsSync(sPath) || !fs.existsSync(lPath) || !fs.existsSync(pPath)) {
       seedDrift.push(`Skill '${name}' missing across .evo/skills, templates/seed-evo/skills, or skills/`);
     } else {
-      const sDoc = normalizeDoc(fs.readFileSync(sPath, 'utf8'));
-      const lDoc = normalizeDoc(fs.readFileSync(lPath, 'utf8'));
-      const pDoc = normalizeDoc(fs.readFileSync(pPath, 'utf8'));
+      const sRaw = fs.readFileSync(sPath, 'utf8');
+      const lRaw = fs.readFileSync(lPath, 'utf8');
+      const pRaw = fs.readFileSync(pPath, 'utf8');
+      const sDoc = normalizeDoc(sRaw);
+      const lDoc = normalizeDoc(lRaw);
+      const pDoc = normalizeDoc(pRaw);
       if (sDoc !== lDoc || lDoc !== pDoc) {
         seedDrift.push(`Skill drift detected for '${name}' across .evo/skills, templates/seed-evo/skills, and skills/`);
+      }
+
+      for (const [skillPath, rawContent] of [
+        [sPath, sRaw],
+        [lPath, lRaw],
+        [pPath, pRaw],
+      ]) {
+        const fmMatch = rawContent.replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        const yaml = fmMatch ? fmMatch[1] : '';
+        const nameMatch = yaml.match(/^name:\s*(?:"([^"]*)"|'([^']*)'|([^\r\n]+))$/m);
+        const descMatch = yaml.match(/^description:\s*(?:"([^"]*)"|'([^']*)'|([^\r\n]+))$/m);
+        let extractedName = (nameMatch ? (nameMatch[1] ?? nameMatch[2] ?? nameMatch[3] ?? '') : '').trim();
+        let extractedDesc = (descMatch ? (descMatch[1] ?? descMatch[2] ?? descMatch[3] ?? '') : '').trim();
+        if (extractedName.startsWith('"') && extractedName.endsWith('"')) extractedName = extractedName.slice(1, -1).trim();
+        if (extractedName.startsWith("'") && extractedName.endsWith("'")) extractedName = extractedName.slice(1, -1).trim();
+        if (extractedDesc.startsWith('"') && extractedDesc.endsWith('"')) extractedDesc = extractedDesc.slice(1, -1).trim();
+        if (extractedDesc.startsWith("'") && extractedDesc.endsWith("'")) extractedDesc = extractedDesc.slice(1, -1).trim();
+        if (extractedName !== name) {
+          seedDrift.push(`Skill '${path.relative(root, skillPath).replace(/\\/g, '/')}' frontmatter name expected '${name}', got '${extractedName}'`);
+        }
+        if (!extractedDesc) {
+          seedDrift.push(`Skill '${path.relative(root, skillPath).replace(/\\/g, '/')}' frontmatter description is missing or empty`);
+        }
       }
     }
   }

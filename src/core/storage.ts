@@ -2,7 +2,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
+  ConfidenceLevel,
   EvoConfig,
+  EvoHookTrigger,
   EvoKind,
   EvoMemory,
   EvoRule,
@@ -335,6 +337,8 @@ export class EvoStorage {
       `tokens: ${rule.tokens}`,
       `origin: ${JSON.stringify(rule.origin)}`,
       ...(rule.supersedes_id ? [`supersedes_id: ${JSON.stringify(rule.supersedes_id)}`] : []),
+      ...(rule.confidence ? [`confidence: ${JSON.stringify(rule.confidence)}`] : []),
+      ...(rule.contrastive_evidence ? [`contrastive_evidence: ${JSON.stringify(rule.contrastive_evidence)}`] : []),
       ...(rule.transfer_scenarios && rule.transfer_scenarios.length > 0
         ? [`transfer_scenarios: ${JSON.stringify(rule.transfer_scenarios)}`]
         : []),
@@ -411,6 +415,11 @@ export class EvoStorage {
         transfer_scenarios: Array.isArray(meta.transfer_scenarios)
           ? meta.transfer_scenarios.map(String)
           : undefined,
+        confidence:
+          meta.confidence && ['high', 'medium', 'low', 'confounded'].includes(String(meta.confidence))
+            ? (String(meta.confidence) as ConfidenceLevel)
+            : undefined,
+        contrastive_evidence: meta.contrastive_evidence ? String(meta.contrastive_evidence) : undefined,
         created_at: String(meta.created_at || new Date().toISOString()),
         updated_at: String(meta.updated_at || new Date().toISOString()),
       };
@@ -456,8 +465,13 @@ export class EvoStorage {
     const content = [
       '---',
       `id: ${skill.id}`,
+      `name: ${skill.name || skill.id}`,
+      `description: ${JSON.stringify(skill.description || skill.l0_summary)}`,
       `title: ${JSON.stringify(skill.title)}`,
       `l0_summary: ${JSON.stringify(skill.l0_summary)}`,
+      ...(skill.trigger_cue ? [`trigger_cue: ${JSON.stringify(skill.trigger_cue)}`] : []),
+      ...(skill.confidence ? [`confidence: ${JSON.stringify(skill.confidence)}`] : []),
+      ...(skill.contrastive_evidence ? [`contrastive_evidence: ${JSON.stringify(skill.contrastive_evidence)}`] : []),
       `tags: ${JSON.stringify(skill.tags)}`,
       `origin: ${JSON.stringify(skill.origin)}`,
       ...(skill.supersedes_id ? [`supersedes_id: ${JSON.stringify(skill.supersedes_id)}`] : []),
@@ -485,12 +499,38 @@ export class EvoStorage {
       const { meta, body } = parseFrontmatter(raw);
       const l1Match = body.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
       const l2Match = body.match(/## L2 SOP\s+([\s\S]*)$/i);
+      const l1_contract = l1Match ? l1Match[1].trim() : body.slice(0, 300).trim();
+      const l2_sop = l2Match ? l2Match[1].trim() : body.trim();
+      const skillId = String(meta.id || cleanId);
+      const l0_summary = String(meta.l0_summary || meta.description || '');
+      const name = meta.name ? String(meta.name) : skillId;
+      const description = meta.description ? String(meta.description) : l0_summary;
+
+      let trigger_cue =
+        meta.trigger_cue && String(meta.trigger_cue).trim()
+          ? String(meta.trigger_cue).trim()
+          : undefined;
+      if (!trigger_cue && l1_contract) {
+        const triggerMatch = l1_contract.match(/-\s*\*\*Trigger\*\*:\s*([^\r\n]+)/i);
+        if (triggerMatch && triggerMatch[1].trim()) {
+          trigger_cue = triggerMatch[1].trim().slice(0, 90);
+        }
+      }
+
       return {
-        id: String(meta.id || cleanId),
+        id: skillId,
+        name,
+        description,
         title: String(meta.title || cleanId),
-        l0_summary: String(meta.l0_summary || ''),
-        l1_contract: l1Match ? l1Match[1].trim() : body.slice(0, 300).trim(),
-        l2_sop: l2Match ? l2Match[1].trim() : body.trim(),
+        l0_summary,
+        trigger_cue,
+        confidence:
+          meta.confidence && ['high', 'medium', 'low', 'confounded'].includes(String(meta.confidence))
+            ? (String(meta.confidence) as ConfidenceLevel)
+            : undefined,
+        contrastive_evidence: meta.contrastive_evidence ? String(meta.contrastive_evidence) : undefined,
+        l1_contract,
+        l2_sop,
         tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
         origin: String(meta.origin || 'session'),
         supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,
@@ -691,7 +731,12 @@ export class EvoStorage {
 
   // ==================== ARCHIVE / COMPACTION ====================
 
-  public archiveCapability(id: string, kind: EvoKind, reason: string): boolean {
+  public archiveCapability(
+    id: string,
+    kind: EvoKind,
+    reason: string,
+    extraMeta?: Record<string, unknown>
+  ): boolean {
     this.ensureInitialized();
     const cleanId = sanitizeId(id);
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -700,7 +745,15 @@ export class EvoStorage {
     if (kind === 'rule') {
       const rule = this.getRule(cleanId);
       if (!rule) return false;
-      fs.writeFileSync(archiveFile, JSON.stringify({ reason, archived_at: new Date().toISOString(), item: rule }, null, 2), 'utf8');
+      fs.writeFileSync(
+        archiveFile,
+        JSON.stringify(
+          { reason, archived_at: new Date().toISOString(), ...(extraMeta || {}), item: rule },
+          null,
+          2
+        ),
+        'utf8'
+      );
       const corePath = path.join(this.rulesDir, `${cleanId}.md`);
       const scopedPath = path.join(this.rulesDir, 'scoped', `${cleanId}.md`);
       if (fs.existsSync(corePath)) fs.unlinkSync(corePath);
@@ -712,7 +765,15 @@ export class EvoStorage {
     if (kind === 'skill') {
       const skill = this.getSkill(cleanId);
       if (!skill) return false;
-      fs.writeFileSync(archiveFile, JSON.stringify({ reason, archived_at: new Date().toISOString(), item: skill }, null, 2), 'utf8');
+      fs.writeFileSync(
+        archiveFile,
+        JSON.stringify(
+          { reason, archived_at: new Date().toISOString(), ...(extraMeta || {}), item: skill },
+          null,
+          2
+        ),
+        'utf8'
+      );
       fs.rmSync(path.join(this.skillsDir, cleanId), { recursive: true, force: true });
       return true;
     }
@@ -720,7 +781,15 @@ export class EvoStorage {
     if (kind === 'tool') {
       const tool = this.getTool(cleanId);
       if (!tool) return false;
-      fs.writeFileSync(archiveFile, JSON.stringify({ reason, archived_at: new Date().toISOString(), item: tool }, null, 2), 'utf8');
+      fs.writeFileSync(
+        archiveFile,
+        JSON.stringify(
+          { reason, archived_at: new Date().toISOString(), ...(extraMeta || {}), item: tool },
+          null,
+          2
+        ),
+        'utf8'
+      );
       fs.rmSync(path.join(this.toolsDir, cleanId), { recursive: true, force: true });
       return true;
     }
@@ -728,7 +797,15 @@ export class EvoStorage {
     if (kind === 'memory') {
       const memory = this.getMemory(cleanId);
       if (!memory) return false;
-      fs.writeFileSync(archiveFile, JSON.stringify({ reason, archived_at: new Date().toISOString(), item: memory }, null, 2), 'utf8');
+      fs.writeFileSync(
+        archiveFile,
+        JSON.stringify(
+          { reason, archived_at: new Date().toISOString(), ...(extraMeta || {}), item: memory },
+          null,
+          2
+        ),
+        'utf8'
+      );
       const memPath = path.join(this.memoriesDir, `${cleanId}.md`);
       if (fs.existsSync(memPath)) fs.unlinkSync(memPath);
       return true;
@@ -753,12 +830,102 @@ export function parseFrontmatter(raw: string): { meta: Record<string, unknown>; 
   const body = match[2];
   const meta: Record<string, unknown> = {};
 
-  for (const line of yamlBlock.split(/\r?\n/)) {
+  const lines = yamlBlock.split(/\r?\n/);
+  let currentKey: string | null = null;
+  let currentList: string[] | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const listMatch = line.match(/^\s*-\s+(.*)$/);
+    if (listMatch && currentKey) {
+      if (!currentList) {
+        currentList = [];
+        meta[currentKey] = currentList;
+      }
+      let val = listMatch[1].trim();
+      if (val.length >= 2 && val.startsWith("'") && val.endsWith("'")) {
+        val = val.slice(1, -1).replace(/''/g, "'");
+      } else if (val.startsWith('"') && val.endsWith('"')) {
+        try {
+          val = JSON.parse(val);
+        } catch {
+          val = val.slice(1, -1);
+        }
+      }
+      currentList.push(val);
+      continue;
+    }
+
+    currentKey = null;
+    currentList = null;
+
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
     const rawVal = line.slice(colonIdx + 1).trim();
     if (!key) continue;
+
+    currentKey = key;
+
+    // Check for YAML block scalars (>, >-, |, |+, |-) or empty rawVal followed by indented lines
+    const isBlockScalar =
+      rawVal === '>' || rawVal === '>-' || rawVal === '|' || rawVal === '|+' || rawVal === '|-';
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : '';
+    const nextIsIndentedText =
+      rawVal === '' &&
+      /^([ \t]{2,}|\t)[^\s-]/.test(nextLine);
+
+    if (isBlockScalar || nextIsIndentedText) {
+      const indentedLines: string[] = [];
+      let minIndent: number | null = null;
+      let j = i + 1;
+      while (j < lines.length) {
+        const candidate = lines[j];
+        if (candidate.trim() === '') {
+          indentedLines.push('');
+          j++;
+          continue;
+        }
+        const indentMatch = candidate.match(/^([ \t]+)(.*)$/);
+        if (!indentMatch || indentMatch[1].length < 2) {
+          break;
+        }
+        const indentLen = indentMatch[1].length;
+        if (minIndent === null || indentLen < minIndent) {
+          minIndent = indentLen;
+        }
+        indentedLines.push(candidate);
+        j++;
+      }
+
+      if (indentedLines.length > 0) {
+        i = j - 1;
+        const stripIndent = minIndent || 2;
+        const stripped = indentedLines.map((l) =>
+          l.length >= stripIndent ? l.slice(stripIndent) : l.trimStart()
+        );
+        const isFolded = rawVal.startsWith('>');
+        const isLiteral = rawVal.startsWith('|');
+        if (isFolded) {
+          meta[key] = stripped.join(' ').trim();
+        } else if (isLiteral) {
+          meta[key] = stripped.join('\n').trim();
+        } else {
+          meta[key] = stripped.join(' ').trim();
+        }
+        continue;
+      }
+    }
+
+    if (rawVal === '') {
+      continue;
+    }
+
+    if (rawVal.length >= 2 && rawVal.startsWith("'") && rawVal.endsWith("'")) {
+      meta[key] = rawVal.slice(1, -1).replace(/''/g, "'");
+      continue;
+    }
+
     try {
       meta[key] = JSON.parse(rawVal);
     } catch {

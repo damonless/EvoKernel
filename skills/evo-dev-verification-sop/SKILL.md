@@ -1,5 +1,8 @@
 ---
 id: evo-dev-verification-sop
+name: evo-dev-verification-sop
+description: "4-stage TDD, CodeGraph blast-radius pre-check, multi-consumer parity, and preflight verification SOP for EvoKernel."
+trigger_cue: "When modifying EvoKernel core modules, running TDD verification, or preparing a release"
 title: "EvoKernel Development, Blast-Radius & Preflight Verification SOP"
 l0_summary: "4-stage TDD, CodeGraph blast-radius pre-check, multi-consumer parity, and preflight verification SOP for EvoKernel."
 tags: []

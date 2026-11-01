@@ -597,7 +597,7 @@ function main() {
     );
   }
 
-  const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮根因诊断确认（含零代码修改的只读白盒排查）、假说证伪纠偏、代码修复或交付物验证后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，通用脚本沉淀为 tool，单点故障使用 memory），并在回复末尾输出 🧬 EvoKernel 演进回执。`;
+  const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮根因诊断确认（含零代码修改的只读白盒排查）、假说证伪纠偏、代码修复或交付物验证后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，多变量修改缺乏因果隔离时使用 memory 或提供 contrastive_evidence，通用脚本沉淀为 tool，单点故障使用 memory），并在回复末尾输出 🧬 EvoKernel 演进回执。`;
 
   process.stdout.write(
     JSON.stringify({

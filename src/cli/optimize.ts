@@ -1,0 +1,152 @@
+import * as path from 'node:path';
+import type {
+  OptimizationCycleOptions,
+  OptimizationResult,
+} from '../core/optimize.js';
+import { runOptimizationCycle } from '../core/optimize.js';
+
+export function parseStringFlag(args: string[], flag: string): string | undefined {
+  const eqArg = args.find((a) => a.startsWith(`${flag}=`));
+  if (eqArg) {
+    return eqArg.slice(flag.length + 1).trim() || undefined;
+  }
+  const idx = args.indexOf(flag);
+  if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
+    return args[idx + 1].trim();
+  }
+  return undefined;
+}
+
+export function parseMultiStringFlag(args: string[], flag: string): string[] {
+  const collected: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith(`${flag}=`)) {
+      const val = a.slice(flag.length + 1).trim();
+      if (val) {
+        for (const part of val.split(',')) {
+          if (part.trim()) collected.push(part.trim());
+        }
+      }
+    } else if (a === flag && args[i + 1] && !args[i + 1].startsWith('-')) {
+      for (const part of args[i + 1].split(',')) {
+        if (part.trim()) collected.push(part.trim());
+      }
+      i++;
+    }
+  }
+  return collected;
+}
+
+export function parseOptimizeFlags(
+  args: string[],
+  workspaceRoot: string
+): OptimizationCycleOptions & { json?: boolean } {
+  const taskText = parseStringFlag(args, '--task');
+  const taskFile = parseStringFlag(args, '--task-file');
+  const trajectories = parseMultiStringFlag(args, '--trajectory');
+  const deliverables = parseMultiStringFlag(args, '--deliverable');
+  const rawDim = parseStringFlag(args, '--dim');
+  const dim = rawDim === 'inv' || rawDim === 'dom' || rawDim === 'both' ? rawDim : 'both';
+
+  let k: number | undefined;
+  const kStr = parseStringFlag(args, '-k') || parseStringFlag(args, '--k');
+  if (kStr) {
+    const parsedK = Number.parseInt(kStr, 10);
+    if (Number.isFinite(parsedK) && parsedK > 0) {
+      k = parsedK;
+    }
+  }
+
+  const proposerCmd = parseStringFlag(args, '--proposer-cmd');
+  const probeCmd = parseStringFlag(args, '--probe-cmd');
+  const leakGlobs = parseMultiStringFlag(args, '--leak-glob');
+  const apply = args.includes('--apply');
+  const dryRun = args.includes('--dry-run');
+  const json = args.includes('--json');
+  const requireProbeImprovement = args.includes('--no-require-probe-improvement')
+    ? false
+    : args.includes('--require-probe-improvement')
+      ? true
+      : undefined;
+
+  return {
+    workspaceRoot,
+    taskText,
+    taskFile: taskFile ? path.resolve(workspaceRoot, taskFile) : undefined,
+    trajectories: trajectories.map((t) => path.resolve(workspaceRoot, t)),
+    deliverables: deliverables.map((d) => path.resolve(workspaceRoot, d)),
+    dim,
+    k,
+    proposerCmd,
+    probeCmd,
+    leakGlobs,
+    apply,
+    dryRun,
+    requireProbeImprovement,
+    json,
+  };
+}
+
+export function renderOptimizeReport(result: OptimizationResult): string {
+  const lines: string[] = [
+    '🧬 EvoKernel Optimize — Offline Evolution Cycle',
+    `  ├─ Run ID             : ${result.runId}`,
+    `  ├─ Workspace          : ${result.workspaceRoot}`,
+    `  ├─ Dimension Mode     : ${result.dim}`,
+    `  ├─ Execution Mode     : ${result.mode}`,
+    `  ├─ Trajectories       : ${result.trajectoriesAnalyzed} analyzed`,
+    `  ├─ Deliverables       : ${result.deliverablesInspected} inspected`,
+  ];
+
+  if (result.baseScore !== undefined) {
+    lines.push(`  ├─ Baseline Probe     : score=${result.baseScore} (passed=${result.basePassed})`);
+  }
+
+  if (result.candidates.length > 0) {
+    lines.push(`  ├─ Candidates Tested  : ${result.candidates.length}`);
+    for (const c of result.candidates) {
+      const status = c.passed ? 'PASSED' : 'REJECTED';
+      const scoreStr = result.baseScore !== undefined ? `, score=${c.score}` : '';
+      const tokenDeltaStr = c.coreTokenDelta !== 0 ? `, coreDelta=${c.coreTokenDelta > 0 ? '+' : ''}${c.coreTokenDelta}t` : '';
+      const attribStr = c.attribution ? `, attr=${c.attribution}` : '';
+      const notesStr = c.notes ? ` (${c.notes})` : '';
+      lines.push(`  │   - [${c.candidateId}] [${c.dim}] ${status}${scoreStr}${tokenDeltaStr}${attribStr}${notesStr}`);
+      if (c.gatekeeperError) {
+        lines.push(`  │     Gatekeeper Error: ${c.gatekeeperError}`);
+      }
+      if (c.auditError) {
+        lines.push(`  │     Audit Error     : ${c.auditError}`);
+      }
+    }
+  }
+
+  lines.push(`  ├─ Final Decision     : ${result.decision}`);
+
+  if (result.winningCandidate) {
+    const win = result.winningCandidate;
+    lines.push(`  ├─ Winning Candidate  : ${win.candidateId}`);
+    lines.push(`  ├─ Proposals Applied  : ${win.proposals.length} proposal(s), ${win.deletedIds.length} deletion(s)`);
+    lines.push(`  └─ Live Commit Status : ${result.applied ? 'APPLIED to workspace' : 'DRY-RUN / STAGED (use --apply to commit)'}`);
+  } else {
+    lines.push(`  └─ Resolution         : Base capabilities preserved unchanged.`);
+  }
+
+  return lines.join('\n');
+}
+
+export function runOptimizeCli(
+  args: string[],
+  workspaceRoot: string
+): OptimizationResult {
+  const flags = parseOptimizeFlags(args, workspaceRoot);
+  const result = runOptimizationCycle(flags);
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(renderOptimizeReport(result));
+  }
+
+  return result;
+}

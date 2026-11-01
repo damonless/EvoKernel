@@ -5,6 +5,7 @@ import {
   META_RULE_MARKER_END,
   META_RULE_MARKER_START,
 } from '../templates/meta-rule.js';
+import { EvoStorage } from '../core/storage.js';
 
 export interface HarnessInstallResult {
   updatedFiles: string[];
@@ -158,7 +159,7 @@ export function resolveEvoMcpLaunchConfig(workspaceRoot: string): {
 
 export function resolveEvoHookCommand(
   workspaceRoot: string,
-  hookEvent: 'post-tool' | 'stop'
+  hookEvent: 'pre-tool' | 'post-tool' | 'stop'
 ): string {
   const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
   if (fs.existsSync(localDistEntry)) {
@@ -405,13 +406,44 @@ export function removeCodexToml(filePath: string): boolean {
 // Claude Code Settings Hooks Utilities (.claude/settings.json)
 // ============================================================================
 
+export function isEvoHookCommand(cmd: string, needle?: string): boolean {
+  if (typeof cmd !== 'string') return false;
+  const expectedEv = needle ? needle.replace(/^hook\s+/i, '').trim().toLowerCase() : '';
+
+  if (/(?:^|[\s"'/\\])antigravity_hook\.mjs(?=["'\s]|$)/i.test(cmd)) {
+    if (!expectedEv) return true;
+    const agyRegex = new RegExp(`['"]?${expectedEv}['"]?|\\b${expectedEv}\\b`, 'i');
+    if (agyRegex.test(cmd)) return true;
+    if (expectedEv === 'pre-tool' && /\bPreInvocation\b/i.test(cmd)) return true;
+    if (expectedEv === 'stop' && /\bStop\b/i.test(cmd)) return true;
+    return false;
+  }
+
+  const evoRegex =
+    /(?:npx\s+(?:--yes\s+|-y\s+)?evo-kernel|(?:^|[\s"'/\\])evo(?:-kernel)?(?:\.cmd|\.ps1|\.exe)?(?=["'\s]|$)|(?:dist|src)[/\\]cli[/\\]index\.(?:js|mjs|ts)|boot-mcp\.mjs)(?:["']|\b)[^|;&\r\n]*?\bhook\s+(pre-tool|post-tool|stop|pre-commit|mark-recovery)\b/i;
+  for (const match of cmd.matchAll(new RegExp(evoRegex.source, 'gi'))) {
+    // A generic `dist/cli/index.js` inside node_modules belongs to whatever package
+    // hosts it (innermost node_modules/<pkg>/ segment of the path); only the
+    // evo-kernel package itself counts as an Evo hook.
+    if (/^(?:dist|src)[/\\]/i.test(match[0])) {
+      const prefix = cmd.slice(0, match.index ?? 0);
+      const nm = prefix.match(
+        /node_modules[/\\](?:@[^/\\\s"']+[/\\])?([^/\\\s"']+)[/\\](?:(?!node_modules[/\\])[^\s"'])*$/i
+      );
+      if (nm && nm[1].toLowerCase() !== 'evo-kernel') continue;
+    }
+    if (!expectedEv || match[1].toLowerCase() === expectedEv) return true;
+  }
+  return false;
+}
+
 function matchesClaudeHookEntry(entry: Record<string, unknown>, needle: string): boolean {
-  if (typeof entry?.command === 'string' && entry.command.includes(needle)) {
+  if (typeof entry?.command === 'string' && isEvoHookCommand(entry.command, needle)) {
     return true;
   }
   if (Array.isArray(entry?.hooks)) {
     return (entry.hooks as Array<Record<string, unknown>>).some(
-      (h) => typeof h?.command === 'string' && h.command.includes(needle)
+      (h) => typeof h?.command === 'string' && isEvoHookCommand(h.command, needle)
     );
   }
   return false;
@@ -422,9 +454,17 @@ export function upsertClaudeSettings(filePath: string, workspaceRoot: string): v
   let settings: Record<string, unknown> = {};
   if (fs.existsSync(filePath)) {
     try {
-      settings = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+      const parsedSettings: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (!parsedSettings || typeof parsedSettings !== 'object' || Array.isArray(parsedSettings)) {
+        throw new Error('settings root is not a JSON object');
+      }
+      settings = parsedSettings as Record<string, unknown>;
     } catch {
-      settings = {};
+      // Data-loss guard: never overwrite a user's unparseable / non-object settings file.
+      console.warn(
+        `[EvoKernel Warning] Skipped Claude hook wiring: ${filePath} is not a valid JSON object; fix it and re-run evo init.`
+      );
+      return;
     }
   }
 
@@ -490,6 +530,8 @@ export function removeClaudeSettings(filePath: string): boolean {
     if (settings.hooks && typeof settings.hooks === 'object') {
       const hooks = settings.hooks as Record<string, unknown>;
       for (const [key, needle] of [
+        ['PreToolUse', 'hook pre-tool'],
+        ['pre-tool', 'hook pre-tool'],
         ['PostToolUse', 'hook post-tool'],
         ['post-tool', 'hook post-tool'],
         ['Stop', 'hook stop'],
@@ -501,13 +543,15 @@ export function removeClaudeSettings(filePath: string): boolean {
             if (Array.isArray(entry?.hooks)) {
               const origInner = entry.hooks as Array<Record<string, unknown>>;
               const filteredInner = origInner.filter(
-                (h) => !(typeof h?.command === 'string' && h.command.includes(needle))
+                (h) => !(typeof h?.command === 'string' && isEvoHookCommand(h.command, needle))
               );
-              if (filteredInner.length !== origInner.length) {
+              if (filteredInner.length === origInner.length) {
+                nextEntries.push(entry);
+              } else {
                 modified = true;
-              }
-              if (filteredInner.length > 0) {
-                nextEntries.push({ ...entry, hooks: filteredInner });
+                if (filteredInner.length > 0) {
+                  nextEntries.push({ ...entry, hooks: filteredInner });
+                }
               }
             } else if (matchesClaudeHookEntry(entry, needle)) {
               modified = true;
@@ -538,6 +582,288 @@ export function removeClaudeSettings(filePath: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+export function syncDeclaredPreToolHooks(workspaceRoot: string): void {
+  const storage = new EvoStorage(workspaceRoot);
+  const evoExists = fs.existsSync(storage.evoDir);
+  const preToolTools = evoExists
+    ? storage.listTools().filter((t) => t.hook_trigger?.event === 'pre-tool')
+    : [];
+
+  let matcher = '*';
+  if (preToolTools.length > 0) {
+    const hasWildcardOrEmpty = preToolTools.some(
+      (t) =>
+        !t.hook_trigger?.tools ||
+        t.hook_trigger.tools.length === 0 ||
+        t.hook_trigger.tools.includes('*')
+    );
+    if (!hasWildcardOrEmpty) {
+      const toolNames = new Set<string>();
+      for (const t of preToolTools) {
+        for (const name of t.hook_trigger?.tools || []) {
+          for (const part of name.split('|')) {
+            const trimmed = part.trim();
+            if (trimmed) toolNames.add(trimmed);
+          }
+        }
+      }
+      matcher = Array.from(toolNames).join('|') || '*';
+    }
+  }
+
+  const preToolCmd = resolveEvoHookCommand(workspaceRoot, 'pre-tool');
+
+  // 1. Claude Code (.claude/settings.json & .claude/settings.local.json)
+  const syncClaudeSettingsFile = (targetSettingsPath: string) => {
+    try {
+      let settings: Record<string, unknown> = {};
+      if (fs.existsSync(targetSettingsPath)) {
+        try {
+          settings = JSON.parse(fs.readFileSync(targetSettingsPath, 'utf8')) as Record<string, unknown>;
+        } catch {
+          // Corrupt/unparseable user settings: never overwrite (data-loss guard).
+          return;
+        }
+        if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+          return;
+        }
+      }
+
+      if (settings.hooks && typeof settings.hooks === 'object') {
+        const hooks = settings.hooks as Record<string, unknown>;
+
+        if (Array.isArray(hooks.PreToolUse)) {
+          const nextList: Array<Record<string, unknown>> = [];
+          for (const entry of hooks.PreToolUse as Array<Record<string, unknown>>) {
+            if (Array.isArray(entry?.hooks)) {
+              const origInner = entry.hooks as Array<Record<string, unknown>>;
+              const filteredInner = origInner.filter(
+                (h) => !(typeof h?.command === 'string' && isEvoHookCommand(h.command, 'hook pre-tool'))
+              );
+              if (filteredInner.length === origInner.length) {
+                nextList.push(entry);
+              } else if (filteredInner.length > 0) {
+                nextList.push({ ...entry, hooks: filteredInner });
+              }
+            } else if (!matchesClaudeHookEntry(entry, 'hook pre-tool')) {
+              nextList.push(entry);
+            }
+          }
+          hooks.PreToolUse = nextList;
+        }
+
+        if (Array.isArray(hooks['pre-tool'])) {
+          const nextFlat: Array<Record<string, unknown>> = [];
+          for (const entry of hooks['pre-tool'] as Array<Record<string, unknown>>) {
+            if (Array.isArray(entry?.hooks)) {
+              const origInner = entry.hooks as Array<Record<string, unknown>>;
+              const filteredInner = origInner.filter(
+                (h) => !(typeof h?.command === 'string' && isEvoHookCommand(h.command, 'hook pre-tool'))
+              );
+              if (filteredInner.length === origInner.length) {
+                nextFlat.push(entry);
+              } else if (filteredInner.length > 0) {
+                nextFlat.push({ ...entry, hooks: filteredInner });
+              }
+            } else if (!matchesClaudeHookEntry(entry, 'hook pre-tool')) {
+              nextFlat.push(entry);
+            }
+          }
+          hooks['pre-tool'] = nextFlat;
+        }
+
+        if (preToolTools.length > 0) {
+          if (!Array.isArray(hooks.PreToolUse)) hooks.PreToolUse = [];
+          (hooks.PreToolUse as Array<Record<string, unknown>>).push({
+            matcher,
+            hooks: [{ type: 'command', command: preToolCmd }],
+          });
+
+          if (!Array.isArray(hooks['pre-tool'])) hooks['pre-tool'] = [];
+          (hooks['pre-tool'] as Array<Record<string, unknown>>).push({
+            command: preToolCmd,
+          });
+        } else {
+          if (Array.isArray(hooks.PreToolUse) && hooks.PreToolUse.length === 0) {
+            delete hooks.PreToolUse;
+          }
+          if (Array.isArray(hooks['pre-tool']) && hooks['pre-tool'].length === 0) {
+            delete hooks['pre-tool'];
+          }
+          if (Object.keys(hooks).length === 0) {
+            delete settings.hooks;
+          }
+        }
+
+        fs.writeFileSync(targetSettingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+      } else if (preToolTools.length > 0) {
+        settings.hooks = {
+          PreToolUse: [
+            {
+              matcher,
+              hooks: [{ type: 'command', command: preToolCmd }],
+            },
+          ],
+          'pre-tool': [
+            {
+              command: preToolCmd,
+            },
+          ],
+        };
+        fs.writeFileSync(targetSettingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+      }
+    } catch {
+      // ignore errors
+    }
+  };
+
+  const claudeSettingsPath = path.join(workspaceRoot, '.claude', 'settings.json');
+  const claudeLocalSettingsPath = path.join(workspaceRoot, '.claude', 'settings.local.json');
+
+  if (fs.existsSync(claudeSettingsPath)) {
+    syncClaudeSettingsFile(claudeSettingsPath);
+  }
+
+  if (fs.existsSync(claudeLocalSettingsPath)) {
+    const shouldSyncLocal =
+      !fs.existsSync(claudeSettingsPath) ||
+      (() => {
+        try {
+          const raw = fs.readFileSync(claudeLocalSettingsPath, 'utf8');
+          const parsedLocal = JSON.parse(raw) as Record<string, unknown>;
+          if (
+            parsedLocal &&
+            typeof parsedLocal === 'object' &&
+            parsedLocal.hooks &&
+            typeof parsedLocal.hooks === 'object'
+          ) {
+            const hooks = parsedLocal.hooks as Record<string, unknown>;
+            for (const key of Object.keys(hooks)) {
+              if (Array.isArray(hooks[key])) {
+                for (const entry of hooks[key] as Array<Record<string, unknown>>) {
+                  if (matchesClaudeHookEntry(entry, '')) {
+                    return true;
+                  }
+                }
+              }
+            }
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      })();
+
+    if (shouldSyncLocal) {
+      syncClaudeSettingsFile(claudeLocalSettingsPath);
+    }
+  }
+
+  // 2. Codex (.codex/hooks.json) - ONLY if .codex directory exists
+  const codexDir = path.join(workspaceRoot, '.codex');
+  if (fs.existsSync(codexDir)) {
+    const codexHooksPath = path.join(codexDir, 'hooks.json');
+    try {
+      if (preToolTools.length > 0) {
+        let parsed: Record<string, unknown> = { hooks: {} };
+        if (fs.existsSync(codexHooksPath)) {
+          // Corrupt/unparseable or non-object user file: never overwrite (data-loss guard).
+          // JSON.parse errors propagate to the outer catch, aborting the Codex sync.
+          parsed = JSON.parse(fs.readFileSync(codexHooksPath, 'utf8'));
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('codex hooks.json is not a JSON object');
+          }
+        }
+        if (!parsed.hooks || typeof parsed.hooks !== 'object' || Array.isArray(parsed.hooks)) {
+          parsed.hooks = {};
+        }
+        const hooks = parsed.hooks as Record<string, unknown>;
+
+        const existingList = Array.isArray(hooks.PreToolUse)
+          ? (hooks.PreToolUse as Array<Record<string, unknown>>)
+          : [];
+        const nextList: Array<Record<string, unknown>> = [];
+        for (const entry of existingList) {
+          if (Array.isArray(entry?.hooks)) {
+            const origInner = entry.hooks as Array<Record<string, unknown>>;
+            const inner = origInner.filter(
+              (h) => !(typeof h?.command === 'string' && isEvoHookCommand(h.command, 'hook pre-tool'))
+            );
+            if (inner.length === origInner.length) {
+              nextList.push(entry);
+            } else if (inner.length > 0) {
+              nextList.push({ ...entry, hooks: inner });
+            }
+          } else if (!(typeof entry?.command === 'string' && isEvoHookCommand(entry.command, 'hook pre-tool'))) {
+            nextList.push(entry);
+          }
+        }
+        nextList.push({
+          matcher,
+          hooks: [{ type: 'command', command: preToolCmd }],
+        });
+        hooks.PreToolUse = nextList;
+
+        fs.writeFileSync(codexHooksPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+      } else if (fs.existsSync(codexHooksPath)) {
+        // Unparseable user file: JSON.parse throws to the outer catch so the file is
+        // neither rewritten nor unlinked (data-loss guard).
+        const parsed = JSON.parse(fs.readFileSync(codexHooksPath, 'utf8')) as Record<string, unknown>;
+        let modified = false;
+        if (
+          parsed &&
+          typeof parsed === 'object' &&
+          !Array.isArray(parsed) &&
+          parsed.hooks &&
+          typeof parsed.hooks === 'object'
+        ) {
+          const hooks = parsed.hooks as Record<string, unknown>;
+          if (Array.isArray(hooks.PreToolUse)) {
+            const nextList: Array<Record<string, unknown>> = [];
+            for (const entry of hooks.PreToolUse as Array<Record<string, unknown>>) {
+              if (Array.isArray(entry?.hooks)) {
+                const origInner = entry.hooks as Array<Record<string, unknown>>;
+                const inner = origInner.filter(
+                  (h) => !(typeof h?.command === 'string' && isEvoHookCommand(h.command, 'hook pre-tool'))
+                );
+                if (inner.length === origInner.length) {
+                  nextList.push(entry);
+                } else {
+                  modified = true;
+                  if (inner.length > 0) nextList.push({ ...entry, hooks: inner });
+                }
+              } else if (!(typeof entry?.command === 'string' && isEvoHookCommand(entry.command, 'hook pre-tool'))) {
+                nextList.push(entry);
+              } else {
+                modified = true;
+              }
+            }
+            if (modified) {
+              if (nextList.length > 0) {
+                hooks.PreToolUse = nextList;
+              } else {
+                delete hooks.PreToolUse;
+              }
+              if (Object.keys(hooks).length === 0) {
+                delete parsed.hooks;
+              }
+            }
+          }
+        }
+        if (modified) {
+          if (Object.keys(parsed).length === 0) {
+            fs.unlinkSync(codexHooksPath);
+          } else {
+            fs.writeFileSync(codexHooksPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -627,10 +953,12 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
       }
     }
     if (typeof parsed.instructions === 'string' && parsed.instructions.includes(META_RULE_MARKER_START)) {
-      parsed.instructions = removeMarkerBlock(parsed.instructions);
+      const cleanedInstructions = removeMarkerBlock(parsed.instructions);
       modified = true;
-      if (!parsed.instructions.trim()) {
+      if (!cleanedInstructions.trim()) {
         delete parsed.instructions;
+      } else {
+        parsed.instructions = cleanedInstructions;
       }
     }
 
@@ -768,6 +1096,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     if (cleanRuleFile(path.join(ws, 'CLAUDE.md'))) cleaned.push('CLAUDE.md');
     if (removeMcpJson(path.join(ws, '.mcp.json'))) cleaned.push('.mcp.json');
     if (removeClaudeSettings(path.join(ws, '.claude', 'settings.json'))) cleaned.push('.claude/settings.json');
+    if (removeClaudeSettings(path.join(ws, '.claude', 'settings.local.json'))) cleaned.push('.claude/settings.local.json');
     pruneEmptyDirs(ws, this.dirs);
     return cleaned;
   }
@@ -1072,6 +1401,12 @@ export class CodexAdapter implements HarnessAdapter {
     const tomlPath = path.join(ws, '.codex', 'config.toml');
     upsertCodexToml(tomlPath, ws);
 
+    try {
+      syncDeclaredPreToolHooks(ws);
+    } catch {
+      // ignore hook sync errors during install
+    }
+
     return {
       updatedFiles: ['AGENTS.md'],
       mcpConfigFiles: ['.codex/config.toml'],
@@ -1082,6 +1417,67 @@ export class CodexAdapter implements HarnessAdapter {
     const cleaned: string[] = [];
     if (cleanRuleFile(path.join(ws, 'AGENTS.md'))) cleaned.push('AGENTS.md');
     if (removeCodexToml(path.join(ws, '.codex', 'config.toml'))) cleaned.push('.codex/config.toml');
+
+    const codexHooksPath = path.join(ws, '.codex', 'hooks.json');
+    if (fs.existsSync(codexHooksPath)) {
+      try {
+        const raw = fs.readFileSync(codexHooksPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        let modified = false;
+        if (parsed && typeof parsed === 'object' && parsed.hooks && typeof parsed.hooks === 'object') {
+          const hooks = parsed.hooks as Record<string, unknown>;
+          for (const ev of Object.keys(hooks)) {
+            if (Array.isArray(hooks[ev])) {
+              const origList = hooks[ev] as Array<Record<string, unknown>>;
+              const nextList: Array<Record<string, unknown>> = [];
+              for (const entry of origList) {
+                if (Array.isArray(entry?.hooks)) {
+                  const origInner = entry.hooks as Array<Record<string, unknown>>;
+                  const inner = origInner.filter(
+                    (h) => !(typeof h?.command === 'string' && isEvoHookCommand(h.command))
+                  );
+                  if (inner.length === origInner.length) {
+                    nextList.push(entry);
+                  } else {
+                    modified = true;
+                    if (inner.length > 0) {
+                      nextList.push({ ...entry, hooks: inner });
+                    }
+                  }
+                } else if (!(typeof entry?.command === 'string' && isEvoHookCommand(entry.command))) {
+                  nextList.push(entry);
+                } else {
+                  modified = true;
+                }
+              }
+              hooks[ev] = nextList;
+              if (nextList.length === 0) {
+                delete hooks[ev];
+              }
+            }
+          }
+          if (Object.keys(hooks).length === 0) {
+            delete parsed.hooks;
+            modified = true;
+          }
+        }
+        if (Object.keys(parsed).length === 0) {
+          modified = true;
+        }
+        if (modified) {
+          if (Object.keys(parsed).length === 0) {
+            fs.unlinkSync(codexHooksPath);
+            cleaned.push('.codex/hooks.json');
+          } else {
+            fs.writeFileSync(codexHooksPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+            cleaned.push('.codex/hooks.json');
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     pruneEmptyDirs(ws, this.dirs);
     return cleaned;
   }

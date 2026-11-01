@@ -2411,7 +2411,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.ok(warnRes.warning, 'Warning must be emitted when orthogonal clauses are removed');
       assert.match(warnRes.warning, /ORTHOGONAL CLAUSE WARNING/);
 
-      const compWarn = warnRes.diagnostics.superseded_comparison as {
+      const compWarn = warnRes.diagnostics!.superseded_comparison as {
         superseded_id: string;
         clause_count_before: number;
         clause_count_after: number;
@@ -2470,7 +2470,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(preserveRes.passed, true);
       assert.equal(preserveRes.warning, undefined, 'No warning when all orthogonal clauses are preserved');
 
-      const compPreserve = preserveRes.diagnostics.superseded_comparison as {
+      const compPreserve = preserveRes.diagnostics!.superseded_comparison as {
         superseded_id: string;
         clause_count_before: number;
         clause_count_after: number;
@@ -2626,7 +2626,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         solution: 'Solution',
         target_symbols: ['src/mod.ts#deadCommentSymbol', 'src/mod.ts#liveSymbol'],
         tags: [],
-        ast_fingerprints: [],
+        ast_fingerprints: {},
         created_commit: 'HEAD',
         origin: 'session',
         created_at: new Date().toISOString(),

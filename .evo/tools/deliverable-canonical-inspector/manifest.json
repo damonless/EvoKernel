@@ -1,0 +1,30 @@
+{
+  "id": "deliverable-canonical-inspector",
+  "title": "Deliverable Canonical Consumer-Reader & Shape Conformance Inspector",
+  "l0_summary": "Zero-dep canonical reader & defect detector for .xlsx, .docx, .pptx, .csv, .json, and .md deliverable artifacts.",
+  "runtime": "node",
+  "entry_script": "run.mjs",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "filePath": {
+        "type": "string",
+        "description": "Path to the deliverable file to inspect (relative to workspace or absolute)"
+      },
+      "expectedShape": {
+        "type": "object",
+        "description": "Optional expected shape constraints (sheets, headers, strictColumns, headings, requiredKeys)"
+      },
+      "checkPlaceholders": {
+        "type": "boolean",
+        "description": "Whether to check for unresolved placeholder leaks (default: true)"
+      }
+    },
+    "required": ["filePath"]
+  },
+  "self_test_args": {},
+  "timeout_ms": 10000,
+  "origin": "bootstrap",
+  "created_at": "2026-10-31T00:00:00.000Z",
+  "updated_at": "2026-10-31T00:00:00.000Z"
+}
