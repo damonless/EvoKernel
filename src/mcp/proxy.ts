@@ -237,7 +237,7 @@ export class McpClientConnection {
         workspaceFolders: [{ uri: rootUri, name: rootName }],
         clientInfo: {
           name: 'evo-kernel-proxy',
-          version: '0.1.0',
+          version: '0.2.0',
         },
       });
 

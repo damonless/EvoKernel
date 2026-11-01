@@ -57,7 +57,7 @@ export function startMcpStdioServer(workspaceRoot: string): void {
           },
           serverInfo: {
             name: 'evo-kernel',
-            version: '0.1.0',
+            version: '0.2.0',
           },
         });
         break;

@@ -2,14 +2,14 @@
 id: worktree-probe-score-improvement
 title: "Worktree Probe Improvement On Failing Baseline"
 l0_summary: "Worktree probe score evaluation when baseline probe failed"
-created_commit: "1415aa2"
+created_commit: "5ae46a8"
 created_branch: "feat/harness2-integration"
 target_symbols: ["probeCandidateInWorktree","runOptimizationCycle"]
 ast_fingerprints: {"probeCandidateInWorktree":{"symbol":"probeCandidateInWorktree","file_path":"src/core/optimize.ts","file":"src/core/optimize.ts","kind":"function","start_line":1390,"end_line":1631,"signature":"export function probeCandidateInWorktree(","ast_hash":"7a1a75a47edd8446"},"runOptimizationCycle":{"symbol":"runOptimizationCycle","file_path":"src/core/optimize.ts","file":"src/core/optimize.ts","kind":"function","start_line":1672,"end_line":1673,"signature":"export function runOptimizationCycle(","ast_hash":"9107fba7af611516"}}
 tags: []
 origin: "evolved"
 created_at: "2026-10-31T09:47:58.578Z"
-updated_at: "2026-10-31T14:59:40.895Z"
+updated_at: "2026-11-01T14:33:25.855Z"
 ---
 
 ## Symptom

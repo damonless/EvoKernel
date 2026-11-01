@@ -90,14 +90,68 @@ export function normalizePath(val) {
   return normalizeTranscriptString(val).replace(/[\\/]+/g, '/');
 }
 
-function readStdinJson() {
+function readStdinJson(timeoutMs = 50) {
   try {
-    const raw = fs.readFileSync(0, 'utf8').trim();
-    if (!raw) return {};
-    return JSON.parse(raw);
+    if (process.stdin.isTTY) return Promise.resolve({});
+    const stat = fs.fstatSync(0);
+    if (stat.isFile()) {
+      if (stat.size === 0) return Promise.resolve({});
+      const raw = fs.readFileSync(0, 'utf8').trim();
+      return Promise.resolve(raw ? JSON.parse(raw) : {});
+    }
   } catch {
-    return {};
+    // fstat failed, proceed with stream
   }
+
+  return new Promise((resolve) => {
+    let data = '';
+    let settled = false;
+
+    function finish(raw) {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        try { process.stdin.pause(); } catch {}
+        try { process.stdin.destroy(); } catch {}
+        try {
+          resolve(raw && raw.trim() ? JSON.parse(raw.trim()) : {});
+        } catch {
+          resolve({});
+        }
+      }
+    }
+
+    const timer = setTimeout(() => {
+      finish(data);
+    }, timeoutMs);
+
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      data += chunk;
+      try {
+        const parsed = JSON.parse(data.trim());
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          try { process.stdin.pause(); } catch {}
+          try { process.stdin.destroy(); } catch {}
+          resolve(parsed);
+        }
+      } catch {
+        // waiting for more chunks
+      }
+    });
+
+    process.stdin.on('end', () => {
+      finish(data);
+    });
+
+    process.stdin.on('error', () => {
+      finish('');
+    });
+
+    process.stdin.resume();
+  });
 }
 
 function readTranscriptTailSteps(transcriptPath) {
@@ -153,9 +207,25 @@ function saveHookState(statePath, state) {
   }
 }
 
-function main() {
+async function main() {
+  if (
+    process.argv.includes('--help') ||
+    process.argv.includes('-h') ||
+    process.argv[2] === 'help' ||
+    process.argv[2] === '--help' ||
+    process.argv[2] === '-h'
+  ) {
+    process.stdout.write(`Usage: node scripts/antigravity_hook.mjs [PreInvocation|Stop] [options]
+
+Antigravity native hook handler for EvoKernel evolution reminder injection and session stop handling.
+
+Options:
+  -h, --help  Show this help message
+`);
+    return;
+  }
   const event = process.argv[2] || 'PreInvocation';
-  const input = readStdinJson();
+  const input = await readStdinJson();
   const conversationId = String(input.conversationId || input.conversation_id || 'default');
   const statePath = path.join(os.tmpdir(), 'evo-agy-hook-state.json');
 
@@ -612,10 +682,8 @@ const isDirectRun =
     path.resolve(import.meta.filename).toLowerCase();
 
 if (isDirectRun) {
-  try {
-    main();
-  } catch {
+  main().catch(() => {
     process.stdout.write('{}\n');
     process.exit(0);
-  }
+  });
 }

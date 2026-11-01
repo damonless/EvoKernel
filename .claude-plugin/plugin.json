@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel",
-  "version": "0.1.0",
-  "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory for AI Coding Agents",
+  "version": "0.2.0",
+  "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory with Offline Worktree Evolution, Deliverable Inspection, and Fixed 5-Tool Meta-MCP Gateway for AI Coding Agents",
   "author": {
     "name": "EvoKernel Contributors"
   },

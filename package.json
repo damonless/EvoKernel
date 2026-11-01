@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel",
-  "version": "0.1.0",
-  "description": "Deterministic Self-Evolving Meta-Kernel for AI Coding Agents — Evolves Rules, Skills, and Sandboxed Micro-Tools via a Single Fixed Meta-MCP Gateway with Zero Prompt-Cache Invalidation.",
+  "version": "0.2.0",
+  "description": "Deterministic Self-Evolving Meta-Kernel for AI Coding Agents — Offline Git Worktree Evolution, Deliverable Canonical Inspection, AST Cognitive Memory, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway.",
   "type": "module",
   "bin": {
     "evo": "./dist/cli/index.js",
@@ -54,7 +54,12 @@
     "gemini-cli",
     "skills",
     "rules",
-    "context-engineering"
+    "context-engineering",
+    "offline-evolution",
+    "worktree-optimization",
+    "deliverable-inspector",
+    "causal-telemetry",
+    "anti-confounding"
   ],
   "author": "EvoKernel Contributors",
   "license": "MIT",

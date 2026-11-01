@@ -17,7 +17,7 @@ import type {
 } from './types.js';
 
 export const DEFAULT_EVO_CONFIG: EvoConfig = {
-  version: '0.1.0',
+  version: '0.2.0',
   maxCoreRuleTokens: 1500,
   maxScopedRulesPerBucket: 3,
   maxTotalScopedRules: 12,

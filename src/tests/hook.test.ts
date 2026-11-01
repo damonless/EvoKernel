@@ -3,7 +3,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   handlePostTool,
   handlePreCommit,
@@ -975,6 +975,117 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     );
     assert.equal(stopWithCorrection.crystallizationSuggested, true);
     assert.match(stopWithCorrection.output, /user correction \/ counter-question detected/);
+  });
+
+  test('34. Dimension 8: CLI hook --help and -h print help and exit 0 without side effects', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    for (const flag of ['--help', '-h']) {
+      const proc = spawnSync(process.execPath, [cliEntry, 'hook', flag], {
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(proc.status, 0);
+      assert.match(proc.stdout, /Usage:/);
+      assert.match(proc.stdout, /evo hook <event> \[options\]/);
+      assert.match(proc.stdout, /Universal lifecycle hook router/);
+    }
+  });
+
+  test('35. Dimension 8: CLI optimize --help and -h print help and exit 0 without running cycle', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const optimizeCacheDir = path.join(ws, '.evo', '.cache', 'optimize');
+    assert.equal(fs.existsSync(optimizeCacheDir), false);
+
+    for (const flag of ['--help', '-h']) {
+      const proc = spawnSync(process.execPath, [cliEntry, 'optimize', flag, '--workspace', ws], {
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(proc.status, 0);
+      assert.match(proc.stdout, /Usage:/);
+      assert.match(proc.stdout, /evo optimize \[options\]/);
+      assert.match(proc.stdout, /Offline Git worktree optimization cycle/);
+      // Ensure no optimization cache run directory was created
+      assert.equal(fs.existsSync(optimizeCacheDir), false);
+    }
+  });
+
+  test('36. Dimension 8: scripts/antigravity_hook.mjs --help and -h print help and exit 0', () => {
+    const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
+    for (const flag of ['--help', '-h']) {
+      const proc = spawnSync(process.execPath, [hookScript, flag], {
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(proc.status, 0);
+      assert.match(proc.stdout, /Usage:/);
+      assert.match(proc.stdout, /antigravity_hook\.mjs/);
+    }
+  });
+
+  test('37. Dimension 8: Open-idle-pipe stdin does NOT hang CLI hook stop or post-tool subprocess', async () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const t0 = Date.now();
+    const child = spawn(process.execPath, [cliEntry, 'hook', 'stop', '--workspace', ws], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    // Open idle pipe: parent writes nothing and does NOT call child.stdin.end()
+    let stdout = '';
+    child.stdout?.on('data', (d) => { stdout += d; });
+    const code = await new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve(-999);
+      }, 4000);
+      child.on('close', (status) => {
+        clearTimeout(timer);
+        resolve(status);
+      });
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(code, 0, `Subprocess hung or failed with code ${code}`);
+    assert.ok(elapsed < 3000, `Took ${elapsed}ms, should exit well within timeout`);
+  });
+
+  test('38. Dimension 8: Open-idle-pipe stdin does NOT hang scripts/antigravity_hook.mjs subprocess', async () => {
+    const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
+    const t0 = Date.now();
+    const child = spawn(process.execPath, [hookScript, 'PreInvocation'], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    let stdout = '';
+    child.stdout?.on('data', (d) => { stdout += d; });
+    const code = await new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve(-999);
+      }, 4000);
+      child.on('close', (status) => {
+        clearTimeout(timer);
+        resolve(status);
+      });
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(code, 0, `Subprocess hung or failed with code ${code}`);
+    assert.ok(elapsed < 3000, `Took ${elapsed}ms, should exit well within timeout`);
+    assert.equal(stdout.trim(), '{}');
+  });
+
+  test('39. Dimension 8: scripts/antigravity_hook.mjs correctly receives piped JSON on stdin', async () => {
+    const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
+    const child = spawn(process.execPath, [hookScript, 'Stop'], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    let stdout = '';
+    child.stdout?.on('data', (d) => { stdout += d; });
+    child.stdin?.write(JSON.stringify({ conversationId: 'conv-stop-test-id' }));
+    child.stdin?.end();
+    const code = await new Promise<number | null>((resolve) => {
+      child.on('close', resolve);
+    });
+    assert.equal(code, 0);
+    const parsed = JSON.parse(stdout.trim());
+    assert.equal(parsed.decision, 'allow');
   });
 });
 

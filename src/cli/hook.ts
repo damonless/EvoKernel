@@ -269,9 +269,12 @@ function resolvePayload(options: HookOptions): Record<string, unknown> {
     !process.argv[1]?.endsWith('.test.js')
   ) {
     try {
-      const rawStdin = fs.readFileSync(0, 'utf8').trim();
-      if (rawStdin) {
-        return JSON.parse(rawStdin) as Record<string, unknown>;
+      const stat = fs.fstatSync(0);
+      if (stat.isFile() && stat.size > 0) {
+        const rawStdin = fs.readFileSync(0, 'utf8').trim();
+        if (rawStdin) {
+          return JSON.parse(rawStdin) as Record<string, unknown>;
+        }
       }
     } catch {
       // Ignore empty/unavailable stdin or invalid JSON

@@ -18,9 +18,107 @@ import {
 import { EvoTelemetry } from '../core/telemetry.js';
 import { refreshMemories, verifyMemoryFreshness } from '../core/memory.js';
 
+export function printHookHelp(): void {
+  console.log(`
+Usage:
+  evo hook <event> [options]
+
+Universal lifecycle hook router for anti-forgetting evolution enforcement and git pre-commit audit.
+
+Events:
+  pre-tool      Pre-tool execution guard hook
+  post-tool     Post-tool execution guard hook (tracks mutations & injects reminders)
+  stop          Post-session stop hook (detects uncommitted fixes / corrections)
+  pre-commit    Git pre-commit hook (validates tokens, cache exclusion, and rule integrity)
+  mark-recovery Records error-recovery telemetry for recent capability usage
+
+Options:
+  --payload <json>   Hook event payload as JSON string
+  --workspace <path> Target workspace directory (default: current directory)
+  --dry-run          Simulate hook execution without modifying telemetry or git state
+  -h, --help         Show this help message
+`);
+}
+
+export function printOptimizeHelp(): void {
+  console.log(`
+Usage:
+  evo optimize [options]
+
+Offline Git worktree optimization cycle for autonomous capability evolution.
+
+Options:
+  --dim <inv|dom|both>      Target dimension: invariant, domain, or both (default: both)
+  -k, --rounds <N>          Maximum optimization rounds (default: 3)
+  --proposer-cmd <cmd>      Command to propose candidate rule/memory modifications
+  --probe-cmd <cmd>         Verification probe command to validate candidate worktrees
+  --trajectory <file>       Path to session transcript or trajectory JSONL file
+  --deliverable <file>      Target deliverable file for canonical defect inspection
+  --apply                   Automatically commit winning candidates to workspace
+  --json                    Output optimization summary in JSON format
+  --workspace <path>        Target workspace directory (default: current directory)
+  -h, --help                Show this help message
+`);
+}
+
+export function readStdinTextWithTimeout(timeoutMs: number = 50): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      if (process.stdin.isTTY) {
+        return resolve('');
+      }
+      const stat = fs.fstatSync(0);
+      if (stat.isFile()) {
+        if (stat.size === 0) return resolve('');
+        return resolve(fs.readFileSync(0, 'utf8').trim());
+      }
+    } catch {
+      // fstat failed, continue to stream
+    }
+
+    let data = '';
+    let settled = false;
+
+    function finish(res: string): void {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        try { process.stdin.pause(); } catch {}
+        try { process.stdin.destroy(); } catch {}
+        resolve(res);
+      }
+    }
+
+    const timer = setTimeout(() => {
+      finish(data.trim());
+    }, timeoutMs);
+
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk: string) => {
+      data += chunk;
+      try {
+        JSON.parse(data.trim());
+        finish(data.trim());
+      } catch {
+        // waiting for more chunks
+      }
+    });
+
+    process.stdin.on('end', () => {
+      finish(data.trim());
+    });
+
+    process.stdin.on('error', () => {
+      finish('');
+    });
+
+    process.stdin.resume();
+  });
+}
+
 function printHelp(): void {
   console.log(`
-🧬 EvoKernel v0.1.0 — Deterministic Self-Evolving Meta-Kernel & Cognitive Memory for AI Agents
+🧬 EvoKernel v0.2.0 — Deterministic Self-Evolving Meta-Kernel & Cognitive Memory for AI Agents
 
 Usage:
   evo <command> [options]
@@ -297,8 +395,35 @@ export function runCli(argv: string[]): void {
     }
 
     case 'hook': {
+      if (
+        args.includes('--help') ||
+        args.includes('-h') ||
+        args[1] === 'help' ||
+        args[1] === '--help' ||
+        args[1] === '-h'
+      ) {
+        printHookHelp();
+        break;
+      }
       const event = parseHookEvent(args);
       const payload = parseHookPayloadArg(args);
+
+      if (!process.stdin.isTTY && !process.argv[1]?.endsWith('.test.js') && !payload) {
+        return readStdinTextWithTimeout(50).then((stdinData) => {
+          const result = runHook(event, {
+            workspaceRoot,
+            payload,
+            stdinData: stdinData || undefined,
+          });
+          if (result.output) {
+            console.log(result.output);
+          }
+          if (result.exitCode !== 0) {
+            process.exit(result.exitCode);
+          }
+        });
+      }
+
       const result = runHook(event, {
         workspaceRoot,
         payload,
@@ -313,6 +438,16 @@ export function runCli(argv: string[]): void {
     }
 
     case 'optimize': {
+      if (
+        args.includes('--help') ||
+        args.includes('-h') ||
+        args[1] === 'help' ||
+        args[1] === '--help' ||
+        args[1] === '-h'
+      ) {
+        printOptimizeHelp();
+        break;
+      }
       runOptimizeCli(args, workspaceRoot);
       break;
     }

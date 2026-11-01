@@ -4,9 +4,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 if (process.env.EVO_SELF_TEST === '1' || process.argv.includes('--self-test')) {
-  const sampleManifest = JSON.stringify({ name: 'evo-kernel', version: '0.1.0' });
+  const sampleManifest = JSON.stringify({ name: 'evo-kernel', version: '0.2.0' });
   const parsed = JSON.parse(sampleManifest);
-  if (parsed.name !== 'evo-kernel' || parsed.version !== '0.1.0') {
+  if (parsed.name !== 'evo-kernel' || parsed.version !== '0.2.0') {
     process.exit(1);
   }
   console.log(JSON.stringify({ self_test: 'passed', tool: 'evo-release-preflight' }));
@@ -50,7 +50,7 @@ const dotMcp = readJsonSafe('.mcp.json');
 const cursorMcp = readJsonSafe('.cursor/mcp.json');
 readJsonSafe('hooks.json');
 
-const expectedVersion = pkg?.version || '0.1.0';
+const expectedVersion = pkg?.version || '0.2.0';
 for (const [name, obj] of [
   ['plugin.json', pluginJson],
   ['.claude-plugin/plugin.json', claudePlugin],
@@ -59,6 +59,15 @@ for (const [name, obj] of [
 ]) {
   if (obj && obj.version !== expectedVersion) {
     issues.push(`Version mismatch in ${name}: expected ${expectedVersion}, got ${obj.version}`);
+  }
+}
+
+if (claudeMarketplace?.plugins && Array.isArray(claudeMarketplace.plugins)) {
+  for (let i = 0; i < claudeMarketplace.plugins.length; i++) {
+    const p = claudeMarketplace.plugins[i];
+    if (p && p.version !== expectedVersion) {
+      issues.push(`Version mismatch in .claude-plugin/marketplace.json plugins[${i}]: expected ${expectedVersion}, got ${p.version}`);
+    }
   }
 }
 

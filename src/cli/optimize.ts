@@ -135,10 +135,50 @@ export function renderOptimizeReport(result: OptimizationResult): string {
   return lines.join('\n');
 }
 
+export function renderOptimizeHelp(): string {
+  return `
+Usage:
+  evo optimize [options]
+
+Offline Git worktree optimization cycle for autonomous capability evolution.
+
+Options:
+  --dim <inv|dom|both>      Target dimension: invariant, domain, or both (default: both)
+  -k, --rounds <N>          Maximum optimization rounds (default: 3)
+  --proposer-cmd <cmd>      Command to propose candidate rule/memory modifications
+  --probe-cmd <cmd>         Verification probe command to validate candidate worktrees
+  --trajectory <file>       Path to session transcript or trajectory JSONL file
+  --deliverable <file>      Target deliverable file for canonical defect inspection
+  --apply                   Automatically commit winning candidates to workspace
+  --json                    Output optimization summary in JSON format
+  --workspace <path>        Target workspace directory (default: current directory)
+  -h, --help                Show this help message
+`.trim();
+}
+
 export function runOptimizeCli(
   args: string[],
   workspaceRoot: string
 ): OptimizationResult {
+  if (
+    args.includes('--help') ||
+    args.includes('-h') ||
+    args[0] === 'help' ||
+    args[0] === '--help' ||
+    args[0] === '-h'
+  ) {
+    console.log(renderOptimizeHelp());
+    return {
+      runId: 'help',
+      success: true,
+      cyclesExecuted: 0,
+      adoptedCandidates: 0,
+      applied: false,
+      invariant: { score: 0, passed: true, details: 'help' },
+      domain: { score: 0, passed: true, details: 'help' },
+    };
+  }
+
   const flags = parseOptimizeFlags(args, workspaceRoot);
   const result = runOptimizationCycle(flags);
 
