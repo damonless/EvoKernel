@@ -22,11 +22,11 @@ const testFiles = [
   path.join(rootDir, 'dist', 'tests', 'hook.test.js'),
   path.join(rootDir, 'dist', 'tests', 'bootstrap.test.js'),
   path.join(rootDir, 'dist', 'tests', 'mcp-proxy.test.js'),
-  path.join(rootDir, 'dist', 'tests', 'harness2-wave1.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'lifecycle-guard-hooks.test.js'),
   path.join(rootDir, 'dist', 'tests', 'deliverable-inspector.test.js'),
-  path.join(rootDir, 'dist', 'tests', 'harness2-borrowings.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'causal-telemetry-and-catalog.test.js'),
   path.join(rootDir, 'dist', 'tests', 'optimize.test.js'),
-  path.join(rootDir, 'dist', 'tests', 'harness2-wave4-audit.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'surface-audit-and-hardening.test.js'),
 ].filter((f) => fs.existsSync(f));
 
 const testArgs = [

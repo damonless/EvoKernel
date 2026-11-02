@@ -335,17 +335,27 @@ EvoKernel 拥有纯原生的测试套件，由 Node 原生测试运行器（`nod
 node ./scripts/test.mjs
 ```
 
-全量 10 大测试套件（242 个测试用例）在 ~19 秒内全数通过：
+全量 10 大测试套件（243 个测试用例）在 ~19 秒内全数通过：
 1. `dist/tests/bootstrap.test.js`: 冷启动技术栈探测与 Git Fix 基因挖掘套件 (22 tests)
-2. `dist/tests/deliverable-inspector.test.js`: 零依赖交付物规范化解析与缺陷审查套件 (33 tests)
-3. `dist/tests/evo-kernel.test.js`: 核心门禁、沙盒、AST 认知记忆与核心规范套件 (44 tests)
-4. `dist/tests/harness2-borrowings.test.js`: 因果归因三态遥测与防混杂门禁套件 (17 tests)
-5. `dist/tests/harness2-wave1.test.js`: 第一波宿主与生命周期钩子加固套件 (27 tests)
-6. `dist/tests/harness2-wave4-audit.test.js`: 多宿主静默失败矩阵审计与防御套件 (32 tests)
-7. `dist/tests/hook.test.js`: 通用钩子路由与空管道 Stdin 非阻塞弹性套件 (27 tests)
-8. `dist/tests/mcp-proxy.test.js`: 下游 MCP 动态虚拟化代理握手与路由套件 (10 tests)
-9. `dist/tests/multi-harness.test.js`: 10 大智能体宿主无损配置合并与隐身排除套件 (14 tests)
-10. `dist/tests/optimize.test.js`: 离线 Git Worktree 演化优化引擎套件 (16 tests)
+2. `dist/tests/causal-telemetry-and-catalog.test.js`: 因果归因三态遥测与防混杂门禁套件 (17 tests)
+3. `dist/tests/deliverable-inspector.test.js`: 零依赖交付物规范化解析与缺陷审查套件 (33 tests)
+4. `dist/tests/evo-kernel.test.js`: 核心门禁、沙盒、AST 认知记忆与核心规范套件 (45 tests)
+5. `dist/tests/hook.test.js`: 通用钩子路由与空管道 Stdin 非阻塞弹性套件 (27 tests)
+6. `dist/tests/lifecycle-guard-hooks.test.js`: 生命周期防线钩子、触发线索与引用完整性套件 (27 tests)
+7. `dist/tests/mcp-proxy.test.js`: 下游 MCP 动态虚拟化代理握手与路由套件 (10 tests)
+8. `dist/tests/multi-harness.test.js`: 10 大智能体宿主无损配置合并与隐身排除套件 (14 tests)
+9. `dist/tests/optimize.test.js`: 离线 Git Worktree 演化优化引擎套件 (16 tests)
+10. `dist/tests/surface-audit-and-hardening.test.js`: 多宿主静默失败矩阵审计与防御加固套件 (32 tests)
+
+---
+
+## 🙏 致谢与架构参考 (Acknowledgments & Architecture References)
+
+EvoKernel 是基于 Node.js 22 原生模块（`node:sqlite`、`node:test`、`stripTypeScriptTypes`）从零独立构建的零第三方依赖开源工程运行时。其架构设计融合并发展了智能体系统与软件工程社区的前沿思想：
+
+- **渐进式披露与上下文工程 (Progressive Disclosure & Context Engineering)**：固定 5 元工具（`evo_search`、`evo_inspect`、`evo_run`、`evo_propose`、`evo_compact`）与 L0/L1/L2 分层按需加载机制，参考了 Anthropic 关于智能体上下文经济学、前缀 KV 缓存保护与技能渐进式披露的工程实践。
+- **离线 Worktree 轨迹回放与正交能力演化 (Offline Worktree Rollout & Orthogonal Capability Optimization)**：`evo optimize` 的离线 Git Worktree 候选探测闭环、流派不变量（`inv`）与垂直领域知识（`dom`）的正交探索机制，以及规范化交付物自检，汲取了智能体 Harness 评测与轨迹优化领域的相关研究思路。
+- **EvoKernel 原创核心机制**：4 阶确定性编译门禁（静态 AST 安全扫描、沙盒 `--self-test` 预演、BM25 去重、1,500 Token 硬上限及因果防混杂校验）、基于 Git 拓扑的三态 AST 认知记忆防漂移机制（`VERIFIED` / `OTHER_BRANCH` / `STALE`），以及覆盖 10 大主流智能体宿主的无损配置虚拟化矩阵，均为 EvoKernel 的独立原创实现。
 
 ---
 

@@ -79,6 +79,49 @@ function safeRealpath(p: string): string {
   }
 }
 
+export function hasValidEvoStructure(candidateEvo: string): boolean {
+  try {
+    if (!fs.existsSync(candidateEvo) || !fs.statSync(candidateEvo).isDirectory()) {
+      return false;
+    }
+    if (fs.existsSync(path.join(candidateEvo, 'global'))) {
+      return false;
+    }
+    return (
+      fs.existsSync(path.join(candidateEvo, 'config.json')) ||
+      fs.existsSync(path.join(candidateEvo, 'rules')) ||
+      fs.existsSync(path.join(candidateEvo, 'skills')) ||
+      fs.existsSync(path.join(candidateEvo, 'tools')) ||
+      fs.existsSync(path.join(candidateEvo, 'memories'))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isHollowEvoZombieDir(dirPath: string): boolean {
+  try {
+    if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+      return false;
+    }
+    const evoDir = path.join(dirPath, '.evo');
+    if (!fs.existsSync(evoDir) || !fs.statSync(evoDir).isDirectory()) {
+      return false;
+    }
+    if (hasValidEvoStructure(evoDir)) {
+      return false;
+    }
+    const rootEntries = fs.readdirSync(dirPath);
+    const nonEvoEntries = rootEntries.filter((name) => name !== '.evo');
+    if (nonEvoEntries.length === 0) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function findNearestEvoWorkspace(startDir: string): string | null {
   let current = path.resolve(startDir);
   const homeReal = safeRealpath(os.homedir()).toLowerCase();
@@ -92,10 +135,7 @@ export function findNearestEvoWorkspace(startDir: string): string | null {
       break;
     }
     const candidateEvo = path.join(current, '.evo');
-    if (
-      fs.existsSync(candidateEvo) &&
-      !fs.existsSync(path.join(candidateEvo, 'global'))
-    ) {
+    if (hasValidEvoStructure(candidateEvo)) {
       return current;
     }
     const parent = path.dirname(current);

@@ -10,10 +10,10 @@ import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
 import type { EvoRule, EvoSkill, EvoToolManifest, ProposalPayload } from '../core/types.js';
 
 function createTempWorkspace(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-harness2-wave1-ws-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-lifecycle-guard-ws-'));
 }
 
-describe('Harness² Wave 1: Core Kernel Foundation Suite', () => {
+describe('Lifecycle Guard Hooks, Trigger Cues & Reference Integrity Suite', () => {
   // =========================================================================
   // 1. SKILL & TOOL FRONTMATTER & TRIGGER CUE FALLBACK TESTS
   // =========================================================================
@@ -24,32 +24,32 @@ describe('Harness² Wave 1: Core Kernel Foundation Suite', () => {
       storage.ensureInitialized();
 
       const skill: EvoSkill = {
-        id: 'harness2-test-skill',
-        name: 'harness2-test-skill',
-        title: 'Harness2 Wave 1 Verification Skill',
-        description: 'Comprehensive skill for verifying Wave 1 capabilities.',
-        l0_summary: 'Comprehensive skill for verifying Wave 1 capabilities.',
+        id: 'lifecycle-test-skill',
+        name: 'lifecycle-test-skill',
+        title: 'Lifecycle Guard Verification Skill',
+        description: 'Comprehensive skill for verifying lifecycle guard capabilities.',
+        l0_summary: 'Comprehensive skill for verifying lifecycle guard capabilities.',
         l1_contract: [
-          '- **Trigger**: When running unit verification on Wave 1 components.',
+          '- **Trigger**: When running unit verification on lifecycle guard components.',
           '- **Inputs**: Test runner output and coverage reports.',
           '- **Outputs**: Clean test results without leaks.',
         ].join('\n'),
         l2_sop: '1. Execute test suite.\n2. Verify all assertions.\n3. Clean resources.',
-        trigger_cue: 'When running unit verification on Wave 1 components.',
+        trigger_cue: 'When running unit verification on lifecycle guard components.',
         confidence: 'high',
         contrastive_evidence: 'Before: unobserved capability outcomes. After: deterministic attribution.',
         origin: 'bootstrap',
-        tags: ['harness2', 'wave1', 'test'],
+        tags: ['lifecycle', 'guard', 'test'],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 
       storage.saveSkill(skill);
-      const loaded = storage.getSkill('harness2-test-skill');
+      const loaded = storage.getSkill('lifecycle-test-skill');
       assert.ok(loaded, 'Saved skill should be retrievable from storage');
-      assert.equal(loaded.name, 'harness2-test-skill');
-      assert.equal(loaded.description, 'Comprehensive skill for verifying Wave 1 capabilities.');
-      assert.equal(loaded.trigger_cue, 'When running unit verification on Wave 1 components.');
+      assert.equal(loaded.name, 'lifecycle-test-skill');
+      assert.equal(loaded.description, 'Comprehensive skill for verifying lifecycle guard capabilities.');
+      assert.equal(loaded.trigger_cue, 'When running unit verification on lifecycle guard components.');
       assert.equal(loaded.confidence, 'high');
       assert.equal(
         loaded.contrastive_evidence,
@@ -101,8 +101,8 @@ describe('Harness² Wave 1: Core Kernel Foundation Suite', () => {
       storage.ensureInitialized();
 
       const manifest: EvoToolManifest = {
-        id: 'harness2-guard-tool',
-        title: 'Harness2 Guard Tool',
+        id: 'lifecycle-guard-tool',
+        title: 'Lifecycle Guard Tool',
         l0_summary: 'A tool triggered by post-tool event hook',
         runtime: 'node',
         entry_script: 'run.mjs',
@@ -133,7 +133,7 @@ if (process.env.EVO_SELF_TEST === '1' || process.argv.includes('--self-test')) {
 console.log('Running guard tool');
 `;
       storage.saveTool(manifest, code);
-      const loaded = storage.getTool('harness2-guard-tool');
+      const loaded = storage.getTool('lifecycle-guard-tool');
       assert.ok(loaded, 'Saved tool should be loaded');
       assert.ok(loaded.hook_trigger, 'hook_trigger should be present on loaded tool');
       assert.equal(loaded.hook_trigger.event, 'post-tool');
@@ -154,9 +154,9 @@ console.log('Running guard tool');
 
       const rule: EvoRule = {
         priority: 0,
-        id: 'harness2-test-rule',
-        title: 'Harness2 Invariant Rule',
-        l0_summary: 'Deterministic invariant for Wave 1 kernel attribution.',
+        id: 'lifecycle-test-rule',
+        title: 'Lifecycle Invariant Rule',
+        l0_summary: 'Deterministic invariant for kernel attribution.',
         scope_glob: 'src/core/**/*.ts',
         core: false,
         confidence: 'medium',
@@ -173,7 +173,7 @@ console.log('Running guard tool');
       };
 
       storage.saveRule(rule);
-      const loaded = storage.getRule('harness2-test-rule');
+      const loaded = storage.getRule('lifecycle-test-rule');
       assert.ok(loaded, 'Saved rule should be retrievable');
       assert.equal(loaded.confidence, 'medium');
       assert.equal(

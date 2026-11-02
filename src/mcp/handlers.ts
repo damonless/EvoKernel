@@ -6,6 +6,8 @@ import type { EvoKind, EvoRule, ProposalPayload, SearchHit } from '../core/types
 import {
   EvoStorage,
   findNearestEvoWorkspace,
+  hasValidEvoStructure,
+  isHollowEvoZombieDir,
   isPluginOrExtensionInstallDir,
   sanitizeId,
 } from '../core/storage.js';
@@ -264,12 +266,13 @@ export class EvoMcpDispatcher {
   private lastDirtyCheckAt = 0;
   private lastDirtySig = '';
   private watermarkDirtySig = '';
+  private activeCallCount = 0;
 
   constructor(workspaceRoot: string, onCoreRulesChanged?: () => void) {
     this.defaultRoot = path.resolve(workspaceRoot);
     this.activeWorkspaceDir = this.defaultRoot;
     this.onCoreRulesChanged = onCoreRulesChanged;
-    const initialCtx = this.getOrCreateContext(this.defaultRoot);
+    const initialCtx = this.getOrCreateContext(this.defaultRoot, false, false);
     this.storage = initialCtx.storage;
     this.telemetry = initialCtx.telemetry;
     this.gatekeeper = initialCtx.gatekeeper;
@@ -333,7 +336,11 @@ export class EvoMcpDispatcher {
     return this.proxyManager;
   }
 
-  private getOrCreateContext(targetRoot: string, ensureInit = false): WorkspaceContext {
+  private getOrCreateContext(
+    targetRoot: string,
+    ensureInit = false,
+    openTelemetry = true
+  ): WorkspaceContext {
     const resolved = path.resolve(targetRoot);
     let ctx = this.contexts.get(resolved);
     if (!ctx) {
@@ -342,13 +349,65 @@ export class EvoMcpDispatcher {
       ctx = { rootDir: resolved, storage, proxyManager };
       this.contexts.set(resolved, ctx);
     }
-    if (!ctx.telemetry && (ensureInit || fs.existsSync(ctx.storage.evoDir))) {
+    if (
+      openTelemetry &&
+      (!ctx.telemetry || ctx.telemetry.isClosed()) &&
+      (ensureInit || hasValidEvoStructure(ctx.storage.evoDir))
+    ) {
       const telemetry = new EvoTelemetry(ctx.storage);
       const gatekeeper = new EvoGatekeeper(ctx.storage, telemetry);
       ctx.telemetry = telemetry;
       ctx.gatekeeper = gatekeeper;
     }
     return ctx;
+  }
+
+  private evictWorkspaceContext(candidatePath: string): void {
+    const resolvedCand = path.resolve(candidatePath).toLowerCase();
+    for (const [rootKey, ctx] of this.contexts.entries()) {
+      const normRoot = rootKey.toLowerCase();
+      const isMatchOrParent =
+        normRoot === resolvedCand ||
+        resolvedCand.startsWith(normRoot + path.sep) ||
+        normRoot.startsWith(resolvedCand + path.sep);
+      const rootMissingOrZombie =
+        !fs.existsSync(rootKey) || isHollowEvoZombieDir(rootKey);
+      if (isMatchOrParent || rootMissingOrZombie) {
+        try {
+          ctx.telemetry?.close();
+        } catch {
+          // ignore
+        }
+        ctx.telemetry = undefined;
+        ctx.gatekeeper = undefined;
+        if (normRoot === resolvedCand || rootMissingOrZombie) {
+          try {
+            ctx.proxyManager.close();
+          } catch {
+            // ignore
+          }
+          this.contexts.delete(rootKey);
+        }
+      }
+    }
+  }
+
+  private releaseInactiveTelemetryHandles(keepRoot?: string): void {
+    const normKeep = keepRoot ? path.resolve(keepRoot).toLowerCase() : null;
+    for (const [rootKey, ctx] of this.contexts.entries()) {
+      if (normKeep && rootKey.toLowerCase() === normKeep) continue;
+      try {
+        ctx.telemetry?.close();
+      } catch {
+        // ignore
+      }
+      ctx.telemetry = undefined;
+      ctx.gatekeeper = undefined;
+    }
+    if (!normKeep) {
+      this.telemetry = undefined;
+      this.gatekeeper = undefined;
+    }
   }
 
   private needsExternalToolsSync(ctx: WorkspaceContext): boolean {
@@ -375,8 +434,13 @@ export class EvoMcpDispatcher {
         const discovered = await c.proxyManager.syncExternalTools(servers);
         if (discovered.length > 0 || activeEntries.length === 0) {
           c.lastExternalServersSignature = sig;
-          if (fs.existsSync(c.storage.evoDir)) {
+          if (hasValidEvoStructure(c.storage.evoDir)) {
             c.storage.saveExternalTools(discovered);
+            if (!c.telemetry || c.telemetry.isClosed()) {
+              const refreshed = this.getOrCreateContext(c.storage.rootDir);
+              c.telemetry = refreshed.telemetry;
+              c.gatekeeper = refreshed.gatekeeper;
+            }
             c.telemetry?.syncFromDisk();
           }
         }
@@ -421,7 +485,7 @@ export class EvoMcpDispatcher {
 
     const seenEvoDirs = new Set<string>([activeEvoDir]);
     for (const cand of candidates) {
-      if (!fs.existsSync(path.join(cand, '.evo'))) continue;
+      if (!hasValidEvoStructure(path.join(cand, '.evo'))) continue;
       const ctx = this.getOrCreateContext(cand);
       const candEvoDir = path.resolve(ctx.storage.evoDir);
       if (seenEvoDirs.has(candEvoDir)) continue;
@@ -450,7 +514,7 @@ export class EvoMcpDispatcher {
               'ERR_INVALID_SCHEMA: Write operations (evo_propose/evo_compact) cannot target ambiguous multi-root workspace.'
             );
           }
-          const rootWithEvo = this.clientRoots.find((r) => fs.existsSync(path.join(r, '.evo')));
+          const rootWithEvo = this.clientRoots.find((r) => hasValidEvoStructure(path.join(r, '.evo')));
           candidate = path.resolve(rootWithEvo || this.clientRoots[0], trimmed);
         } else {
           candidate = path.resolve(this.defaultRoot, trimmed);
@@ -468,9 +532,32 @@ export class EvoMcpDispatcher {
         );
       }
 
+      const norm = candidate.replace(/\\/g, '/').toLowerCase();
+      const isGlobalFallbackTarget =
+        norm.endsWith('/.evo/global') ||
+        Boolean(
+          process.env.EVO_GLOBAL_DIR &&
+            path.resolve(process.env.EVO_GLOBAL_DIR).toLowerCase() === candidate.toLowerCase()
+        );
+      if (!isGlobalFallbackTarget && !isPluginOrExtensionInstallDir(candidate)) {
+        let existsAsDir = false;
+        try {
+          existsAsDir = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory();
+        } catch {
+          existsAsDir = false;
+        }
+        if (!existsAsDir || isHollowEvoZombieDir(candidate)) {
+          this.evictWorkspaceContext(candidate);
+          const notFoundErr = new Error(
+            `ERR_WORKSPACE_NOT_FOUND: Workspace directory "${candidate}" does not exist on disk or is an orphaned .evo/.cache shell after a folder move/rename. Please verify the current moved/renamed workspace directory and pass the valid path.`
+          );
+          (notFoundErr as any).candidate = candidate;
+          throw notFoundErr;
+        }
+      }
+
       if (isPluginOrExtensionInstallDir(candidate)) {
         // Explicit global fallback dir or plugin install dir binds to defaultRoot (or candidate if ~/.evo/global)
-        const norm = candidate.replace(/\\/g, '/').toLowerCase();
         if (
           norm.endsWith('/.evo/global') ||
           (process.env.EVO_GLOBAL_DIR &&
@@ -484,11 +571,14 @@ export class EvoMcpDispatcher {
           targetRoot = nearestEvo;
         } else if (toolName === 'evo_propose' || toolName === 'evo_compact') {
           // Module 1.2: Never fall back to ~/.evo/global on write operations!
-          // If candidate is within this.defaultRoot, bind to this.defaultRoot (preserving subdirectory workspace isolation);
+          // If candidate is within this.defaultRoot and defaultRoot still exists on disk, bind to this.defaultRoot;
           // otherwise resolve nearest Git root (or candidate) and auto-initialize local Stealth .evo/
-          const localRoot = isSubpathOf(this.defaultRoot, candidate)
-            ? this.defaultRoot
-            : findGitRoot(candidate) || candidate;
+          const defaultExists =
+            fs.existsSync(this.defaultRoot) && !isHollowEvoZombieDir(this.defaultRoot);
+          const localRoot =
+            defaultExists && isSubpathOf(this.defaultRoot, candidate)
+              ? this.defaultRoot
+              : findGitRoot(candidate) || candidate;
           fs.mkdirSync(localRoot, { recursive: true });
           const localStorage = new EvoStorage(localRoot);
           localStorage.ensureInitialized();
@@ -497,13 +587,16 @@ export class EvoMcpDispatcher {
         } else {
           // Read/exec operations (evo_search, evo_inspect, evo_run): do not create .evo/ in uninitialized folders,
           // but preserve candidate for evo_run cwd & scope_glob filtering!
-          const rootWithEvo = this.clientRoots.find((r) => fs.existsSync(path.join(r, '.evo')));
+          const rootWithEvo = this.clientRoots.find((r) => hasValidEvoStructure(path.join(r, '.evo')));
           targetRoot = rootWithEvo || this.defaultRoot;
         }
       }
     }
 
     this.activeWorkspaceDir = candidate;
+    if (this.activeCallCount <= 1) {
+      this.releaseInactiveTelemetryHandles(targetRoot);
+    }
     const isWriteTool = toolName === 'evo_propose' || toolName === 'evo_compact';
     const ctx = this.getOrCreateContext(targetRoot, isWriteTool);
     ctx.requestWorkspaceDir = candidate;
@@ -518,71 +611,95 @@ export class EvoMcpDispatcher {
     name: string,
     args: Record<string, unknown> = {}
   ): any {
+    const rawWs = args.workspace ?? args.workspace_path;
+    if (
+      (name === 'evo_propose' || name === 'evo_compact') &&
+      (typeof rawWs !== 'string' || !rawWs.trim())
+    ) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                passed: false,
+                gate_failed: 'SCHEMA_SECURITY',
+                error_code: 'ERR_INVALID_SCHEMA',
+                message:
+                  'Non-empty workspace path is required for evo_propose and evo_compact.',
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    if (name === 'evo_compact') {
+      const schemaError = this.compactSchemaError(args);
+      if (schemaError) return schemaError;
+    }
+
+    this.activeCallCount++;
+    let isAsyncResult = false;
     try {
-      const rawWs = args.workspace ?? args.workspace_path;
-      if (
-        (name === 'evo_propose' || name === 'evo_compact') &&
-        (typeof rawWs !== 'string' || !rawWs.trim())
-      ) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  passed: false,
-                  gate_failed: 'SCHEMA_SECURITY',
-                  error_code: 'ERR_INVALID_SCHEMA',
-                  message:
-                    'Non-empty workspace path is required for evo_propose and evo_compact.',
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-      if (name === 'evo_compact') {
-        const schemaError = this.compactSchemaError(args);
-        if (schemaError) return schemaError;
-      }
       const ctx = this.bindActiveContext(name, args);
       const needsSync =
         (name === 'evo_search' || name === 'evo_inspect') &&
         (this.needsExternalToolsSync(ctx) ||
           this.getGlobalFallbackContexts().some((g) => this.needsExternalToolsSync(g)));
 
+      let result: any;
       switch (name) {
         case 'evo_search':
           if (needsSync) {
-            return this.ensureExternalToolsSynced(ctx).then(() => {
+            result = this.ensureExternalToolsSynced(ctx).then(() => {
               const freshCtx = this.bindActiveContext(name, args);
               return this.handleSearch(args, freshCtx);
             });
+          } else {
+            result = this.handleSearch(args, ctx);
           }
-          return this.handleSearch(args, ctx);
+          break;
         case 'evo_inspect':
           if (needsSync) {
-            return this.ensureExternalToolsSynced(ctx).then(() => {
+            result = this.ensureExternalToolsSynced(ctx).then(() => {
               const freshCtx = this.bindActiveContext(name, args);
               return this.handleInspect(args, freshCtx);
             });
+          } else {
+            result = this.handleInspect(args, ctx);
           }
-          return this.handleInspect(args, ctx);
+          break;
         case 'evo_run':
-          return this.handleRun(args, ctx);
+          result = this.handleRun(args, ctx);
+          break;
         case 'evo_propose':
-          return this.handlePropose(args as unknown as ProposalPayload, ctx);
+          result = this.handlePropose(args as unknown as ProposalPayload, ctx);
+          break;
         case 'evo_compact':
-          return this.handleCompact(args, ctx);
+          result = this.handleCompact(args, ctx);
+          break;
         default:
-          return {
+          result = {
             isError: true,
             content: [{ type: 'text', text: `Unknown Meta-MCP tool: ${name}` }],
           };
+          break;
       }
+
+      if (result && typeof result.then === 'function') {
+        isAsyncResult = true;
+        return result.finally(() => {
+          this.activeCallCount = Math.max(0, this.activeCallCount - 1);
+          if (this.activeCallCount === 0) {
+            this.releaseInactiveTelemetryHandles();
+          }
+        });
+      }
+      return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('ERR_INVALID_SCHEMA')) {
@@ -605,10 +722,40 @@ export class EvoMcpDispatcher {
           ],
         };
       }
+      if (msg.includes('ERR_WORKSPACE_NOT_FOUND')) {
+        const cand =
+          (err as any).candidate ||
+          (msg.match(/"([^"]+)"/) ? msg.match(/"([^"]+)"/)![1] : '');
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  passed: false,
+                  gate_failed: 'WORKSPACE_VALIDATION',
+                  error_code: 'ERR_WORKSPACE_NOT_FOUND',
+                  message: `Workspace directory "${cand}" does not exist on disk or is an orphaned .evo/.cache shell after a folder move/rename. Please verify the current moved/renamed workspace directory and pass the valid path.`,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
       return {
         isError: true,
         content: [{ type: 'text', text: `EvoKernel internal error in ${name}: ${msg}` }],
       };
+    } finally {
+      if (!isAsyncResult) {
+        this.activeCallCount = Math.max(0, this.activeCallCount - 1);
+        if (this.activeCallCount === 0) {
+          this.releaseInactiveTelemetryHandles();
+        }
+      }
     }
   }
 
@@ -748,8 +895,8 @@ export class EvoMcpDispatcher {
       }
       if (extTool) {
         extTelemetry?.recordUsage(extTool.id, true, 300);
-        if (tier !== 'L1' && fs.existsSync(this.storage.evoDir)) {
-          if (!this.telemetry) {
+        if (tier !== 'L1' && hasValidEvoStructure(this.storage.evoDir)) {
+          if (!this.telemetry || this.telemetry.isClosed()) {
             const refreshed = this.getOrCreateContext(this.storage.rootDir);
             this.telemetry = refreshed.telemetry;
             this.gatekeeper = refreshed.gatekeeper;
@@ -782,11 +929,16 @@ export class EvoMcpDispatcher {
     }
     if (rule) {
       activeTelemetry?.recordUsage(id, true, 250);
-      if (tier !== 'L1' && fs.existsSync(storage.evoDir)) {
-        if (!telemetry) {
+      if (tier !== 'L1' && hasValidEvoStructure(storage.evoDir)) {
+        if (!telemetry || telemetry.isClosed()) {
           const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
           this.gatekeeper = refreshed.gatekeeper;
+          telemetry = refreshed.telemetry;
+          if (activeCtx) {
+            activeCtx.telemetry = refreshed.telemetry;
+            activeCtx.gatekeeper = refreshed.gatekeeper;
+          }
         }
         (telemetry || this.telemetry)?.recordRecalledCapability({
           id: rule.id,
@@ -815,11 +967,16 @@ export class EvoMcpDispatcher {
     }
     if (skill) {
       activeTelemetry?.recordUsage(id, true, 400);
-      if (tier !== 'L1' && fs.existsSync(storage.evoDir)) {
-        if (!telemetry) {
+      if (tier !== 'L1' && hasValidEvoStructure(storage.evoDir)) {
+        if (!telemetry || telemetry.isClosed()) {
           const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
           this.gatekeeper = refreshed.gatekeeper;
+          telemetry = refreshed.telemetry;
+          if (activeCtx) {
+            activeCtx.telemetry = refreshed.telemetry;
+            activeCtx.gatekeeper = refreshed.gatekeeper;
+          }
         }
         (telemetry || this.telemetry)?.recordRecalledCapability({
           id: skill.id,
@@ -848,11 +1005,16 @@ export class EvoMcpDispatcher {
     }
     if (tool) {
       activeTelemetry?.recordUsage(id, true, 300);
-      if (tier !== 'L1' && fs.existsSync(storage.evoDir)) {
-        if (!telemetry) {
+      if (tier !== 'L1' && hasValidEvoStructure(storage.evoDir)) {
+        if (!telemetry || telemetry.isClosed()) {
           const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
           this.gatekeeper = refreshed.gatekeeper;
+          telemetry = refreshed.telemetry;
+          if (activeCtx) {
+            activeCtx.telemetry = refreshed.telemetry;
+            activeCtx.gatekeeper = refreshed.gatekeeper;
+          }
         }
         (telemetry || this.telemetry)?.recordRecalledCapability({
           id: tool.id,
@@ -874,11 +1036,16 @@ export class EvoMcpDispatcher {
         includeCallers: tier !== 'L1',
       });
       (telemetry || this.telemetry)?.recordUsage(id, report.overall_status !== 'STALE', 650);
-      if (tier !== 'L1' && fs.existsSync(storage.evoDir)) {
-        if (!telemetry) {
+      if (tier !== 'L1' && hasValidEvoStructure(storage.evoDir)) {
+        if (!telemetry || telemetry.isClosed()) {
           const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
           this.gatekeeper = refreshed.gatekeeper;
+          telemetry = refreshed.telemetry;
+          if (activeCtx) {
+            activeCtx.telemetry = refreshed.telemetry;
+            activeCtx.gatekeeper = refreshed.gatekeeper;
+          }
         }
         (telemetry || this.telemetry)?.recordRecalledCapability({
           id: memory.id,
@@ -1048,9 +1215,18 @@ export class EvoMcpDispatcher {
           boundServerConfig
         );
         try {
-          boundTelemetry?.recordUsage(canonicalExtId, !res.isError, res.isError ? 0 : 850);
-          if (fs.existsSync(initialCtx.storage.evoDir)) {
-            if (!initialCtx.telemetry) {
+          if (hasValidEvoStructure(targetCtx.storage.evoDir)) {
+            if (!targetCtx.telemetry || targetCtx.telemetry.isClosed()) {
+              const refreshedTarget = this.getOrCreateContext(targetCtx.storage.rootDir);
+              targetCtx.telemetry = refreshedTarget.telemetry;
+              targetCtx.gatekeeper = refreshedTarget.gatekeeper;
+            }
+            targetCtx.telemetry?.recordUsage(canonicalExtId, !res.isError, res.isError ? 0 : 850);
+          } else {
+            boundTelemetry?.recordUsage(canonicalExtId, !res.isError, res.isError ? 0 : 850);
+          }
+          if (hasValidEvoStructure(initialCtx.storage.evoDir)) {
+            if (!initialCtx.telemetry || initialCtx.telemetry.isClosed()) {
               const refreshed = this.getOrCreateContext(initialCtx.storage.rootDir);
               initialCtx.telemetry = refreshed.telemetry;
               initialCtx.gatekeeper = refreshed.gatekeeper;
@@ -1114,8 +1290,8 @@ export class EvoMcpDispatcher {
     const success = res.exitCode === 0;
     activeTelemetry?.recordUsage(toolId, success, success ? 850 : 0);
     const isGlobalHit = activeTelemetry !== this.telemetry;
-    if (fs.existsSync(this.storage.evoDir)) {
-      if (!this.telemetry) {
+    if (hasValidEvoStructure(this.storage.evoDir)) {
+      if (!this.telemetry || this.telemetry.isClosed()) {
         const refreshed = this.getOrCreateContext(this.storage.rootDir);
         this.telemetry = refreshed.telemetry;
         this.gatekeeper = refreshed.gatekeeper;

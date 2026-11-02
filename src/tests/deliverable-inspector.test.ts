@@ -23,7 +23,7 @@ function createTempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-deliverable-test-'));
 }
 
-describe('Harness² Wave 2A: Zero-Dependency Deliverable Canonical Consumer-Reader Suite', () => {
+describe('Zero-Dependency Deliverable Canonical Consumer-Reader Suite', () => {
   // =========================================================================
   // 1. LOW-LEVEL ZIP & CRC32 INVARIANTS
   // =========================================================================

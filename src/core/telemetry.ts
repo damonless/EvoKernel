@@ -508,6 +508,7 @@ export class EvoTelemetry {
   private readonly storage: EvoStorage;
   private readonly forceFallback: boolean;
   private fts5Enabled = false;
+  private closed = false;
   private db: DatabaseSync;
 
   constructor(storage: EvoStorage, options?: TelemetryOptions) {
@@ -1488,8 +1489,18 @@ export class EvoTelemetry {
     return row ? row.value : null;
   }
 
+  public isClosed(): boolean {
+    return this.closed;
+  }
+
   public close(): void {
-    this.db.close();
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      this.db.close();
+    } catch {
+      // Ignore already-closed errors
+    }
   }
 }
 

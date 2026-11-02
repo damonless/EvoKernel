@@ -335,17 +335,27 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-All 10 test suites (242 tests) pass in ~19 seconds:
+All 10 test suites (243 tests) pass in ~19 seconds:
 1. `dist/tests/bootstrap.test.js`: Bootstrap Cold-Start Expansion Suite (22 tests)
-2. `dist/tests/deliverable-inspector.test.js`: Zero-Dependency Deliverable Canonical Consumer-Reader Suite (33 tests)
-3. `dist/tests/evo-kernel.test.js`: Core Gatekeeper, Sandbox, AST Cognitive Memory, and Invariants Suite (44 tests)
-4. `dist/tests/harness2-borrowings.test.js`: Wave 2B Causal Telemetry, Outcome Attribution & Anti-Confounding Suite (17 tests)
-5. `dist/tests/harness2-wave1.test.js`: Wave 1 Harness & Hook Hardening Suite (27 tests)
-6. `dist/tests/harness2-wave4-audit.test.js`: Wave 4 Multi-Harness Silent-Failure Audit Matrix Suite (32 tests)
-7. `dist/tests/hook.test.js`: Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience Suite (27 tests)
-8. `dist/tests/mcp-proxy.test.js`: Downstream MCP Proxy Virtualization Suite (10 tests)
-9. `dist/tests/multi-harness.test.js`: Multi-Agent Harness Matrix Suite (14 tests)
-10. `dist/tests/optimize.test.js`: Wave 2C Offline Git Worktree Optimization Engine Suite (16 tests)
+2. `dist/tests/causal-telemetry-and-catalog.test.js`: Causal Telemetry, Outcome Attribution & Anti-Confounding Suite (17 tests)
+3. `dist/tests/deliverable-inspector.test.js`: Zero-Dependency Deliverable Canonical Consumer-Reader Suite (33 tests)
+4. `dist/tests/evo-kernel.test.js`: Core Gatekeeper, Sandbox, AST Cognitive Memory, and Invariants Suite (45 tests)
+5. `dist/tests/hook.test.js`: Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience Suite (27 tests)
+6. `dist/tests/lifecycle-guard-hooks.test.js`: Lifecycle Guard Hooks, Trigger Cues & Reference Integrity Suite (27 tests)
+7. `dist/tests/mcp-proxy.test.js`: Downstream MCP Proxy Virtualization Suite (10 tests)
+8. `dist/tests/multi-harness.test.js`: Multi-Agent Harness Matrix Suite (14 tests)
+9. `dist/tests/optimize.test.js`: Offline Git Worktree Optimization Engine Suite (16 tests)
+10. `dist/tests/surface-audit-and-hardening.test.js`: Multi-Harness Silent-Failure Audit Matrix & Hardening Suite (32 tests)
+
+---
+
+## 🙏 Acknowledgments & Architecture References
+
+EvoKernel is an independent, from-scratch open-source engineering runtime built in zero-dependency TypeScript on Node.js 22 native modules (`node:sqlite`, `node:test`, `stripTypeScriptTypes`). Its design synthesizes foundational ideas from the agentic systems and software engineering community:
+
+- **Progressive Disclosure & Context Engineering**: The 5 fixed meta-tools (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`) and the L0/L1/L2 tiered loading architecture draw inspiration from Anthropic's engineering guidelines on context window economics, prompt-cache preservation, and progressive skill disclosure.
+- **Offline Worktree Rollout & Orthogonal Capability Optimization**: The `evo optimize` offline Git worktree evaluation loop, invariant (`inv`) vs. domain (`dom`) orthogonal exploration, and canonical deliverable verification are informed by recent research on agent harness evaluation, trajectory replay, and automated capability refinement.
+- **Original EvoKernel Contributions**: The 4-Stage Deterministic Gatekeeper (Static AST Security, Sandbox `--self-test` Dry-Run, BM25 Deduplication, 1,500-Token Hard Cap, and Causal Anti-Confounding), the 3-Stage AST-Anchored Cognitive Memory with git-topology drift detection (`VERIFIED` / `OTHER_BRANCH` / `STALE`), and the 10-host lossless adapter matrix are original to EvoKernel.
 
 ---
 
