@@ -14,10 +14,10 @@ import { refreshMemories, verifyMemoryFreshness } from '../core/memory.js';
 import type { EvoMemory, EvoRule, EvoSkill, EvoToolManifest } from '../core/types.js';
 
 function createTempWorkspace(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-harness2-borrowings-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-causal-telemetry-'));
 }
 
-describe('Harness² Wave 2B: Multi-Harness Borrowings & Dynamic Section 5 Suite', () => {
+describe('Causal Telemetry, Outcome Attribution & Dynamic Section 5 Catalog Suite', () => {
   // =========================================================================
   // GROUP 1: DYNAMIC SECTION 5 TOOLS CATALOG & TOKEN BUDGETING
   // =========================================================================

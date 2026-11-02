@@ -18,6 +18,7 @@ import {
 import {
   EvoStorage,
   estimateTokens,
+  findNearestEvoWorkspace,
   isPluginOrExtensionInstallDir,
   parseFrontmatter,
 } from '../core/storage.js';
@@ -791,8 +792,8 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       );
 
       // 2. Subdirectory inside projectA with .evo must walk up to projectA root
-      fs.mkdirSync(path.join(projectA, '.evo'), { recursive: true });
-      fs.mkdirSync(path.join(projectB, '.evo'), { recursive: true });
+      fs.mkdirSync(path.join(projectA, '.evo', 'rules'), { recursive: true });
+      fs.mkdirSync(path.join(projectB, '.evo', 'rules'), { recursive: true });
       const subDirA = path.join(projectA, 'packages', 'firmware', 'src');
       fs.mkdirSync(subDirA, { recursive: true });
       assert.equal(resolveWorkspaceRoot([], true, subDirA), path.resolve(projectA));
@@ -1320,7 +1321,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.match(excludeText, /\.evo\//);
 
       // 5. Pure C firmware workspace filters out '**/*.cs' rule, but can inspect & run global tool with cwd = cFirmwareWs
-      fs.mkdirSync(path.join(cFirmwareWs, '.evo'), { recursive: true });
+      fs.mkdirSync(path.join(cFirmwareWs, '.evo', 'rules'), { recursive: true });
       fs.writeFileSync(path.join(cFirmwareWs, 'main.c'), 'int main(void) { return 0; }\n', 'utf8');
 
       const cRuleRes = dispatcher.handleToolCall('evo_propose', {
@@ -1631,7 +1632,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       });
       assert.equal(Boolean(projARule.isError), false, projARule.content[0]?.text);
 
-      fs.mkdirSync(path.join(projectB, '.evo'), { recursive: true });
+      fs.mkdirSync(path.join(projectB, '.evo', 'rules'), { recursive: true });
       const searchInB = dispatcher.handleToolCall('evo_search', {
         workspace: projectB,
         query: 'Project A Private Invariant',
@@ -3922,6 +3923,123 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       } catch {
         // ignore transient Windows lock in temp dir
       }
+    }
+  });
+
+  test('32. Issue #19: Prevent ghost .evo/ resurrection on moved/deleted workspaces, reject hollow .evo/.cache shells, and release Windows SQLite locks immediately', () => {
+    const baseDir = createTempWorkspace();
+    const oldWs = path.join(baseDir, 'project-before-move');
+    const newWs = path.join(baseDir, 'project-after-move');
+    const zombieWs = path.join(baseDir, 'zombie-shell');
+    fs.mkdirSync(oldWs, { recursive: true });
+    fs.writeFileSync(path.join(oldWs, 'index.ts'), 'export const x = 1;\n', 'utf8');
+
+    const dispatcher = new EvoMcpDispatcher(oldWs);
+    try {
+      // 1. Propose and search in oldWs (opens and uses SQLite telemetry.db)
+      const propRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: oldWs,
+        kind: 'rule',
+        id: 'move-lock-test-rule',
+        title: 'Move Lock Test Rule',
+        l0_summary: 'Verify SQLite handle is released after tool execution.',
+        core: true,
+        content: 'Release SQLite DatabaseSync handles so Windows folders can be moved cleanly.',
+      });
+      assert.equal(Boolean(propRes.isError), false, propRes.content[0]?.text);
+
+      const searchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: oldWs,
+        query: 'Move Lock',
+      });
+      assert.equal(Boolean(searchRes.isError), false);
+      assert.match(searchRes.content[0].text, /move-lock-test-rule/);
+
+      // 2. Without calling dispatcher.close(), move/rename oldWs -> newWs on disk!
+      // On Windows NTFS, if DatabaseSync handle were still held open, renameSync/rmSync would fail with EBUSY/EPERM.
+      fs.renameSync(oldWs, newWs);
+      assert.equal(fs.existsSync(oldWs), false, 'oldWs should be cleanly moved to newWs');
+      assert.equal(fs.existsSync(newWs), true, 'newWs should exist after rename');
+
+      // 3. Calling evo_propose, evo_compact, or evo_search with the stale oldWs path must return ERR_WORKSPACE_NOT_FOUND
+      // and MUST NOT resurrect oldWs on disk!
+      for (const toolName of ['evo_search', 'evo_inspect', 'evo_run', 'evo_propose', 'evo_compact']) {
+        const staleArgs: Record<string, unknown> =
+          toolName === 'evo_propose'
+            ? {
+                workspace: oldWs,
+                kind: 'rule',
+                id: 'ghost-rule',
+                title: 'Ghost Rule',
+                l0_summary: 'Should never be written to ghost folder.',
+                core: true,
+                content: 'Should fail before mkdirSync.',
+              }
+            : toolName === 'evo_compact'
+              ? {
+                  workspace: oldWs,
+                  target_ids: ['a-id', 'b-id'],
+                  merged_proposal: {
+                    kind: 'rule',
+                    id: 'merged-ghost',
+                    title: 'Merged Ghost',
+                    l0_summary: 'Merged ghost',
+                    content: 'Merged content',
+                    scope_glob: 'src/**/*.ts',
+                  },
+                }
+              : { workspace: oldWs, query: 'test', id: 'move-lock-test-rule', tool_id: 'nonexistent' };
+
+        const staleRes = dispatcher.handleToolCall(toolName, staleArgs);
+        assert.equal(staleRes.isError, true, `${toolName} on deleted workspace must return isError: true`);
+        assert.match(staleRes.content[0].text, /ERR_WORKSPACE_NOT_FOUND/);
+        assert.equal(
+          fs.existsSync(oldWs),
+          false,
+          `${toolName} must NEVER recreate deleted workspace directory ${oldWs} on disk`
+        );
+      }
+
+      // 4. Hollow .evo/.cache zombie shell (with no config.json, no capability dirs, and no project files)
+      // must be ignored by findNearestEvoWorkspace and rejected with ERR_WORKSPACE_NOT_FOUND
+      fs.mkdirSync(path.join(zombieWs, '.evo', '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(zombieWs, '.evo', '.cache', 'telemetry.db'), '', 'utf8');
+      assert.equal(
+        findNearestEvoWorkspace(zombieWs),
+        null,
+        'findNearestEvoWorkspace must ignore orphaned .evo/.cache-only zombie shells'
+      );
+
+      const zombiePropose = dispatcher.handleToolCall('evo_propose', {
+        workspace: zombieWs,
+        kind: 'rule',
+        id: 'zombie-rule',
+        title: 'Zombie Rule',
+        l0_summary: 'Should not initialize inside hollow zombie shell.',
+        core: true,
+        content: 'Reject hollow zombie shells.',
+      });
+      assert.equal(zombiePropose.isError, true);
+      assert.match(zombiePropose.content[0].text, /ERR_WORKSPACE_NOT_FOUND/);
+      assert.equal(
+        fs.existsSync(path.join(zombieWs, '.evo', 'config.json')),
+        false,
+        'Hollow zombie shell must not be initialized with config.json'
+      );
+
+      // 5. Using the new moved workspace path (newWs) works seamlessly and can be deleted cleanly while dispatcher is open
+      const newSearchRes = dispatcher.handleToolCall('evo_search', {
+        workspace: newWs,
+        query: 'Move Lock',
+      });
+      assert.equal(Boolean(newSearchRes.isError), false);
+      assert.match(newSearchRes.content[0].text, /move-lock-test-rule/);
+
+      fs.rmSync(newWs, { recursive: true, force: true });
+      assert.equal(fs.existsSync(newWs), false, 'newWs must be cleanly removable on Windows without closing dispatcher');
+    } finally {
+      dispatcher.close();
+      fs.rmSync(baseDir, { recursive: true, force: true });
     }
   });
 });

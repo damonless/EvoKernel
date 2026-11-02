@@ -2,14 +2,14 @@
 id: harness-hook-filter-preserve-untouched-entries
 title: "Hook Config Filter Must Preserve Untouched Entries"
 l0_summary: "Hook cleanup dropped user entries with empty inner hooks; corrupt settings overwritten"
-created_commit: "7c7a015"
-created_branch: "feat/harness2-integration"
+created_commit: "82af524"
+created_branch: "main"
 target_symbols: ["removeClaudeSettings","syncDeclaredPreToolHooks","isEvoHookCommand"]
 ast_fingerprints: {"removeClaudeSettings":{"symbol":"removeClaudeSettings","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":523,"end_line":586,"signature":"export function removeClaudeSettings(filePath: string): boolean","ast_hash":"0716b5859d2090d5"},"syncDeclaredPreToolHooks":{"symbol":"syncDeclaredPreToolHooks","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":588,"end_line":868,"signature":"export function syncDeclaredPreToolHooks(workspaceRoot: string): void","ast_hash":"5439f61c9bb75d98"},"isEvoHookCommand":{"symbol":"isEvoHookCommand","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":409,"end_line":438,"signature":"export function isEvoHookCommand(cmd: string, needle?: string): boolean","ast_hash":"40d06c89798cdf3e"}}
 tags: []
 origin: "evolved"
 created_at: "2026-10-31T18:26:36.261Z"
-updated_at: "2026-11-01T14:59:38.715Z"
+updated_at: "2026-11-02T13:45:42.371Z"
 ---
 
 ## Symptom

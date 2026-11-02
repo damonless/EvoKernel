@@ -36,7 +36,7 @@ function cleanTempWorkspace(dir: string): void {
   }
 }
 
-describe('Harness² Wave 2C: Offline Git Worktree Optimization Engine Suite', () => {
+describe('Offline Git Worktree Optimization Engine Suite', () => {
   // =========================================================================
   // 1. MULTI-AGENT TRAJECTORY RENDERING: ANTIGRAVITY FORMAT
   // =========================================================================
@@ -313,7 +313,7 @@ describe('Harness² Wave 2C: Offline Git Worktree Optimization Engine Suite', ()
   // =========================================================================
   // 6. WORKSPACE EVIDENCE PREPARATION & MISSION BUILDER
   // =========================================================================
-  test('6. prepareOptimizationWorkspace integrates deliverable inspector and MISSION.md sections', () => {
+  test('6. prepareOptimizationWorkspace integrates deliverable inspector and OPTIMIZE_SPEC.md sections', () => {
     const ws = createTempWorkspace();
     try {
       const storage = new EvoStorage(ws);
