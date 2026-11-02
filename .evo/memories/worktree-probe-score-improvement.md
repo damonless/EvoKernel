@@ -2,14 +2,14 @@
 id: worktree-probe-score-improvement
 title: "Worktree Probe Improvement On Failing Baseline"
 l0_summary: "Worktree probe score evaluation when baseline probe failed"
-created_commit: "7c7a015"
-created_branch: "feat/harness2-integration"
+created_commit: "82af524"
+created_branch: "feat/p0-core-hardening"
 target_symbols: ["probeCandidateInWorktree","runOptimizationCycle"]
-ast_fingerprints: {"probeCandidateInWorktree":{"symbol":"probeCandidateInWorktree","file_path":"src/core/optimize.ts","file":"src/core/optimize.ts","kind":"function","start_line":1390,"end_line":1631,"signature":"export function probeCandidateInWorktree(","ast_hash":"7a1a75a47edd8446"},"runOptimizationCycle":{"symbol":"runOptimizationCycle","file_path":"src/core/optimize.ts","file":"src/core/optimize.ts","kind":"function","start_line":1672,"end_line":1673,"signature":"export function runOptimizationCycle(","ast_hash":"9107fba7af611516"}}
+ast_fingerprints: {"probeCandidateInWorktree":{"symbol":"probeCandidateInWorktree","file_path":"src/core/optimize.ts","file":"src/core/optimize.ts","kind":"function","start_line":1390,"end_line":1657,"signature":"export function probeCandidateInWorktree(","ast_hash":"591222cd58d7876c"},"runOptimizationCycle":{"symbol":"runOptimizationCycle","file_path":"src/core/optimize.ts","file":"src/core/optimize.ts","kind":"function","start_line":1742,"end_line":2083,"signature":"export function runOptimizationCycle(","ast_hash":"4360ffca7d549206"}}
 tags: []
 origin: "evolved"
 created_at: "2026-10-31T09:47:58.578Z"
-updated_at: "2026-11-01T14:59:38.815Z"
+updated_at: "2026-11-02T02:14:33.206Z"
 ---
 
 ## Symptom

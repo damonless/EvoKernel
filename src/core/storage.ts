@@ -218,6 +218,11 @@ export class EvoStorage {
       fs.writeFileSync(this.configPath, JSON.stringify(DEFAULT_EVO_CONFIG, null, 2), 'utf8');
     }
 
+    const evoGitignore = path.join(this.evoDir, '.gitignore');
+    if (!fs.existsSync(evoGitignore)) {
+      fs.writeFileSync(evoGitignore, '/.cache/\n/optimize/\n/archive/\n', 'utf8');
+    }
+
     return this.getConfig();
   }
 

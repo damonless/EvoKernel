@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import type {
   EvoMemory,
   MemoryVerificationReport,
@@ -12,6 +13,8 @@ import type {
 } from './types.js';
 import { EvoStorage } from './storage.js';
 import { EvoTelemetry } from './telemetry.js';
+
+export const PARSER_VERSION = 2;
 
 const SOURCE_EXTENSIONS = new Set([
   '.ts',
@@ -46,65 +49,196 @@ const IGNORED_DIRS = new Set([
   'venv',
 ]);
 
-export function resolveCurrentGitCommit(workspaceRoot: string): string {
+export interface GitPaths {
+  gitDir: string;
+  commonDir: string;
+  repoRoot?: string;
+}
+
+export function resolveGitPaths(workspaceRoot: string): GitPaths {
+  const root = path.resolve(workspaceRoot);
+  let repoRoot: string | undefined;
+  let gitDir = '';
+  if (process.env.GIT_DIR) {
+    gitDir = path.resolve(root, process.env.GIT_DIR);
+    repoRoot = root;
+  }
+
+  if (!gitDir) {
+    let cur = root;
+    while (true) {
+      const cand = path.join(cur, '.git');
+      if (fs.existsSync(cand)) {
+        gitDir = cand;
+        repoRoot = cur;
+        break;
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+  }
+
+  if (!gitDir) {
+    gitDir = path.join(root, '.git');
+  }
+
   try {
-    const res = spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
-      cwd: workspaceRoot,
-      encoding: 'utf8',
-      timeout: 1500,
-    });
-    if (res.status === 0 && res.stdout) {
-      const sha = res.stdout.trim();
-      if (sha) return sha;
+    const stat = fs.statSync(gitDir);
+    if (stat.isFile()) {
+      const content = fs.readFileSync(gitDir, 'utf8').trim();
+      const match = content.match(/^gitdir:\s*(.+)$/i);
+      if (match) {
+        gitDir = path.resolve(path.dirname(gitDir), match[1].trim());
+      }
     }
   } catch {
-    // ignore git spawn errors
+    // fallback
   }
+
+  let commonDir = gitDir;
+  const commondirFile = path.join(gitDir, 'commondir');
+  try {
+    if (fs.existsSync(commondirFile)) {
+      const relCommon = fs.readFileSync(commondirFile, 'utf8').trim();
+      if (relCommon) {
+        commonDir = path.resolve(gitDir, relCommon);
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  return { gitDir, commonDir, repoRoot };
+}
+
+interface PackedRefsCache {
+  mtimeMs: number;
+  size: number;
+  refs: Map<string, string>;
+}
+const packedRefsCache = new Map<string, PackedRefsCache>();
+
+export interface GitHeadSnapshot {
+  commit: string;
+  fullCommit: string;
+  branch?: string;
+}
+
+export function readGitHeadSnapshot(workspaceRoot: string): GitHeadSnapshot {
+  const { gitDir, commonDir } = resolveGitPaths(workspaceRoot);
+  const headFile = path.join(gitDir, 'HEAD');
+  if (!fs.existsSync(headFile)) {
+    return { commit: 'uncommitted', fullCommit: 'uncommitted' };
+  }
+
+  let headContent = '';
+  try {
+    headContent = fs.readFileSync(headFile, 'utf8').trim();
+  } catch {
+    return { commit: 'uncommitted', fullCommit: 'uncommitted' };
+  }
+
+  let branch: string | undefined;
+  let fullCommit = '';
+
+  const refPrefix = 'ref: ';
+  if (headContent.startsWith(refPrefix)) {
+    const refPath = headContent.slice(refPrefix.length).trim();
+    if (refPath.startsWith('refs/heads/')) {
+      branch = refPath.slice('refs/heads/'.length);
+    } else {
+      branch = refPath;
+    }
+
+    // 1. Check loose ref in commonDir / gitDir
+    const looseRefCommon = path.join(commonDir, refPath);
+    const looseRefGit = path.join(gitDir, refPath);
+    if (fs.existsSync(looseRefCommon)) {
+      try {
+        fullCommit = fs.readFileSync(looseRefCommon, 'utf8').trim();
+      } catch {}
+    } else if (fs.existsSync(looseRefGit)) {
+      try {
+        fullCommit = fs.readFileSync(looseRefGit, 'utf8').trim();
+      } catch {}
+    }
+
+    // 2. Check packed-refs in commonDir (cached by mtimeMs and size)
+    if (!fullCommit) {
+      const packedRefsPath = path.join(commonDir, 'packed-refs');
+      try {
+        if (fs.existsSync(packedRefsPath)) {
+          const stat = fs.statSync(packedRefsPath);
+          let cached = packedRefsCache.get(commonDir);
+          if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+            const lines = fs.readFileSync(packedRefsPath, 'utf8').split(/\r?\n/);
+            const refMap = new Map<string, string>();
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('^')) continue;
+              const spaceIdx = trimmed.indexOf(' ');
+              if (spaceIdx !== -1) {
+                const sha = trimmed.slice(0, spaceIdx).trim();
+                const ref = trimmed.slice(spaceIdx + 1).trim();
+                refMap.set(ref, sha);
+              }
+            }
+            cached = { mtimeMs: stat.mtimeMs, size: stat.size, refs: refMap };
+            packedRefsCache.set(commonDir, cached);
+          }
+          fullCommit = cached.refs.get(refPath) || '';
+        }
+      } catch {}
+    }
+  } else if (/^[0-9a-f]{40,64}$/i.test(headContent)) {
+    // Detached HEAD
+    fullCommit = headContent;
+  }
+
+  // 3. Fallback: if Git 2.45+ reftable exists or ref not resolved
+  if (!fullCommit) {
+    try {
+      const res = spawnSync('git', ['rev-parse', 'HEAD'], {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+        timeout: 1000,
+      });
+      if (res.status === 0 && res.stdout) {
+        fullCommit = res.stdout.trim();
+      }
+    } catch {}
+  }
+
+  if (!fullCommit) {
+    return { commit: 'uncommitted', fullCommit: 'uncommitted', branch };
+  }
+
+  return {
+    commit: fullCommit.slice(0, 7),
+    fullCommit,
+    branch,
+  };
+}
+
+export function resolveCurrentGitCommit(workspaceRoot: string): string {
+  try {
+    const snap = readGitHeadSnapshot(workspaceRoot);
+    if (snap.commit && snap.commit !== 'uncommitted') {
+      return snap.commit;
+    }
+  } catch {}
   return 'uncommitted';
 }
 
 export function resolveCurrentGitBranch(workspaceRoot: string): string | undefined {
   try {
-    const res = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: workspaceRoot,
-      encoding: 'utf8',
-      timeout: 1500,
-    });
-    if (res.status === 0 && res.stdout) {
-      const branch = res.stdout.trim();
-      if (branch && branch !== 'HEAD') {
-        return branch;
-      }
+    const snap = readGitHeadSnapshot(workspaceRoot);
+    if (snap.branch && snap.branch !== 'HEAD') {
+      return snap.branch;
     }
-  } catch {
-    // ignore git spawn errors
-  }
+  } catch {}
   return undefined;
-}
-
-/**
- * Strips comments and normalizes whitespace/punctuation so that pure formatting,
- * indentation, line shifts, or comment edits do NOT alter the structural AST hash,
- * whereas any modification to signature, statements, conditions, or identifiers DOES.
- */
-export function normalizeCodeStructure(code: string, ext = '.ts'): string {
-  if (!code) return '';
-  let stripped = code;
-
-  if (ext === '.py') {
-    // Strip Python triple-quoted docstrings and # line comments outside strings
-    stripped = stripped
-      .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, ' ')
-      .replace(/(^|\s)#[^\r\n]*/g, ' ');
-  } else {
-    // Strip C/TS/JS block comments /* ... */ and line comments // ...
-    stripped = stripCStyleComments(stripped);
-  }
-
-  return stripped
-    .replace(/\s+/g, ' ')
-    .replace(/\s*([{}()[\];,:<>+=*/&|!?-])\s*/g, '$1')
-    .trim();
 }
 
 function canPrecedeRegexLiteral(out: string): boolean {
@@ -118,7 +252,366 @@ function canPrecedeRegexLiteral(out: string): boolean {
   );
 }
 
+export function trySkipGenericAngles(masked: string, pos: number): number {
+  if (pos >= masked.length || masked[pos] !== '<') return pos;
+  if (pos + 1 < masked.length && (masked[pos + 1] === '=' || masked[pos + 1] === '<')) return pos;
+  let angleDepth = 0;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  const maxScan = Math.min(masked.length, pos + 500);
+
+  for (let i = pos; i < maxScan; i++) {
+    const ch = masked[i];
+    if (
+      (ch === ';' && braceDepth === 0) ||
+      (angleDepth === 0 && (ch === '{' || ch === '}' || ch === ')' || ch === ']'))
+    ) {
+      return pos;
+    }
+
+    if (ch === '(') parenDepth++;
+    else if (ch === ')') {
+      if (parenDepth === 0) return pos;
+      parenDepth--;
+    } else if (ch === '[') bracketDepth++;
+    else if (ch === ']') {
+      if (bracketDepth === 0) return pos;
+      bracketDepth--;
+    } else if (ch === '{') braceDepth++;
+    else if (ch === '}') {
+      if (braceDepth === 0) return pos;
+      braceDepth--;
+    } else if (parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+      if (ch === '<') {
+        angleDepth++;
+      } else if (ch === '>' && (i === 0 || (masked[i - 1] !== '=' && masked[i - 1] !== '-'))) {
+        angleDepth--;
+        if (angleDepth === 0) {
+          return i + 1;
+        }
+      }
+    }
+  }
+  return pos;
+}
+
+export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
+  if (!rawSrc) return '';
+  const len = rawSrc.length;
+  const isPy = ext === '.py';
+  const isJsTs = /^\.(?:ts|tsx|js|jsx|mjs|cjs)$/i.test(ext);
+  const isGo = ext === '.go';
+
+  let out = '';
+  let i = 0;
+
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inPyTripleSingle = false;
+  let inPyTripleDouble = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let inRegex = false;
+  let inRegexCharClass = false;
+
+  const tplBraceStack: number[] = [];
+  let templateDepth = 0;
+  let braceDepth = 0;
+
+  while (i < len) {
+    const ch = rawSrc[i];
+    const next = i + 1 < len ? rawSrc[i + 1] : '';
+    const next2 = i + 2 < len ? rawSrc[i + 2] : '';
+
+    if (ch === '\r' || ch === '\n') {
+      out += ch;
+      if (inLineComment) {
+        inLineComment = false;
+      }
+      if (inRegex) {
+        inRegex = false;
+        inRegexCharClass = false;
+      }
+      if (inSingleQuote) {
+        inSingleQuote = false;
+      }
+      i++;
+      continue;
+    }
+
+    if (inLineComment) {
+      out += ' ';
+      i++;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        out += '  ';
+        i += 2;
+        inBlockComment = false;
+      } else {
+        out += ' ';
+        i++;
+      }
+      continue;
+    }
+
+    if (inPyTripleDouble) {
+      if (ch === '"' && next === '"' && next2 === '"') {
+        out += '   ';
+        i += 3;
+        inPyTripleDouble = false;
+      } else {
+        out += ' ';
+        i++;
+      }
+      continue;
+    }
+    if (inPyTripleSingle) {
+      if (ch === "'" && next === "'" && next2 === "'") {
+        out += '   ';
+        i += 3;
+        inPyTripleSingle = false;
+      } else {
+        out += ' ';
+        i++;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (ch === '\\' && i + 1 < len) {
+        out += '  ';
+        i += 2;
+        continue;
+      }
+      if (ch === "'") {
+        out += ' ';
+        inSingleQuote = false;
+      } else {
+        out += ' ';
+      }
+      i++;
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (ch === '\\' && i + 1 < len) {
+        out += '  ';
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        out += ' ';
+        inDoubleQuote = false;
+      } else {
+        out += ' ';
+      }
+      i++;
+      continue;
+    }
+
+    if (inRegex) {
+      if (ch === '\\' && i + 1 < len) {
+        out += '  ';
+        i += 2;
+        continue;
+      }
+      if (ch === '[') {
+        inRegexCharClass = true;
+        out += ' ';
+        i++;
+        continue;
+      }
+      if (ch === ']' && inRegexCharClass) {
+        inRegexCharClass = false;
+        out += ' ';
+        i++;
+        continue;
+      }
+      if (ch === '/' && !inRegexCharClass) {
+        out += ' ';
+        i++;
+        while (i < len && /[a-z]/i.test(rawSrc[i])) {
+          out += ' ';
+          i++;
+        }
+        inRegex = false;
+        continue;
+      }
+      out += ' ';
+      i++;
+      continue;
+    }
+
+    const inTemplateStatic = isJsTs && templateDepth > 0 && tplBraceStack.length < templateDepth;
+
+    if (inTemplateStatic) {
+      if (ch === '\\' && i + 1 < len) {
+        out += '  ';
+        i += 2;
+        continue;
+      }
+      if (ch === '`') {
+        out += ' ';
+        templateDepth--;
+        i++;
+        continue;
+      }
+      if (ch === '$' && next === '{') {
+        out += ' {';
+        braceDepth++;
+        tplBraceStack.push(braceDepth);
+        i += 2;
+        continue;
+      }
+      out += ' ';
+      i++;
+      continue;
+    }
+
+    if (ch === '{') {
+      braceDepth++;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === '}') {
+      if (tplBraceStack.length > 0 && braceDepth === tplBraceStack[tplBraceStack.length - 1]) {
+        braceDepth--;
+        tplBraceStack.pop();
+        out += '}';
+        i++;
+        continue;
+      }
+      braceDepth = Math.max(0, braceDepth - 1);
+      out += ch;
+      i++;
+      continue;
+    }
+
+    if (isPy) {
+      if (ch === '#') {
+        inLineComment = true;
+        out += ' ';
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        if (next === '"' && next2 === '"') {
+          inPyTripleDouble = true;
+          out += '   ';
+          i += 3;
+          continue;
+        }
+        inDoubleQuote = true;
+        out += ' ';
+        i++;
+        continue;
+      }
+      if (ch === "'") {
+        if (next === "'" && next2 === "'") {
+          inPyTripleSingle = true;
+          out += '   ';
+          i += 3;
+          continue;
+        }
+        inSingleQuote = true;
+        out += ' ';
+        i++;
+        continue;
+      }
+      out += ch;
+      i++;
+      continue;
+    }
+
+    if (ch === '/' && next === '/') {
+      inLineComment = true;
+      out += '  ';
+      i += 2;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      inBlockComment = true;
+      out += '  ';
+      i += 2;
+      continue;
+    }
+
+    if (isJsTs && ch === '/' && canPrecedeRegexLiteral(out)) {
+      inRegex = true;
+      inRegexCharClass = false;
+      out += ' ';
+      i++;
+      continue;
+    }
+
+    if (isJsTs && ch === '`') {
+      templateDepth++;
+      out += ' ';
+      i++;
+      continue;
+    }
+
+    if (isGo && ch === '`') {
+      out += ' ';
+      i++;
+      while (i < len && rawSrc[i] !== '`') {
+        if (rawSrc[i] === '\r' || rawSrc[i] === '\n') {
+          out += rawSrc[i];
+        } else {
+          out += ' ';
+        }
+        i++;
+      }
+      if (i < len && rawSrc[i] === '`') {
+        out += ' ';
+        i++;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inDoubleQuote = true;
+      out += ' ';
+      i++;
+      continue;
+    }
+    if (ch === "'") {
+      if (ext === '.rs') {
+        let isChar = false;
+        if (rawSrc[i + 1] === '\\') {
+          const end = rawSrc.indexOf("'", i + 2);
+          if (end !== -1 && end - i <= 10 && !rawSrc.slice(i, end).includes('\n')) {
+            isChar = true;
+          }
+        } else if (i + 2 < len && rawSrc[i + 2] === "'") {
+          isChar = true;
+        }
+        if (!isChar) {
+          out += ch;
+          i++;
+          continue;
+        }
+      }
+      inSingleQuote = true;
+      out += ' ';
+      i++;
+      continue;
+    }
+
+    out += ch;
+    i++;
+  }
+
+  return out;
+}
+
 export function stripCStyleComments(input: string): string {
+  if (!input) return '';
   let out = '';
   let i = 0;
   const len = input.length;
@@ -131,42 +624,41 @@ export function stripCStyleComments(input: string): string {
     const next = i + 1 < len ? input[i + 1] : '';
 
     if (inSingle) {
-      out += ch;
       if (ch === '\\' && i + 1 < len) {
-        out += input[i + 1];
+        out += ch + input[i + 1];
         i += 2;
         continue;
       }
       if (ch === "'") inSingle = false;
+      out += ch;
       i++;
       continue;
     }
 
     if (inDouble) {
-      out += ch;
       if (ch === '\\' && i + 1 < len) {
-        out += input[i + 1];
+        out += ch + input[i + 1];
         i += 2;
         continue;
       }
       if (ch === '"') inDouble = false;
+      out += ch;
       i++;
       continue;
     }
 
     if (inTemplate) {
-      out += ch;
       if (ch === '\\' && i + 1 < len) {
-        out += input[i + 1];
+        out += ch + input[i + 1];
         i += 2;
         continue;
       }
       if (ch === '`') inTemplate = false;
+      out += ch;
       i++;
       continue;
     }
 
-    // Check comment starts
     if (ch === '/' && next === '/') {
       i += 2;
       while (i < len && input[i] !== '\n') i++;
@@ -182,7 +674,6 @@ export function stripCStyleComments(input: string): string {
       continue;
     }
 
-    // Check JavaScript/TypeScript regular expression literal
     if (ch === '/' && canPrecedeRegexLiteral(out)) {
       out += ch;
       i++;
@@ -233,6 +724,45 @@ export function stripCStyleComments(input: string): string {
   }
 
   return out;
+}
+
+export function normalizeCodeStructureV1(code: string, ext = '.ts'): string {
+  if (!code) return '';
+  let stripped = code;
+  if (ext === '.py') {
+    stripped = stripped
+      .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, ' ')
+      .replace(/(^|\s)#[^\r\n]*/g, ' ');
+  } else {
+    stripped = stripCStyleComments(stripped);
+  }
+  return stripped
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([{}()[\];,:<>+=*/&|!?-])\s*/g, '$1')
+    .trim();
+}
+
+export function computeAstHashV1(code: string, ext = '.ts'): string {
+  const canonical = normalizeCodeStructureV1(code, ext);
+  return crypto.createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
+}
+
+export function normalizeCodeStructure(code: string, ext = '.ts'): string {
+  if (!code) return '';
+  let stripped = code;
+
+  if (ext === '.py') {
+    stripped = stripped
+      .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, ' ')
+      .replace(/(^|\s)#[^\r\n]*/g, ' ');
+  } else {
+    stripped = stripCStyleComments(stripped);
+  }
+
+  return stripped
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([{}()[\];,:<>+=*/&|!?-])\s*/g, '$1')
+    .trim();
 }
 
 export function computeAstHash(code: string, ext = '.ts'): string {
@@ -448,7 +978,7 @@ function findSymbolDeclarationInLines(
     },
     {
       kind: 'type',
-      regex: new RegExp(`^\\s*(?:export\\s+)?type\\s+${esc}\\s*(?:<[^>]*>)?\\s*=`),
+      regex: new RegExp(`^\\s*(?:export\\s+)?type\\s+${esc}\\b`),
     },
     // TS / JS function
     {
@@ -478,13 +1008,13 @@ function findSymbolDeclarationInLines(
     // TS / JS const / let / var exported or arrow function / object
     {
       kind: 'variable',
-      regex: new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${esc}\\s*(?::[^=]+)?=`),
+      regex: new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${esc}\\b`),
     },
     // Class method in TS/JS/Java/C# (e.g., "public async search(" or "private initSchema(")
     {
       kind: 'method',
       regex: new RegExp(
-        `^\\s*(?:(?:public|private|protected|static|readonly|async|override|virtual|inline)\\s+)*${esc}\\s*(?:<[^>]*>)?\\s*\\([^;{]*(?:\\{.*)?$`
+        `^\\s*(?:(?:public|private|protected|static|readonly|async|override|virtual|inline|\\*)\\s+)*${esc}\\s*(?:<[^>]*>)?\\s*\\([^;{]*(?:\\{.*)?$`
       ),
     },
     // C / C++ function definition: ReturnType SymbolName(args...)
@@ -504,7 +1034,7 @@ function findSymbolDeclarationInLines(
         .replace(/\/\*.*?\*\//g, '')
         .replace(/\/\*.*$/, '');
       const trimmed = cleanLine.trim();
-      if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
+      if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
         continue;
       }
 
@@ -523,13 +1053,58 @@ function findSymbolDeclarationInLines(
               /\b(?:public|private|protected|static|async|function|def|fn|func|void|int|char|bool|float|double|uint\d+_t|int\d+_t|size_t|long|short)\b/.test(
                 cleanLine
               );
-            const opensBraceSoon =
-              cleanLine.includes('{') ||
-              (i + 1 < lines.length && lines[i + 1].includes('{')) ||
-              (i + 2 < lines.length && lines[i + 2].includes('{')) ||
-              (i + 3 < lines.length && lines[i + 3].includes('{'));
-            if (!hasModifierOrKeyword && !opensBraceSoon) {
-              continue;
+            if (!hasModifierOrKeyword) {
+              let pDepth = 0;
+              let foundParen = false;
+              let isDecl = false;
+              const maxL = Math.min(lines.length, i + 30);
+              for (let lineIdx = i; lineIdx < maxL; lineIdx++) {
+                const l = lines[lineIdx].replace(/\/\/.*$/, '');
+                for (let ci = 0; ci < l.length; ci++) {
+                  const ch = l[ci];
+                  if (ch === '(') {
+                    pDepth++;
+                    foundParen = true;
+                  } else if (ch === ')') {
+                    pDepth = Math.max(0, pDepth - 1);
+                    if (foundParen && pDepth === 0) {
+                      const rest = l.slice(ci + 1).trim();
+                      if (
+                        rest &&
+                        (rest.startsWith('{') ||
+                          rest.startsWith(':') ||
+                          rest.startsWith('->') ||
+                          rest.startsWith('=>') ||
+                          /^(?:where|throws|noexcept|const|volatile)\b/.test(rest))
+                      ) {
+                        isDecl = true;
+                      } else if (!rest) {
+                        for (let nextL = lineIdx + 1; nextL < Math.min(lines.length, lineIdx + 5); nextL++) {
+                          const trimmedNext = lines[nextL].trim();
+                          if (!trimmedNext || trimmedNext.startsWith('//')) continue;
+                          if (
+                            trimmedNext.startsWith('{') ||
+                            trimmedNext.startsWith(':') ||
+                            trimmedNext.startsWith('->') ||
+                            trimmedNext.startsWith('=>') ||
+                            /^(?:where|throws|noexcept|const|volatile)\b/.test(trimmedNext)
+                          ) {
+                            isDecl = true;
+                          }
+                          break;
+                        }
+                      }
+                      break;
+                    }
+                  } else if (ch === ';' && !foundParen) {
+                    break;
+                  }
+                }
+                if (foundParen && pDepth === 0) break;
+              }
+              if (!isDecl) {
+                continue;
+              }
             }
           }
 
@@ -552,7 +1127,7 @@ function findSymbolDeclarationInLines(
   return null;
 }
 
-function findBraceBlockEnd(lines: string[], startIndex: number): number {
+export function findBraceBlockEndV1(lines: string[], startIndex: number): number {
   let depth = 0;
   let foundOpenBrace = false;
   let parenDepth = 0;
@@ -594,12 +1169,313 @@ function findBraceBlockEnd(lines: string[], startIndex: number): number {
   return Math.min(lines.length - 1, startIndex + 80);
 }
 
-function findPythonBlockEnd(lines: string[], startIndex: number): number {
-  const startLine = lines[startIndex];
-  const baseIndent = startLine.match(/^\s*/)?.[0].length ?? 0;
-  let lastContentLine = startIndex;
+const TYPE_OPERATORS = new Set([
+  ':',
+  '|',
+  '&',
+  '?',
+  '<',
+  ',',
+  '=>',
+  'extends',
+  'infer',
+  'keyof',
+  'is',
+  'readonly',
+  'typeof',
+  'in',
+  'struct',
+  'interface',
+]);
 
-  for (let i = startIndex + 1; i < lines.length; i++) {
+function getPrecedingToken(
+  mLines: string[],
+  lineIdx: number,
+  charIdx: number,
+  startLineIdx: number
+): string {
+  let l = lineIdx;
+  let c = charIdx - 1;
+
+  while (l >= startLineIdx) {
+    const line = mLines[l] ?? '';
+    while (c >= 0) {
+      const ch = line[c];
+      if (ch !== ' ' && ch !== '\t' && ch !== '\r' && ch !== '\n') {
+        if (ch === '>' && c > 0 && line[c - 1] === '=') {
+          return '=>';
+        }
+        if (/^[:|&?=\],;()<>{}]/.test(ch)) {
+          return ch;
+        }
+        let idStart = c;
+        while (idStart >= 0 && /[A-Za-z0-9_$]/.test(line[idStart])) {
+          idStart--;
+        }
+        return line.slice(idStart + 1, c + 1);
+      }
+      c--;
+    }
+    l--;
+    if (l >= startLineIdx) {
+      c = (mLines[l] ?? '').length - 1;
+    }
+  }
+  return '';
+}
+
+export function findBraceBlockEnd(
+  lines: string[],
+  startIndex: number,
+  ext = '.ts',
+  maskedLines?: string[]
+): number {
+  if (startIndex < 0 || startIndex >= lines.length) return startIndex;
+
+  // 1. C preprocessor macro line continuations `\`
+  if (/^\s*#\s*define\b/.test(lines[startIndex])) {
+    let m = startIndex;
+    while (m < lines.length && lines[m].trimEnd().endsWith('\\')) {
+      m++;
+    }
+    return m;
+  }
+
+  const mLines =
+    maskedLines && maskedLines.length === lines.length
+      ? maskedLines
+      : maskSourceLexical(lines.join('\n'), ext).split(/\r?\n/);
+
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let typeBraceDepth = 0;
+  let foundBodyOpen = false;
+
+  const startLine = lines[startIndex] || '';
+  const isTypeDecl = /^\s*(?:export\s+)?type\b/.test(startLine);
+  const isVarDecl = /^\s*(?:export\s+)?(?:const|let|var)\b/.test(startLine);
+  const isCpp = /^\.(?:cpp|hpp|cc|c|h)$/i.test(ext);
+
+  let seenTopLevelEquals = false;
+  let seenArrow = false;
+  let inCppInitList = false;
+
+  for (let i = startIndex; i < lines.length; i++) {
+    let line = mLines[i] ?? '';
+
+    for (let c = 0; c < line.length; c++) {
+      const ch = line[c];
+      const next = c + 1 < line.length ? line[c + 1] : '';
+
+      if (ch === ' ' || ch === '\t') continue;
+
+      if (ch === '(') {
+        parenDepth++;
+        continue;
+      }
+      if (ch === ')') {
+        parenDepth = Math.max(0, parenDepth - 1);
+        continue;
+      }
+      if (ch === '[') {
+        bracketDepth++;
+        continue;
+      }
+      if (ch === ']') {
+        bracketDepth = Math.max(0, bracketDepth - 1);
+        continue;
+      }
+
+      if (ch === '<' && !seenArrow && (parenDepth === 0 || bracketDepth === 0)) {
+        const prevToken = getPrecedingToken(mLines, i, c, startIndex);
+        if (
+          prevToken &&
+          (/^[A-Za-z_$]/.test(prevToken) ||
+            prevToken === ':' ||
+            prevToken === '->' ||
+            prevToken === '=' ||
+            prevToken === ',')
+        ) {
+          const nextPos = trySkipGenericAngles(line, c);
+          if (nextPos > c) {
+            c = nextPos - 1;
+            continue;
+          }
+          // Multiline generic support (up to 30 lines forward)
+          const lookaheadMax = Math.min(mLines.length, i + 30);
+          if (lookaheadMax > i + 1) {
+            const joined = mLines.slice(i, lookaheadMax).join('\n');
+            const multiNextPos = trySkipGenericAngles(joined, c);
+            if (multiNextPos > c) {
+              const consumed = joined.slice(0, multiNextPos);
+              const parts = consumed.split('\n');
+              const lineOffset = parts.length - 1;
+              const colOffset = parts[parts.length - 1].length;
+              i += lineOffset;
+              line = mLines[i] ?? '';
+              c = colOffset - 1;
+              continue;
+            }
+          }
+        }
+      }
+
+      if (isCpp && ch === ':' && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0 && typeBraceDepth === 0) {
+        inCppInitList = true;
+      }
+
+      if (isVarDecl && !seenTopLevelEquals && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0 && typeBraceDepth === 0) {
+        if (ch === '=') {
+          seenTopLevelEquals = true;
+          continue;
+        }
+        if (ch === ';') {
+          return i;
+        }
+      }
+
+      if (ch === '=' && next === '>') {
+        if (isVarDecl && seenTopLevelEquals && parenDepth === 0 && bracketDepth === 0 && typeBraceDepth === 0) {
+          seenArrow = true;
+        }
+        c++;
+        continue;
+      }
+
+      if (ch === ';' && parenDepth === 0 && bracketDepth === 0 && typeBraceDepth === 0) {
+        if (!foundBodyOpen) {
+          return i;
+        }
+      }
+
+      if (ch === '{') {
+        if (parenDepth > 0 || bracketDepth > 0) {
+          continue;
+        }
+
+        if (foundBodyOpen) {
+          braceDepth++;
+          continue;
+        }
+
+        if (typeBraceDepth > 0) {
+          typeBraceDepth++;
+          continue;
+        }
+
+        if (isTypeDecl) {
+          foundBodyOpen = true;
+          braceDepth = 1;
+          continue;
+        }
+
+        if (isVarDecl) {
+          if (!seenTopLevelEquals) {
+            typeBraceDepth = 1;
+            continue;
+          }
+          if (seenArrow) {
+            foundBodyOpen = true;
+            braceDepth = 1;
+            continue;
+          }
+          const prevToken = getPrecedingToken(mLines, i, c, startIndex);
+          if (prevToken && TYPE_OPERATORS.has(prevToken)) {
+            typeBraceDepth = 1;
+            continue;
+          }
+          foundBodyOpen = true;
+          braceDepth = 1;
+          continue;
+        }
+
+        if (isCpp && inCppInitList) {
+          const prevToken = getPrecedingToken(mLines, i, c, startIndex);
+          if (prevToken && /^[A-Za-z_][A-Za-z0-9_]*$/.test(prevToken) && prevToken !== 'try') {
+            typeBraceDepth = 1;
+            continue;
+          }
+          inCppInitList = false;
+          foundBodyOpen = true;
+          braceDepth = 1;
+          continue;
+        }
+
+        // For function / method / constructor / class / interface / struct:
+        const prevToken = getPrecedingToken(mLines, i, c, startIndex);
+        if (prevToken && TYPE_OPERATORS.has(prevToken)) {
+          typeBraceDepth = 1;
+          continue;
+        }
+
+        foundBodyOpen = true;
+        braceDepth = 1;
+        continue;
+      }
+
+      if (ch === '}') {
+        if (parenDepth > 0 || bracketDepth > 0) {
+          continue;
+        }
+
+        if (typeBraceDepth > 0) {
+          typeBraceDepth--;
+          continue;
+        }
+
+        if (foundBodyOpen) {
+          braceDepth--;
+          if (braceDepth <= 0) {
+            return i;
+          }
+          continue;
+        }
+      }
+    }
+
+    if (seenArrow && !foundBodyOpen && parenDepth === 0 && bracketDepth === 0 && typeBraceDepth === 0) {
+      const restOfLine = line.trim();
+      if (restOfLine && !restOfLine.startsWith('{') && restOfLine.includes(';')) {
+        return i;
+      }
+    }
+
+    if (!foundBodyOpen && i - startIndex >= 60) {
+      return i;
+    }
+  }
+
+  return Math.min(lines.length - 1, startIndex + 120);
+}
+
+function findPythonBlockEnd(lines: string[], declLineIndex: number): number {
+  if (declLineIndex < 0 || declLineIndex >= lines.length) return declLineIndex;
+
+  let parenDepth = 0;
+  let colonLine = declLineIndex;
+  let foundColon = false;
+
+  for (let i = declLineIndex; i < lines.length; i++) {
+    const line = lines[i];
+    for (let c = 0; c < line.length; c++) {
+      const ch = line[c];
+      if (ch === '#') break;
+      if (ch === '(' || ch === '[' || ch === '{') parenDepth++;
+      else if (ch === ')' || ch === ']' || ch === '}') parenDepth = Math.max(0, parenDepth - 1);
+      else if (ch === ':' && parenDepth === 0) {
+        colonLine = i;
+        foundColon = true;
+        break;
+      }
+    }
+    if (foundColon) break;
+  }
+
+  const baseIndent = lines[declLineIndex].match(/^\s*/)?.[0].length ?? 0;
+  let lastContentLine = colonLine;
+
+  for (let i = colonLine + 1; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
@@ -667,6 +1543,32 @@ export function extractSymbolFingerprint(
     }
   }
 
+  // Short connection: if no direct file match and .codegraph/codegraph.db exists, query candidate files
+  if (candidateFiles.length === 0 && !parsed.isWholeFile) {
+    const cgDbPath = path.join(root, '.codegraph', 'codegraph.db');
+    if (fs.existsSync(cgDbPath)) {
+      try {
+        const db = new DatabaseSync(cgDbPath, { readOnly: true });
+        try {
+          const stmt = db.prepare(
+            `SELECT file_path FROM nodes WHERE name = ? OR qualified_name LIKE ? LIMIT 5`
+          );
+          const rows = stmt.all(parsed.symbolName, `%${parsed.symbolName}%`) as Array<{ file_path: string }>;
+          for (const row of rows) {
+            if (row.file_path) {
+              const full = path.resolve(root, row.file_path);
+              if (fs.existsSync(full) && !candidateFiles.includes(full)) {
+                candidateFiles.push(full);
+              }
+            }
+          }
+        } finally {
+          db.close();
+        }
+      } catch {}
+    }
+  }
+
   if (parsed.isWholeFile) {
     if (candidateFiles.length === 0) return null;
     const targetFile = candidateFiles[0];
@@ -705,12 +1607,20 @@ export function extractSymbolFingerprint(
       if (!decl) continue;
 
       const ext = path.extname(filePath).toLowerCase();
+      let startIdx = decl.lineIndex;
+      if (ext === '.py') {
+        let s = decl.lineIndex - 1;
+        while (s >= 0 && /^\s*@/.test(lines[s])) {
+          startIdx = s;
+          s--;
+        }
+      }
       const endIdx =
         ext === '.py'
           ? findPythonBlockEnd(lines, decl.lineIndex)
-          : findBraceBlockEnd(lines, decl.lineIndex);
+          : findBraceBlockEnd(lines, decl.lineIndex, ext);
 
-      const blockCode = lines.slice(decl.lineIndex, endIdx + 1).join('\n');
+      const blockCode = lines.slice(startIdx, endIdx + 1).join('\n');
       const relPath = resolveCanonicalRelativePath(root, filePath);
 
       return {
@@ -718,7 +1628,7 @@ export function extractSymbolFingerprint(
         file_path: relPath,
         file: relPath,
         kind: decl.kind,
-        start_line: decl.lineIndex + 1,
+        start_line: startIdx + 1,
         end_line: endIdx + 1,
         signature: decl.signature,
         ast_hash: computeAstHash(blockCode, ext),
@@ -782,9 +1692,49 @@ export function findSymbolCallers(
 
   const esc = escapeRegExp(parsed.symbolName);
   const refRegex = new RegExp(`\\b${esc}\\b`);
-  const files = collectWorkspaceSourceFiles(root, 300);
   const callers: string[] = [];
 
+  // Short connection: CodeGraph caller edges query if .codegraph/codegraph.db exists
+  const cgDbPath = path.join(root, '.codegraph', 'codegraph.db');
+  if (fs.existsSync(cgDbPath)) {
+    try {
+      const db = new DatabaseSync(cgDbPath, { readOnly: true });
+      try {
+        const stmt = db.prepare(`
+          SELECT DISTINCT n_src.file_path, e.line
+          FROM edges e
+          JOIN nodes n_tgt ON e.target = n_tgt.id
+          JOIN nodes n_src ON e.source = n_src.id
+          WHERE (n_tgt.name = ? OR n_tgt.qualified_name LIKE ?) AND e.kind = 'call' AND e.line IS NOT NULL
+          LIMIT ?
+        `);
+        const rows = stmt.all(parsed.symbolName, `%${parsed.symbolName}%`, maxCallers) as Array<{
+          file_path: string;
+          line: number;
+        }>;
+        for (const r of rows) {
+          if (r.file_path && r.line) {
+            const rel = r.file_path.replace(/\\/g, '/');
+            if (rel === defFilePath && r.line >= defStartLine && r.line <= defEndLine) {
+              continue;
+            }
+            const callerEntry = `${rel}:${r.line}`;
+            if (!callers.includes(callerEntry)) {
+              callers.push(callerEntry);
+            }
+          }
+        }
+      } finally {
+        db.close();
+      }
+    } catch {}
+  }
+
+  if (callers.length >= maxCallers) {
+    return callers;
+  }
+
+  const files = collectWorkspaceSourceFiles(root, 300);
   for (const filePath of files) {
     if (callers.length >= maxCallers) break;
     let raw: string;
@@ -817,7 +1767,10 @@ export function findSymbolCallers(
         continue;
       }
       if (refRegex.test(trimmed)) {
-        callers.push(`${rel}:${lineNo}`);
+        const callerEntry = `${rel}:${lineNo}`;
+        if (!callers.includes(callerEntry)) {
+          callers.push(callerEntry);
+        }
       }
     }
   }
@@ -1022,17 +1975,25 @@ function extractSymbolFingerprintAtCommit(
       const decl = findSymbolDeclarationInLines(lines, parsed.symbolName, parsed.classHint);
       if (!decl) continue;
 
+      let startIdx = decl.lineIndex;
+      if (ext === '.py') {
+        let s = decl.lineIndex - 1;
+        while (s >= 0 && /^\s*@/.test(lines[s])) {
+          startIdx = s;
+          s--;
+        }
+      }
       const endIdx =
         ext === '.py'
           ? findPythonBlockEnd(lines, decl.lineIndex)
-          : findBraceBlockEnd(lines, decl.lineIndex);
-      const blockCode = lines.slice(decl.lineIndex, endIdx + 1).join('\n');
+          : findBraceBlockEnd(lines, decl.lineIndex, ext);
+      const blockCode = lines.slice(startIdx, endIdx + 1).join('\n');
 
       return {
         symbol: rawSpec,
         file_path: cleanRel,
         kind: decl.kind,
-        start_line: decl.lineIndex + 1,
+        start_line: startIdx + 1,
         end_line: endIdx + 1,
         signature: decl.signature,
         ast_hash: computeAstHash(blockCode, ext),
@@ -1089,10 +2050,95 @@ function extractSymbolFingerprintAtCommit(
   return null;
 }
 
+export function extractSymbolFingerprintAtCommitV1(
+  workspaceRoot: string,
+  commitSha: string,
+  rawSpec: string,
+  recordedFp?: SymbolFingerprint
+): SymbolFingerprint | null {
+  const parsed = parseSymbolTarget(rawSpec);
+  const candidateRelFiles: string[] = [];
+  const seenFiles = new Set<string>();
+
+  const addCandidate = (rel?: string) => {
+    if (!rel || rel === '(unrecorded)') return;
+    const clean = rel.replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
+    if (clean && !seenFiles.has(clean)) {
+      seenFiles.add(clean);
+      candidateRelFiles.push(clean);
+    }
+  };
+
+  addCandidate(parsed.fileHint);
+  addCandidate(recordedFp?.file_path);
+
+  const tryExtractFromGitFiles = (relFiles: string[]): SymbolFingerprint | null => {
+    for (const relFile of relFiles) {
+      const cleanRel = relFile.replace(/\\/g, '/').replace(/^\.\/+/, '');
+      let rawContent = '';
+      try {
+        const res = spawnSync('git', ['show', `${commitSha.trim()}:./${cleanRel}`], {
+          cwd: workspaceRoot,
+          encoding: 'utf8',
+          timeout: 2000,
+          maxBuffer: 4 * 1024 * 1024,
+        });
+        if (res.status !== 0 || typeof res.stdout !== 'string') continue;
+        rawContent = res.stdout;
+      } catch {
+        continue;
+      }
+
+      const ext = path.extname(cleanRel).toLowerCase();
+      if (parsed.isWholeFile) {
+        const lines = rawContent.split(/\r?\n/);
+        return {
+          symbol: rawSpec,
+          file_path: cleanRel,
+          kind: 'file',
+          start_line: 1,
+          end_line: lines.length,
+          signature: `file ${cleanRel} (${lines.length} lines)`,
+          ast_hash: computeAstHashV1(rawContent, ext),
+        };
+      }
+
+      if (!rawContent.includes(parsed.symbolName)) continue;
+      const lines = rawContent.split(/\r?\n/);
+      const decl = findSymbolDeclarationInLines(lines, parsed.symbolName, parsed.classHint);
+      if (!decl) continue;
+
+      const endIdx =
+        ext === '.py'
+          ? findPythonBlockEnd(lines, decl.lineIndex)
+          : findBraceBlockEndV1(lines, decl.lineIndex);
+      const blockCode = lines.slice(decl.lineIndex, endIdx + 1).join('\n');
+
+      return {
+        symbol: rawSpec,
+        file_path: cleanRel,
+        kind: decl.kind,
+        start_line: decl.lineIndex + 1,
+        end_line: endIdx + 1,
+        signature: decl.signature,
+        ast_hash: computeAstHashV1(blockCode, ext),
+      };
+    }
+    return null;
+  };
+
+  if (candidateRelFiles.length > 0) {
+    const directHit = tryExtractFromGitFiles(candidateRelFiles);
+    if (directHit) return directHit;
+  }
+
+  return null;
+}
+
 export function verifyMemoryFreshness(
   workspaceRoot: string,
   memory: EvoMemory,
-  options?: { includeCallers?: boolean }
+  options?: { includeCallers?: boolean; cacheDb?: DatabaseSync }
 ): MemoryVerificationReport {
   const root = path.resolve(workspaceRoot);
   const includeCallers = options?.includeCallers ?? true;
@@ -1100,14 +2146,86 @@ export function verifyMemoryFreshness(
   const currentBranch = resolveCurrentGitBranch(root);
   const hasCodeGraph = fs.existsSync(path.join(root, '.codegraph'));
 
-  const checks: SymbolDriftCheck[] = [];
-  const topologyAnchors: TopologyAnchor[] = [];
-
   const targetKeys =
     Object.keys(memory.ast_fingerprints).length > 0
       ? Object.keys(memory.ast_fingerprints)
       : memory.target_symbols;
 
+  // Level 1 Cache Check
+  const cacheDbPath = path.join(root, '.evo', '.cache', 'telemetry.db');
+  let cacheDb: DatabaseSync | null = options?.cacheDb ?? null;
+  const shouldCloseDb = !options?.cacheDb;
+  let canUseCache = false;
+  let memFileSig = '';
+  let targetFilesSig = '';
+
+  try {
+    if (!cacheDb && fs.existsSync(cacheDbPath)) {
+      cacheDb = new DatabaseSync(cacheDbPath);
+    }
+    if (cacheDb) {
+      const memFilePath = path.join(root, '.evo', 'memories', `${memory.id}.md`);
+      if (fs.existsSync(memFilePath)) {
+        const memStat = fs.statSync(memFilePath);
+        memFileSig = `${memStat.mtimeMs}:${memStat.size}`;
+        const targetSigs: string[] = [];
+        for (const symKey of targetKeys) {
+          const fp = memory.ast_fingerprints[symKey];
+          if (fp && fp.file_path && fp.file_path !== '(unrecorded)') {
+            const p = path.resolve(root, fp.file_path);
+            if (fs.existsSync(p)) {
+              const s = fs.statSync(p);
+              targetSigs.push(`${fp.file_path}:${s.mtimeMs}:${s.size}`);
+            } else {
+              targetSigs.push(`${fp.file_path}:missing`);
+            }
+          }
+        }
+        targetFilesSig = targetSigs.join('|');
+
+        try {
+          const stmt = cacheDb.prepare(`
+            SELECT parser_version, memory_file_sig, target_files_sig, report_json
+            FROM memory_verification_cache
+            WHERE memory_id = ?
+          `);
+          const row = stmt.get(memory.id) as {
+            parser_version: number;
+            memory_file_sig: string;
+            target_files_sig: string;
+            report_json: string;
+          } | undefined;
+
+          if (
+            row &&
+            row.parser_version === PARSER_VERSION &&
+            row.memory_file_sig === memFileSig &&
+            row.target_files_sig === targetFilesSig &&
+            !includeCallers
+          ) {
+            const cachedReport = JSON.parse(row.report_json) as MemoryVerificationReport;
+            if (shouldCloseDb && cacheDb) {
+              try { cacheDb.close(); } catch {}
+              cacheDb = null;
+            }
+            cachedReport.current_commit = currentCommit;
+            cachedReport.current_branch = currentBranch;
+            cachedReport.commit_match = memory.created_commit === currentCommit;
+            return cachedReport;
+          }
+        } catch {}
+        canUseCache = true;
+      }
+    }
+  } catch {
+    if (shouldCloseDb && cacheDb) {
+      try { cacheDb.close(); } catch {}
+      cacheDb = null;
+    }
+  }
+
+  const checks: SymbolDriftCheck[] = [];
+  const topologyAnchors: TopologyAnchor[] = [];
   let verifiedCount = 0;
 
   for (const symKey of targetKeys) {
@@ -1190,58 +2308,168 @@ export function verifyMemoryFreshness(
           : `view_file ${live.file_path} (lines ${live.start_line}-${live.end_line})`,
       });
     } else {
-      const callers = includeCallers
-        ? findSymbolCallers(
-            root,
-            symKey,
-            live.file_path,
-            live.start_line,
-            live.end_line,
-            5
-          )
-        : [];
+      // Check dual V1/V2 verification for truncated memories
+      let dualVerified = false;
+      const recordedSpan = recorded.end_line - recorded.start_line + 1;
+      const liveSpan = live.end_line - live.start_line + 1;
+      const createdCommit = (memory.created_commit || '').trim();
 
-      checks.push({
-        symbol: symKey,
-        status: 'MISMATCH',
-        recorded,
-        current: live,
-        detail: `AST structural drift detected for '${symKey}': recorded hash ${recorded.ast_hash} != live hash ${live.ast_hash} at ${live.file_path}:L${live.start_line}-L${live.end_line}.`,
-      });
+      if (
+        recordedSpan <= 12 &&
+        recordedSpan < liveSpan &&
+        createdCommit &&
+        createdCommit !== 'uncommitted' &&
+        isGitCommitPresent(root, createdCommit)
+      ) {
+        const fpAtCreatedV1 = extractSymbolFingerprintAtCommitV1(root, createdCommit, symKey, recorded);
+        const fpAtCreatedV2 = extractSymbolFingerprintAtCommit(root, createdCommit, symKey, recorded);
+        if (
+          fpAtCreatedV1 &&
+          fpAtCreatedV2 &&
+          fpAtCreatedV1.ast_hash === recorded.ast_hash &&
+          fpAtCreatedV2.ast_hash === live.ast_hash
+        ) {
+          dualVerified = true;
+        }
+      }
 
-      topologyAnchors.push({
-        symbol: symKey,
-        file_path: live.file_path,
-        lines: `L${live.start_line}-L${live.end_line} (MUTATED)`,
-        signature: live.signature,
-        status: 'MISMATCH',
-        callers,
-        codegraph_hint: hasCodeGraph
-          ? `codegraph explore "${parsed.symbolName}"`
-          : `view_file ${live.file_path} (lines ${live.start_line}-${live.end_line})`,
-      });
+      if (dualVerified) {
+        verifiedCount++;
+        const lineShiftNote =
+          recorded.start_line > 0 &&
+          (live.start_line !== recorded.start_line || live.file_path !== recorded.file_path)
+            ? ` (relocated from ${recorded.file_path}:L${recorded.start_line}-L${recorded.end_line} -> ${live.file_path}:L${live.start_line}-L${live.end_line}, AST hash intact)`
+            : '';
+
+        checks.push({
+          symbol: symKey,
+          status: 'VERIFIED',
+          recorded,
+          current: live,
+          detail: `AST fingerprint verified (${live.ast_hash}) at ${live.file_path}:L${live.start_line}-L${live.end_line}${lineShiftNote} (upgraded from truncated v1 hash ${recorded.ast_hash}).`,
+        });
+
+        const callers = includeCallers
+          ? findSymbolCallers(
+              root,
+              symKey,
+              live.file_path,
+              live.start_line,
+              live.end_line,
+              5
+            )
+          : [];
+
+        topologyAnchors.push({
+          symbol: symKey,
+          file_path: live.file_path,
+          lines: `L${live.start_line}-L${live.end_line}`,
+          signature: live.signature,
+          status: 'VERIFIED',
+          callers,
+          codegraph_hint: hasCodeGraph
+            ? `codegraph explore "${parsed.symbolName}"`
+            : `view_file ${live.file_path} (lines ${live.start_line}-${live.end_line})`,
+        });
+      } else {
+        const callers = includeCallers
+          ? findSymbolCallers(
+              root,
+              symKey,
+              live.file_path,
+              live.start_line,
+              live.end_line,
+              5
+            )
+          : [];
+
+        checks.push({
+          symbol: symKey,
+          status: 'MISMATCH',
+          recorded,
+          current: live,
+          detail: `AST structural drift detected for '${symKey}': recorded hash ${recorded.ast_hash} != live hash ${live.ast_hash} at ${live.file_path}:L${live.start_line}-L${live.end_line}.`,
+        });
+
+        topologyAnchors.push({
+          symbol: symKey,
+          file_path: live.file_path,
+          lines: `L${live.start_line}-L${live.end_line} (MUTATED)`,
+          signature: live.signature,
+          status: 'MISMATCH',
+          callers,
+          codegraph_hint: hasCodeGraph
+            ? `codegraph explore "${parsed.symbolName}"`
+            : `view_file ${live.file_path} (lines ${live.start_line}-${live.end_line})`,
+        });
+      }
     }
   }
 
   const totalSymbols = targetKeys.length;
 
-  // Tier 1: All symbols verified in live working tree (shared code across branches or current branch)
-  if (totalSymbols > 0 && verifiedCount === totalSymbols) {
-    return {
+  const buildResult = (
+    overallStatus: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE',
+    confidenceTag: string,
+    commitMatch: boolean,
+    recCommit: string,
+    recBranch: string | undefined,
+    branchVerifiedCount: number
+  ): MemoryVerificationReport => {
+    const report: MemoryVerificationReport = {
       memory_id: memory.id,
-      overall_status: 'VERIFIED',
-      confidence_tag: '[置信度: HIGH (≥80%)]',
-      commit_match: memory.created_commit === currentCommit,
-      recorded_commit: memory.created_commit,
+      overall_status: overallStatus,
+      confidence_tag: confidenceTag,
+      commit_match: commitMatch,
+      recorded_commit: recCommit,
       current_commit: currentCommit,
-      recorded_branch: memory.created_branch,
+      recorded_branch: recBranch,
       current_branch: currentBranch,
-      branch_verified_count: 0,
+      branch_verified_count: branchVerifiedCount,
       verified_count: verifiedCount,
       total_symbols: totalSymbols,
       checks,
       topology_anchors: topologyAnchors,
     };
+
+    if (canUseCache && cacheDb) {
+      try {
+        const insStmt = cacheDb.prepare(`
+          INSERT OR REPLACE INTO memory_verification_cache
+          (memory_id, parser_version, memory_file_sig, target_files_sig, workspace_sources_sig, overall_status, report_json, cached_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        insStmt.run(
+          memory.id,
+          PARSER_VERSION,
+          memFileSig,
+          targetFilesSig,
+          '',
+          overallStatus,
+          JSON.stringify(report),
+          new Date().toISOString()
+        );
+      } catch {} finally {
+        if (shouldCloseDb && cacheDb) {
+          try { cacheDb.close(); } catch {}
+          cacheDb = null;
+        }
+      }
+    }
+
+    return report;
+  };
+
+  // Tier 1: All symbols verified in live working tree
+  if (totalSymbols > 0 && verifiedCount === totalSymbols) {
+    return buildResult(
+      'VERIFIED',
+      '[置信度: HIGH (≥80%)]',
+      memory.created_commit === currentCommit,
+      memory.created_commit,
+      memory.created_branch,
+      0
+    );
   }
 
   // Tier 2: Git-Topology-Aware Fallback (OTHER_BRANCH vs STALE)
@@ -1330,40 +2558,26 @@ export function verifyMemoryFreshness(
     }
 
     if (verifiedCount + branchVerifiedCount === totalSymbols) {
-      return {
-        memory_id: memory.id,
-        overall_status: 'OTHER_BRANCH',
-        confidence_tag: '[置信度: MID (50–80%) · OTHER_BRANCH]',
-        commit_match: false,
-        recorded_commit: resolvedCommitRef,
-        current_commit: currentCommit,
-        recorded_branch: resolvedBranchLabel || 'other-branch',
-        current_branch: currentBranch,
-        branch_verified_count: branchVerifiedCount,
-        verified_count: verifiedCount,
-        total_symbols: totalSymbols,
-        checks,
-        topology_anchors: topologyAnchors,
-      };
+      return buildResult(
+        'OTHER_BRANCH',
+        '[置信度: MID (50–80%) · OTHER_BRANCH]',
+        false,
+        resolvedCommitRef,
+        resolvedBranchLabel || 'other-branch',
+        branchVerifiedCount
+      );
     }
   }
 
   // Tier 3: True code drift (STALE)
-  return {
-    memory_id: memory.id,
-    overall_status: 'STALE',
-    confidence_tag: '[置信度: LOW (20–50%) · STALE]',
-    commit_match: memory.created_commit === currentCommit,
-    recorded_commit: memory.created_commit,
-    current_commit: currentCommit,
-    recorded_branch: memory.created_branch,
-    current_branch: currentBranch,
-    branch_verified_count: 0,
-    verified_count: verifiedCount,
-    total_symbols: totalSymbols,
-    checks,
-    topology_anchors: topologyAnchors,
-  };
+  return buildResult(
+    'STALE',
+    '[置信度: LOW (20–50%) · STALE]',
+    memory.created_commit === currentCommit,
+    memory.created_commit,
+    memory.created_branch,
+    0
+  );
 }
 
 export function extractSymbolsFromGitCommit(

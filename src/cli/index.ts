@@ -6,7 +6,7 @@ import { parseInitTargets, runInit, runUninstall } from './init.js';
 import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from './visualizer.js';
-import { parseHookEvent, parseHookPayloadArg, runHook } from './hook.js';
+import { parseHookEvent, parseHookHarnessArg, parseHookPayloadArg, runHook } from './hook.js';
 import { renderVirtualizeReport, runVirtualize } from './virtualize.js';
 import { runOptimizeCli } from './optimize.js';
 import { startMcpStdioServer } from '../mcp/server.js';
@@ -416,6 +416,7 @@ export function runCli(argv: string[]): void {
       }
       const event = parseHookEvent(args);
       const payload = parseHookPayloadArg(args);
+      const harness = parseHookHarnessArg(args);
 
       const isTestProcess = Boolean(process.argv[1]?.includes('.test.'));
 
@@ -424,6 +425,7 @@ export function runCli(argv: string[]): void {
           const result = runHook(event, {
             workspaceRoot,
             payload,
+            harness,
             stdinData: stdinData || undefined,
           });
           if (result.output) {
@@ -441,6 +443,7 @@ export function runCli(argv: string[]): void {
       const result = runHook(event, {
         workspaceRoot,
         payload,
+        harness,
       });
       if (result.output) {
         console.log(result.output);

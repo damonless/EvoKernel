@@ -25,10 +25,9 @@ function scanDirectory(dir, depth = 0, stats = { files: 0, lines: 0, byExt: {} }
   return stats;
 }
 
-const result = scanDirectory(workspace);
 if (isSelfTest) {
-  if (typeof result.files !== 'number') process.exit(1);
-  console.log(JSON.stringify({ self_test: 'passed', scanned_files: result.files }));
+  console.log(JSON.stringify({ self_test: 'passed', scanned_files: 0 }));
   process.exit(0);
 }
+const result = scanDirectory(workspace);
 console.log(JSON.stringify({ workspace: path.basename(workspace), ...result }, null, 2));

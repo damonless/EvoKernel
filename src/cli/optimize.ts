@@ -49,7 +49,7 @@ export function parseOptimizeFlags(
   const rawDim = parseStringFlag(args, '--dim');
   const dim = rawDim === 'inv' || rawDim === 'dom' || rawDim === 'both' ? rawDim : 'both';
 
-  let k: number | undefined;
+  let k = 3;
   const kStr = parseStringFlag(args, '-k') || parseStringFlag(args, '--k');
   if (kStr) {
     const parsedK = Number.parseInt(kStr, 10);
@@ -58,6 +58,11 @@ export function parseOptimizeFlags(
     }
   }
 
+  const roundsStr = parseStringFlag(args, '--rounds');
+  const rounds = roundsStr ? Number.parseInt(roundsStr, 10) : undefined;
+  const auto = args.includes('--auto');
+  const prepare = args.includes('--prepare');
+  const worktreeSetupCmd = parseStringFlag(args, '--worktree-setup-cmd');
   const proposerCmd = parseStringFlag(args, '--proposer-cmd');
   const probeCmd = parseStringFlag(args, '--probe-cmd');
   const leakGlobs = parseMultiStringFlag(args, '--leak-glob');
@@ -78,6 +83,10 @@ export function parseOptimizeFlags(
     deliverables: deliverables.map((d) => path.resolve(workspaceRoot, d)),
     dim,
     k,
+    rounds,
+    auto,
+    prepare,
+    worktreeSetupCmd,
     proposerCmd,
     probeCmd,
     leakGlobs,

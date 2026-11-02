@@ -229,8 +229,16 @@ export const META_MCP_TOOLS = [
   },
 ] as const;
 
+export function isSubpathOf(parent: string, child: string): boolean {
+  const normParent = path.resolve(parent);
+  const normChild = path.resolve(child);
+  const rel = path.relative(normParent, normChild);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 interface WorkspaceContext {
   rootDir: string;
+  requestWorkspaceDir?: string;
   storage: EvoStorage;
   telemetry?: EvoTelemetry;
   gatekeeper?: EvoGatekeeper;
@@ -242,6 +250,8 @@ interface WorkspaceContext {
 export class EvoMcpDispatcher {
   private readonly defaultRoot: string;
   private readonly contexts = new Map<string, WorkspaceContext>();
+  private clientRoots: string[] = [];
+  private rootsReadyPromise?: Promise<void>;
   private activeWorkspaceDir: string;
   private storage: EvoStorage;
   private telemetry?: EvoTelemetry;
@@ -258,6 +268,17 @@ export class EvoMcpDispatcher {
     this.telemetry = initialCtx.telemetry;
     this.gatekeeper = initialCtx.gatekeeper;
     this.proxyManager = initialCtx.proxyManager;
+  }
+
+  public setClientRoots(roots: string[], readyPromise?: Promise<void>): void {
+    this.clientRoots = roots.map((r) => path.resolve(r));
+    if (readyPromise) {
+      this.rootsReadyPromise = readyPromise;
+    }
+  }
+
+  public getClientRoots(): string[] {
+    return [...this.clientRoots];
   }
 
   public getProxyManager(): McpProxyManager {
@@ -366,10 +387,39 @@ export class EvoMcpDispatcher {
   private bindActiveContext(toolName: string, args: Record<string, unknown>): WorkspaceContext {
     const rawWs = args.workspace ?? args.workspace_path;
     let targetRoot = this.defaultRoot;
-    this.activeWorkspaceDir = this.defaultRoot;
+    let candidate = this.defaultRoot;
 
     if (typeof rawWs === 'string' && rawWs.trim()) {
-      const candidate = path.resolve(rawWs.trim());
+      const trimmed = rawWs.trim();
+      const isRel = !path.isAbsolute(trimmed);
+
+      if (isRel) {
+        if (this.clientRoots.length === 1) {
+          candidate = path.resolve(this.clientRoots[0], trimmed);
+        } else if (this.clientRoots.length > 1) {
+          if (toolName === 'evo_propose' || toolName === 'evo_compact') {
+            throw new Error(
+              'ERR_INVALID_SCHEMA: Write operations (evo_propose/evo_compact) cannot target ambiguous multi-root workspace.'
+            );
+          }
+          const rootWithEvo = this.clientRoots.find((r) => fs.existsSync(path.join(r, '.evo')));
+          candidate = path.resolve(rootWithEvo || this.clientRoots[0], trimmed);
+        } else {
+          candidate = path.resolve(this.defaultRoot, trimmed);
+        }
+      } else {
+        candidate = path.resolve(trimmed);
+      }
+
+      const isHomeOrFsRoot =
+        candidate.toLowerCase() === path.resolve(os.homedir()).toLowerCase() ||
+        path.resolve(candidate).toLowerCase() === path.parse(candidate).root.toLowerCase();
+      if (isHomeOrFsRoot && (toolName === 'evo_propose' || toolName === 'evo_compact')) {
+        throw new Error(
+          'ERR_INVALID_SCHEMA: Write operations (evo_propose/evo_compact) cannot target home directory or filesystem root.'
+        );
+      }
+
       if (isPluginOrExtensionInstallDir(candidate)) {
         // Explicit global fallback dir or plugin install dir binds to defaultRoot (or candidate if ~/.evo/global)
         const norm = candidate.replace(/\\/g, '/').toLowerCase();
@@ -379,10 +429,8 @@ export class EvoMcpDispatcher {
             path.resolve(process.env.EVO_GLOBAL_DIR).toLowerCase() === candidate.toLowerCase())
         ) {
           targetRoot = candidate;
-          this.activeWorkspaceDir = candidate;
         }
       } else {
-        this.activeWorkspaceDir = candidate;
         const nearestEvo = findNearestEvoWorkspace(candidate);
         if (nearestEvo) {
           targetRoot = nearestEvo;
@@ -390,10 +438,9 @@ export class EvoMcpDispatcher {
           // Module 1.2: Never fall back to ~/.evo/global on write operations!
           // If candidate is within this.defaultRoot, bind to this.defaultRoot (preserving subdirectory workspace isolation);
           // otherwise resolve nearest Git root (or candidate) and auto-initialize local Stealth .evo/
-          const localRoot =
-            candidate.toLowerCase().startsWith(this.defaultRoot.toLowerCase())
-              ? this.defaultRoot
-              : findGitRoot(candidate) || candidate;
+          const localRoot = isSubpathOf(this.defaultRoot, candidate)
+            ? this.defaultRoot
+            : findGitRoot(candidate) || candidate;
           fs.mkdirSync(localRoot, { recursive: true });
           const localStorage = new EvoStorage(localRoot);
           localStorage.ensureInitialized();
@@ -401,14 +448,17 @@ export class EvoMcpDispatcher {
           targetRoot = localRoot;
         } else {
           // Read/exec operations (evo_search, evo_inspect, evo_run): do not create .evo/ in uninitialized folders,
-          // but preserve this.activeWorkspaceDir = candidate for evo_run cwd & scope_glob filtering!
-          targetRoot = this.defaultRoot;
+          // but preserve candidate for evo_run cwd & scope_glob filtering!
+          const rootWithEvo = this.clientRoots.find((r) => fs.existsSync(path.join(r, '.evo')));
+          targetRoot = rootWithEvo || this.defaultRoot;
         }
       }
     }
 
+    this.activeWorkspaceDir = candidate;
     const isWriteTool = toolName === 'evo_propose' || toolName === 'evo_compact';
     const ctx = this.getOrCreateContext(targetRoot, isWriteTool);
+    ctx.requestWorkspaceDir = candidate;
     this.storage = ctx.storage;
     this.telemetry = ctx.telemetry;
     this.gatekeeper = ctx.gatekeeper;
@@ -460,25 +510,25 @@ export class EvoMcpDispatcher {
         case 'evo_search':
           if (needsSync) {
             return this.ensureExternalToolsSynced(ctx).then(() => {
-              this.bindActiveContext(name, args);
-              return this.handleSearch(args, ctx);
+              const freshCtx = this.bindActiveContext(name, args);
+              return this.handleSearch(args, freshCtx);
             });
           }
           return this.handleSearch(args, ctx);
         case 'evo_inspect':
           if (needsSync) {
             return this.ensureExternalToolsSynced(ctx).then(() => {
-              this.bindActiveContext(name, args);
-              return this.handleInspect(args);
+              const freshCtx = this.bindActiveContext(name, args);
+              return this.handleInspect(args, freshCtx);
             });
           }
-          return this.handleInspect(args);
+          return this.handleInspect(args, ctx);
         case 'evo_run':
           return this.handleRun(args, ctx);
         case 'evo_propose':
-          return this.handlePropose(args as unknown as ProposalPayload);
+          return this.handlePropose(args as unknown as ProposalPayload, ctx);
         case 'evo_compact':
-          return this.handleCompact(args);
+          return this.handleCompact(args, ctx);
         default:
           return {
             isError: true,
@@ -487,6 +537,26 @@ export class EvoMcpDispatcher {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('ERR_INVALID_SCHEMA')) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  passed: false,
+                  gate_failed: 'SCHEMA_SECURITY',
+                  error_code: 'ERR_INVALID_SCHEMA',
+                  message: msg.replace(/^Error:\s*/, '').replace(/^ERR_INVALID_SCHEMA:\s*/, ''),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
       return {
         isError: true,
         content: [{ type: 'text', text: `EvoKernel internal error in ${name}: ${msg}` }],
@@ -602,15 +672,17 @@ export class EvoMcpDispatcher {
     };
   }
 
-  private handleInspect(args: Record<string, unknown>) {
+  private handleInspect(args: Record<string, unknown>, activeCtx?: WorkspaceContext) {
     const rawId = String(args.id || '').trim();
     const id = sanitizeId(rawId);
     const tier = String(args.tier ?? args.level ?? args.depth ?? 'L2').toUpperCase();
+    const storage = activeCtx?.storage || this.storage;
+    const telemetry = activeCtx?.telemetry || this.telemetry;
 
     const parsedExt = parseExternalToolId(rawId);
     if (parsedExt) {
-      let extTool = this.storage.getExternalTool(rawId);
-      let extTelemetry = this.telemetry;
+      let extTool = storage.getExternalTool(rawId);
+      let extTelemetry = telemetry;
       if (!extTool) {
         for (const gCtx of this.getGlobalFallbackContexts()) {
           const gExt = gCtx.storage.getExternalTool(rawId);
@@ -643,8 +715,8 @@ export class EvoMcpDispatcher {
       }
     }
 
-    let rule = this.storage.getRule(id);
-    let activeTelemetry = this.telemetry;
+    let rule = storage.getRule(id);
+    let activeTelemetry = telemetry;
     if (!rule) {
       for (const gCtx of this.getGlobalFallbackContexts()) {
         const gRule = gCtx.storage.getRule(id);
@@ -657,16 +729,16 @@ export class EvoMcpDispatcher {
     }
     if (rule) {
       activeTelemetry?.recordUsage(id, true, 250);
-      if (tier !== 'L1' && fs.existsSync(this.storage.evoDir)) {
-        if (!this.telemetry) {
-          const refreshed = this.getOrCreateContext(this.storage.rootDir);
+      if (tier !== 'L1' && fs.existsSync(storage.evoDir)) {
+        if (!telemetry) {
+          const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
           this.gatekeeper = refreshed.gatekeeper;
         }
-        this.telemetry?.recordRecalledCapability({
+        (telemetry || this.telemetry)?.recordRecalledCapability({
           id: rule.id,
           kind: 'rule',
-          tier: activeTelemetry !== this.telemetry ? 'GLOBAL' : 'LOCAL',
+          tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
         });
       }
       const body =
@@ -676,8 +748,8 @@ export class EvoMcpDispatcher {
       return { content: [{ type: 'text' as const, text: body }] };
     }
 
-    let skill = this.storage.getSkill(id);
-    activeTelemetry = this.telemetry;
+    let skill = storage.getSkill(id);
+    activeTelemetry = telemetry;
     if (!skill) {
       for (const gCtx of this.getGlobalFallbackContexts()) {
         const gSkill = gCtx.storage.getSkill(id);
@@ -690,16 +762,16 @@ export class EvoMcpDispatcher {
     }
     if (skill) {
       activeTelemetry?.recordUsage(id, true, 400);
-      if (tier !== 'L1' && fs.existsSync(this.storage.evoDir)) {
-        if (!this.telemetry) {
-          const refreshed = this.getOrCreateContext(this.storage.rootDir);
+      if (tier !== 'L1' && fs.existsSync(storage.evoDir)) {
+        if (!telemetry) {
+          const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
           this.gatekeeper = refreshed.gatekeeper;
         }
-        this.telemetry?.recordRecalledCapability({
+        (telemetry || this.telemetry)?.recordRecalledCapability({
           id: skill.id,
           kind: 'skill',
-          tier: activeTelemetry !== this.telemetry ? 'GLOBAL' : 'LOCAL',
+          tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
         });
       }
       const body =
@@ -709,8 +781,8 @@ export class EvoMcpDispatcher {
       return { content: [{ type: 'text' as const, text: body }] };
     }
 
-    let tool = this.storage.getTool(id);
-    activeTelemetry = this.telemetry;
+    let tool = storage.getTool(id);
+    activeTelemetry = telemetry;
     if (!tool) {
       for (const gCtx of this.getGlobalFallbackContexts()) {
         const gTool = gCtx.storage.getTool(id);
@@ -723,16 +795,16 @@ export class EvoMcpDispatcher {
     }
     if (tool) {
       activeTelemetry?.recordUsage(id, true, 300);
-      if (tier !== 'L1' && fs.existsSync(this.storage.evoDir)) {
-        if (!this.telemetry) {
-          const refreshed = this.getOrCreateContext(this.storage.rootDir);
+      if (tier !== 'L1' && fs.existsSync(storage.evoDir)) {
+        if (!telemetry) {
+          const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
           this.gatekeeper = refreshed.gatekeeper;
         }
-        this.telemetry?.recordRecalledCapability({
+        (telemetry || this.telemetry)?.recordRecalledCapability({
           id: tool.id,
           kind: 'tool',
-          tier: activeTelemetry !== this.telemetry ? 'GLOBAL' : 'LOCAL',
+          tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
         });
       }
       const body =
@@ -742,19 +814,20 @@ export class EvoMcpDispatcher {
       return { content: [{ type: 'text' as const, text: body }] };
     }
 
-    const memory = this.storage.getMemory(id);
+    const memory = storage.getMemory(id);
     if (memory) {
-      const report = verifyMemoryFreshness(this.storage.rootDir, memory, {
+      const memoryTargetDir = activeCtx?.requestWorkspaceDir || activeCtx?.rootDir || storage.rootDir;
+      const report = verifyMemoryFreshness(memoryTargetDir, memory, {
         includeCallers: tier !== 'L1',
       });
-      this.telemetry?.recordUsage(id, report.overall_status !== 'STALE', 650);
-      if (tier !== 'L1' && fs.existsSync(this.storage.evoDir)) {
-        if (!this.telemetry) {
-          const refreshed = this.getOrCreateContext(this.storage.rootDir);
+      (telemetry || this.telemetry)?.recordUsage(id, report.overall_status !== 'STALE', 650);
+      if (tier !== 'L1' && fs.existsSync(storage.evoDir)) {
+        if (!telemetry) {
+          const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
           this.gatekeeper = refreshed.gatekeeper;
         }
-        this.telemetry?.recordRecalledCapability({
+        (telemetry || this.telemetry)?.recordRecalledCapability({
           id: memory.id,
           kind: 'memory',
           tier: 'LOCAL',
@@ -1014,7 +1087,7 @@ export class EvoMcpDispatcher {
     };
   }
 
-  private handlePropose(proposal: ProposalPayload) {
+  private handlePropose(proposal: ProposalPayload, activeCtx?: WorkspaceContext) {
     const payload: ProposalPayload = {
       ...proposal,
       trigger_cue:
@@ -1026,7 +1099,9 @@ export class EvoMcpDispatcher {
           : undefined,
       hook_trigger: proposal.hook_trigger,
     };
-    const result = this.gatekeeper!.evaluateAndCommit(payload);
+    const gatekeeper = activeCtx?.gatekeeper || this.gatekeeper!;
+    const storage = activeCtx?.storage || this.storage;
+    const result = gatekeeper.evaluateAndCommit(payload);
     if (!result.passed) {
       return {
         isError: true,
@@ -1040,7 +1115,7 @@ export class EvoMcpDispatcher {
     }
 
     if (payload.kind === 'rule' || payload.kind === 'tool' || payload.kind === 'skill') {
-      syncManagedRuleBlocks(this.storage.rootDir);
+      syncManagedRuleBlocks(storage.rootDir);
       if (payload.kind === 'rule' && this.onCoreRulesChanged) {
         this.onCoreRulesChanged();
       }
@@ -1085,7 +1160,7 @@ export class EvoMcpDispatcher {
     };
   }
 
-  private handleCompact(args: Record<string, unknown>) {
+  private handleCompact(args: Record<string, unknown>, activeCtx?: WorkspaceContext) {
     const rawTargetIds = Array.isArray(args.target_ids)
       ? args.target_ids.map((id) => sanitizeId(String(id))).filter(Boolean)
       : [];
@@ -1096,14 +1171,18 @@ export class EvoMcpDispatcher {
     const schemaError = this.compactSchemaError(args);
     if (schemaError) return schemaError;
 
+    const storage = activeCtx?.storage || this.storage;
+    const telemetry = activeCtx?.telemetry || this.telemetry;
+    const gatekeeper = activeCtx?.gatekeeper || this.gatekeeper!;
+
     const existingTargets = targetIds
       .map((id) => ({
         id,
         item:
-          this.storage.getRule(id) ||
-          this.storage.getSkill(id) ||
-          this.storage.getTool(id) ||
-          this.storage.getMemory(id),
+          storage.getRule(id) ||
+          storage.getSkill(id) ||
+          storage.getTool(id) ||
+          storage.getMemory(id),
       }))
       .filter((entry) => entry.item !== null);
 
@@ -1130,14 +1209,14 @@ export class EvoMcpDispatcher {
 
     const mergedCleanId = sanitizeId(mergedProposal.id || '');
     const existingMergedTarget =
-      this.storage.getRule(mergedCleanId) ||
-      this.storage.getSkill(mergedCleanId) ||
-      this.storage.getTool(mergedCleanId) ||
-      this.storage.getMemory(mergedCleanId);
+      storage.getRule(mergedCleanId) ||
+      storage.getSkill(mergedCleanId) ||
+      storage.getTool(mergedCleanId) ||
+      storage.getMemory(mergedCleanId);
     const preservedCreatedAt = existingMergedTarget?.created_at;
 
     const existingRuleTargets: EvoRule[] = targetIds
-      .map((id) => this.storage.getRule(id))
+      .map((id) => storage.getRule(id))
       .filter((r): r is EvoRule => r !== null);
     const inheritedCore =
       mergedProposal.core !== undefined
@@ -1157,7 +1236,7 @@ export class EvoMcpDispatcher {
     );
 
     // Module 3.1: Atomic pre-check before archiving or deleting any target_ids
-    const precheck = this.gatekeeper!.evaluateAndCommit(
+    const precheck = gatekeeper.evaluateAndCommit(
       {
         ...effectiveMergedProposal,
         origin: 'compacted',
@@ -1197,11 +1276,11 @@ export class EvoMcpDispatcher {
     for (const id of targetIds) {
       const cleanId = sanitizeId(id);
       const candidatePaths = [
-        path.join(this.storage.rulesDir, `${cleanId}.md`),
-        path.join(this.storage.rulesDir, 'scoped', `${cleanId}.md`),
-        path.join(this.storage.memoriesDir, `${cleanId}.md`),
-        path.join(this.storage.skillsDir, cleanId),
-        path.join(this.storage.toolsDir, cleanId),
+        path.join(storage.rulesDir, `${cleanId}.md`),
+        path.join(storage.rulesDir, 'scoped', `${cleanId}.md`),
+        path.join(storage.memoriesDir, `${cleanId}.md`),
+        path.join(storage.skillsDir, cleanId),
+        path.join(storage.toolsDir, cleanId),
       ];
       for (const p of candidatePaths) {
         if (!fs.existsSync(p)) continue;
@@ -1228,19 +1307,19 @@ export class EvoMcpDispatcher {
     const archived: string[] = [];
     for (const id of targetIds) {
       if (
-        this.storage.archiveCapability(id, mergedProposal.kind, reason) ||
-        this.storage.archiveCapability(id, 'rule', reason) ||
-        this.storage.archiveCapability(id, 'skill', reason) ||
-        this.storage.archiveCapability(id, 'tool', reason) ||
-        this.storage.archiveCapability(id, 'memory', reason)
+        storage.archiveCapability(id, mergedProposal.kind, reason) ||
+        storage.archiveCapability(id, 'rule', reason) ||
+        storage.archiveCapability(id, 'skill', reason) ||
+        storage.archiveCapability(id, 'tool', reason) ||
+        storage.archiveCapability(id, 'memory', reason)
       ) {
         archived.push(id);
       }
     }
 
-    this.telemetry?.syncFromDisk();
+    (telemetry || this.telemetry)?.syncFromDisk();
 
-    const commitRes = this.gatekeeper!.evaluateAndCommit(
+    const commitRes = gatekeeper.evaluateAndCommit(
       {
         ...effectiveMergedProposal,
         origin: 'compacted',
@@ -1258,10 +1337,10 @@ export class EvoMcpDispatcher {
         fs.mkdirSync(path.dirname(snap.path), { recursive: true });
         fs.writeFileSync(snap.path, snap.data);
       }
-      this.telemetry?.syncFromDisk();
+      (telemetry || this.telemetry)?.syncFromDisk();
     }
 
-    syncManagedRuleBlocks(this.storage.rootDir);
+    syncManagedRuleBlocks(storage.rootDir);
     if (this.onCoreRulesChanged) {
       this.onCoreRulesChanged();
     }

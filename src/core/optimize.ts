@@ -1343,6 +1343,7 @@ export interface ProbeWorktreeOptions {
   leakGlobs?: string[];
   baseScore?: number;
   basePassed?: boolean;
+  worktreeSetupCmd?: string;
 }
 
 export interface CandidateProbeResult {
@@ -1362,7 +1363,7 @@ export interface CandidateProbeResult {
   coreTokenDelta: number;
   proposals: ProposalPayload[];
   deletedIds: Array<{ kind: EvoKind; id: string }>;
-  attribution?: 'helped' | 'hurt' | 'no_effect' | 'confounded';
+  attribution?: 'helped' | 'hurt' | 'no_effect' | 'confounded' | 'unverified';
   notes?: string;
 }
 
@@ -1391,10 +1392,42 @@ export function probeCandidateInWorktree(
   options: ProbeWorktreeOptions
 ): CandidateProbeResult {
   const wsRoot = path.resolve(options.workspaceRoot);
-  const wtDir = path.join(
+  const wtContainer = path.join(
     os.tmpdir(),
     `evo-wt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   );
+  const wtDir = path.join(wtContainer, 'repo');
+  fs.mkdirSync(wtContainer, { recursive: true });
+
+  const isPnpmWorkspace =
+    fs.existsSync(path.join(wsRoot, 'pnpm-workspace.yaml')) ||
+    fs.existsSync(path.join(path.dirname(wsRoot), 'pnpm-workspace.yaml'));
+
+  let hostNodeModules = path.join(wsRoot, 'node_modules');
+  if (!fs.existsSync(hostNodeModules)) {
+    let cur = path.dirname(wsRoot);
+    for (let depth = 0; depth < 3; depth++) {
+      const cand = path.join(cur, 'node_modules');
+      if (fs.existsSync(cand)) {
+        hostNodeModules = cand;
+        break;
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+  }
+
+  const siblingNodeModules = path.join(wtContainer, 'node_modules');
+  let junctionMounted = false;
+  if (!isPnpmWorkspace && fs.existsSync(hostNodeModules)) {
+    try {
+      fs.symlinkSync(hostNodeModules, siblingNodeModules, 'junction');
+      junctionMounted = true;
+    } catch {
+      // junction error fallback
+    }
+  }
 
   let usedGitWorktree = false;
   const headCheck = child_process.spawnSync('git', ['rev-parse', '--verify', 'HEAD'], {
@@ -1427,6 +1460,24 @@ export function probeCandidateInWorktree(
     const liveEvo = path.join(wsRoot, '.evo');
     if (fs.existsSync(liveEvo)) {
       copyDirRecursiveExcluding(liveEvo, wtEvoDir, ['.cache']);
+    }
+
+    if (options.worktreeSetupCmd) {
+      try {
+        child_process.spawnSync(options.worktreeSetupCmd, {
+          cwd: wtDir,
+          shell: true,
+          timeout: 60000,
+          env: {
+            ...process.env,
+            EVO_WORKSPACE: wtDir,
+            EVO_WORKTREE: '1',
+            EVO_PARENT_CONTAINER: wtContainer,
+          },
+        });
+      } catch {
+        // ignore setup cmd failure
+      }
     }
 
     // Inner execution block with guaranteed SQLite telemetry cleanup
@@ -1533,6 +1584,8 @@ export function probeCandidateInWorktree(
           env: {
             ...process.env,
             EVO_WORKSPACE: wtDir,
+            EVO_WORKTREE: '1',
+            EVO_PARENT_CONTAINER: wtContainer,
           },
           encoding: 'utf8',
           timeout: options.timeoutMs ?? 60000,
@@ -1578,14 +1631,19 @@ export function probeCandidateInWorktree(
           } else if (score < options.baseScore || (options.basePassed && !probePassed)) {
             attribution = 'hurt';
           } else {
-            attribution = 'no_effect';
+            // Regime 3: Binary non-regression gate
+            if (probePassed && coreTokenDelta <= 0 && options.proposals.length > 0) {
+              attribution = 'helped';
+            } else {
+              attribution = 'no_effect';
+            }
           }
         } else {
           attribution = probePassed ? 'helped' : 'hurt';
         }
       } else {
         passed = true;
-        attribution = 'helped';
+        attribution = 'unverified';
       }
 
       return {
@@ -1608,7 +1666,14 @@ export function probeCandidateInWorktree(
       wtTelemetry.close();
     }
   } finally {
-    // Outer cleanup block
+    // Outer cleanup block: unmount sibling junction first
+    if (junctionMounted && fs.existsSync(siblingNodeModules)) {
+      try {
+        fs.unlinkSync(siblingNodeModules);
+      } catch {
+        // ignore junction unmount failure
+      }
+    }
     if (usedGitWorktree) {
       child_process.spawnSync('git', ['worktree', 'remove', '--force', wtDir], {
         cwd: wsRoot,
@@ -1620,9 +1685,9 @@ export function probeCandidateInWorktree(
       });
     }
 
-    if (fs.existsSync(wtDir)) {
+    if (fs.existsSync(wtContainer)) {
       try {
-        fs.rmSync(wtDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        fs.rmSync(wtContainer, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       } catch {
         // ignore residual cleanup errors
       }
@@ -1642,6 +1707,10 @@ export interface OptimizationCycleOptions {
   deliverables?: string[];
   dim?: 'inv' | 'dom' | 'both';
   k?: number;
+  rounds?: number;
+  auto?: boolean;
+  prepare?: boolean;
+  worktreeSetupCmd?: string;
   proposerCmd?: string;
   probeCmd?: string;
   leakGlobs?: string[];
@@ -1669,6 +1738,46 @@ export interface OptimizationResult {
   notes?: string;
 }
 
+export function runBuiltinOfflineProposer(options: {
+  missionFile: string;
+  contextDir: string;
+  harnessDir: string;
+  dim: 'inv' | 'dom' | 'both';
+  candidateId: string;
+  baseWorkspaceRoot: string;
+  trajectories?: string[];
+  deliverables?: string[];
+}): ProposerCandidateResult {
+  const proposals: ProposalPayload[] = [];
+  const deletedIds: Array<{ kind: EvoKind; id: string }> = [];
+
+  const baseStorage = new EvoStorage(options.baseWorkspaceRoot);
+  const audit = runAudit(options.baseWorkspaceRoot, { includeGlobal: false });
+
+  if (audit.budgetViolations.length > 0) {
+    const worst = audit.budgetViolations[0];
+    const rule = baseStorage.getRule(worst.ruleId);
+    if (rule) {
+      deletedIds.push({ kind: 'rule', id: rule.id });
+      proposals.push({
+        kind: 'rule',
+        id: rule.id,
+        title: rule.title,
+        l0_summary: rule.l0_summary,
+        scope_glob: rule.scope_glob,
+        core: false,
+        content: rule.content.slice(0, 500),
+      });
+    }
+  }
+
+  if (proposals.length === 0 && deletedIds.length === 0) {
+    return { keepBase: true, notes: 'Built-in offline proposer found zero compaction or invariant targets' };
+  }
+
+  return { keepBase: false, proposals, deletedIds, notes: 'Built-in offline proposer generated compaction candidate' };
+}
+
 export function runOptimizationCycle(
   options: OptimizationCycleOptions = {}
 ): OptimizationResult {
@@ -1682,7 +1791,12 @@ export function runOptimizationCycle(
     leakGlobs: options.leakGlobs,
   });
 
-  if (!options.proposerCmd) {
+  const isAutoMode = Boolean(
+    options.auto ||
+    (options.apply && ((options.trajectories && options.trajectories.length > 0) || (options.deliverables && options.deliverables.length > 0)))
+  );
+
+  if (!options.proposerCmd && (!isAutoMode || options.prepare || options.dryRun)) {
     return {
       runId: prep.runId,
       workspaceRoot: wsRoot,
@@ -1712,6 +1826,7 @@ export function runOptimizationCycle(
       proposals: [],
       deletedIds: [],
       probeCmd: options.probeCmd,
+      worktreeSetupCmd: options.worktreeSetupCmd,
       leakGlobs: options.leakGlobs,
     });
     baseScore = baseProbe.score;
@@ -1719,7 +1834,9 @@ export function runOptimizationCycle(
   }
 
   // 2. Determine dimensions across k candidates
-  const k = Math.max(options.k ?? 1, 1);
+  const rounds = Math.max(options.rounds ?? 1, 1);
+  const baseK = Math.max(options.k ?? 1, 1);
+  const k = options.rounds ? baseK * rounds : baseK;
   const candidateDims: Array<'inv' | 'dom' | 'both'> = [];
   for (let i = 0; i < k; i++) {
     if (prep.dim === 'both' && k >= 2) {
@@ -1758,16 +1875,27 @@ export function runOptimizationCycle(
       copyCapabilitiesNonOverwriting(liveEvo, prep.harnessDir);
     }
 
-    const proposerRes = runProposerCandidate({
-      proposerCmd: options.proposerCmd,
-      missionFile: prep.missionFile,
-      contextDir: prep.contextDir,
-      harnessDir: prep.harnessDir,
-      dim: cDim,
-      candidateId,
-      runDir: prep.runDir,
-      baseWorkspaceRoot: wsRoot,
-    });
+    const proposerRes = options.proposerCmd
+      ? runProposerCandidate({
+          proposerCmd: options.proposerCmd,
+          missionFile: prep.missionFile,
+          contextDir: prep.contextDir,
+          harnessDir: prep.harnessDir,
+          dim: cDim,
+          candidateId,
+          runDir: prep.runDir,
+          baseWorkspaceRoot: wsRoot,
+        })
+      : runBuiltinOfflineProposer({
+          missionFile: prep.missionFile,
+          contextDir: prep.contextDir,
+          harnessDir: prep.harnessDir,
+          dim: cDim,
+          candidateId,
+          baseWorkspaceRoot: wsRoot,
+          trajectories: options.trajectories,
+          deliverables: options.deliverables,
+        });
 
     if (proposerRes.keepBase) {
       candidates.push({
@@ -1794,6 +1922,7 @@ export function runOptimizationCycle(
       proposals: proposerRes.proposals,
       deletedIds: proposerRes.deletedIds,
       probeCmd: options.probeCmd,
+      worktreeSetupCmd: options.worktreeSetupCmd,
       leakGlobs: options.leakGlobs,
       baseScore,
       basePassed,

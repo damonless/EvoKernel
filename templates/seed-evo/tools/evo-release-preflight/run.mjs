@@ -62,6 +62,10 @@ for (const [name, obj] of [
   }
 }
 
+if (geminiExt && geminiExt.contextFileName !== 'GEMINI.md' && geminiExt.contextFileName !== 'templates/GEMINI.extension.md') {
+  issues.push('gemini-extension.json contextFileName must point to GEMINI.md or templates/GEMINI.extension.md');
+}
+
 if (claudeMarketplace?.plugins && Array.isArray(claudeMarketplace.plugins)) {
   for (let i = 0; i < claudeMarketplace.plugins.length; i++) {
     const p = claudeMarketplace.plugins[i];

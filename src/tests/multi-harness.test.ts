@@ -108,10 +108,18 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       for (const jf of jsonConfigs) {
         const full = path.join(ws, jf);
         const parsed = JSON.parse(fs.readFileSync(full, 'utf8'));
-        assert.ok(parsed.mcpServers, `Expected mcpServers in ${jf}`);
-        assert.ok(parsed.mcpServers['evo-kernel'], `Expected mcpServers['evo-kernel'] in ${jf}`);
-        assert.equal(typeof parsed.mcpServers['evo-kernel'].command, 'string');
-        assert.ok(Array.isArray(parsed.mcpServers['evo-kernel'].args));
+        if (jf === '.vscode/mcp.json') {
+          assert.ok(parsed.servers, `Expected servers in ${jf}`);
+          assert.ok(parsed.servers['evo-kernel'], `Expected servers['evo-kernel'] in ${jf}`);
+          assert.equal(parsed.servers['evo-kernel'].type, 'stdio');
+          assert.equal(typeof parsed.servers['evo-kernel'].command, 'string');
+          assert.ok(Array.isArray(parsed.servers['evo-kernel'].args));
+        } else {
+          assert.ok(parsed.mcpServers, `Expected mcpServers in ${jf}`);
+          assert.ok(parsed.mcpServers['evo-kernel'], `Expected mcpServers['evo-kernel'] in ${jf}`);
+          assert.equal(typeof parsed.mcpServers['evo-kernel'].command, 'string');
+          assert.ok(Array.isArray(parsed.mcpServers['evo-kernel'].args));
+        }
       }
 
       // 4. Verify Claude Code settings.json Lifecycle Hooks
@@ -130,9 +138,11 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
 
       // 5. Verify OpenCode opencode.json Structure
       const opencode = JSON.parse(fs.readFileSync(path.join(ws, 'opencode.json'), 'utf8'));
-      assert.equal(opencode.instructionsFile, 'AGENTS.md');
+      assert.deepEqual(opencode.instructions, ['AGENTS.md']);
       assert.ok(opencode.mcp && opencode.mcp['evo-kernel']);
-      assert.equal(typeof opencode.mcp['evo-kernel'].command, 'string');
+      assert.equal(opencode.mcp['evo-kernel'].type, 'local');
+      assert.ok(Array.isArray(opencode.mcp['evo-kernel'].command));
+      assert.equal(opencode.mcp['evo-kernel'].enabled, true);
 
       // 6. Verify Cursor MDC YAML Frontmatter
       const mdcContent = fs.readFileSync(path.join(ws, '.cursor', 'rules', 'evo-kernel.mdc'), 'utf8');
@@ -304,6 +314,8 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       assert.equal(opencodeAfter.theme, 'nord');
       assert.ok(opencodeAfter.mcp.fetch);
       assert.ok(opencodeAfter.mcp['evo-kernel']);
+      assert.equal(opencodeAfter.mcp['evo-kernel'].type, 'local');
+      assert.equal(opencodeAfter.mcp['evo-kernel'].enabled, true);
       assert.match(opencodeAfter.instructions, /Always respond in valid JSON format/);
       assert.match(opencodeAfter.instructions, /<!-- EVO:START -->/);
 
@@ -701,11 +713,11 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       runInit(ws, ['opencode']);
       runUninstall(ws);
 
-      // AGENTS.md still exists with user content, so opencode.json should retain instructionsFile: 'AGENTS.md'
+      // AGENTS.md still exists with user content, so opencode.json should retain instructions: ['AGENTS.md']
       assert.ok(fs.existsSync(path.join(ws, 'AGENTS.md')));
       assert.ok(fs.existsSync(path.join(ws, 'opencode.json')));
       const parsedOpenCode = JSON.parse(fs.readFileSync(path.join(ws, 'opencode.json'), 'utf8'));
-      assert.equal(parsedOpenCode.instructionsFile, 'AGENTS.md');
+      assert.deepEqual(parsedOpenCode.instructions, ['AGENTS.md']);
 
       // 2. Custom instructionsFile in opencode.json is synced by syncManagedRuleBlocks
       fs.writeFileSync(
@@ -802,8 +814,9 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       assert.match(tomlDist, /args = \["\.\/dist\/cli\/index\.js","mcp"\]/);
       const openCodeDist = JSON.parse(fs.readFileSync(path.join(ws, 'opencode.json'), 'utf8'));
       assert.deepEqual(openCodeDist.mcp['evo-kernel'], {
-        command: 'node',
-        args: ['./dist/cli/index.js', 'mcp'],
+        type: 'local',
+        command: ['node', './dist/cli/index.js', 'mcp'],
+        enabled: true,
       });
 
       // Phase B: scripts/boot-mcp.mjs also exists -> prefers ./scripts/boot-mcp.mjs
@@ -820,8 +833,9 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       assert.match(tomlBoot, /args = \["\.\/scripts\/boot-mcp\.mjs","mcp"\]/);
       const openCodeBoot = JSON.parse(fs.readFileSync(path.join(ws, 'opencode.json'), 'utf8'));
       assert.deepEqual(openCodeBoot.mcp['evo-kernel'], {
-        command: 'node',
-        args: ['./scripts/boot-mcp.mjs', 'mcp'],
+        type: 'local',
+        command: ['node', './scripts/boot-mcp.mjs', 'mcp'],
+        enabled: true,
       });
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });

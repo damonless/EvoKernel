@@ -135,11 +135,15 @@ export function resolveEvoMcpLaunchConfig(workspaceRoot: string): {
 } {
   const localBootEntry = path.join(workspaceRoot, 'scripts', 'boot-mcp.mjs');
   const localDistEntry = path.join(workspaceRoot, 'dist', 'cli', 'index.js');
+  const localEvoBootEntry = path.join(workspaceRoot, '.evo', 'boot-mcp.mjs');
   if (fs.existsSync(localBootEntry)) {
     return { command: 'node', args: ['./scripts/boot-mcp.mjs', 'mcp'] };
   }
   if (fs.existsSync(localDistEntry)) {
     return { command: 'node', args: ['./dist/cli/index.js', 'mcp'] };
+  }
+  if (fs.existsSync(localEvoBootEntry)) {
+    return { command: 'node', args: ['./.evo/boot-mcp.mjs', 'mcp'] };
   }
 
   const installedRoot = resolveInstalledEvoKernelRoot();
@@ -169,6 +173,10 @@ export function resolveEvoHookCommand(
   if (fs.existsSync(localBootEntry)) {
     return `node ./scripts/boot-mcp.mjs hook ${hookEvent}`;
   }
+  const localEvoBootEntry = path.join(workspaceRoot, '.evo', 'boot-mcp.mjs');
+  if (fs.existsSync(localEvoBootEntry)) {
+    return `node ./.evo/boot-mcp.mjs hook ${hookEvent}`;
+  }
 
   const installedRoot = resolveInstalledEvoKernelRoot();
   if (installedRoot) {
@@ -185,33 +193,143 @@ export function resolveEvoHookCommand(
   return `npx -y evo-kernel hook ${hookEvent}`;
 }
 
+function isTrailingComma(text: string, commaPos: number): boolean {
+  let j = commaPos + 1;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === ' ' || c === '\t' || c === '\r' || c === '\n') {
+      j++;
+      continue;
+    }
+    if (c === '/' && text[j + 1] === '/') {
+      j += 2;
+      while (j < text.length && text[j] !== '\n' && text[j] !== '\r') j++;
+      continue;
+    }
+    if (c === '/' && text[j + 1] === '*') {
+      j += 2;
+      while (j < text.length - 1 && !(text[j] === '*' && text[j + 1] === '/')) j++;
+      j += 2;
+      continue;
+    }
+    return c === '}' || c === ']';
+  }
+  return false;
+}
+
+export function stripJsonComments(text: string): string {
+  let out = '';
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (inString) {
+      out += ch;
+      if (escape) {
+        escape = false;
+      } else if (ch === '\\') {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < text.length && text[i] !== '\n' && text[i] !== '\r') {
+        i++;
+      }
+      if (i < text.length) {
+        out += text[i];
+      }
+      continue;
+    }
+
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < text.length - 1 && !(text[i] === '*' && text[i + 1] === '/')) {
+        if (text[i] === '\n') out += '\n';
+        i++;
+      }
+      i++;
+      continue;
+    }
+
+    if (ch === ',') {
+      if (isTrailingComma(text, i)) {
+        continue;
+      }
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+export function parseJsonc(text: string, filePath?: string): any {
+  const stripped = stripJsonComments(text);
+  try {
+    return JSON.parse(stripped);
+  } catch (err: any) {
+    const loc = filePath ? ` in ${filePath}` : '';
+    throw new Error(`Failed to parse JSON/JSONC${loc}: ${err?.message || String(err)}`);
+  }
+}
+
 export function upsertMcpJson(filePath: string, workspaceRoot: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let current: Record<string, unknown> = {};
   if (fs.existsSync(filePath)) {
-    try {
-      current = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, unknown>;
-    } catch {
-      current = {};
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (raw.trim()) {
+      current = parseJsonc(raw, filePath) as Record<string, unknown>;
     }
   }
 
-  const mcpServers =
-    current.mcpServers && typeof current.mcpServers === 'object'
-      ? (current.mcpServers as Record<string, unknown>)
-      : {};
+  const isVsCode =
+    filePath.replace(/\\/g, '/').endsWith('.vscode/mcp.json') ||
+    (current.servers && typeof current.servers === 'object');
 
-  // Guard against clobbering the self-bootstrapping plugin manifest in mcp_config.json
-  if (
-    path.basename(filePath) === 'mcp_config.json' &&
-    isPluginBootstrapEntry(mcpServers['evo-kernel'])
-  ) {
-    return;
+  if (isVsCode) {
+    const servers =
+      current.servers && typeof current.servers === 'object'
+        ? (current.servers as Record<string, unknown>)
+        : {};
+    const launch = resolveEvoMcpLaunchConfig(workspaceRoot);
+    servers['evo-kernel'] = {
+      type: 'stdio',
+      ...launch,
+    };
+    current.servers = servers;
+  } else {
+    const mcpServers =
+      current.mcpServers && typeof current.mcpServers === 'object'
+        ? (current.mcpServers as Record<string, unknown>)
+        : {};
+
+    // Guard against clobbering the self-bootstrapping plugin manifest in mcp_config.json
+    if (
+      path.basename(filePath) === 'mcp_config.json' &&
+      isPluginBootstrapEntry(mcpServers['evo-kernel'])
+    ) {
+      return;
+    }
+
+    mcpServers['evo-kernel'] = resolveEvoMcpLaunchConfig(workspaceRoot);
+    current.mcpServers = mcpServers;
   }
 
-  mcpServers['evo-kernel'] = resolveEvoMcpLaunchConfig(workspaceRoot);
-
-  current.mcpServers = mcpServers;
   fs.writeFileSync(filePath, JSON.stringify(current, null, 2) + '\n', 'utf8');
 }
 
@@ -219,7 +337,8 @@ export function removeMcpJson(filePath: string): boolean {
   if (!fs.existsSync(filePath)) return false;
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!raw.trim()) return false;
+    const parsed = parseJsonc(raw, filePath) as Record<string, unknown>;
     let modified = false;
 
     if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
@@ -879,22 +998,25 @@ export function upsertOpenCode(
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let current: Record<string, unknown> = {};
   if (fs.existsSync(filePath)) {
-    try {
-      current = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, unknown>;
-    } catch {
-      current = {};
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (raw.trim()) {
+      current = parseJsonc(raw, filePath) as Record<string, unknown>;
     }
   }
 
-  const mcpEntry = resolveEvoMcpLaunchConfig(workspaceRoot);
+  const launch = resolveEvoMcpLaunchConfig(workspaceRoot);
+  const openCodeMcpEntry = {
+    type: 'local',
+    command: [launch.command, ...launch.args],
+    enabled: true,
+  };
 
-  if (current.mcp && typeof current.mcp === 'object') {
-    (current.mcp as Record<string, unknown>)['evo-kernel'] = mcpEntry;
-  } else if (current.mcpServers && typeof current.mcpServers === 'object') {
-    (current.mcpServers as Record<string, unknown>)['evo-kernel'] = mcpEntry;
-  } else {
-    current.mcp = { 'evo-kernel': mcpEntry };
-  }
+  const mcp =
+    current.mcp && typeof current.mcp === 'object'
+      ? (current.mcp as Record<string, unknown>)
+      : {};
+  mcp['evo-kernel'] = openCodeMcpEntry;
+  current.mcp = mcp;
 
   const updatedFiles: string[] = [];
 
@@ -902,22 +1024,38 @@ export function upsertOpenCode(
     current.instructions = upsertMarkerBlock(current.instructions, managedBlock);
     updatedFiles.push('opencode.json');
   } else {
-    if (!current.instructionsFile) {
-      current.instructionsFile = 'AGENTS.md';
+    let targetFiles: string[] = [];
+    if (typeof current.instructionsFile === 'string' && current.instructionsFile.trim()) {
+      targetFiles.push(current.instructionsFile.trim());
+      delete current.instructionsFile;
     }
-    const agentsPath = path.join(workspaceRoot, String(current.instructionsFile));
-    fs.mkdirSync(path.dirname(agentsPath), { recursive: true });
-    let existingAgents = '';
-    if (fs.existsSync(agentsPath)) {
-      try {
-        existingAgents = fs.readFileSync(agentsPath, 'utf8');
-      } catch {
-        existingAgents = '';
+    if (Array.isArray(current.instructions)) {
+      for (const item of current.instructions) {
+        if (typeof item === 'string' && item.trim() && !targetFiles.includes(item.trim())) {
+          targetFiles.push(item.trim());
+        }
       }
     }
-    const updatedAgents = upsertMarkerBlock(existingAgents, managedBlock);
-    fs.writeFileSync(agentsPath, updatedAgents, 'utf8');
-    updatedFiles.push(String(current.instructionsFile));
+    if (targetFiles.length === 0) {
+      targetFiles = ['AGENTS.md'];
+    }
+    current.instructions = targetFiles;
+
+    for (const relFile of targetFiles) {
+      const fullPath = path.join(workspaceRoot, relFile);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      let existingContent = '';
+      if (fs.existsSync(fullPath)) {
+        try {
+          existingContent = fs.readFileSync(fullPath, 'utf8');
+        } catch {
+          existingContent = '';
+        }
+      }
+      const updated = upsertMarkerBlock(existingContent, managedBlock);
+      fs.writeFileSync(fullPath, updated, 'utf8');
+      updatedFiles.push(relFile);
+    }
   }
 
   fs.writeFileSync(filePath, JSON.stringify(current, null, 2) + '\n', 'utf8');
@@ -929,7 +1067,8 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
   const cleaned: string[] = [];
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!raw.trim()) return [];
+    const parsed = parseJsonc(raw, filePath) as Record<string, unknown>;
     let modified = false;
 
     if (parsed.mcp && typeof parsed.mcp === 'object') {
@@ -962,7 +1101,41 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
       }
     }
 
-    let instructionsFileRemoved = false;
+    if (Array.isArray(parsed.instructions)) {
+      const remaining: string[] = [];
+      for (const relFile of parsed.instructions) {
+        if (typeof relFile !== 'string' || !relFile.trim()) continue;
+        const targetPath = path.join(workspaceRoot, relFile);
+        if (fs.existsSync(targetPath)) {
+          const c = fs.readFileSync(targetPath, 'utf8');
+          if (c.includes(META_RULE_MARKER_START)) {
+            const next = removeMarkerBlock(c);
+            if (!next.trim()) {
+              try {
+                fs.unlinkSync(targetPath);
+              } catch {}
+              modified = true;
+            } else {
+              fs.writeFileSync(targetPath, next, 'utf8');
+              remaining.push(relFile);
+            }
+            cleaned.push(relFile);
+          } else {
+            remaining.push(relFile);
+          }
+        } else {
+          modified = true;
+        }
+      }
+      if (remaining.length === 0) {
+        delete parsed.instructions;
+        modified = true;
+      } else if (remaining.length !== parsed.instructions.length) {
+        parsed.instructions = remaining;
+        modified = true;
+      }
+    }
+
     if (parsed.instructionsFile) {
       const targetPath = path.join(workspaceRoot, String(parsed.instructionsFile));
       if (fs.existsSync(targetPath)) {
@@ -971,24 +1144,17 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
           const next = removeMarkerBlock(c);
           if (!next.trim()) {
             fs.unlinkSync(targetPath);
-            instructionsFileRemoved = true;
+            delete parsed.instructionsFile;
+            modified = true;
           } else {
             fs.writeFileSync(targetPath, next, 'utf8');
           }
           cleaned.push(String(parsed.instructionsFile));
         }
       } else {
-        instructionsFileRemoved = true;
+        delete parsed.instructionsFile;
+        modified = true;
       }
-    }
-
-    if (
-      instructionsFileRemoved &&
-      Object.keys(parsed).length === 1 &&
-      parsed.instructionsFile === 'AGENTS.md'
-    ) {
-      delete parsed.instructionsFile;
-      modified = true;
     }
 
     if (Object.keys(parsed).length === 0) {

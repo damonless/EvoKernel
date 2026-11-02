@@ -1,4 +1,6 @@
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
@@ -11,6 +13,118 @@ import type {
 } from './types.js';
 import { EvoStorage } from './storage.js';
 import { verifyMemoryFreshness } from './memory.js';
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function redactSensitiveDiagnostics(text: string, workspaceRoot?: string): string {
+  if (!text) return '';
+  let out = text;
+
+  // 1. Path redactions (<WORKSPACE> and <HOME>) - case and slash insensitive
+  if (workspaceRoot) {
+    const cleanWs = path.resolve(workspaceRoot);
+    const ws1 = cleanWs.replace(/\\/g, '/');
+    const ws2 = cleanWs.replace(/\//g, '\\');
+    const reWs = new RegExp(escapeRegExp(ws1) + '|' + escapeRegExp(ws2), 'gi');
+    out = out.replace(reWs, '<WORKSPACE>');
+  }
+
+  const home = path.resolve(os.homedir());
+  if (home) {
+    const home1 = home.replace(/\\/g, '/');
+    const home2 = home.replace(/\//g, '\\');
+    const reHome = new RegExp(escapeRegExp(home1) + '|' + escapeRegExp(home2), 'gi');
+    out = out.replace(reHome, '<HOME>');
+  }
+
+  // 2. 18 Categories of sensitive credentials/tokens
+  // (1) OpenAI / AI service keys (sk-..., sk-proj-...)
+  out = out.replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_API_KEY]');
+  // (2) GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_, github_pat_)
+  out = out.replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82})\b/g, '[REDACTED_GITHUB_TOKEN]');
+  // (3) GitLab tokens (glpat-)
+  out = out.replace(/\bglpat-[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_GITLAB_TOKEN]');
+  // (4) Slack tokens (xoxb-, xoxp-, xoxa-, xoxr-)
+  out = out.replace(/\bxox[bpar]-[A-Za-z0-9-]{20,}\b/g, '[REDACTED_SLACK_TOKEN]');
+  // (5) AWS Access Key ID
+  out = out.replace(/\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY_ID]');
+  // (6) AWS Secret Access Key
+  out = out.replace(
+    /\b(aws_secret_access_key|secret_key|secretKey)(\s*[:=]\s*["']?)[A-Za-z0-9/+=]{40}(["']?)/gi,
+    (_m, p1, p2, p3) => `${p1}${p2}[REDACTED_AWS_SECRET]${p3 || ''}`
+  );
+  // (7) Bearer tokens
+  out = out.replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/g, 'Bearer [REDACTED_TOKEN]');
+  // (8) Private keys (RSA, EC, OPENSSH, PGP, DSA, etc.)
+  out = out.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]');
+  // (9) JWT tokens (eyJ...)
+  out = out.replace(/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED_JWT]');
+  // (10) Basic auth credentials in URLs
+  out = out.replace(/https?:\/\/[^:\s\/]+:[^@\s\/]+@/g, 'https://[REDACTED_CREDENTIALS]@');
+  // (11) Generic API keys in key-value pairs (api_key, apiKey, access_token, etc.)
+  out = out.replace(
+    /\b(api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?token)(\s*[:=]\s*["']?)[A-Za-z0-9_\-]{16,}(["']?)/gi,
+    (_m, p1, p2, p3) => `${p1}${p2}[REDACTED_SECRET]${p3 || ''}`
+  );
+  // (12) Password in assignments
+  out = out.replace(
+    /\b(password|passwd|pwd)(\s*[:=]\s*["']?)[^"' \r\n]{6,}(["']?)/gi,
+    (_m, p1, p2, p3) => `${p1}${p2}[REDACTED_PASSWORD]${p3 || ''}`
+  );
+  // (13) Stripe keys (sk_live_, pk_live_, rk_live_)
+  out = out.replace(/\b[rs]k_live_[A-Za-z0-9]{24,}\b/g, '[REDACTED_STRIPE_KEY]');
+  // (14) Google Cloud API key (AIza...)
+  out = out.replace(/\bAIza[0-9A-Za-z-_]{35}\b/g, '[REDACTED_GOOGLE_API_KEY]');
+  // (15) Anthropic API key (sk-ant-...)
+  out = out.replace(/\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_ANTHROPIC_KEY]');
+  // (16) Hugging Face token (hf_...)
+  out = out.replace(/\bhf_[A-Za-z0-9]{34,}\b/g, '[REDACTED_HF_TOKEN]');
+  // (17) NPM auth tokens (npm_...)
+  out = out.replace(/\bnpm_[A-Za-z0-9]{36}\b/g, '[REDACTED_NPM_TOKEN]');
+  // (18) Database connection strings with credentials (postgres://..., mysql://..., mongodb://..., redis://...)
+  out = out.replace(
+    /\b(postgres|postgresql|mysql|mongodb(?:\+srv)?|redis):\/\/[^:\s]+:[^@\s]+@[A-Za-z0-9.-]+/gi,
+    (_m, scheme) => `${scheme}://[REDACTED_USER]:[REDACTED_PW]@[HOST]`
+  );
+
+  return out;
+}
+
+export function computeDiskSyncDigest(evoDir: string): string {
+  const subdirs = ['rules', 'skills', 'tools', 'memories'];
+  const parts: string[] = [];
+  for (const sub of subdirs) {
+    const dir = path.join(evoDir, sub);
+    if (!fs.existsSync(dir)) continue;
+    const walk = (d: string) => {
+      try {
+        const entries = fs.readdirSync(d, { withFileTypes: true });
+        for (const e of entries) {
+          const full = path.join(d, e.name);
+          if (e.isDirectory()) {
+            walk(full);
+          } else if (e.isFile()) {
+            const st = fs.statSync(full);
+            const rel = path.relative(evoDir, full).replace(/\\/g, '/');
+            parts.push(`${rel}:${st.mtimeMs}:${st.size}`);
+          }
+        }
+      } catch {}
+    };
+    walk(dir);
+  }
+  const extTools = path.join(evoDir, 'external-tools.json');
+  if (fs.existsSync(extTools)) {
+    try {
+      const st = fs.statSync(extTools);
+      parts.push(`external-tools.json:${st.mtimeMs}:${st.size}`);
+    } catch {}
+  }
+  parts.sort();
+  return crypto.createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 24);
+}
 
 export function extractCjkBigrams(text: string): string[] {
   const bigrams = new Set<string>();
@@ -465,6 +579,28 @@ export class EvoTelemetry {
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS gatekeeper_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        target_id TEXT,
+        target_name TEXT,
+        passed INTEGER NOT NULL,
+        stage_failed TEXT,
+        diagnostics TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_verification_cache (
+        memory_id TEXT PRIMARY KEY,
+        parser_version INTEGER NOT NULL,
+        memory_file_sig TEXT NOT NULL,
+        target_files_sig TEXT NOT NULL,
+        workspace_sources_sig TEXT,
+        overall_status TEXT NOT NULL,
+        report_json TEXT NOT NULL,
+        cached_at TEXT NOT NULL
+      );
     `);
 
     try {
@@ -507,7 +643,24 @@ export class EvoTelemetry {
     }
   }
 
-  public syncFromDisk(): void {
+  private lastSyncDigest?: string;
+
+  public syncFromDisk(force = false): void {
+    const diskDigest = computeDiskSyncDigest(this.storage.evoDir);
+    if (!force) {
+      if (this.lastSyncDigest && this.lastSyncDigest === diskDigest) {
+        return;
+      }
+      try {
+        const stmt = this.db.prepare('SELECT value FROM session_state WHERE key = ?');
+        const row = stmt.get('disk_sync_digest') as { value: string } | undefined;
+        if (row && row.value === diskDigest) {
+          this.lastSyncDigest = diskDigest;
+          return;
+        }
+      } catch {}
+    }
+
     const rules = this.storage.listRules();
     const skills = this.storage.listSkills();
     const tools = this.storage.listTools();
@@ -702,6 +855,14 @@ export class EvoTelemetry {
       }
 
       this.db.exec('COMMIT;');
+      try {
+        const stmt = this.db.prepare(`
+          INSERT OR REPLACE INTO session_state (key, value, updated_at)
+          VALUES ('disk_sync_digest', ?, ?)
+        `);
+        stmt.run(diskDigest, now);
+        this.lastSyncDigest = diskDigest;
+      } catch {}
     } catch (err) {
       try {
         this.db.exec('ROLLBACK;');
@@ -709,6 +870,87 @@ export class EvoTelemetry {
         // ignore rollback errors if already aborted
       }
       throw err;
+    }
+  }
+
+  public recordGatekeeperEvent(
+    event: {
+      kind: string;
+      targetId?: string;
+      targetName?: string;
+      passed: boolean;
+      stageFailed?: string;
+      diagnostics: string;
+    },
+    workspaceRoot?: string
+  ): void {
+    try {
+      const redactedDiag = redactSensitiveDiagnostics(
+        event.diagnostics,
+        workspaceRoot || this.storage.workspaceRoot
+      );
+      const stmt = this.db.prepare(`
+        INSERT INTO gatekeeper_events (timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      stmt.run(
+        new Date().toISOString(),
+        event.kind,
+        event.targetId || null,
+        event.targetName || null,
+        event.passed ? 1 : 0,
+        event.stageFailed || null,
+        redactedDiag
+      );
+      // Cap ring buffer to 200 items
+      this.db.exec(`
+        DELETE FROM gatekeeper_events
+        WHERE id NOT IN (
+          SELECT id FROM gatekeeper_events ORDER BY id DESC LIMIT 200
+        );
+      `);
+    } catch {}
+  }
+
+  public getGatekeeperEvents(limit = 200): Array<{
+    id: number;
+    timestamp: string;
+    kind: string;
+    target_id?: string;
+    target_name?: string;
+    passed: boolean;
+    stage_failed?: string;
+    diagnostics: string;
+  }> {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT id, timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics
+        FROM gatekeeper_events
+        ORDER BY id DESC
+        LIMIT ?
+      `);
+      const rows = stmt.all(limit) as Array<{
+        id: number;
+        timestamp: string;
+        kind: string;
+        target_id: string | null;
+        target_name: string | null;
+        passed: number;
+        stage_failed: string | null;
+        diagnostics: string;
+      }>;
+      return rows.map((r) => ({
+        id: r.id,
+        timestamp: r.timestamp,
+        kind: r.kind,
+        target_id: r.target_id || undefined,
+        target_name: r.target_name || undefined,
+        passed: r.passed === 1,
+        stage_failed: r.stage_failed || undefined,
+        diagnostics: r.diagnostics,
+      }));
+    } catch {
+      return [];
     }
   }
 
@@ -819,9 +1061,17 @@ export class EvoTelemetry {
       if (itemKind === 'memory') {
         const mem = this.storage.getMemory(id);
         if (mem) {
-          const ver = verifyMemoryFreshness(this.storage.rootDir, mem, { includeCallers: false });
+          const ver = verifyMemoryFreshness(this.storage.rootDir, mem, {
+            includeCallers: false,
+            cacheDb: this.db,
+          });
           const isActive = ver.overall_status !== 'STALE' ? 1 : 0;
-          updateActiveStmt.run(isActive, now, id);
+          const memRow = this.db
+            .prepare('SELECT is_active FROM episodic_memories WHERE id = ?')
+            .get(id) as { is_active: number } | undefined;
+          if (memRow && memRow.is_active !== isActive) {
+            updateActiveStmt.run(isActive, now, id);
+          }
 
           if (ver.overall_status === 'VERIFIED') {
             return {

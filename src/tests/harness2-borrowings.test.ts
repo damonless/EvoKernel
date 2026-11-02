@@ -8,9 +8,18 @@ import { EvoStorage, estimateTokens } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { formatToolsCatalogMarkdown, MAX_TOOLS_CATALOG_TOKENS, runInit } from '../cli/init.js';
 import { handlePreTool, handlePostTool, handleStop, handlePreCommit, runHook } from '../cli/hook.js';
-import { syncDeclaredPreToolHooks, CodexAdapter } from '../cli/harness.js';
+import { syncDeclaredPreToolHooks, CodexAdapter, parseJsonc } from '../cli/harness.js';
 import { runAudit, auditHarnessSurfaces, runRefactor } from '../cli/audit.js';
-import { refreshMemories, verifyMemoryFreshness } from '../core/memory.js';
+import {
+  refreshMemories,
+  verifyMemoryFreshness,
+  findBraceBlockEnd,
+  extractSymbolFingerprint,
+  maskSourceLexical,
+  trySkipGenericAngles,
+} from '../core/memory.js';
+import { redactSensitiveDiagnostics } from '../core/telemetry.js';
+import { runOptimizationCycle } from '../core/optimize.js';
 import type { EvoMemory, EvoRule, EvoSkill, EvoToolManifest } from '../core/types.js';
 
 function createTempWorkspace(): string {
@@ -1429,5 +1438,134 @@ describe('Harness² Wave 2B: Multi-Harness Borrowings & Dynamic Section 5 Suite'
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
+  });
+
+  test('18. P0 Hardening & Edge Cases: C++ constructor init list, TS arrow return, typed arrow variable, Rust lifetimes, Python decorators, JSONC commas, and telemetry redaction', () => {
+    // 1. C++ constructor initializer list with braces
+    const cppCode = [
+      'MyClass::MyClass(int val) : m_member{val}, m_other(10) {',
+      '    doSomething();',
+      '}',
+    ];
+    assert.equal(findBraceBlockEnd(cppCode, 0, '.cpp'), 2);
+
+    // 2. TypeScript function returning an arrow function type with object return type
+    const tsArrowRet = [
+      'function makeHandler(): () => { id: string } {',
+      '    return () => ({ id: "ok" });',
+      '}',
+    ];
+    assert.equal(findBraceBlockEnd(tsArrowRet, 0, '.ts'), 2);
+
+    // 3. TypeScript typed arrow variable with return type annotation
+    const tsVarArrow = [
+      'const makeObj = (): { id: string } => {',
+      '    return { id: "ok" };',
+      '};',
+    ];
+    assert.equal(findBraceBlockEnd(tsVarArrow, 0, '.ts'), 2);
+
+    // 4. TypeScript function with generic default object literal
+    const tsGeneric = [
+      'function parseGeneric<T = { a: number }>() {',
+      '    return 123;',
+      '}',
+    ];
+    assert.equal(findBraceBlockEnd(tsGeneric, 0, '.ts'), 2);
+
+    // 5. Rust lifetimes in signature must not swallow subsequent functions
+    const rsCode = [
+      "fn parse<'a>(s: &'a str) -> &'a str {",
+      '    s',
+      '}',
+      'fn other_func() {',
+      '    println!("hello");',
+      '}',
+    ];
+    assert.equal(findBraceBlockEnd(rsCode, 0, '.rs'), 2);
+
+    // 6. Python decorated function with multi-line signature
+    const ws = createTempWorkspace();
+    try {
+      const pyFilePath = path.join(ws, 'service.py');
+      fs.writeFileSync(
+        pyFilePath,
+        [
+          '@dataclass',
+          '@decorator(param="val")',
+          'def compute_metric(',
+          '    alpha: float,',
+          '    beta: float = 1.0',
+          ') -> float:',
+          '    result = alpha * beta',
+          '    return result',
+        ].join('\n') + '\n',
+        'utf8'
+      );
+      const fp = extractSymbolFingerprint(ws, 'service.py#compute_metric');
+      assert.ok(fp);
+      assert.equal(fp.start_line, 1);
+      assert.equal(fp.end_line, 8);
+      assert.equal(fp.signature, 'def compute_metric(');
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+
+    // 7. parseJsonc must preserve commas inside string literals while stripping trailing commas
+    const jsonWithCommaInString = JSON.stringify({
+      query: 'SELECT a, b, } FROM table',
+      nested: { tag: 'foo, ]' },
+    });
+    const parsed = parseJsonc(jsonWithCommaInString);
+    assert.equal(parsed.query, 'SELECT a, b, } FROM table');
+    assert.equal(parsed.nested.tag, 'foo, ]');
+
+    const jsoncWithTrailingCommas = '{\n  "a": 1,\n  "b": [2, 3, ],\n}\n';
+    const parsedTrailing = parseJsonc(jsoncWithTrailingCommas);
+    assert.equal(parsedTrailing.a, 1);
+    assert.deepEqual(parsedTrailing.b, [2, 3]);
+
+    // 8. redactSensitiveDiagnostics must properly redact generic API keys and DB strings without leaking secret in $1
+    const secretToRedact = 'supersecretkey1234567890';
+    const diag = `Error at api_key: ${secretToRedact}\npwd = topsecretpwd\nConnected to postgres://alice:secret@localhost:5432/db\nRedis cache: redis://authuser:mypassword@cache.internal:6379`;
+    const redacted = redactSensitiveDiagnostics(diag);
+    assert.ok(!redacted.includes(secretToRedact), 'Secret key must not appear anywhere in redacted output');
+    assert.ok(redacted.includes('api_key: [REDACTED_SECRET]'));
+    assert.ok(redacted.includes('pwd = [REDACTED_PASSWORD]'));
+    assert.ok(redacted.includes('postgres://[REDACTED_USER]:[REDACTED_PW]@[HOST]'));
+    assert.ok(redacted.includes('redis://[REDACTED_USER]:[REDACTED_PW]@[HOST]'));
+    assert.ok(!redacted.includes('$1'), 'Literal $1 must not appear in redacted output');
+
+    // 9. Generic type literals with semicolons and multiline generic defaults
+    const tsGenericWithSemicolons = [
+      'function handle<T = { foo: string; bar: number }>() {',
+      '    const x = 1;',
+      '    return x;',
+      '}',
+      'function next() {}',
+    ];
+    assert.equal(findBraceBlockEnd(tsGenericWithSemicolons, 0, '.ts'), 3);
+
+    const tsGenericMultiline = [
+      'function handle<',
+      '    T = {',
+      '        a: number;',
+      '    }',
+      '>() {',
+      '    return 42;',
+      '}',
+    ];
+    assert.equal(findBraceBlockEnd(tsGenericMultiline, 0, '.ts'), 6);
+
+    const tsVarArrowMultiline = [
+      'const fn = <',
+      '    T = {',
+      '        a: number;',
+      '    }',
+      '>(): void => {',
+      '    return;',
+      '};',
+    ];
+    assert.equal(findBraceBlockEnd(tsVarArrowMultiline, 0, '.ts'), 6);
   });
 });

@@ -1174,6 +1174,29 @@ export class EvoGatekeeper {
     rawProposal: ProposalPayload,
     options?: EvaluateOptions
   ): GatekeeperResult {
+    const res = this.evaluateAndCommitInternal(rawProposal, options);
+    if (!res.passed && !options?.dryRun) {
+      try {
+        this.telemetry.recordGatekeeperEvent(
+          {
+            kind: rawProposal.kind,
+            targetId: sanitizeId(rawProposal.id || ''),
+            targetName: rawProposal.title || rawProposal.id,
+            passed: false,
+            stageFailed: res.gate_failed || res.error_code || 'GATEKEEPER',
+            diagnostics: res.message || JSON.stringify(res),
+          },
+          this.storage.workspaceRoot
+        );
+      } catch {}
+    }
+    return res;
+  }
+
+  private evaluateAndCommitInternal(
+    rawProposal: ProposalPayload,
+    options?: EvaluateOptions
+  ): GatekeeperResult {
     const config = this.storage.getConfig();
     const cleanId = sanitizeId(rawProposal.id || '');
     const rawDict = rawProposal as unknown as Record<string, unknown>;

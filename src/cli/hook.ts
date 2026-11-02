@@ -63,6 +63,7 @@ export interface HookOptions {
   toolName?: string;
   targetFile?: string;
   dryRun?: boolean;
+  harness?: string;
 }
 
 export interface HookResult {
@@ -79,7 +80,7 @@ export interface HookResult {
   errors?: string[];
 }
 
-const EDIT_TOOL_NAMES = new Set([
+export const FILE_EDIT_TOOL_NAMES = new Set([
   'edit',
   'multiedit',
   'write',
@@ -93,10 +94,17 @@ const EDIT_TOOL_NAMES = new Set([
   'str_replace_editor',
   'apply_patch',
   'patch',
+]);
+
+export const COMMAND_TOOL_NAMES = new Set([
   'execute_command',
   'run_command',
   'bash',
+  'terminal',
+  'exec',
 ]);
+
+export const EDIT_TOOL_NAMES = FILE_EDIT_TOOL_NAMES;
 
 export const READ_TOOL_NAMES = new Set([
   'read',
@@ -114,6 +122,33 @@ export const READ_TOOL_NAMES = new Set([
   'codegraph_callees',
   'codegraph_impact',
 ]);
+
+export function readTranscriptTail(transcriptPath: unknown): string {
+  if (typeof transcriptPath !== 'string' || !transcriptPath) return '';
+  try {
+    if (!fs.existsSync(transcriptPath)) return '';
+    const stat = fs.statSync(transcriptPath);
+    if (!stat.isFile()) return '';
+    const fd = fs.openSync(transcriptPath, 'r');
+    const readSize = Math.min(stat.size, 65536);
+    const buffer = Buffer.alloc(readSize);
+    fs.readSync(fd, buffer, 0, readSize, Math.max(0, stat.size - readSize));
+    fs.closeSync(fd);
+    return buffer.toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
+export function parseHookHarnessArg(args: string[]): string | undefined {
+  const eqArg = args.find((a) => a.startsWith('--harness='));
+  if (eqArg) return eqArg.slice('--harness='.length).trim();
+  const idx = args.indexOf('--harness');
+  if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
+    return args[idx + 1].trim();
+  }
+  return undefined;
+}
 
 export const CORRECTION_REGEX =
   /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,])/i;
@@ -555,13 +590,16 @@ export function handlePostTool(
     if ((isEvoPropose || isEvoCompact) && !proposalRejected) {
       const proposedId = String(ctx.innerArgs.id || 'capability');
       telemetry.setSessionFlag('last_crystallized_id', proposedId);
+      telemetry.setSessionFlag('last_propose_at', String(Date.now()));
       telemetry.setSessionFlag('pending_evolution', 'false');
       telemetry.setSessionFlag('unproposed_edit_count', '0');
       telemetry.setSessionFlag('unproposed_read_count', '0');
       telemetry.setSessionFlag('user_correction_detected', 'false');
       telemetry.setSessionFlag('contested_attributed', 'false');
       telemetry.setSessionFlag('had_command_error', 'false');
+      telemetry.setSessionFlag('monotonic_recovery_detected', 'false');
       telemetry.setSessionFlag('dirty_crystallized_id', '');
+      telemetry.setSessionFlag('stop_strike_count', '0');
       output = `[EvoKernel Post-Tool] Capability '${proposedId}' registered. Session evolution debt cleared.`;
     } else if ((isEvoPropose || isEvoCompact) && proposalRejected) {
       output = `[EvoKernel Post-Tool] Capability proposal rejected by Gatekeeper. Session evolution debt preserved.`;
@@ -570,9 +608,11 @@ export function handlePostTool(
         (ctx.toolName.includes('evo_run') || ctx.innerToolName.includes('evo_run')) &&
         String(ctx.innerArgs.tool_id || ctx.toolInput.tool_id || '').toLowerCase().includes('codegraph');
 
-      const isMutation = ctx.toolName ? EDIT_TOOL_NAMES.has(ctx.toolName) : Boolean(ctx.rawPath);
+      const isCommand = ctx.toolName ? COMMAND_TOOL_NAMES.has(ctx.toolName) : false;
+      const isMutation = ctx.toolName ? FILE_EDIT_TOOL_NAMES.has(ctx.toolName) : Boolean(ctx.rawPath);
       const isReadDiagnostic =
         !isMutation &&
+        !isCommand &&
         Boolean(ctx.toolName || ctx.innerToolName) &&
         (READ_TOOL_NAMES.has(ctx.toolName) ||
           READ_TOOL_NAMES.has(ctx.innerToolName) ||
@@ -581,8 +621,22 @@ export function handlePostTool(
           ctx.serverName.includes('codegraph') ||
           isCodeGraphEvoRun);
 
+      if (isCommand) {
+        if (isCommandError) {
+          telemetry.setSessionFlag('had_command_error', 'true');
+          telemetry.setSessionFlag('last_command_failed_at', String(Date.now()));
+        } else if (telemetry.getSessionFlag('had_command_error') === 'true') {
+          const lastFailed = parseInt(telemetry.getSessionFlag('last_command_failed_at') || '0', 10);
+          const lastEdit = parseInt(telemetry.getSessionFlag('last_file_edit_at') || '0', 10);
+          if (lastEdit > lastFailed) {
+            telemetry.setSessionFlag('monotonic_recovery_detected', 'true');
+          }
+        }
+      }
+
       if (isMutation && !ctx.isInternalMeta) {
         telemetry.setSessionFlag('pending_evolution', 'true');
+        telemetry.setSessionFlag('last_file_edit_at', String(Date.now()));
         const currentCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
         telemetry.setSessionFlag('unproposed_edit_count', String(currentCount + 1));
 
@@ -603,7 +657,12 @@ export function handlePostTool(
         ctx.toolInput.user_message ||
         ''
       );
-      if (isUserCorrectionSignal(userPromptCandidate)) {
+      const transcriptPath = payload.transcript_path || payload.transcriptPath;
+      const transcriptTail = readTranscriptTail(transcriptPath);
+      if (
+        isUserCorrectionSignal(userPromptCandidate) ||
+        (Boolean(transcriptTail) && isUserCorrectionSignal(transcriptTail))
+      ) {
         telemetry.setSessionFlag('user_correction_detected', 'true');
         if (telemetry.getSessionFlag('contested_attributed') !== 'true') {
           const recalled = telemetry.getRecalledCapabilities();
@@ -737,7 +796,7 @@ export function handlePostTool(
 export function handleStop(
   workspaceRoot: string,
   payload: Record<string, unknown>,
-  _options: HookOptions
+  options: HookOptions
 ): HookResult {
   const storage = new EvoStorage(workspaceRoot);
   if (!fs.existsSync(storage.evoDir)) {
@@ -745,8 +804,14 @@ export function handleStop(
   }
   const telemetry = new EvoTelemetry(storage);
   try {
+    if (telemetry.getSessionFlag('stop_hook_running') === 'true') {
+      return { event: 'stop', success: true, exitCode: 0, output: '' };
+    }
+    telemetry.setSessionFlag('stop_hook_running', 'true');
+
     const recalled = telemetry.getRecalledCapabilities();
     const hadCommandError = telemetry.getSessionFlag('had_command_error') === 'true';
+    const monotonicRecovery = telemetry.getSessionFlag('monotonic_recovery_detected') === 'true';
     const contestedAttributed = telemetry.getSessionFlag('contested_attributed') === 'true';
 
     const pending = telemetry.getSessionFlag('pending_evolution') === 'true';
@@ -762,7 +827,12 @@ export function handleStop(
       payload.last_user_message ||
       ''
     );
-    const hasUserCorrection = persistedCorrection || isUserCorrectionSignal(inlineUserText);
+    const transcriptPath = payload.transcript_path || payload.transcriptPath;
+    const transcriptTail = readTranscriptTail(transcriptPath);
+    const hasUserCorrection =
+      persistedCorrection ||
+      isUserCorrectionSignal(inlineUserText) ||
+      (Boolean(transcriptTail) && isUserCorrectionSignal(transcriptTail));
 
     if (recalled.length > 0) {
       if (hasUserCorrection && !contestedAttributed) {
@@ -793,9 +863,53 @@ export function handleStop(
 
     const hasUncrystallizedEdits = pending || editCount > 0 || modifiedFiles.length > 0;
     const hasHeavyDiagnosticReads = editCount < 4 && readCount >= 10;
-    const crystallizationSuggested =
-      hasUncrystallizedEdits || hasHeavyDiagnosticReads || hasUserCorrection;
+
+    const isHarness = Boolean(options.harness || payload.harness || payload.transcript_path || payload.transcriptPath);
+
+    // Stop 3-Tier Strategy
+    const isTier1 = Boolean(dirtyId) || hasUserCorrection || monotonicRecovery;
+    const isTier2 = !isTier1 && (hasHeavyDiagnosticReads || editCount >= 6 || modifiedFiles.length >= 6);
+    const isTier3 = !isTier1 && !isTier2;
+
+    const strikeCount = parseInt(telemetry.getSessionFlag('stop_strike_count') || '0', 10);
+    const lastStopSuggestedAt = parseInt(telemetry.getSessionFlag('last_stop_suggested_at') || '0', 10);
+    const lastStopStep = parseInt(telemetry.getSessionFlag('last_stop_suggested_step') || '0', 10);
+    const lastFileEditAt = parseInt(telemetry.getSessionFlag('last_file_edit_at') || '0', 10);
+
+    const now = Date.now();
+    const cooldownElapsedMs = now - lastStopSuggestedAt;
+    const stepsElapsed = (editCount + readCount) - lastStopStep;
+    const inCooldown = cooldownElapsedMs < 15 * 60 * 1000 && stepsElapsed < 12;
+
+    let crystallizationSuggested = false;
+    let shouldBlock = false;
     const messages: string[] = [];
+
+    if (isHarness) {
+      if (isTier1) {
+        const alreadyFiredForCurrentEdit = strikeCount > 0 && lastFileEditAt > 0 && lastFileEditAt <= lastStopSuggestedAt;
+        if (!alreadyFiredForCurrentEdit || hasUserCorrection) {
+          crystallizationSuggested = true;
+          shouldBlock = true;
+          telemetry.setSessionFlag('stop_strike_count', String(strikeCount + 1));
+          telemetry.setSessionFlag('last_stop_suggested_at', String(now));
+          telemetry.setSessionFlag('last_stop_suggested_step', String(editCount + readCount));
+        }
+      } else if (isTier2) {
+        if (!inCooldown) {
+          crystallizationSuggested = true;
+          shouldBlock = false;
+          telemetry.setSessionFlag('last_stop_suggested_at', String(now));
+          telemetry.setSessionFlag('last_stop_suggested_step', String(editCount + readCount));
+        }
+      } else {
+        // Tier 3: 1~5 normal edits: 100% silent under harness
+        crystallizationSuggested = false;
+      }
+    } else {
+      crystallizationSuggested =
+        hasUncrystallizedEdits || hasHeavyDiagnosticReads || hasUserCorrection || Boolean(dirtyId) || monotonicRecovery;
+    }
 
     if (dirtyId) {
       messages.push(
@@ -805,15 +919,17 @@ export function handleStop(
 
     if (crystallizationSuggested) {
       let reasonSummary: string;
-      if (hasUncrystallizedEdits) {
+      if (hasUserCorrection && hasHeavyDiagnosticReads) {
+        reasonSummary = `(user correction / counter-question + ${readCount} read-only diagnostic steps)`;
+      } else if (hasUserCorrection) {
+        reasonSummary = `(user correction / counter-question detected)`;
+      } else if (monotonicRecovery) {
+        reasonSummary = `(command error recovered after file modification)`;
+      } else if (hasUncrystallizedEdits) {
         reasonSummary =
           modifiedFiles.length > 0
             ? `(${modifiedFiles.slice(0, 3).join(', ')}${modifiedFiles.length > 3 ? ` +${modifiedFiles.length - 3} more` : ''})`
             : `(${editCount} mutation steps recorded)`;
-      } else if (hasUserCorrection && hasHeavyDiagnosticReads) {
-        reasonSummary = `(user correction / counter-question + ${readCount} read-only diagnostic steps)`;
-      } else if (hasUserCorrection) {
-        reasonSummary = `(user correction / counter-question detected)`;
       } else {
         reasonSummary = `(${readCount} read-only diagnostic steps with ${editCount} edits)`;
       }
@@ -829,9 +945,14 @@ export function handleStop(
     }
 
     let finalOutput = messages.join('\n\n');
-    if (payload.transcriptPath || payload.transcript_path) {
-      const allowPayload = JSON.stringify({ decision: 'allow' });
-      finalOutput = finalOutput ? `${finalOutput}\n${allowPayload}` : allowPayload;
+    if (isHarness) {
+      if (shouldBlock && finalOutput) {
+        finalOutput = JSON.stringify({ decision: 'block', reason: finalOutput });
+      } else if (finalOutput) {
+        finalOutput = JSON.stringify({ decision: 'allow', reason: finalOutput });
+      } else {
+        finalOutput = JSON.stringify({ decision: 'allow' });
+      }
     }
 
     return {
@@ -843,6 +964,7 @@ export function handleStop(
       dirtyRuleId: dirtyId || undefined,
     };
   } finally {
+    telemetry.setSessionFlag('stop_hook_running', 'false');
     telemetry.close();
   }
 }
