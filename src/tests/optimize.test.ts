@@ -14,6 +14,7 @@ import {
   probeCandidateInWorktree,
   renderTrajectory,
   renderTrajectoryFile,
+  runBuiltinOfflineProposer,
   runOptimizationCycle,
   runProposerCandidate,
   truncateString,
@@ -899,6 +900,272 @@ process.exit(1);
       assert.equal(cycleResult.candidates[0].score, 0.85);
       assert.equal(cycleResult.candidates[0].attribution, 'helped');
       assert.equal(cycleResult.decision, 'ADOPT');
+    } finally {
+      cleanTempWorkspace(ws);
+    }
+  });
+
+  // =========================================================================
+  // 17. BUILT-IN OFFLINE PROPOSER (DIM A: RULE DOWNGRADE & DIM B: TRAJECTORY/GIT MEMORY)
+  // =========================================================================
+  test('17. runBuiltinOfflineProposer Dimension A downgrades scoped core rules & Dimension B extracts trajectory memory', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // Setup a bloated core rule with non-global scope
+      storage.saveRule({
+        id: 'scoped-bloated-rule',
+        title: 'Scoped Bloated Rule',
+        l0_summary: 'Scoped rule that should not be core: true',
+        scope_glob: 'src/core/**/*.ts',
+        core: true,
+        priority: 80,
+        tokens: 300,
+        origin: 'test',
+        content: 'This rule body must be preserved completely during downgrade.',
+        transfer_scenarios: ['Core subsystem refactoring', 'Public client interface abstraction'],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // 1. Dimension A: should generate proposal to downgrade to core: false
+      const resDimA = runBuiltinOfflineProposer({
+        missionFile: path.join(ws, 'MISSION.md'),
+        contextDir: path.join(ws, '.evo-opt-ctx'),
+        harnessDir: path.join(ws, '.evo-opt-harness'),
+        dim: 'inv',
+        candidateId: 'test-dim-a',
+        baseWorkspaceRoot: ws,
+      });
+
+      assert.equal(resDimA.keepBase, false);
+      assert.equal(resDimA.proposals.length, 1);
+      const propA = resDimA.proposals[0];
+      assert.equal(propA.kind, 'rule');
+      assert.equal(propA.id, 'scoped-bloated-rule');
+      assert.equal(propA.core, false);
+      assert.equal(propA.supersedes_id, 'scoped-bloated-rule');
+      assert.equal(propA.content, 'This rule body must be preserved completely during downgrade.');
+      assert.deepEqual(propA.transfer_scenarios, ['Core subsystem refactoring', 'Public client interface abstraction']);
+
+      // 2. Dimension B: trajectory mining
+      // Create a dummy source file
+      const srcDir = path.join(ws, 'src');
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(srcDir, 'engine.ts'),
+        'export function startEngine(): void {\n  console.log("running");\n}\n',
+        'utf8'
+      );
+
+      // Create a trajectory referencing engine.ts
+      const trajFile = path.join(ws, 'sample_traj.jsonl');
+      fs.writeFileSync(
+        trajFile,
+        JSON.stringify({ event: 'action', tool: 'run', text: 'Error in src/engine.ts around startEngine' }) + '\n',
+        'utf8'
+      );
+
+      const resDimB = runBuiltinOfflineProposer({
+        missionFile: path.join(ws, 'MISSION.md'),
+        contextDir: path.join(ws, '.evo-opt-ctx'),
+        harnessDir: path.join(ws, '.evo-opt-harness'),
+        dim: 'dom',
+        candidateId: 'test-dim-b',
+        baseWorkspaceRoot: ws,
+        trajectories: [trajFile],
+      });
+
+      assert.equal(resDimB.keepBase, false);
+      assert.equal(resDimB.proposals.length, 1);
+      const propB = resDimB.proposals[0];
+      assert.equal(propB.kind, 'memory');
+      assert.ok(propB.target_symbols?.includes('src/engine.ts#startEngine'));
+    } finally {
+      cleanTempWorkspace(ws);
+    }
+  });
+
+  // =========================================================================
+  // 18. MULTI-REGIME OFFLINE CAUSAL ATTRIBUTION & ZERO HELPED_COUNT INFLATION
+  // =========================================================================
+  test('18. probeCandidateInWorktree multi-regime causal attribution & no inflation for unverified', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // Regime 1: coreTokenDelta < 0 => helped
+      const ruleToDowngrade: ProposalPayload = {
+        kind: 'rule',
+        id: 'core-downgrade-test',
+        title: 'Core Downgrade Test',
+        l0_summary: 'Entropy reduction rule',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: 'Downgraded non-core content',
+        transfer_scenarios: ['Architectural decoupling', 'Cross-module subsystem abstraction'],
+      };
+
+      // Seed a core: true rule first in ws
+      storage.saveRule({
+        id: 'core-downgrade-test',
+        title: 'Core Downgrade Test',
+        l0_summary: 'Entropy reduction rule',
+        scope_glob: 'src/**/*.ts',
+        core: true,
+        priority: 90,
+        tokens: 150,
+        origin: 'test',
+        content: 'Original core content',
+        transfer_scenarios: ['Architectural decoupling', 'Cross-module subsystem abstraction'],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const wtContainer = path.join(ws, 'wt-container');
+      fs.mkdirSync(wtContainer, { recursive: true });
+
+      const resRegime1 = probeCandidateInWorktree({
+        workspaceRoot: ws,
+        candidateId: 'regime1-test',
+        dim: 'inv',
+        wsRoot: ws,
+        wtContainer,
+        proposals: [ruleToDowngrade],
+        deletedIds: [],
+      });
+
+      assert.equal(resRegime1.passed, true);
+      assert.ok(resRegime1.coreTokenDelta < 0);
+      assert.equal(resRegime1.attribution, 'helped');
+      assert.equal(resRegime1.score, Math.abs(resRegime1.coreTokenDelta));
+
+      // Regime 2: Trajectory holdout matching
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(ws, 'src', 'alpha.ts'), 'export function SymbolAlpha(): void {}\n', 'utf8');
+
+      const traj1 = path.join(ws, 'traj1.jsonl');
+      const traj2 = path.join(ws, 'traj2.jsonl');
+      fs.writeFileSync(traj1, JSON.stringify({ type: 'USER_INPUT', source: 'USER', text: 'Initial run' }) + '\n', 'utf8');
+      fs.writeFileSync(traj2, JSON.stringify({ type: 'USER_INPUT', source: 'USER', text: 'Second run error trace in SymbolAlpha: failure occurred' }) + '\n', 'utf8');
+
+      const memCandidate: ProposalPayload = {
+        kind: 'memory',
+        id: 'mem-alpha',
+        title: 'Memory Alpha',
+        l0_summary: 'Memory Alpha summary',
+        symptom: 'SymbolAlpha failed',
+        root_cause: 'Root cause for SymbolAlpha',
+        solution: 'Fix SymbolAlpha',
+        target_symbols: ['src/alpha.ts#SymbolAlpha'],
+      };
+
+      const resRegime2Hit = probeCandidateInWorktree({
+        workspaceRoot: ws,
+        candidateId: 'regime2-hit-test',
+        dim: 'dom',
+        wsRoot: ws,
+        wtContainer: path.join(ws, 'wt-container-2'),
+        proposals: [memCandidate],
+        deletedIds: [],
+        trajectories: [traj1, traj2],
+      });
+
+      assert.equal(resRegime2Hit.passed, true);
+      assert.equal(resRegime2Hit.attribution, 'helped');
+      assert.equal(resRegime2Hit.score, 1);
+
+      // Single trajectory or no holdout match => unverified
+      const resUnverified = probeCandidateInWorktree({
+        workspaceRoot: ws,
+        candidateId: 'unverified-test',
+        dim: 'dom',
+        wsRoot: ws,
+        wtContainer: path.join(ws, 'wt-container-3'),
+        proposals: [memCandidate],
+        deletedIds: [],
+        trajectories: [traj1], // single trajectory
+      });
+
+      assert.equal(resUnverified.passed, true);
+      assert.equal(resUnverified.attribution, 'unverified');
+
+      // Verify runOptimizationCycle does NOT inflate helped_count when winning candidate is unverified
+      const cycleResult = runOptimizationCycle({
+        workspaceRoot: ws,
+        dim: 'dom',
+        k: 1,
+        apply: true,
+        trajectories: [traj1],
+      });
+
+      if (cycleResult.decision === 'ADOPT') {
+        const telemetry = new EvoTelemetry(storage);
+        const map = telemetry.getTelemetryMap();
+        telemetry.close();
+        const adoptedMem = map.get(cycleResult.winningCandidate!.proposals[0].id);
+        assert.equal(adoptedMem?.helped_count ?? 0, 0);
+      }
+    } finally {
+      cleanTempWorkspace(ws);
+    }
+  });
+
+  // =========================================================================
+  // 19. WORKTREE HOST RULE SYNCHRONIZATION AND PROBE ENVIRONMENT AUGMENTATION
+  // =========================================================================
+  test('19. probeCandidateInWorktree syncs host rules and augments probe process environment', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // Create host rule files in wsRoot
+      fs.writeFileSync(path.join(ws, 'CLAUDE.md'), '# Claude Host Invariants', 'utf8');
+      fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# Agents Host Invariants', 'utf8');
+      fs.writeFileSync(path.join(ws, 'GEMINI.md'), '# Gemini Host Invariants', 'utf8');
+
+      // Probe script checking env and files
+      const envProbeScript = path.join(ws, 'env_probe.mjs');
+      fs.writeFileSync(
+        envProbeScript,
+        `
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+const cwd = process.cwd();
+const hasClaude = fs.existsSync(path.join(cwd, 'CLAUDE.md'));
+const hasAgents = fs.existsSync(path.join(cwd, 'AGENTS.md'));
+const hasGemini = fs.existsSync(path.join(cwd, 'GEMINI.md'));
+const hasNodePath = Boolean(process.env.NODE_PATH);
+const hasViteCache = Boolean(process.env.VITE_CACHE_DIR);
+
+if (hasClaude && hasAgents && hasGemini && hasNodePath && hasViteCache) {
+  console.log(JSON.stringify({ score: 1.0, probePassed: true }));
+  process.exit(0);
+} else {
+  console.error("Missing expected env or files", { hasClaude, hasAgents, hasGemini, hasNodePath, hasViteCache });
+  process.exit(1);
+}
+`,
+        'utf8'
+      );
+
+      const probeRes = probeCandidateInWorktree({
+        workspaceRoot: ws,
+        candidateId: 'env-sync-test',
+        dim: 'inv',
+        wsRoot: ws,
+        wtContainer: path.join(ws, 'wt-container-env'),
+        proposals: [],
+        deletedIds: [],
+        probeCmd: `node "${envProbeScript}"`,
+      });
+
+      assert.equal(probeRes.probePassed, true);
+      assert.equal(probeRes.score, 1.0);
     } finally {
       cleanTempWorkspace(ws);
     }

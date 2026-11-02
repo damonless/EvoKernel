@@ -4,7 +4,10 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as stream from 'node:stream';
+import { pathToFileURL } from 'node:url';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
+import { startMcpStdioServer } from '../mcp/server.js';
 import { findGitRoot, runInit, runUninstall, syncManagedRuleBlocks } from '../cli/init.js';
 import { runBootstrap } from '../cli/bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from '../cli/audit.js';
@@ -28,6 +31,7 @@ import {
   stripCStyleComments,
   normalizeCodeStructure,
   verifyMemoryFreshness,
+  clearMemoryVerificationCache,
 } from '../core/memory.js';
 import {
   EvoGatekeeper,
@@ -954,7 +958,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         fs.readFileSync(path.join(repoRoot, 'gemini-extension.json'), 'utf8')
       );
       assert.equal(geminiExt.name, 'evo-kernel');
-      assert.equal(geminiExt.contextFileName, 'GEMINI.md');
+      assert.equal(geminiExt.contextFileName, 'templates/GEMINI.extension.md');
       assert.match(
         geminiExt.mcpServers['evo-kernel'].args[0],
         /\$\{extensionPath\}\/(?:scripts\/boot-mcp\.mjs|dist\/cli\/index\.js)/
@@ -3922,6 +3926,299 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       } catch {
         // ignore transient Windows lock in temp dir
       }
+    }
+  });
+
+  test('34. Memory Freshness: In-process Map + SQLite cache synergy, caller backfill persistence, and <5ms warm latency', () => {
+    const ws = createTempWorkspace();
+    clearMemoryVerificationCache();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // Create a source file in ws
+      const srcDir = path.join(ws, 'src');
+      fs.mkdirSync(srcDir, { recursive: true });
+      const srcFile = path.join(srcDir, 'math.ts');
+      fs.writeFileSync(
+        srcFile,
+        'export function calculateSum(a: number, b: number): number {\n  return a + b;\n}\n\nexport function callerFunc(): number {\n  return calculateSum(1, 2);\n}\n',
+        'utf8'
+      );
+
+      const fp = extractSymbolFingerprint(ws, 'calculateSum');
+      assert.ok(fp, 'Fingerprint must be extracted');
+
+      const memPayload = {
+        id: 'math-sum-defect',
+        title: 'Math Sum Defect',
+        l0_summary: 'Defect in calculateSum implementation',
+        symptom: 'Calculation defect',
+        root_cause: 'Missing boundary check',
+        solution: 'Add validation',
+        target_symbols: ['src/math.ts#calculateSum'],
+        ast_fingerprints: {
+          'src/math.ts#calculateSum': fp,
+        },
+        tags: ['math'],
+        origin: 'test' as const,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      storage.saveMemory(memPayload);
+
+      // 1. Initial verification with includeCallers: false
+      const rNoCallers = verifyMemoryFreshness(ws, memPayload, { includeCallers: false });
+      assert.equal(rNoCallers.overall_status, 'VERIFIED');
+      assert.equal(rNoCallers.topology_anchors[0].callers.length, 0);
+
+      // 2. Subsequent verification with includeCallers: true in same process
+      const rWithCallers = verifyMemoryFreshness(ws, memPayload, { includeCallers: true });
+      assert.equal(rWithCallers.overall_status, 'VERIFIED');
+      assert.ok(rWithCallers.topology_anchors[0].callers.length > 0);
+
+      // 3. Clear in-process Map cache to simulate next process run
+      clearMemoryVerificationCache();
+
+      // 4. Verification with includeCallers: true should hit SQLite cache with callers intact!
+      const t0 = performance.now();
+      const rFromSqlite = verifyMemoryFreshness(ws, memPayload, { includeCallers: true });
+      const elapsedMs = performance.now() - t0;
+
+      assert.equal(rFromSqlite.overall_status, 'VERIFIED');
+      assert.ok(rFromSqlite.topology_anchors[0].callers.length > 0);
+      assert.ok(elapsedMs < 50, `SQLite warm verify with callers took ${elapsedMs}ms, should be fast`);
+    } finally {
+      clearMemoryVerificationCache();
+      try {
+        fs.rmSync(ws, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  test('35. MCP dirty tree watermark reminder on hookless hosts and propose reset', () => {
+    const ws = createTempWorkspace();
+    const prevAntigravity = process.env.ANTIGRAVITY_AGENT;
+    delete process.env.ANTIGRAVITY_AGENT;
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      runInit(ws, { stealth: true });
+
+      // Initialize git repo in ws so git status --porcelain works
+      spawnSync('git', ['init'], { cwd: ws });
+      spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws });
+      spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: ws });
+      spawnSync('git', ['add', '.'], { cwd: ws });
+      spawnSync('git', ['commit', '-m', 'Initial commit'], { cwd: ws });
+
+      // Save a dummy rule
+      storage.saveRule({
+        id: 'test-rule-mcp',
+        title: 'Test Rule MCP',
+        l0_summary: 'Rule for MCP dirty tree reminder test',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        priority: 70,
+        tokens: 30,
+        origin: 'test',
+        content: 'Rule body',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const dispatcher = new EvoMcpDispatcher(ws);
+
+      // Call 1 & 2: callsSinceLastPropose < 3, no reminder
+      const res1 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      assert.doesNotMatch(res1.content[0].text, /Uncommitted edits detected/);
+
+      const res2 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      assert.doesNotMatch(res2.content[0].text, /Uncommitted edits detected/);
+
+      // Now introduce an uncommitted modification to a source file
+      fs.writeFileSync(path.join(ws, 'dirty_source.ts'), 'export const dirty = 1;\n', 'utf8');
+
+      // Call 3: callsSinceLastPropose reaches 3 with dirty tree -> appends reminder
+      const res3 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      assert.match(res3.content[0].text, /💡 Uncommitted edits detected/);
+
+      // Call 4: dirty tree has not changed (watermark matches) -> reminder suppressed
+      const res4 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      assert.doesNotMatch(res4.content[0].text, /💡 Uncommitted edits detected/);
+
+      // Now propose capability -> resets callsSinceLastPropose to 0
+      dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'handled-dirty-guard',
+        title: 'Handled Dirty Guard',
+        l0_summary: 'Guard for uncommitted dirty tree edits',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        content: 'Body of rule addressing uncommitted changes.',
+        transfer_scenarios: ['Subsystem change validation'],
+      });
+
+      // Inspect after propose -> callsSinceLastPropose was reset to 0, no reminder
+      const res5 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      assert.doesNotMatch(res5.content[0].text, /💡 Uncommitted edits detected/);
+
+      dispatcher.close();
+    } finally {
+      if (prevAntigravity !== undefined) process.env.ANTIGRAVITY_AGENT = prevAntigravity;
+      try {
+        fs.rmSync(ws, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  test('36. MCP Server stream dispatching: initialize and notifications/initialized update dispatcher clientRoots', async () => {
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    storage.ensureInitialized();
+
+    const rootA = createTempWorkspace();
+    const rootB = createTempWorkspace();
+
+    const inStream = new stream.PassThrough();
+    const outStream = new stream.PassThrough();
+
+    const { dispatcher, close } = startMcpStdioServer(ws, {
+      input: inStream,
+      output: outStream,
+    });
+
+    try {
+      assert.deepEqual(dispatcher.getClientRoots(), []);
+
+      // 1. Send initialize with rootUri, workspaceFolders, and empty rootPath guard
+      const initReq = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          rootUri: pathToFileURL(rootA).href,
+          rootPath: '',
+          workspaceFolders: [
+            { uri: '' },
+            { uri: pathToFileURL(rootA).href },
+          ],
+          capabilities: {
+            roots: {
+              listChanged: true,
+            },
+          },
+        },
+      };
+      inStream.write(JSON.stringify(initReq) + '\n');
+
+      // Wait a tick for readline line event processing
+      await new Promise((r) => setImmediate(r));
+
+      assert.deepEqual(dispatcher.getClientRoots(), [path.resolve(rootA)]);
+
+      // 2. Send notifications/initialized -> server initiates roots/list request to client
+      const serverReqPromise = new Promise<any>((resolve) => {
+        const onData = (chunk: Buffer) => {
+          const lines = chunk.toString().split('\n');
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line.trim());
+              if (msg.method === 'roots/list') {
+                outStream.removeListener('data', onData);
+                resolve(msg);
+                return;
+              }
+            } catch {}
+          }
+        };
+        outStream.on('data', onData);
+      });
+
+      inStream.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'notifications/initialized',
+          params: {},
+        }) + '\n'
+      );
+
+      const serverReq = await serverReqPromise;
+      assert.ok(serverReq && serverReq.id);
+
+      // Reply to roots/list with rootB
+      const rootsResp = {
+        jsonrpc: '2.0',
+        id: serverReq.id,
+        result: {
+          roots: [{ uri: pathToFileURL(rootB).href }],
+        },
+      };
+      inStream.write(JSON.stringify(rootsResp) + '\n');
+
+      // Wait for promise resolution
+      await new Promise((r) => setTimeout(r, 50));
+
+      const updatedRoots = dispatcher.getClientRoots();
+      assert.ok(updatedRoots.includes(path.resolve(rootA)));
+      assert.ok(updatedRoots.includes(path.resolve(rootB)));
+
+      // 3. Send roots/list_changed (without notifications/ prefix) with rootC
+      const rootC = createTempWorkspace();
+      try {
+        const listChangedPromise = new Promise<any>((resolve) => {
+          const onData = (chunk: Buffer) => {
+            const lines = chunk.toString().split('\n');
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              try {
+                const msg = JSON.parse(line.trim());
+                if (msg.method === 'roots/list') {
+                  outStream.removeListener('data', onData);
+                  resolve(msg);
+                  return;
+                }
+              } catch {}
+            }
+          };
+          outStream.on('data', onData);
+        });
+
+        inStream.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'roots/list_changed',
+            params: {},
+          }) + '\n'
+        );
+
+        const listChangedReq = await listChangedPromise;
+        inStream.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: listChangedReq.id,
+            result: {
+              roots: [{ uri: pathToFileURL(rootC).href }],
+            },
+          }) + '\n'
+        );
+
+        await new Promise((r) => setTimeout(r, 50));
+        assert.deepEqual(dispatcher.getClientRoots(), [path.resolve(rootC)]);
+      } finally {
+        try {
+          fs.rmSync(rootC, { recursive: true, force: true });
+        } catch {}
+      }
+    } finally {
+      close();
+      try {
+        fs.rmSync(ws, { recursive: true, force: true });
+        fs.rmSync(rootA, { recursive: true, force: true });
+        fs.rmSync(rootB, { recursive: true, force: true });
+      } catch {}
     }
   });
 });

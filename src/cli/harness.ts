@@ -1747,12 +1747,18 @@ export function upsertAntigravityHooks(ws: string): string[] {
   let hooksObj: Record<string, unknown> = {};
   if (fs.existsSync(hooksPath)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        hooksObj = parsed as Record<string, unknown>;
+      const raw = fs.readFileSync(hooksPath, 'utf8');
+      const parsed: unknown = parseJsonc(raw, hooksPath);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('hooks root is not a JSON object');
       }
+      hooksObj = parsed as Record<string, unknown>;
     } catch {
-      hooksObj = {};
+      // Data-loss guard: never overwrite a user's unparseable / non-object hooks file.
+      console.warn(
+        `[EvoKernel Warning] Skipped Antigravity hook wiring: ${hooksPath} is not a valid JSON object; fix it and re-run evo init.`
+      );
+      return updated;
     }
   }
 

@@ -26,6 +26,7 @@ import {
   resolveInstalledEvoKernelRoot,
   upsertCodexToml,
   upsertClaudeSettings,
+  upsertAntigravityHooks,
   upsertMdcFile,
   upsertMcpJson,
   upsertOpenCode,
@@ -792,6 +793,18 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       runUninstall(ws);
       assert.equal(fs.existsSync(path.join(ws, '.agents', 'hooks.json')), false);
       assert.equal(fs.existsSync(path.join(ws, '.agents')), false);
+
+      // Verify fail-closed data-loss guard for corrupt or non-object .agents/hooks.json
+      fs.mkdirSync(path.join(ws, '.agents'), { recursive: true });
+      for (const corrupt of ['{ "evo-evolution-reminder": { // broken json', '[1, 2, 3]']) {
+        fs.writeFileSync(path.join(ws, '.agents', 'hooks.json'), corrupt, 'utf8');
+        upsertAntigravityHooks(ws);
+        assert.strictEqual(
+          fs.readFileSync(path.join(ws, '.agents', 'hooks.json'), 'utf8'),
+          corrupt,
+          'Corrupted hooks.json must never be overwritten'
+        );
+      }
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

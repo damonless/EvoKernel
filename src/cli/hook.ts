@@ -567,9 +567,9 @@ export function handlePostTool(
 
   const telemetry = new EvoTelemetry(storage);
   try {
-    if (isCommandError) {
-      telemetry.setSessionFlag('had_command_error', 'true');
-    }
+    const currentStep = parseInt(telemetry.getSessionFlag('session_step_seq') || '0', 10) + 1;
+    telemetry.setSessionFlag('session_step_seq', String(currentStep));
+    telemetry.setSessionFlag('last_hook_event_at', String(Date.now()));
 
     let output = '';
     const recalledRuleIds: string[] = [];
@@ -591,6 +591,7 @@ export function handlePostTool(
       const proposedId = String(ctx.innerArgs.id || 'capability');
       telemetry.setSessionFlag('last_crystallized_id', proposedId);
       telemetry.setSessionFlag('last_propose_at', String(Date.now()));
+      telemetry.setSessionFlag('last_propose_step', String(currentStep));
       telemetry.setSessionFlag('pending_evolution', 'false');
       telemetry.setSessionFlag('unproposed_edit_count', '0');
       telemetry.setSessionFlag('unproposed_read_count', '0');
@@ -621,14 +622,28 @@ export function handlePostTool(
           ctx.serverName.includes('codegraph') ||
           isCodeGraphEvoRun);
 
+      const cmdStr = String(
+        ctx.toolInput.command || ctx.toolInput.CommandLine || ctx.toolInput.cmd || ''
+      ).trim();
+      const isSearchOrDiff =
+        /^(?:rg|grep|git\s+diff)\b/i.test(cmdStr) || /\b(?:rg|grep|git\s+diff)\b/i.test(cmdStr);
+      const effectiveCommandError = isCommandError && !isSearchOrDiff;
+
       if (isCommand) {
-        if (isCommandError) {
+        if (effectiveCommandError) {
           telemetry.setSessionFlag('had_command_error', 'true');
+          telemetry.setSessionFlag('last_cmd_error_step', String(currentStep));
           telemetry.setSessionFlag('last_command_failed_at', String(Date.now()));
-        } else if (telemetry.getSessionFlag('had_command_error') === 'true') {
-          const lastFailed = parseInt(telemetry.getSessionFlag('last_command_failed_at') || '0', 10);
-          const lastEdit = parseInt(telemetry.getSessionFlag('last_file_edit_at') || '0', 10);
-          if (lastEdit > lastFailed) {
+        } else if (!isCommandError) {
+          telemetry.setSessionFlag('last_cmd_ok_step', String(currentStep));
+          const lastProposeStep = parseInt(telemetry.getSessionFlag('last_propose_step') || '0', 10);
+          const lastCmdErrorStep = parseInt(telemetry.getSessionFlag('last_cmd_error_step') || '0', 10);
+          const lastFileEditStep = parseInt(telemetry.getSessionFlag('last_file_edit_step') || '0', 10);
+          if (
+            lastCmdErrorStep > lastProposeStep &&
+            lastFileEditStep > lastCmdErrorStep &&
+            currentStep > lastFileEditStep
+          ) {
             telemetry.setSessionFlag('monotonic_recovery_detected', 'true');
           }
         }
@@ -637,6 +652,7 @@ export function handlePostTool(
       if (isMutation && !ctx.isInternalMeta) {
         telemetry.setSessionFlag('pending_evolution', 'true');
         telemetry.setSessionFlag('last_file_edit_at', String(Date.now()));
+        telemetry.setSessionFlag('last_file_edit_step', String(currentStep));
         const currentCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
         telemetry.setSessionFlag('unproposed_edit_count', String(currentCount + 1));
 
@@ -679,15 +695,24 @@ export function handlePostTool(
 
       if (ctx.rawPath && !ctx.isInternalMeta) {
         const rules = storage.listRules();
+        const injectedRaw = telemetry.getSessionFlag('injected_post_tool_rules') || '';
+        const injectedSet = new Set(injectedRaw ? injectedRaw.split(',').filter(Boolean) : []);
+        const newlyRecalled: string[] = [];
+
         for (const rule of rules) {
           if (rule.scope_glob && matchesScopeGlob(relPath, rule.scope_glob)) {
             recalledRuleIds.push(rule.id);
+            if (!injectedSet.has(rule.id)) {
+              newlyRecalled.push(rule.id);
+              injectedSet.add(rule.id);
+            }
             telemetry.recordRecalledCapability({ id: rule.id, kind: 'rule', tier: 'LOCAL' });
           }
         }
 
-        if (recalledRuleIds.length > 0) {
-          const matchedDetails = recalledRuleIds
+        if (newlyRecalled.length > 0) {
+          telemetry.setSessionFlag('injected_post_tool_rules', Array.from(injectedSet).join(','));
+          const matchedDetails = newlyRecalled
             .map((id) => {
               const r = storage.getRule(id);
               return r
@@ -771,21 +796,37 @@ export function handlePostTool(
         }
       }
 
+      const postHarness = (options.harness || (typeof payload.harness === 'string' ? payload.harness : '')).trim().toLowerCase();
+      let finalOutput = output;
+      if (postHarness) {
+        finalOutput = output
+          ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: output } })
+          : '{}';
+      }
+
       return {
         event: 'post-tool',
         success: true,
         exitCode: 0,
-        output,
+        output: finalOutput,
         recalledRules: recalledRuleIds,
         triggeredHooks: triggeredHooks.length > 0 ? triggeredHooks : undefined,
       };
+    }
+
+    const postHarness = (options.harness || (typeof payload.harness === 'string' ? payload.harness : '')).trim().toLowerCase();
+    let finalOutput = output;
+    if (postHarness) {
+      finalOutput = output
+        ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: output } })
+        : '{}';
     }
 
     return {
       event: 'post-tool',
       success: true,
       exitCode: 0,
-      output,
+      output: finalOutput,
       recalledRules: recalledRuleIds,
     };
   } finally {
@@ -864,6 +905,21 @@ export function handleStop(
     const hasUncrystallizedEdits = pending || editCount > 0 || modifiedFiles.length > 0;
     const hasHeavyDiagnosticReads = editCount < 4 && readCount >= 10;
 
+    const loopCount =
+      typeof payload.loop_count === 'number'
+        ? payload.loop_count
+        : typeof (payload as any).loopCount === 'number'
+          ? (payload as any).loopCount
+          : 0;
+    const isStopHookActive =
+      payload.stop_hook_active === true || (payload as any).stopHookActive === true;
+    const shouldForceAllow = isStopHookActive || loopCount >= 1;
+
+    const currentStep = parseInt(telemetry.getSessionFlag('session_step_seq') || '0', 10);
+    const lastStopStepRaw = telemetry.getSessionFlag('last_stop_suggested_step');
+    const lastStopStep = lastStopStepRaw !== null ? parseInt(lastStopStepRaw, 10) : 0;
+    const strike1Fired = lastStopStepRaw !== null && lastStopStep >= currentStep;
+
     const isHarness = Boolean(options.harness || payload.harness || payload.transcript_path || payload.transcriptPath);
 
     // Stop 3-Tier Strategy
@@ -873,10 +929,10 @@ export function handleStop(
 
     const strikeCount = parseInt(telemetry.getSessionFlag('stop_strike_count') || '0', 10);
     const lastStopSuggestedAt = parseInt(telemetry.getSessionFlag('last_stop_suggested_at') || '0', 10);
-    const lastStopStep = parseInt(telemetry.getSessionFlag('last_stop_suggested_step') || '0', 10);
     const lastFileEditAt = parseInt(telemetry.getSessionFlag('last_file_edit_at') || '0', 10);
 
     const now = Date.now();
+    telemetry.setSessionFlag('last_hook_event_at', String(now));
     const cooldownElapsedMs = now - lastStopSuggestedAt;
     const stepsElapsed = (editCount + readCount) - lastStopStep;
     const inCooldown = cooldownElapsedMs < 15 * 60 * 1000 && stepsElapsed < 12;
@@ -885,22 +941,24 @@ export function handleStop(
     let shouldBlock = false;
     const messages: string[] = [];
 
-    if (isHarness) {
+    if (shouldForceAllow) {
+      crystallizationSuggested = false;
+      shouldBlock = false;
+    } else if (isHarness) {
       if (isTier1) {
-        const alreadyFiredForCurrentEdit = strikeCount > 0 && lastFileEditAt > 0 && lastFileEditAt <= lastStopSuggestedAt;
-        if (!alreadyFiredForCurrentEdit || hasUserCorrection) {
+        if (!strike1Fired) {
           crystallizationSuggested = true;
           shouldBlock = true;
           telemetry.setSessionFlag('stop_strike_count', String(strikeCount + 1));
           telemetry.setSessionFlag('last_stop_suggested_at', String(now));
-          telemetry.setSessionFlag('last_stop_suggested_step', String(editCount + readCount));
+          telemetry.setSessionFlag('last_stop_suggested_step', String(currentStep));
         }
       } else if (isTier2) {
-        if (!inCooldown) {
+        if (!inCooldown && !strike1Fired) {
           crystallizationSuggested = true;
           shouldBlock = false;
           telemetry.setSessionFlag('last_stop_suggested_at', String(now));
-          telemetry.setSessionFlag('last_stop_suggested_step', String(editCount + readCount));
+          telemetry.setSessionFlag('last_stop_suggested_step', String(currentStep));
         }
       } else {
         // Tier 3: 1~5 normal edits: 100% silent under harness
@@ -945,7 +1003,26 @@ export function handleStop(
     }
 
     let finalOutput = messages.join('\n\n');
-    if (isHarness) {
+    const explicitHarness = (
+      options.harness ||
+      (typeof payload.harness === 'string' ? payload.harness : '')
+    )
+      .trim()
+      .toLowerCase();
+
+    if (explicitHarness) {
+      if (explicitHarness === 'cursor') {
+        finalOutput = shouldBlock && finalOutput ? JSON.stringify({ followup_message: finalOutput }) : '{}';
+      } else if (explicitHarness === 'gemini') {
+        finalOutput = shouldBlock && finalOutput ? JSON.stringify({ decision: 'deny', reason: finalOutput }) : JSON.stringify({ decision: 'allow' });
+      } else if (explicitHarness === 'claude' || explicitHarness === 'codex') {
+        finalOutput = shouldBlock && finalOutput ? JSON.stringify({ decision: 'block', reason: finalOutput }) : '{}';
+      } else {
+        finalOutput = shouldBlock && finalOutput ? JSON.stringify({ decision: 'block', reason: finalOutput }) : JSON.stringify({ decision: 'allow' });
+      }
+    } else if (payload.transcript_path || payload.transcriptPath) {
+      finalOutput = finalOutput ? `${finalOutput}\n{"decision":"allow"}` : '{"decision":"allow"}';
+    } else if (isHarness) {
       if (shouldBlock && finalOutput) {
         finalOutput = JSON.stringify({ decision: 'block', reason: finalOutput });
       } else if (finalOutput) {
@@ -960,6 +1037,7 @@ export function handleStop(
       success: true,
       exitCode: 0,
       output: finalOutput,
+      blocked: shouldBlock,
       crystallizationSuggested,
       dirtyRuleId: dirtyId || undefined,
     };

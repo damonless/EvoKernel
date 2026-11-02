@@ -1145,6 +1145,219 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     });
     assert.equal(code, 0);
   });
+
+  test('43. handleStop Strike-1 watermark covers step 0 without infinite loop and resets on new step', () => {
+    const storage = new EvoStorage(ws);
+    const telemetry = new EvoTelemetry(storage);
+    telemetry.setSessionFlag('dirty_crystallized_id', 'test-rule');
+    telemetry.close();
+
+    // Call 1 at step 0: triggers Strike-1, blocks
+    const r1 = handleStop(ws, {}, { harness: 'claude' });
+    assert.equal(r1.blocked, true);
+    const p1 = JSON.parse(r1.output);
+    assert.equal(p1.decision, 'block');
+    assert.match(p1.reason, /test-rule/);
+
+    // Call 2 at step 0: Strike-1 already fired for step 0, must allow (no infinite loop)
+    const r2 = handleStop(ws, {}, { harness: 'claude' });
+    assert.equal(r2.blocked, false);
+    assert.equal(r2.output, '{}');
+
+    // Tool edit occurs: step increments to 1
+    handlePostTool(ws, { tool_name: 'edit_file', tool_input: { path: 'src/foo.ts' } }, {});
+
+    // Now a new Tier 1 trigger occurs at step 1
+    const t2 = new EvoTelemetry(storage);
+    t2.setSessionFlag('user_correction_detected', 'true');
+    t2.close();
+
+    // Call 3 at step 1: new step allows Strike-1 to fire once again
+    const r3 = handleStop(ws, {}, { harness: 'claude' });
+    assert.equal(r3.blocked, true);
+    const p3 = JSON.parse(r3.output);
+    assert.equal(p3.decision, 'block');
+
+    // Call 4 at step 1: must allow
+    const r4 = handleStop(ws, {}, { harness: 'claude' });
+    assert.equal(r4.blocked, false);
+    assert.equal(r4.output, '{}');
+  });
+
+  test('44. handleStop harness-specific envelopes (cursor, gemini, claude, codex, legacy) and force-allow', () => {
+    const storage = new EvoStorage(ws);
+
+    // 1. Force allow when stop_hook_active or loop_count >= 1
+    const t1 = new EvoTelemetry(storage);
+    t1.setSessionFlag('dirty_crystallized_id', 'active-rule');
+    t1.close();
+    const rForce = handleStop(ws, { stop_hook_active: true }, { harness: 'claude' });
+    assert.equal(rForce.blocked, false);
+    assert.equal(rForce.output, '{}');
+
+    const rLoop = handleStop(ws, { loop_count: 1 }, { harness: 'gemini' });
+    assert.equal(rLoop.blocked, false);
+    assert.equal(JSON.parse(rLoop.output).decision, 'allow');
+
+    // 2. Cursor harness: blocked -> {"followup_message": "..."}, allow -> {}
+    const wsCursor = createTempWorkspace();
+    new EvoStorage(wsCursor).ensureInitialized();
+    const tCursor = new EvoTelemetry(new EvoStorage(wsCursor));
+    tCursor.setSessionFlag('dirty_crystallized_id', 'c-rule');
+    tCursor.close();
+    const rCursorBlock = handleStop(wsCursor, {}, { harness: 'cursor' });
+    assert.equal(rCursorBlock.blocked, true);
+    const pCursor = JSON.parse(rCursorBlock.output);
+    assert.ok(typeof pCursor.followup_message === 'string' && pCursor.followup_message.length > 0);
+    const rCursorAllow = handleStop(wsCursor, {}, { harness: 'cursor' });
+    assert.equal(rCursorAllow.blocked, false);
+    assert.equal(rCursorAllow.output, '{}');
+    fs.rmSync(wsCursor, { recursive: true, force: true });
+
+    // 3. Gemini harness: blocked -> {"decision": "deny", "reason": "..."}, allow -> {"decision": "allow"}
+    const wsGemini = createTempWorkspace();
+    new EvoStorage(wsGemini).ensureInitialized();
+    const tGemini = new EvoTelemetry(new EvoStorage(wsGemini));
+    tGemini.setSessionFlag('dirty_crystallized_id', 'g-rule');
+    tGemini.close();
+    const rGeminiBlock = handleStop(wsGemini, {}, { harness: 'gemini' });
+    assert.equal(rGeminiBlock.blocked, true);
+    const pGemini = JSON.parse(rGeminiBlock.output);
+    assert.equal(pGemini.decision, 'deny');
+    assert.ok(typeof pGemini.reason === 'string');
+    const rGeminiAllow = handleStop(wsGemini, {}, { harness: 'gemini' });
+    assert.equal(rGeminiAllow.blocked, false);
+    assert.equal(JSON.parse(rGeminiAllow.output).decision, 'allow');
+    fs.rmSync(wsGemini, { recursive: true, force: true });
+
+    // 4. Codex / Claude harness: blocked -> {"decision": "block", "reason": "..."}, allow -> {}
+    const wsCodex = createTempWorkspace();
+    new EvoStorage(wsCodex).ensureInitialized();
+    const tCodex = new EvoTelemetry(new EvoStorage(wsCodex));
+    tCodex.setSessionFlag('dirty_crystallized_id', 'cx-rule');
+    tCodex.close();
+    const rCodexBlock = handleStop(wsCodex, {}, { harness: 'codex' });
+    assert.equal(rCodexBlock.blocked, true);
+    const pCodex = JSON.parse(rCodexBlock.output);
+    assert.equal(pCodex.decision, 'block');
+    const rCodexAllow = handleStop(wsCodex, {}, { harness: 'codex' });
+    assert.equal(rCodexAllow.blocked, false);
+    assert.equal(rCodexAllow.output, '{}');
+    fs.rmSync(wsCodex, { recursive: true, force: true });
+
+    // 5. Legacy transcriptPath compatibility mode: preserves trailing {"decision":"allow"}
+    const wsLegacy = createTempWorkspace();
+    new EvoStorage(wsLegacy).ensureInitialized();
+    const tLegacy = new EvoTelemetry(new EvoStorage(wsLegacy));
+    tLegacy.setSessionFlag('dirty_crystallized_id', 'legacy-rule');
+    tLegacy.close();
+    const rLegacy = handleStop(wsLegacy, { transcript_path: path.join(wsLegacy, 'dummy.jsonl') }, {});
+    assert.match(rLegacy.output, /\{"decision":"allow"\}/);
+    fs.rmSync(wsLegacy, { recursive: true, force: true });
+  });
+
+  test('45. handlePostTool harness JSON wrapping and injected_post_tool_rules deduplication', () => {
+    const storage = new EvoStorage(ws);
+    storage.saveRule({
+      id: 'scoped-rule-dedup',
+      title: 'Scoped Rule For Dedup',
+      l0_summary: 'Rule summary for dedup testing',
+      scope_glob: 'src/**/*.ts',
+      core: false,
+      priority: 80,
+      tokens: 30,
+      origin: 'test',
+      content: 'Rule body for dedup',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Call 1 with --harness claude: rule matches, returned output is wrapped in JSON
+    const r1 = handlePostTool(
+      ws,
+      { tool_name: 'edit_file', tool_input: { path: 'src/module.ts' } },
+      { harness: 'claude' }
+    );
+    assert.equal(r1.success, true);
+    assert.ok(r1.recalledRules?.includes('scoped-rule-dedup'));
+    const p1 = JSON.parse(r1.output);
+    assert.equal(p1.hookSpecificOutput?.hookEventName, 'PostToolUse');
+    assert.match(p1.hookSpecificOutput?.additionalContext, /scoped-rule-dedup/);
+
+    // Call 2 on same file: rule was already injected in this session, output must be empty JSON {}
+    const r2 = handlePostTool(
+      ws,
+      { tool_name: 'edit_file', tool_input: { path: 'src/module.ts' } },
+      { harness: 'claude' }
+    );
+    assert.equal(r2.success, true);
+    assert.equal(r2.output, '{}');
+  });
+
+  test('46. handlePostTool monotonic step sequence and search command error filter', () => {
+    const storage = new EvoStorage(ws);
+
+    // 1. Monotonic step sequence increments
+    const rStep1 = handlePostTool(ws, { tool_name: 'read_file', tool_input: { path: 'a.ts' } }, {});
+    const t1 = new EvoTelemetry(storage);
+    const step1 = parseInt(t1.getSessionFlag('session_step_seq') || '0', 10);
+    t1.close();
+    assert.ok(step1 >= 1);
+
+    const rStep2 = handlePostTool(ws, { tool_name: 'read_file', tool_input: { path: 'b.ts' } }, {});
+    const t2 = new EvoTelemetry(storage);
+    const step2 = parseInt(t2.getSessionFlag('session_step_seq') || '0', 10);
+    t2.close();
+    assert.equal(step2, step1 + 1);
+
+    // 2. rg/grep/git diff exiting with code 1 is NOT treated as a command error
+    const rSearch = handlePostTool(
+      ws,
+      {
+        tool_name: 'bash',
+        tool_input: { command: 'rg "nonexistent_pattern" src/' },
+        tool_result: 'exit 1: pattern not found',
+        is_error: true,
+      },
+      {}
+    );
+    const t3 = new EvoTelemetry(storage);
+    const lastCmdErr = t3.getSessionFlag('last_cmd_error_step');
+    t3.close();
+    assert.equal(lastCmdErr, null);
+
+    // 3. Monotonic recovery detection: propose -> cmd_error -> file_edit -> cmd_ok
+    // Step a: propose
+    handlePostTool(ws, { tool_name: 'evo_propose', tool_input: { id: 'recovery-rule' } }, {});
+    // Step b: actual build failure error
+    handlePostTool(
+      ws,
+      {
+        tool_name: 'bash',
+        tool_input: { command: 'npm test' },
+        tool_result: 'Error: test failed',
+        is_error: true,
+      },
+      {}
+    );
+    // Step c: file edit to fix
+    handlePostTool(ws, { tool_name: 'edit_file', tool_input: { path: 'src/fix.ts' } }, {});
+    // Step d: successful test
+    handlePostTool(
+      ws,
+      {
+        tool_name: 'bash',
+        tool_input: { command: 'npm test' },
+        tool_result: 'Tests passed',
+        is_error: false,
+      },
+      {}
+    );
+
+    const t4 = new EvoTelemetry(storage);
+    assert.equal(t4.getSessionFlag('monotonic_recovery_detected'), 'true');
+    t4.close();
+  });
 });
 
 

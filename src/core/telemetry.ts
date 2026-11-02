@@ -599,9 +599,16 @@ export class EvoTelemetry {
         workspace_sources_sig TEXT,
         overall_status TEXT NOT NULL,
         report_json TEXT NOT NULL,
-        cached_at TEXT NOT NULL
+        cached_at TEXT NOT NULL,
+        has_callers INTEGER NOT NULL DEFAULT 0
       );
     `);
+
+    try {
+      this.db.exec('ALTER TABLE memory_verification_cache ADD COLUMN has_callers INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // column already exists
+    }
 
     try {
       this.db.exec('ALTER TABLE telemetry ADD COLUMN helped_count INTEGER NOT NULL DEFAULT 0');

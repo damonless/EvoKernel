@@ -2,14 +2,14 @@
 id: codex-hooks-corrupt-file-unlink
 title: "Codex hooks.json corrupt file deleted by pre-tool sync"
 l0_summary: "syncDeclaredPreToolHooks treated unparseable .codex/hooks.json as {} and unlinked/overwrote it"
-created_commit: "82af524"
+created_commit: "8d6d5f2"
 created_branch: "feat/p0-core-hardening"
 target_symbols: ["syncDeclaredPreToolHooks","isEvoHookCommand"]
-ast_fingerprints: {"syncDeclaredPreToolHooks":{"symbol":"syncDeclaredPreToolHooks","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":678,"end_line":958,"signature":"export function syncDeclaredPreToolHooks(workspaceRoot: string): void","ast_hash":"5439f61c9bb75d98"},"isEvoHookCommand":{"symbol":"isEvoHookCommand","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":499,"end_line":528,"signature":"export function isEvoHookCommand(cmd: string, needle?: string): boolean","ast_hash":"40d06c89798cdf3e"}}
+ast_fingerprints: {"syncDeclaredPreToolHooks":{"symbol":"syncDeclaredPreToolHooks","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":707,"end_line":987,"signature":"export function syncDeclaredPreToolHooks(workspaceRoot: string): void","ast_hash":"5439f61c9bb75d98"},"isEvoHookCommand":{"symbol":"isEvoHookCommand","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":528,"end_line":557,"signature":"export function isEvoHookCommand(cmd: string, needle?: string): boolean","ast_hash":"40d06c89798cdf3e"}}
 tags: []
 origin: "evolved"
 created_at: "2026-10-31T18:34:22.922Z"
-updated_at: "2026-11-02T02:14:32.997Z"
+updated_at: "2026-11-02T04:28:49.588Z"
 ---
 
 ## Symptom

@@ -1,3 +1,4 @@
+import * as child_process from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -258,6 +259,11 @@ export class EvoMcpDispatcher {
   private gatekeeper?: EvoGatekeeper;
   private proxyManager: McpProxyManager;
   private readonly onCoreRulesChanged?: () => void;
+  private sessionStartTime = Date.now();
+  private callsSinceLastPropose = 0;
+  private lastDirtyCheckAt = 0;
+  private lastDirtySig = '';
+  private watermarkDirtySig = '';
 
   constructor(workspaceRoot: string, onCoreRulesChanged?: () => void) {
     this.defaultRoot = path.resolve(workspaceRoot);
@@ -268,6 +274,48 @@ export class EvoMcpDispatcher {
     this.telemetry = initialCtx.telemetry;
     this.gatekeeper = initialCtx.gatekeeper;
     this.proxyManager = initialCtx.proxyManager;
+  }
+
+  private checkDirtyTreeReminder(workspaceRoot: string, activeTelemetry?: EvoTelemetry | null): string {
+    const lastHookAt = activeTelemetry
+      ? parseInt(activeTelemetry.getSessionFlag('last_hook_event_at') || '0', 10)
+      : 0;
+    const hasActiveHook = Boolean(
+      process.env.ANTIGRAVITY_AGENT || (lastHookAt > 0 && lastHookAt >= this.sessionStartTime)
+    );
+    if (hasActiveHook) return '';
+
+    this.callsSinceLastPropose++;
+    if (this.callsSinceLastPropose < 3) return '';
+
+    const now = Date.now();
+    if (now - this.lastDirtyCheckAt >= 15000) {
+      this.lastDirtyCheckAt = now;
+      try {
+        const res = child_process.spawnSync('git', ['status', '--porcelain'], {
+          cwd: workspaceRoot,
+          encoding: 'utf8',
+          timeout: 1500,
+        });
+        if (res.status === 0 && res.stdout) {
+          const dirtyLines = res.stdout
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter((l) => l && !l.includes('.evo/') && !l.includes('.git/'));
+          this.lastDirtySig = dirtyLines.join('\n');
+        } else {
+          this.lastDirtySig = '';
+        }
+      } catch {
+        this.lastDirtySig = '';
+      }
+    }
+
+    if (this.lastDirtySig && this.lastDirtySig !== this.watermarkDirtySig) {
+      this.watermarkDirtySig = this.lastDirtySig;
+      return '\n💡 Uncommitted edits detected — call evo_propose(workspace) once root cause/fix is verified.';
+    }
+    return '';
   }
 
   public setClientRoots(roots: string[], readyPromise?: Promise<void>): void {
@@ -679,6 +727,11 @@ export class EvoMcpDispatcher {
     const storage = activeCtx?.storage || this.storage;
     const telemetry = activeCtx?.telemetry || this.telemetry;
 
+    const formatInspectResult = (bodyText: string) => {
+      const reminder = this.checkDirtyTreeReminder(storage.rootDir, telemetry || this.telemetry);
+      return { content: [{ type: 'text' as const, text: bodyText + reminder }] };
+    };
+
     const parsedExt = parseExternalToolId(rawId);
     if (parsedExt) {
       let extTool = storage.getExternalTool(rawId);
@@ -711,7 +764,7 @@ export class EvoMcpDispatcher {
           tier === 'L1'
             ? `[EXTERNAL TOOL L1] ${extTool.id} (server: ${extTool.serverName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}`
             : `[EXTERNAL TOOL L2] ${extTool.id} (server: ${extTool.serverName}, tool: ${extTool.originalName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}\n\nExecution:\nRouted via downstream MCP server '${extTool.serverName}' using stdio JSON-RPC.\nCall via: evo_run("${extTool.id}", args)`;
-        return { content: [{ type: 'text' as const, text: body }] };
+        return formatInspectResult(body);
       }
     }
 
@@ -745,7 +798,7 @@ export class EvoMcpDispatcher {
         tier === 'L1'
           ? `[RULE L1] ${rule.id} (${rule.scope_glob})\nL0: ${rule.l0_summary}\nTokens: ${rule.tokens}`
           : `[RULE L2] ${rule.id} — ${rule.title}\nScope: ${rule.scope_glob} | Core: ${rule.core}\nL0: ${rule.l0_summary}\n\n${rule.content}`;
-      return { content: [{ type: 'text' as const, text: body }] };
+      return formatInspectResult(body);
     }
 
     let skill = storage.getSkill(id);
@@ -778,7 +831,7 @@ export class EvoMcpDispatcher {
         tier === 'L1'
           ? `[SKILL L1] ${skill.id} — ${skill.title}\nL0: ${skill.l0_summary}\nTags: ${skill.tags.join(', ')}\n\n## L1 Contract\n${skill.l1_contract}`
           : `[SKILL L2] ${skill.id} — ${skill.title}\nL0: ${skill.l0_summary}\n\n## L1 Contract\n${skill.l1_contract}\n\n## L2 SOP\n${skill.l2_sop}`;
-      return { content: [{ type: 'text' as const, text: body }] };
+      return formatInspectResult(body);
     }
 
     let tool = storage.getTool(id);
@@ -811,7 +864,7 @@ export class EvoMcpDispatcher {
         tier === 'L1'
           ? `[TOOL L1] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}`
           : `[TOOL L2] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}\n\nScript (${tool.entry_script}):\n\`\`\`${tool.runtime}\n${tool.script_code}\n\`\`\``;
-      return { content: [{ type: 'text' as const, text: body }] };
+      return formatInspectResult(body);
     }
 
     const memory = storage.getMemory(id);
@@ -893,7 +946,7 @@ export class EvoMcpDispatcher {
         ]
           .filter(Boolean)
           .join('\n');
-        return { content: [{ type: 'text' as const, text: l1Body }] };
+        return formatInspectResult(l1Body);
       }
 
       const l2Body = [
@@ -919,7 +972,7 @@ export class EvoMcpDispatcher {
       ]
         .filter(Boolean)
         .join('\n');
-      return { content: [{ type: 'text' as const, text: l2Body }] };
+      return formatInspectResult(l2Body);
     }
 
     return {
@@ -1013,9 +1066,10 @@ export class EvoMcpDispatcher {
         }
         const header = `[evo_run: ${canonicalExtId} (proxy: ${parsedExt.serverName}/${resolvedToolName}) | exit=${res.isError ? 1 : 0} | ${res.durationMs}ms]`;
         const formattedText = res.content.map((c) => c.text).join('\n\n');
+        const reminder = this.checkDirtyTreeReminder(initialCtx.storage.rootDir, initialCtx.telemetry);
         return {
           isError: res.isError,
-          content: [{ type: 'text' as const, text: `${header}\n\n${formattedText}` }],
+          content: [{ type: 'text' as const, text: `${header}\n\n${formattedText}${reminder}` }],
         };
       };
 
@@ -1073,6 +1127,7 @@ export class EvoMcpDispatcher {
       });
     }
 
+    const reminder = this.checkDirtyTreeReminder(execCwd, activeTelemetry);
     const output = [
       `[evo_run: ${tool.id} (${tool.runtime}) | exit=${res.exitCode} | ${res.durationMs}ms]`,
       res.stdout ? `STDOUT:\n${res.stdout}` : '',
@@ -1083,11 +1138,13 @@ export class EvoMcpDispatcher {
 
     return {
       isError: !success,
-      content: [{ type: 'text' as const, text: output }],
+      content: [{ type: 'text' as const, text: output + reminder }],
     };
   }
 
   private handlePropose(proposal: ProposalPayload, activeCtx?: WorkspaceContext) {
+    this.callsSinceLastPropose = 0;
+    this.watermarkDirtySig = this.lastDirtySig;
     const payload: ProposalPayload = {
       ...proposal,
       trigger_cue:

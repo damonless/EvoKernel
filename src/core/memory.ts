@@ -55,8 +55,12 @@ export interface GitPaths {
   repoRoot?: string;
 }
 
+const gitPathsCache = new Map<string, GitPaths>();
+
 export function resolveGitPaths(workspaceRoot: string): GitPaths {
   const root = path.resolve(workspaceRoot);
+  const cached = gitPathsCache.get(root);
+  if (cached) return cached;
   let repoRoot: string | undefined;
   let gitDir = '';
   if (process.env.GIT_DIR) {
@@ -109,7 +113,9 @@ export function resolveGitPaths(workspaceRoot: string): GitPaths {
     // fallback
   }
 
-  return { gitDir, commonDir, repoRoot };
+  const res = { gitDir, commonDir, repoRoot };
+  gitPathsCache.set(root, res);
+  return res;
 }
 
 interface PackedRefsCache {
@@ -126,7 +132,8 @@ export interface GitHeadSnapshot {
 }
 
 export function readGitHeadSnapshot(workspaceRoot: string): GitHeadSnapshot {
-  const { gitDir, commonDir } = resolveGitPaths(workspaceRoot);
+  const root = path.resolve(workspaceRoot);
+  const { gitDir, commonDir } = resolveGitPaths(root);
   const headFile = path.join(gitDir, 'HEAD');
   if (!fs.existsSync(headFile)) {
     return { commit: 'uncommitted', fullCommit: 'uncommitted' };
@@ -2135,6 +2142,87 @@ export function extractSymbolFingerprintAtCommitV1(
   return null;
 }
 
+const workspaceSigCache = new Map<string, { sig: string; expiresAt: number }>();
+
+export function getWorkspaceSourcesSig(workspaceRoot: string): string {
+  const root = path.resolve(workspaceRoot);
+  const now = Date.now();
+  const cached = workspaceSigCache.get(root);
+  if (cached && cached.expiresAt > now) {
+    return cached.sig;
+  }
+  const files = collectWorkspaceSourceFiles(root, 300);
+  const parts: string[] = [];
+  for (const f of files) {
+    try {
+      const s = fs.statSync(f);
+      parts.push(`${path.relative(root, f)}:${s.mtimeMs}:${s.size}`);
+    } catch {
+      parts.push(`${path.relative(root, f)}:missing`);
+    }
+  }
+  const sig = crypto.createHash('sha1').update(parts.join('|')).digest('hex');
+  workspaceSigCache.set(root, { sig, expiresAt: now + 500 });
+  return sig;
+}
+
+interface InProcessVerificationCacheEntry {
+  parser_version: number;
+  memory_file_sig: string;
+  target_files_sig: string;
+  workspace_sources_sig: string;
+  overall_status: string;
+  has_callers: boolean;
+  report: MemoryVerificationReport;
+}
+
+const memoryVerificationProcessCache = new Map<string, InProcessVerificationCacheEntry>();
+const fileSigCache = new Map<string, { sig: string; expiresAt: number }>();
+
+function getFileSigFast(filePath: string): string {
+  const now = Date.now();
+  const cached = fileSigCache.get(filePath);
+  if (cached && cached.expiresAt > now) {
+    return cached.sig;
+  }
+  try {
+    const s = fs.statSync(filePath);
+    const sig = `${s.mtimeMs}:${s.size}`;
+    fileSigCache.set(filePath, { sig, expiresAt: now + 500 });
+    return sig;
+  } catch {
+    const sig = 'missing';
+    fileSigCache.set(filePath, { sig, expiresAt: now + 500 });
+    return sig;
+  }
+}
+
+export function clearMemoryVerificationCache(): void {
+  memoryVerificationProcessCache.clear();
+  workspaceSigCache.clear();
+  gitPathsCache.clear();
+  fileSigCache.clear();
+}
+
+function cloneVerificationReport(
+  rep: MemoryVerificationReport,
+  currentCommit: string,
+  currentBranch: string | undefined,
+  createdCommit: string
+): MemoryVerificationReport {
+  return {
+    ...rep,
+    current_commit: currentCommit,
+    current_branch: currentBranch,
+    commit_match: createdCommit === currentCommit,
+    checks: rep.checks.map((c) => ({ ...c })),
+    topology_anchors: rep.topology_anchors.map((a) => ({
+      ...a,
+      callers: [...a.callers],
+    })),
+  };
+}
+
 export function verifyMemoryFreshness(
   workspaceRoot: string,
   memory: EvoMemory,
@@ -2142,8 +2230,9 @@ export function verifyMemoryFreshness(
 ): MemoryVerificationReport {
   const root = path.resolve(workspaceRoot);
   const includeCallers = options?.includeCallers ?? true;
-  const currentCommit = resolveCurrentGitCommit(root);
-  const currentBranch = resolveCurrentGitBranch(root);
+  const headSnap = readGitHeadSnapshot(root);
+  const currentCommit = headSnap.commit;
+  const currentBranch = headSnap.branch !== 'HEAD' ? headSnap.branch : undefined;
   const hasCodeGraph = fs.existsSync(path.join(root, '.codegraph'));
 
   const targetKeys =
@@ -2158,52 +2247,143 @@ export function verifyMemoryFreshness(
   let canUseCache = false;
   let memFileSig = '';
   let targetFilesSig = '';
+  const procKey = `${root}:${memory.id}`;
 
   try {
-    if (!cacheDb && fs.existsSync(cacheDbPath)) {
-      cacheDb = new DatabaseSync(cacheDbPath);
+    const memFilePath = path.join(root, '.evo', 'memories', `${memory.id}.md`);
+    const mSig = getFileSigFast(memFilePath);
+    if (mSig !== 'missing') {
+      memFileSig = mSig;
+      const targetSigs: string[] = [];
+      for (const symKey of targetKeys) {
+        const fp = memory.ast_fingerprints[symKey];
+        if (fp && fp.file_path && fp.file_path !== '(unrecorded)') {
+          const p = path.resolve(root, fp.file_path);
+          targetSigs.push(`${fp.file_path}:${getFileSigFast(p)}`);
+        }
+      }
+      targetFilesSig = targetSigs.join('|');
+      canUseCache = true;
     }
-    if (cacheDb) {
-      const memFilePath = path.join(root, '.evo', 'memories', `${memory.id}.md`);
-      if (fs.existsSync(memFilePath)) {
-        const memStat = fs.statSync(memFilePath);
-        memFileSig = `${memStat.mtimeMs}:${memStat.size}`;
-        const targetSigs: string[] = [];
-        for (const symKey of targetKeys) {
-          const fp = memory.ast_fingerprints[symKey];
-          if (fp && fp.file_path && fp.file_path !== '(unrecorded)') {
-            const p = path.resolve(root, fp.file_path);
-            if (fs.existsSync(p)) {
-              const s = fs.statSync(p);
-              targetSigs.push(`${fp.file_path}:${s.mtimeMs}:${s.size}`);
-            } else {
-              targetSigs.push(`${fp.file_path}:missing`);
+
+    if (canUseCache) {
+      // 1. Process-level Map Cache
+      const proc = memoryVerificationProcessCache.get(procKey);
+      if (
+        proc &&
+        proc.parser_version === PARSER_VERSION &&
+        proc.memory_file_sig === memFileSig &&
+        proc.target_files_sig === targetFilesSig
+      ) {
+        if (!includeCallers && proc.overall_status === 'VERIFIED') {
+          if (shouldCloseDb && cacheDb) {
+            try { cacheDb.close(); } catch {}
+            cacheDb = null;
+          }
+          return cloneVerificationReport(proc.report, currentCommit, currentBranch, memory.created_commit);
+        }
+
+        const wsSig = getWorkspaceSourcesSig(root);
+        if (wsSig === proc.workspace_sources_sig) {
+          if (proc.has_callers || !includeCallers) {
+            if (shouldCloseDb && cacheDb) {
+              try { cacheDb.close(); } catch {}
+              cacheDb = null;
             }
+            return cloneVerificationReport(proc.report, currentCommit, currentBranch, memory.created_commit);
+          } else {
+            for (const anchor of proc.report.topology_anchors) {
+              if (!anchor.callers || anchor.callers.length === 0) {
+                const m = anchor.lines.match(/L(\d+)-L(\d+)/);
+                const sLine = m ? parseInt(m[1], 10) : 0;
+                const eLine = m ? parseInt(m[2], 10) : 0;
+                anchor.callers = findSymbolCallers(root, anchor.symbol, anchor.file_path, sLine, eLine, 5);
+              }
+            }
+            proc.has_callers = true;
+            let openedDbForProc = false;
+            let dbToUpdate = cacheDb;
+            if (!dbToUpdate && fs.existsSync(cacheDbPath)) {
+              try {
+                dbToUpdate = new DatabaseSync(cacheDbPath);
+                openedDbForProc = true;
+              } catch {}
+            }
+            if (dbToUpdate) {
+              try {
+                dbToUpdate.prepare(`
+                  UPDATE memory_verification_cache
+                  SET report_json = ?, workspace_sources_sig = ?, has_callers = 1, cached_at = ?
+                  WHERE memory_id = ?
+                `).run(JSON.stringify(proc.report), wsSig, new Date().toISOString(), memory.id);
+              } catch {}
+              if (openedDbForProc) {
+                try { dbToUpdate.close(); } catch {}
+              }
+            }
+            if (shouldCloseDb && cacheDb) {
+              try { cacheDb.close(); } catch {}
+              cacheDb = null;
+            }
+            return cloneVerificationReport(proc.report, currentCommit, currentBranch, memory.created_commit);
           }
         }
-        targetFilesSig = targetSigs.join('|');
+      }
 
+      // 2. SQLite Database Cache
+      if (!cacheDb && fs.existsSync(cacheDbPath)) {
+        cacheDb = new DatabaseSync(cacheDbPath);
+      }
+      if (cacheDb) {
         try {
-          const stmt = cacheDb.prepare(`
-            SELECT parser_version, memory_file_sig, target_files_sig, report_json
-            FROM memory_verification_cache
-            WHERE memory_id = ?
+          cacheDb.exec(`
+            CREATE TABLE IF NOT EXISTS memory_verification_cache (
+              memory_id TEXT PRIMARY KEY,
+              parser_version INTEGER NOT NULL,
+              memory_file_sig TEXT NOT NULL,
+              target_files_sig TEXT NOT NULL,
+              workspace_sources_sig TEXT,
+              overall_status TEXT NOT NULL,
+              report_json TEXT NOT NULL,
+              cached_at TEXT NOT NULL,
+              has_callers INTEGER NOT NULL DEFAULT 0
+            );
           `);
-          const row = stmt.get(memory.id) as {
-            parser_version: number;
-            memory_file_sig: string;
-            target_files_sig: string;
-            report_json: string;
-          } | undefined;
+          cacheDb.exec('ALTER TABLE memory_verification_cache ADD COLUMN has_callers INTEGER NOT NULL DEFAULT 0');
+        } catch {}
 
-          if (
-            row &&
-            row.parser_version === PARSER_VERSION &&
-            row.memory_file_sig === memFileSig &&
-            row.target_files_sig === targetFilesSig &&
-            !includeCallers
-          ) {
+        const stmt = cacheDb.prepare(`
+          SELECT parser_version, memory_file_sig, target_files_sig, workspace_sources_sig, overall_status, report_json, has_callers
+          FROM memory_verification_cache
+          WHERE memory_id = ?
+        `);
+        const row = stmt.get(memory.id) as {
+          parser_version: number;
+          memory_file_sig: string;
+          target_files_sig: string;
+          workspace_sources_sig: string | null;
+          overall_status: string;
+          report_json: string;
+          has_callers: number;
+        } | undefined;
+
+        if (
+          row &&
+          row.parser_version === PARSER_VERSION &&
+          row.memory_file_sig === memFileSig &&
+          row.target_files_sig === targetFilesSig
+        ) {
+          if (!includeCallers && row.overall_status === 'VERIFIED') {
             const cachedReport = JSON.parse(row.report_json) as MemoryVerificationReport;
+            memoryVerificationProcessCache.set(procKey, {
+              parser_version: row.parser_version,
+              memory_file_sig: row.memory_file_sig,
+              target_files_sig: row.target_files_sig,
+              workspace_sources_sig: row.workspace_sources_sig || '',
+              overall_status: row.overall_status,
+              has_callers: Boolean(row.has_callers),
+              report: JSON.parse(row.report_json),
+            });
             if (shouldCloseDb && cacheDb) {
               try { cacheDb.close(); } catch {}
               cacheDb = null;
@@ -2213,8 +2393,64 @@ export function verifyMemoryFreshness(
             cachedReport.commit_match = memory.created_commit === currentCommit;
             return cachedReport;
           }
-        } catch {}
-        canUseCache = true;
+
+          const wsSig = getWorkspaceSourcesSig(root);
+          if (wsSig === (row.workspace_sources_sig || '')) {
+            const cachedReport = JSON.parse(row.report_json) as MemoryVerificationReport;
+            if (Boolean(row.has_callers) || !includeCallers) {
+              memoryVerificationProcessCache.set(procKey, {
+                parser_version: row.parser_version,
+                memory_file_sig: row.memory_file_sig,
+                target_files_sig: row.target_files_sig,
+                workspace_sources_sig: row.workspace_sources_sig || '',
+                overall_status: row.overall_status,
+                has_callers: Boolean(row.has_callers),
+                report: JSON.parse(row.report_json),
+              });
+              if (shouldCloseDb && cacheDb) {
+                try { cacheDb.close(); } catch {}
+                cacheDb = null;
+              }
+              cachedReport.current_commit = currentCommit;
+              cachedReport.current_branch = currentBranch;
+              cachedReport.commit_match = memory.created_commit === currentCommit;
+              return cachedReport;
+            } else {
+              for (const anchor of cachedReport.topology_anchors) {
+                if (!anchor.callers || anchor.callers.length === 0) {
+                  const m = anchor.lines.match(/L(\d+)-L(\d+)/);
+                  const sLine = m ? parseInt(m[1], 10) : 0;
+                  const eLine = m ? parseInt(m[2], 10) : 0;
+                  anchor.callers = findSymbolCallers(root, anchor.symbol, anchor.file_path, sLine, eLine, 5);
+                }
+              }
+              try {
+                cacheDb.prepare(`
+                  UPDATE memory_verification_cache
+                  SET report_json = ?, workspace_sources_sig = ?, has_callers = 1, cached_at = ?
+                  WHERE memory_id = ?
+                `).run(JSON.stringify(cachedReport), wsSig, new Date().toISOString(), memory.id);
+              } catch {}
+              memoryVerificationProcessCache.set(procKey, {
+                parser_version: row.parser_version,
+                memory_file_sig: row.memory_file_sig,
+                target_files_sig: row.target_files_sig,
+                workspace_sources_sig: wsSig,
+                overall_status: row.overall_status,
+                has_callers: true,
+                report: JSON.parse(JSON.stringify(cachedReport)),
+              });
+              if (shouldCloseDb && cacheDb) {
+                try { cacheDb.close(); } catch {}
+                cacheDb = null;
+              }
+              cachedReport.current_commit = currentCommit;
+              cachedReport.current_branch = currentBranch;
+              cachedReport.commit_match = memory.created_commit === currentCommit;
+              return cachedReport;
+            }
+          }
+        }
       }
     }
   } catch {
@@ -2432,29 +2668,55 @@ export function verifyMemoryFreshness(
       topology_anchors: topologyAnchors,
     };
 
-    if (canUseCache && cacheDb) {
-      try {
-        const insStmt = cacheDb.prepare(`
-          INSERT OR REPLACE INTO memory_verification_cache
-          (memory_id, parser_version, memory_file_sig, target_files_sig, workspace_sources_sig, overall_status, report_json, cached_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        insStmt.run(
-          memory.id,
-          PARSER_VERSION,
-          memFileSig,
-          targetFilesSig,
-          '',
-          overallStatus,
-          JSON.stringify(report),
-          new Date().toISOString()
-        );
-      } catch {} finally {
-        if (shouldCloseDb && cacheDb) {
-          try { cacheDb.close(); } catch {}
-          cacheDb = null;
+    const wsSig = getWorkspaceSourcesSig(root);
+    if (canUseCache) {
+      let localDb = cacheDb;
+      let openedLocal = false;
+      if (!localDb && fs.existsSync(cacheDbPath)) {
+        try {
+          localDb = new DatabaseSync(cacheDbPath);
+          openedLocal = true;
+        } catch {}
+      }
+      if (localDb) {
+        try {
+          const insStmt = localDb.prepare(`
+            INSERT OR REPLACE INTO memory_verification_cache
+            (memory_id, parser_version, memory_file_sig, target_files_sig, workspace_sources_sig, overall_status, report_json, cached_at, has_callers)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          insStmt.run(
+            memory.id,
+            PARSER_VERSION,
+            memFileSig,
+            targetFilesSig,
+            wsSig,
+            overallStatus,
+            JSON.stringify(report),
+            new Date().toISOString(),
+            includeCallers ? 1 : 0
+          );
+        } catch {} finally {
+          if (openedLocal) {
+            try { localDb.close(); } catch {}
+          } else if (shouldCloseDb && cacheDb) {
+            try { cacheDb.close(); } catch {}
+            cacheDb = null;
+          }
         }
       }
+    }
+
+    if (canUseCache) {
+      memoryVerificationProcessCache.set(procKey, {
+        parser_version: PARSER_VERSION,
+        memory_file_sig: memFileSig,
+        target_files_sig: targetFilesSig,
+        workspace_sources_sig: wsSig,
+        overall_status: overallStatus,
+        has_callers: includeCallers,
+        report: JSON.parse(JSON.stringify(report)),
+      });
     }
 
     return report;
@@ -2765,6 +3027,7 @@ export function refreshMemories(
     }
 
     if (refreshed.length > 0) {
+      clearMemoryVerificationCache();
       telemetry = new EvoTelemetry(storage);
       telemetry.syncFromDisk();
     }

@@ -2,6 +2,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { parseInitTargets, runInit, runUninstall } from './init.js';
 import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
@@ -480,11 +481,24 @@ export function runCli(argv: string[]): void {
       let verifiedMems = 0;
       let otherBranchMems = 0;
       let staleMems = 0;
-      for (const m of memories) {
-        const status = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false }).overall_status;
-        if (status === 'VERIFIED') verifiedMems++;
-        else if (status === 'OTHER_BRANCH') otherBranchMems++;
-        else staleMems++;
+      const docCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
+      let docCacheDb: any = undefined;
+      if (fs.existsSync(docCacheDbPath)) {
+        try {
+          docCacheDb = new DatabaseSync(docCacheDbPath);
+        } catch {}
+      }
+      try {
+        for (const m of memories) {
+          const status = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false, cacheDb: docCacheDb }).overall_status;
+          if (status === 'VERIFIED') verifiedMems++;
+          else if (status === 'OTHER_BRANCH') otherBranchMems++;
+          else staleMems++;
+        }
+      } finally {
+        if (docCacheDb) {
+          try { docCacheDb.close(); } catch {}
+        }
       }
       console.log('🩺 EvoKernel Doctor — Diagnostics Check');
       console.log(`  ├─ [x] Node.js Runtime       : ${process.version} (${process.execPath})`);

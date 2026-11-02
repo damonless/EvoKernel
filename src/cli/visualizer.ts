@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
@@ -68,10 +71,22 @@ export function renderEvoTree(workspaceRoot: string): string {
     });
   }
 
-  const verifications = memories.map((m) => ({
-    memory: m,
-    report: verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false }),
-  }));
+  const cacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
+  let treeCacheDb: DatabaseSync | undefined;
+  if (fs.existsSync(cacheDbPath)) {
+    try { treeCacheDb = new DatabaseSync(cacheDbPath); } catch {}
+  }
+  let verifications: Array<{ memory: any; report: any }>;
+  try {
+    verifications = memories.map((m) => ({
+      memory: m,
+      report: verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false, cacheDb: treeCacheDb }),
+    }));
+  } finally {
+    if (treeCacheDb) {
+      try { treeCacheDb.close(); } catch {}
+    }
+  }
   const verifiedCount = verifications.filter((v) => v.report.overall_status === 'VERIFIED').length;
   const branchCount = verifications.filter((v) => v.report.overall_status === 'OTHER_BRANCH').length;
   const staleCount = verifications.length - verifiedCount - branchCount;
@@ -118,10 +133,21 @@ export function renderEvoStats(workspaceRoot: string): string {
 
   let verifiedMemories = 0;
   let branchMemories = 0;
-  for (const m of memories) {
-    const rep = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false });
-    if (rep.overall_status === 'VERIFIED') verifiedMemories++;
-    else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
+  const statsCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
+  let statsCacheDb: DatabaseSync | undefined;
+  if (fs.existsSync(statsCacheDbPath)) {
+    try { statsCacheDb = new DatabaseSync(statsCacheDbPath); } catch {}
+  }
+  try {
+    for (const m of memories) {
+      const rep = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false, cacheDb: statsCacheDb });
+      if (rep.overall_status === 'VERIFIED') verifiedMemories++;
+      else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
+    }
+  } finally {
+    if (statsCacheDb) {
+      try { statsCacheDb.close(); } catch {}
+    }
   }
   const staleMemories = memories.length - verifiedMemories - branchMemories;
 
@@ -184,31 +210,42 @@ export function renderMemoryVerifyReport(workspaceRoot: string): string {
     return lines.join('\n');
   }
 
-  for (const m of memories) {
-    const rep = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: true });
-    const badge =
-      rep.overall_status === 'VERIFIED'
-        ? '✅ VERIFIED'
-        : rep.overall_status === 'OTHER_BRANCH'
-          ? `🌿 OTHER_BRANCH (${rep.recorded_branch || m.created_branch || 'other'})`
-          : '⚠️ STALE';
-    lines.push(
-      `├── [${badge}] ${m.id} — ${m.title} ${rep.confidence_tag}`
-    );
-    lines.push(
-      `│   ├─ Commit Anchor : recorded @ ${rep.recorded_commit} -> current @ ${rep.current_commit}`
-    );
-    lines.push(`│   ├─ L0 Summary    : ${m.l0_summary}`);
-    for (const c of rep.checks) {
-      const symBadge = c.status === 'VERIFIED' ? '✓' : c.status === 'OTHER_BRANCH' ? '🌿' : '✗';
-      lines.push(`│   ├─ [${symBadge} ${c.status}] ${c.detail}`);
-    }
-    for (const a of rep.topology_anchors) {
-      if (a.callers.length > 0) {
-        lines.push(`│   └─ 🔗 Topology Callers (${a.symbol}): ${a.callers.join(', ')}`);
+  const reportCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
+  let reportCacheDb: DatabaseSync | undefined;
+  if (fs.existsSync(reportCacheDbPath)) {
+    try { reportCacheDb = new DatabaseSync(reportCacheDbPath); } catch {}
+  }
+  try {
+    for (const m of memories) {
+      const rep = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: true, cacheDb: reportCacheDb });
+      const badge =
+        rep.overall_status === 'VERIFIED'
+          ? '✅ VERIFIED'
+          : rep.overall_status === 'OTHER_BRANCH'
+            ? `🌿 OTHER_BRANCH (${rep.recorded_branch || m.created_branch || 'other'})`
+            : '⚠️ STALE';
+      lines.push(
+        `├── [${badge}] ${m.id} — ${m.title} ${rep.confidence_tag}`
+      );
+      lines.push(
+        `│   ├─ Commit Anchor : recorded @ ${rep.recorded_commit} -> current @ ${rep.current_commit}`
+      );
+      lines.push(`│   ├─ L0 Summary    : ${m.l0_summary}`);
+      for (const c of rep.checks) {
+        const symBadge = c.status === 'VERIFIED' ? '✓' : c.status === 'OTHER_BRANCH' ? '🌿' : '✗';
+        lines.push(`│   ├─ [${symBadge} ${c.status}] ${c.detail}`);
       }
+      for (const a of rep.topology_anchors) {
+        if (a.callers.length > 0) {
+          lines.push(`│   └─ 🔗 Topology Callers (${a.symbol}): ${a.callers.join(', ')}`);
+        }
+      }
+      lines.push('');
     }
-    lines.push('');
+  } finally {
+    if (reportCacheDb) {
+      try { reportCacheDb.close(); } catch {}
+    }
   }
 
   return lines.join('\n');

@@ -12,6 +12,9 @@ export const MCP_INSTRUCTIONS =
 
 function parseUriToPath(uriStr: string): string | null {
   try {
+    if (!uriStr || !uriStr.trim()) {
+      return null;
+    }
     if (uriStr.startsWith('file://')) {
       return path.resolve(fileURLToPath(uriStr));
     }
@@ -21,8 +24,17 @@ function parseUriToPath(uriStr: string): string | null {
   }
 }
 
-export function startMcpStdioServer(workspaceRoot: string): void {
-  const dispatcher = new EvoMcpDispatcher(workspaceRoot);
+export interface McpServerOptions {
+  input?: NodeJS.ReadableStream;
+  output?: NodeJS.WritableStream;
+  dispatcher?: EvoMcpDispatcher;
+}
+
+export function startMcpStdioServer(
+  workspaceRoot: string,
+  options?: McpServerOptions
+): { dispatcher: EvoMcpDispatcher; close: () => void } {
+  const dispatcher = options?.dispatcher ?? new EvoMcpDispatcher(workspaceRoot);
   const clientRoots: string[] = [];
   let clientSupportsRoots = false;
   let rootsReadyResolve: () => void;
@@ -41,15 +53,18 @@ export function startMcpStdioServer(workspaceRoot: string): void {
     }
   >();
 
+  const inStream = options?.input ?? process.stdin;
+  const outStream = options?.output ?? process.stdout;
+
   const rl = readline.createInterface({
-    input: process.stdin,
+    input: inStream,
     terminal: false,
   });
 
   const sendResponse = (id: string | number | null | undefined, result: unknown) => {
     if (id === undefined) return;
     const payload = JSON.stringify({ jsonrpc: '2.0', id, result });
-    process.stdout.write(`${payload}\n`);
+    outStream.write(`${payload}\n`);
   };
 
   const sendError = (id: string | number | null | undefined, code: number, message: string) => {
@@ -59,7 +74,7 @@ export function startMcpStdioServer(workspaceRoot: string): void {
       id,
       error: { code, message },
     });
-    process.stdout.write(`${payload}\n`);
+    outStream.write(`${payload}\n`);
   };
 
   const sendServerRequest = (
@@ -75,7 +90,7 @@ export function startMcpStdioServer(workspaceRoot: string): void {
       }, timeoutMs);
       pendingServerRequests.set(reqId, { resolve, reject, timer });
       const payload = JSON.stringify({ jsonrpc: '2.0', id: reqId, method, params });
-      process.stdout.write(`${payload}\n`);
+      outStream.write(`${payload}\n`);
     });
   };
 
@@ -120,8 +135,8 @@ export function startMcpStdioServer(workspaceRoot: string): void {
             const p = parseUriToPath(params.rootUri);
             if (p && !clientRoots.includes(p)) clientRoots.push(p);
           }
-          if (typeof params.rootPath === 'string') {
-            const p = path.resolve(params.rootPath);
+          if (typeof params.rootPath === 'string' && params.rootPath.trim()) {
+            const p = path.resolve(params.rootPath.trim());
             if (!clientRoots.includes(p)) clientRoots.push(p);
           }
           if (Array.isArray(params.workspaceFolders)) {
@@ -133,6 +148,7 @@ export function startMcpStdioServer(workspaceRoot: string): void {
             }
           }
         }
+        dispatcher.setClientRoots(clientRoots);
 
         const clientCapabilities = params?.capabilities as Record<string, unknown> | undefined;
         clientSupportsRoots = Boolean(clientCapabilities && clientCapabilities.roots);
@@ -168,12 +184,36 @@ export function startMcpStdioServer(workspaceRoot: string): void {
                     if (p && !clientRoots.includes(p)) clientRoots.push(p);
                   }
                 }
+                dispatcher.setClientRoots(clientRoots);
               }
             })
             .catch(() => {})
             .finally(() => {
               rootsReadyResolve();
             });
+        }
+        break;
+      }
+
+      case 'notifications/roots/list_changed':
+      case 'roots/list_changed': {
+        if (clientSupportsRoots) {
+          sendServerRequest('roots/list', undefined, 150)
+            .then((res: any) => {
+              if (res && Array.isArray(res.roots)) {
+                const newRoots: string[] = [];
+                for (const r of res.roots) {
+                  if (r && typeof r.uri === 'string') {
+                    const p = parseUriToPath(r.uri);
+                    if (p && !newRoots.includes(p)) newRoots.push(p);
+                  }
+                }
+                clientRoots.length = 0;
+                clientRoots.push(...newRoots);
+                dispatcher.setClientRoots(clientRoots);
+              }
+            })
+            .catch(() => {});
         }
         break;
       }
@@ -218,8 +258,21 @@ export function startMcpStdioServer(workspaceRoot: string): void {
     }
   });
 
-  process.on('SIGINT', () => {
+  const close = () => {
+    rl.close();
+    for (const pending of pendingServerRequests.values()) {
+      clearTimeout(pending.timer);
+    }
+    pendingServerRequests.clear();
     dispatcher.close();
-    process.exit(0);
-  });
+  };
+
+  if (!options?.input) {
+    process.on('SIGINT', () => {
+      close();
+      process.exit(0);
+    });
+  }
+
+  return { dispatcher, close };
 }
