@@ -3,17 +3,20 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { parseInitTargets, runInit, runUninstall } from './init.js';
+import { findGitRoot, parseInitTargets, runInit, runUninstall } from './init.js';
 import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import { renderEvoStats, renderEvoTree, renderMemoryVerifyReport } from './visualizer.js';
 import { parseHookEvent, parseHookHarnessArg, parseHookPayloadArg, runHook } from './hook.js';
 import { renderVirtualizeReport, runVirtualize } from './virtualize.js';
 import { runOptimizeCli } from './optimize.js';
+import { runScoreCli } from './score.js';
+import { runUiCli } from './ui.js';
 import { startMcpStdioServer } from '../mcp/server.js';
 import {
   EvoStorage,
   findNearestEvoWorkspace,
+  hasValidEvoStructure,
   isPluginOrExtensionInstallDir,
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
@@ -134,8 +137,12 @@ Usage:
   evo <command> [options]
 
 Commands:
-  init [--stealth] [--targets <list|auto>]
-                      Detect and wire L0 Meta-Rule Seed + Single Meta-MCP
+  score [--json] [--badge] [--workspace <path>]
+                      Instant 0-overhead diagnostic scoring for agent host tax, git bug hotspots, and memory coverage
+  ui [--port <N>] [--open] [--token <str>] [--export <path>] [--workspace <path>]
+                      Zero-dependency local cockpit UI for telemetry X-ray, budget treemap, and memory constellation
+  init [--stealth] [--targets <list|auto>] [--no-warmup]
+                      Detect and wire L0 Meta-Rule Seed + Single Meta-MCP + Slash Commands
                       (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
   bootstrap [--max-commits <N>]
                       Cold-start repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories (default: 50, up to 500)
@@ -301,17 +308,48 @@ export function parsePositiveIntFlag(args: string[], flag: string): number | und
 
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
-  const cmd = (args[0] || 'help').toLowerCase();
+  let cmd = (args[0] || '').toLowerCase();
+  if (!cmd && process.stdout.isTTY && !process.env.CI) {
+    cmd = 'score';
+  } else if (!cmd) {
+    cmd = 'help';
+  }
+
   const globalDir = resolveGlobalFallbackDir();
-  if (fs.existsSync(path.join(globalDir, '.evo'))) {
+  const isReadOnlyDiagnostic = ['score', 'ui', 'doctor'].includes(cmd);
+  if (!isReadOnlyDiagnostic && fs.existsSync(path.join(globalDir, '.evo'))) {
     ensureGlobalFallbackSeeded(globalDir);
   }
+
   const isLocalMutationCmd =
     ['init', 'bootstrap', 'virtualize', 'audit', 'refactor', 'optimize', 'hook', 'uninstall'].includes(cmd) ||
     ((cmd === 'memory' || cmd === 'memories') && (args.includes('refresh') || args.includes('--refresh')));
-  const workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
+
+  let workspaceRoot: string;
+  if (isReadOnlyDiagnostic) {
+    const wsFlagIdx = args.indexOf('--workspace');
+    const target =
+      wsFlagIdx !== -1 && args[wsFlagIdx + 1]
+        ? path.resolve(args[wsFlagIdx + 1])
+        : process.env.EVO_WORKSPACE
+        ? path.resolve(process.env.EVO_WORKSPACE)
+        : path.resolve(process.cwd());
+    workspaceRoot = findNearestEvoWorkspace(target) || findGitRoot(target) || target;
+  } else {
+    workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
+  }
 
   switch (cmd) {
+    case 'score': {
+      runScoreCli(workspaceRoot, args);
+      break;
+    }
+
+    case 'ui': {
+      runUiCli(workspaceRoot, args);
+      break;
+    }
+
     case 'mcp': {
       startMcpStdioServer(workspaceRoot);
       break;
@@ -321,11 +359,15 @@ export function runCli(argv: string[]): void {
       const stealth = args.includes('--stealth');
       const targets = parseTargetsArg(args, workspaceRoot);
       const linkEvoFrom = parseLinkArg(args);
-      const res = runInit(workspaceRoot, { stealth, targets, linkEvoFrom });
+      const noWarmup = args.includes('--no-warmup');
+      const res = runInit(workspaceRoot, { stealth, targets, linkEvoFrom, warmup: !noWarmup });
       console.log('🧬 EvoKernel initialized successfully!');
       console.log(`  ├─ Harnesses wired : ${res.initializedHarnesses.join(', ')}`);
       console.log(`  ├─ Rule seeds      : ${res.updatedFiles.join(', ')}`);
       console.log(`  ├─ MCP gateways    : ${res.mcpConfigFiles.join(', ')}`);
+      if (res.commandFiles && res.commandFiles.length > 0) {
+        console.log(`  ├─ Slash commands  : ${res.commandFiles.join(', ')}`);
+      }
       if (res.linkedSharedEvoDir) {
         console.log(`  ├─ Shared .evo     : ${res.linkedSharedEvoDir}`);
       }
@@ -336,6 +378,30 @@ export function runCli(argv: string[]): void {
             : 'Standard mode (.evo/.cache/ excluded locally)'
         }`
       );
+      if (res.warmupReport) {
+        const boot = res.warmupReport.bootSummary;
+        const score = res.warmupReport.scoreReport || res.warmupReport;
+        console.log('');
+        console.log('⚡ Warmup & Cold-Start Gene Extraction:');
+        if (boot?.detectedStacks && boot.detectedStacks.length > 0) {
+          console.log(`  ├─ Detected Stacks : ${boot.detectedStacks.join(', ')}`);
+        }
+        const totalEvolved =
+          (boot?.rulesCreated?.length || 0) +
+          (boot?.skillsCreated?.length || 0) +
+          (boot?.toolsCreated?.length || 0) +
+          (boot?.memoriesCreated?.length || 0);
+        console.log(
+          `  ├─ Capabilities    : ${totalEvolved} evolved (${boot?.rulesCreated?.length || 0} rules, ${boot?.memoriesCreated?.length || 0} memories)`
+        );
+        if (score?.mcpTax?.activeServers > 0) {
+          console.log(
+            `  └─ MCP Tax         : ${score.mcpTax.activeServers} active server(s) (~${score.mcpTax.activeTaxTokens} tok) ready for \`evo virtualize\``
+          );
+        } else {
+          console.log(`  └─ Context Health  : Grade ${score?.grade || 'A'} (${score?.overallScore || 100}/100)`);
+        }
+      }
       break;
     }
 
@@ -472,34 +538,50 @@ export function runCli(argv: string[]): void {
 
     case 'doctor': {
       const storage = new EvoStorage(workspaceRoot);
-      storage.ensureInitialized();
-      const telemetry = new EvoTelemetry(storage);
-      telemetry.syncFromDisk();
-      const ftsEnabled = telemetry.isFts5Enabled();
-      telemetry.close();
-      const memories = storage.listMemories();
+      const hasEvo = hasValidEvoStructure(storage.evoDir);
+      let ftsEnabled = false;
+      try {
+        const memDb = new DatabaseSync(':memory:');
+        try {
+          memDb.exec('CREATE VIRTUAL TABLE _fts_probe USING fts5(content);');
+          ftsEnabled = true;
+        } catch {
+          ftsEnabled = false;
+        } finally {
+          try { memDb.close(); } catch {}
+        }
+      } catch {
+        ftsEnabled = false;
+      }
+
       let verifiedMems = 0;
       let otherBranchMems = 0;
       let staleMems = 0;
-      const docCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
-      let docCacheDb: any = undefined;
-      if (fs.existsSync(docCacheDbPath)) {
+      let totalMemories = 0;
+
+      if (hasEvo) {
+        const memories = storage.listMemories();
+        totalMemories = memories.length;
+        let docCacheDb: DatabaseSync | undefined = undefined;
+        if (fs.existsSync(storage.telemetryDbPath)) {
+          try {
+            docCacheDb = new DatabaseSync(storage.telemetryDbPath, { readOnly: true });
+          } catch {}
+        }
         try {
-          docCacheDb = new DatabaseSync(docCacheDbPath);
-        } catch {}
-      }
-      try {
-        for (const m of memories) {
-          const status = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false, cacheDb: docCacheDb }).overall_status;
-          if (status === 'VERIFIED') verifiedMems++;
-          else if (status === 'OTHER_BRANCH') otherBranchMems++;
-          else staleMems++;
-        }
-      } finally {
-        if (docCacheDb) {
-          try { docCacheDb.close(); } catch {}
+          for (const m of memories) {
+            const status = verifyMemoryFreshness(storage.rootDir, m, { includeCallers: false, cacheDb: docCacheDb }).overall_status;
+            if (status === 'VERIFIED') verifiedMems++;
+            else if (status === 'OTHER_BRANCH') otherBranchMems++;
+            else staleMems++;
+          }
+        } finally {
+          if (docCacheDb) {
+            try { docCacheDb.close(); } catch {}
+          }
         }
       }
+
       console.log('🩺 EvoKernel Doctor — Diagnostics Check');
       console.log(`  ├─ [x] Node.js Runtime       : ${process.version} (${process.execPath})`);
       console.log(
@@ -510,9 +592,13 @@ export function runCli(argv: string[]): void {
         }`
       );
       console.log(
-        `  ├─ [x] Cognitive Memory AST  : ${verifiedMems}/${memories.length} VERIFIED (${otherBranchMems} OTHER_BRANCH, ${staleMems} STALE)`
+        `  ├─ [x] Cognitive Memory AST  : ${
+          hasEvo
+            ? `${verifiedMems}/${totalMemories} VERIFIED (${otherBranchMems} OTHER_BRANCH, ${staleMems} STALE)`
+            : 'Not initialized (run `evo init` to activate)'
+        }`
       );
-      console.log(`  ├─ [x] .evo/ Storage Tree    : ${storage.evoDir}`);
+      console.log(`  ├─ [x] .evo/ Storage Tree    : ${hasEvo ? storage.evoDir : 'Not present'}`);
       console.log(`  └─ [x] Meta-MCP Config       : ${fs.existsSync(path.join(workspaceRoot, '.mcp.json')) ? 'Registered (.mcp.json)' : 'Run `evo init` to register'}`);
       break;
     }

@@ -45,3 +45,8 @@ jobs:
           node ./dist/cli/index.js audit
           node ./dist/cli/index.js doctor
           node ./dist/cli/index.js memory verify
+
+      - name: "Smoke Test: Run Score and UI Export"
+        run: |
+          node ./dist/cli/index.js score --json
+          node ./dist/cli/index.js ui --export ./evo-cockpit.html

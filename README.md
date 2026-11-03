@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🧬 EvoKernel
+# 🧬 EvoKernel (evo-kernel) — Context Virtualization, Git-Worktree Self-Evolution & Anti-Drift Memory MCP for Claude Code, Cursor & Codex
 
 ### The Deterministic Self-Evolving Meta-Kernel for AI Coding Agents
 
@@ -12,12 +12,29 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#zero-dependency-architecture)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#1-why-a-fixed-5-tool-meta-mcp-gateway)
-[![Tests](https://img.shields.io/badge/tests-242%20passed%20%7C%2010%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
+[![Tests](https://img.shields.io/badge/tests-264%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 [![Harnesses](https://img.shields.io/badge/10%20Harnesses-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Cline%20%7C%20Roo%20%7C%20Copilot%20%7C%20Codex%20%7C%20OpenCode%20%7C%20Gemini%20%7C%20Antigravity-8A2BE2?style=flat-square)](#-10-agent-harness-matrix)
 
 **[English](README.md) · [简体中文](README.zh-CN.md)**
 
 </div>
+
+> [!NOTE]
+> **Disambiguation Note:** EvoKernel (`evo-kernel`) is an agent architecture and context engineering framework for AI coding assistants (Claude Code, Cursor, Windsurf, Codex, Gemini, etc.). It is not affiliated with academic ICML papers/benchmarks of similar naming or Linux kernel projects.
+
+---
+
+## ⚡ Quick Demo — Instant Scoring & Live Cockpit in 2 Commands
+
+```bash
+# 1. Instant 0-overhead diagnostic scoring (<40ms) — audits host rules, git bug hotspots, and memory coverage
+npx evo-kernel score
+
+# 2. Zero-dependency Live Cockpit UI — dark mode, telemetry X-ray, budget treemap, and memory constellation
+npx evo-kernel ui
+# or export a self-contained offline HTML audit report
+npx evo-kernel ui --export ./evo-cockpit.html
+```
 
 ---
 
@@ -78,7 +95,8 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 | **Verification & Gatekeeper** | Model self-reflection | Git commit diffs & tests | None | Manual `/learn-eval` | Async LLM reviewer | **4-Stage Deterministic Gatekeeper (Static AST, Sandbox Exit 0, BM25, 1500-tok Cap, Anti-Confounding)** |
 | **Offline Worktree Optimization** | None | None | None | None | Cloud LLM evaluations | **`evo optimize`: Isolated Git worktrees, dual `inv`/`dom` cycles, automated probe evaluation & regression rollbacks** |
 | **Deliverable Inspection** | None | None | None | None | None | **Zero-dependency canonical parser for `.xlsx`, `.docx`, `.pptx`, CSV, JSON/JSONL, and Markdown** |
-| **Episodic Memory & Anti-Drift** | Semantic vector embeddings (hallucination prone) | Repo map only | None | None (static docs) | No AST verification | **3-Stage AST Cognitive Memory (Fingerprint Hash, [STALE] demotion, Topology Penetration)** |
+| **Episodic Memory & Anti-Drift** | Semantic vector embeddings (hallucination prone) | Repo map only | None | None (static docs) | No AST verification | **Zero-Dep Lexical-Structural Symbol Fingerprinting (Fast regex/lexical AST hash, [STALE] demotion, Topology Penetration Anchors)** |
+| **Cockpit & Diagnostic Scoring** | Web UI with Postgres | None | None | None | Web UI | **`evo score` (<40ms zero-cost scan) & `evo ui` (0-dep dark cockpit, SSE live-reload, strict CSP, exportable single-file HTML)** |
 | **Causal Telemetry** | None | Git diff size | None | None | Win/loss counter | **Causal outcomes (`helped`, `hurt`, `contested`) with `ERR_CONFOUNDED_CAUSATION` protection** |
 | **Multi-Agent Harness Support** | Standalone only | Standalone only | Generic MCP clients | Claude Code / Cursor only | Generic proxy | **10 Native Harnesses (Claude, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, Antigravity)** |
 | **Cold-Start Gene Extraction** | Empty until chat sessions accumulate | Git repo scan | Empty | Static catalog | Empty until chat history grows | **`evo bootstrap` mines project stacks + git fixes in <10s** |
@@ -335,9 +353,9 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-All 10 test suites (243 tests) pass in ~19 seconds:
+All 11 test suites (264 tests) pass in ~17 seconds:
 1. `dist/tests/bootstrap.test.js`: Bootstrap Cold-Start Expansion Suite (22 tests)
-2. `dist/tests/causal-telemetry-and-catalog.test.js`: Causal Telemetry, Outcome Attribution & Anti-Confounding Suite (17 tests)
+2. `dist/tests/causal-telemetry-and-catalog.test.js`: Causal Telemetry, Outcome Attribution & Anti-Confounding Suite (18 tests)
 3. `dist/tests/deliverable-inspector.test.js`: Zero-Dependency Deliverable Canonical Consumer-Reader Suite (33 tests)
 4. `dist/tests/evo-kernel.test.js`: Core Gatekeeper, Sandbox, AST Cognitive Memory, and Invariants Suite (45 tests)
 5. `dist/tests/hook.test.js`: Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience Suite (27 tests)
@@ -345,7 +363,8 @@ All 10 test suites (243 tests) pass in ~19 seconds:
 7. `dist/tests/mcp-proxy.test.js`: Downstream MCP Proxy Virtualization Suite (10 tests)
 8. `dist/tests/multi-harness.test.js`: Multi-Agent Harness Matrix Suite (14 tests)
 9. `dist/tests/optimize.test.js`: Offline Git Worktree Optimization Engine Suite (16 tests)
-10. `dist/tests/surface-audit-and-hardening.test.js`: Multi-Harness Silent-Failure Audit Matrix & Hardening Suite (32 tests)
+10. `dist/tests/score-and-ui.test.js`: Score, Live Cockpit UI, Warmup & Slash Commands Suite (10 tests)
+11. `dist/tests/surface-audit-and-hardening.test.js`: Multi-Harness Silent-Failure Audit Matrix & Hardening Suite (32 tests)
 
 ---
 

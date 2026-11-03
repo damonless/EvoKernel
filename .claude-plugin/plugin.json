@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel",
   "version": "0.2.0",
-  "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory with Offline Worktree Evolution, Deliverable Inspection, and Fixed 5-Tool Meta-MCP Gateway for AI Coding Agents",
+  "description": "Deterministic Self-Evolving Meta-Kernel & Zero-Dep Lexical-Structural Symbol Fingerprinting with Offline Worktree Evolution, Deliverable Inspection, and Fixed 5-Tool Meta-MCP Gateway for AI Coding Agents",
   "author": {
     "name": "EvoKernel Contributors"
   },
@@ -10,5 +10,17 @@
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/boot-mcp.mjs", "mcp"]
     }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/boot-mcp.mjs hook post-tool"
+      }
+    ],
+    "Stop": [
+      {
+        "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/boot-mcp.mjs hook stop"
+      }
+    ]
   }
 }

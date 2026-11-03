@@ -1,0 +1,20 @@
+{
+  "name": "evo-kernel",
+  "displayName": "EvoKernel",
+  "version": "0.2.0",
+  "description": "Deterministic Self-Evolving Meta-Kernel & Zero-Dep Lexical-Structural Symbol Fingerprinting with Offline Worktree Evolution, Deliverable Inspection, and Fixed 5-Tool Meta-MCP Gateway for AI Coding Agents",
+  "publisher": "damonless",
+  "engines": {
+    "cursor": ">=0.40.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "homepage": "https://github.com/damonless/EvoKernel",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/damonless/EvoKernel.git"
+  }
+}

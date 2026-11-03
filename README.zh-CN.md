@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🧬 EvoKernel
+# 🧬 EvoKernel (evo-kernel) — 上下文虚拟化、Git-Worktree 自演进与防漂移记忆元 MCP（面向 Claude Code、Cursor 与 Codex）
 
 ### 面向 AI 编程智能体的「确定性自演进元内核」
 
@@ -12,12 +12,29 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#零依赖原生架构)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#1-为什么采用固定-5-工具的元-mcp-网关)
-[![Tests](https://img.shields.io/badge/tests-242%20通过%20%7C%2010%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
+[![Tests](https://img.shields.io/badge/tests-264%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 [![Harnesses](https://img.shields.io/badge/10%20Harnesses-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Cline%20%7C%20Roo%20%7C%20Copilot%20%7C%20Codex%20%7C%20OpenCode%20%7C%20Gemini%20%7C%20Antigravity-8A2BE2?style=flat-square)](#-10-大智能体接入矩阵-10-agent-harness-matrix)
 
 **[English](README.md) · [简体中文](README.zh-CN.md)**
 
 </div>
+
+> [!NOTE]
+> **消歧说明：** EvoKernel (`evo-kernel`) 是面向 AI 编程智能体（Claude Code、Cursor、Windsurf、Codex、Gemini 等）的智能体架构与上下文工程框架，与同名的学术 ICML 论文/基准测试或 Linux 内核项目无关。
+
+---
+
+## ⚡ 极速体验 — 两条命令完成无损体检与实时驾驶舱
+
+```bash
+# 1. 毫秒级零开销宿主与仓库诊断体检（<40ms）— 快速审计宿主规则税、Git 高频 Bug 聚集地与记忆覆盖率
+npx evo-kernel score
+
+# 2. 零外部依赖本地实时驾驶舱 — 深色极客风、遥测透视、预算树图、情景记忆星座图
+npx evo-kernel ui
+# 或一键导出无外链离线单个 HTML 报告
+npx evo-kernel ui --export ./evo-cockpit.html
+```
 
 ---
 
@@ -78,7 +95,8 @@
 | **门禁自测与防毒化** | 模型自我反思（无确定性保证） | Git diff 与测试执行 | 无门禁校验 | 人工运行 `/learn-eval` | 异步 LLM 评审 | **4 道确定性编译门禁（静态 AST、沙盒 exit 0、BM25、1500-tok 预算、因果防混杂）** |
 | **离线 Worktree 优化** | 无 | 无 | 无 | 无 | 云端 LLM 评估 | **`evo optimize`：临时 Git Worktree 隔离、双正交维度演化、自动化探针比对与回滚保底** |
 | **工程交付物审查** | 无 | 无 | 无 | 无 | 无 | **零依赖规范化校验器：内置 `.xlsx`、`.docx`、`.pptx`、CSV、JSON/JSONL、Markdown 缺陷检测** |
-| **情景记忆与防漂移** | 语义向量检索（极易产生重构幻觉）| 仅 Repo Map 索引 | 无记忆体系 | 无（静态只读文档） | 无 AST 存在性校验 | **3 阶认知记忆（AST 结构指纹防刻舟求剑 + [STALE] 降权 + 拓扑穿透）** |
+| **情景记忆与防漂移** | 语义向量检索（极易产生重构幻觉）| 仅 Repo Map 索引 | 无记忆体系 | 无（静态只读文档） | 无 AST 存在性校验 | **零依赖词法结构符号指纹（Zero-Dep Lexical-Structural Symbol Fingerprinting，纯正则词法哈希防刻舟求剑 + [STALE] 降权 + 拓扑穿透）** |
+| **实时驾驶舱与诊断体检** | 依赖 Postgres 的 Web 前端 | 无 | 无 | 无 | Web UI | **`evo score`（<40ms 极速体检）与 `evo ui`（0 依赖深色驾驶舱、SSE 实时热重载、严格 CSP、单文件 HTML 离线导出）** |
 | **因果归因遥测** | 无 | Git diff 行数统计 | 无 | 无 | 胜率计数器 | **因果三态归因（`helped` / `hurt` / `contested`）与 `ERR_CONFOUNDED_CAUSATION` 门禁** |
 | **多智能体宿主适配** | 仅独立运行时 | 仅独立运行时 | 通用 MCP 客户端 | 仅 Claude Code / Cursor | 通用代理 | **原生深度适配 10 大宿主（Claude, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, Antigravity）** |
 | **冷启动基因提取** | 依赖长期对话积累 | 仅扫 Git 仓库文件 | 无初始化挖掘 | 静态模板库 | 依赖漫长会话累积 | **`evo bootstrap` 10 秒提取工程技术栈 + Git Fix 经验** |
@@ -335,9 +353,9 @@ EvoKernel 拥有纯原生的测试套件，由 Node 原生测试运行器（`nod
 node ./scripts/test.mjs
 ```
 
-全量 10 大测试套件（243 个测试用例）在 ~19 秒内全数通过：
+全量 11 大测试套件（264 个测试用例）在 ~17 秒内全数通过：
 1. `dist/tests/bootstrap.test.js`: 冷启动技术栈探测与 Git Fix 基因挖掘套件 (22 tests)
-2. `dist/tests/causal-telemetry-and-catalog.test.js`: 因果归因三态遥测与防混杂门禁套件 (17 tests)
+2. `dist/tests/causal-telemetry-and-catalog.test.js`: 因果归因三态遥测与防混杂门禁套件 (18 tests)
 3. `dist/tests/deliverable-inspector.test.js`: 零依赖交付物规范化解析与缺陷审查套件 (33 tests)
 4. `dist/tests/evo-kernel.test.js`: 核心门禁、沙盒、AST 认知记忆与核心规范套件 (45 tests)
 5. `dist/tests/hook.test.js`: 通用钩子路由与空管道 Stdin 非阻塞弹性套件 (27 tests)
@@ -345,7 +363,8 @@ node ./scripts/test.mjs
 7. `dist/tests/mcp-proxy.test.js`: 下游 MCP 动态虚拟化代理握手与路由套件 (10 tests)
 8. `dist/tests/multi-harness.test.js`: 10 大智能体宿主无损配置合并与隐身排除套件 (14 tests)
 9. `dist/tests/optimize.test.js`: 离线 Git Worktree 演化优化引擎套件 (16 tests)
-10. `dist/tests/surface-audit-and-hardening.test.js`: 多宿主静默失败矩阵审计与防御加固套件 (32 tests)
+10. `dist/tests/score-and-ui.test.js`: 诊断体检、实时驾驶舱、预热与斜杠命令套件 (10 tests)
+11. `dist/tests/surface-audit-and-hardening.test.js`: 多宿主静默失败矩阵审计与防御加固套件 (32 tests)
 
 ---
 

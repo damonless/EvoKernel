@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel",
   "version": "0.2.0",
-  "description": "Deterministic Self-Evolving Meta-Kernel for AI Coding Agents — Offline Git Worktree Evolution, Deliverable Canonical Inspection, AST Cognitive Memory, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway.",
+  "description": "Deterministic Self-Evolving Meta-Kernel for AI Coding Agents — Offline Git Worktree Evolution, Deliverable Canonical Inspection, Zero-Dep Lexical-Structural Symbol Fingerprinting, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway.",
   "type": "module",
   "bin": {
     "evo": "./dist/cli/index.js",
@@ -27,8 +27,10 @@
     "rules",
     "skills",
     ".claude-plugin",
+    ".cursor-plugin",
     "plugin.json",
     "gemini-extension.json",
+    "server.json",
     "hooks.json",
     "mcp_config.json"
   ],

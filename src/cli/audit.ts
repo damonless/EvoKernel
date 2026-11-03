@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   EvoStorage,
   estimateTokens,
@@ -35,6 +36,9 @@ export interface AuditedFileMetric {
   tokens: number;
   budgetLimit: number;
   overBudget: boolean;
+  totalTokens?: number;
+  userStaticTokens?: number;
+  evoSeedTokens?: number;
 }
 
 export interface DomainLeakWarning {
@@ -557,17 +561,21 @@ export function auditHarnessSurfaces(workspaceRoot: string): SurfaceViolation[] 
   function scanJinjaFiles(currentDir: string, depth = 0): string[] {
     if (depth > 3 || !fs.existsSync(currentDir)) return [];
     const results: string[] = [];
-    for (const ent of fs.readdirSync(currentDir, { withFileTypes: true })) {
-      if (ent.name === 'node_modules' || ent.name === '.git' || ent.name === 'dist') continue;
-      const full = path.join(currentDir, ent.name);
-      if (ent.isDirectory()) {
-        results.push(...scanJinjaFiles(full, depth + 1));
-      } else if (ent.isFile()) {
-        const lower = ent.name.toLowerCase();
-        if (lower.endsWith('.j2') || lower.endsWith('.jinja') || lower.endsWith('.jinja2')) {
-          results.push(full);
+    try {
+      for (const ent of fs.readdirSync(currentDir, { withFileTypes: true })) {
+        if (ent.name === 'node_modules' || ent.name === '.git' || ent.name === 'dist') continue;
+        const full = path.join(currentDir, ent.name);
+        if (ent.isDirectory()) {
+          results.push(...scanJinjaFiles(full, depth + 1));
+        } else if (ent.isFile()) {
+          const lower = ent.name.toLowerCase();
+          if (lower.endsWith('.j2') || lower.endsWith('.jinja') || lower.endsWith('.jinja2')) {
+            results.push(full);
+          }
         }
       }
+    } catch {
+      return results;
     }
     return results;
   }
@@ -655,6 +663,9 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
         ? skillBudgetLimit
         : tokenBudgetLimit;
     const overBudget = tokens > effectiveLimit;
+    const totalTokens = estimateTokens(raw);
+    const evoSeedTokens = markerMatch ? tokens : 0;
+    const userStaticTokens = markerMatch ? estimateTokens(raw.replace(markerMatch[0], '')) : tokens;
     const metric: AuditedFileMetric = {
       scope: entry.scope,
       kind: entry.kind,
@@ -664,6 +675,9 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
       tokens,
       budgetLimit: effectiveLimit,
       overBudget,
+      totalTokens,
+      userStaticTokens,
+      evoSeedTokens,
     };
     files.push(metric);
     if (overBudget) {
@@ -894,24 +908,40 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   const surfaceViolations = auditHarnessSurfaces(root);
 
   const contestedCapabilities: ContestedCapability[] = [];
-  if (fs.existsSync(localStorage.evoDir)) {
-    const telemetry = new EvoTelemetry(localStorage);
+  const dbPath = localStorage.telemetryDbPath;
+  if (fs.existsSync(dbPath)) {
+    let db: DatabaseSync | undefined;
     try {
-      const telMap = telemetry.getTelemetryMap();
-      for (const record of telMap.values()) {
-        const totalOutcomes = record.helped_count + record.hurt_count + record.contested_count;
-        if (totalOutcomes >= 2 && (record.hurt_count + record.contested_count) > record.helped_count) {
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      const stmt = db.prepare(`
+        SELECT id, kind, helped_count, hurt_count, contested_count
+        FROM telemetry
+      `);
+      const rows = stmt.all() as Array<{
+        id: string;
+        kind: 'rule' | 'skill' | 'tool' | 'memory';
+        helped_count: number;
+        hurt_count: number;
+        contested_count: number;
+      }>;
+      for (const record of rows) {
+        const totalOutcomes = (record.helped_count || 0) + (record.hurt_count || 0) + (record.contested_count || 0);
+        if (totalOutcomes >= 2 && ((record.hurt_count || 0) + (record.contested_count || 0)) > (record.helped_count || 0)) {
           contestedCapabilities.push({
             id: record.id,
             kind: record.kind,
-            helped_count: record.helped_count,
-            hurt_count: record.hurt_count,
-            contested_count: record.contested_count,
+            helped_count: record.helped_count || 0,
+            hurt_count: record.hurt_count || 0,
+            contested_count: record.contested_count || 0,
           });
         }
       }
+    } catch {
+      // Ignore read-only DB errors
     } finally {
-      telemetry.close();
+      try {
+        db?.close();
+      } catch {}
     }
   }
 

@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel",
   "version": "0.2.0",
-  "description": "Deterministic Self-Evolving Meta-Kernel & AST-Anchored Cognitive Memory with Offline Worktree Evolution, Deliverable Inspection, and Fixed 5-Tool Meta-MCP Gateway for AI Coding Agents",
+  "description": "Deterministic Self-Evolving Meta-Kernel & Zero-Dep Lexical-Structural Symbol Fingerprinting with Offline Worktree Evolution, Deliverable Inspection, and Fixed 5-Tool Meta-MCP Gateway for AI Coding Agents",
   "contextFileName": "templates/GEMINI.extension.md",
   "mcpServers": {
     "evo-kernel": {

@@ -12,6 +12,7 @@ import {
 import {
   ALL_HARNESS_ADAPTERS,
   HARNESS_RULE_TARGETS,
+  SLASH_COMMAND_DEFINITIONS,
   detectCascadedTargets,
   parseHarnessTargets,
   pruneEmptyDirs,
@@ -25,19 +26,24 @@ export {
   removeMarkerBlock,
   upsertMarkerBlock,
 } from './harness.js';
+import { buildScoreReport } from './score.js';
+import { runBootstrap } from './bootstrap.js';
 
 export interface InitResult {
   initializedHarnesses: string[];
   updatedFiles: string[];
   mcpConfigFiles: string[];
+  commandFiles?: string[];
   stealthExcluded?: string[];
   linkedSharedEvoDir?: string;
+  warmupReport?: any;
 }
 
 export interface InitOptions {
   targets?: string[];
   stealth?: boolean;
   linkEvoFrom?: string;
+  warmup?: boolean;
 }
 
 export const MAX_TOOLS_CATALOG_TOKENS = 350;
@@ -554,17 +560,43 @@ export const BOOT_MCP_STUB = `#!/usr/bin/env node
  * keeping stdio clean and eliminating Windows spawn ENOENT / npx latency.
  */
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const evoDir = path.resolve(import.meta.dirname);
 const wsRoot = path.resolve(evoDir, '..');
+const homeDir = os.homedir ? os.homedir() : (process.env.HOME || process.env.USERPROFILE || '');
 const candidates = [
   path.join(wsRoot, 'dist', 'cli', 'index.js'),
   path.join(wsRoot, 'node_modules', 'evo-kernel', 'dist', 'cli', 'index.js'),
   path.join(evoDir, 'dist', 'cli', 'index.js'),
 ];
+
+// Walk up ancestor node_modules/evo-kernel/dist/cli/index.js
+let curr = wsRoot;
+while (true) {
+  const ancestorCandidate = path.join(curr, 'node_modules', 'evo-kernel', 'dist', 'cli', 'index.js');
+  if (!candidates.includes(ancestorCandidate)) {
+    candidates.push(ancestorCandidate);
+  }
+  const parent = path.dirname(curr);
+  if (!parent || parent === curr) break;
+  curr = parent;
+}
+
+// Global npm modules & host plugin paths
+if (process.env.APPDATA) {
+  candidates.push(path.join(process.env.APPDATA, 'npm', 'node_modules', 'evo-kernel', 'dist', 'cli', 'index.js'));
+}
+candidates.push(path.resolve(process.execPath, '../../lib/node_modules/evo-kernel/dist/cli/index.js'));
+candidates.push(path.resolve(process.execPath, '../node_modules/evo-kernel/dist/cli/index.js'));
+if (homeDir) {
+  candidates.push(path.join(homeDir, '.gemini', 'config', 'plugins', 'evo-kernel', 'dist', 'cli', 'index.js'));
+  candidates.push(path.join(homeDir, '.gemini', 'extensions', 'evo-kernel', 'dist', 'cli', 'index.js'));
+}
+
 let entry = candidates.find((c) => fs.existsSync(c));
 if (!entry) {
   const buildScript = path.join(wsRoot, 'scripts', 'build.mjs');
@@ -647,6 +679,7 @@ export function runInit(
 
   const updatedFilesList: string[] = [];
   const mcpConfigFilesList: string[] = [];
+  const commandFilesList: string[] = [];
   const activeDirs: string[] = [];
 
   for (const target of targets) {
@@ -655,6 +688,9 @@ export function runInit(
     const res = adapter.install(workspaceRoot, managedBlock);
     updatedFilesList.push(...res.updatedFiles);
     mcpConfigFilesList.push(...res.mcpConfigFiles);
+    if (res.commandFiles) {
+      commandFilesList.push(...res.commandFiles);
+    }
     activeDirs.push(...adapter.dirs);
   }
 
@@ -681,19 +717,34 @@ export function runInit(
 
   const excludeDirs = activeDirs.map((d) => (d.endsWith('/') ? d : `${d}/`));
   const excludeCandidates = stealth
-    ? ['.evo/', ...mcpConfigFiles, ...updatedFiles, ...excludeDirs]
+    ? ['.evo/', ...mcpConfigFiles, ...updatedFiles, ...commandFilesList, ...excludeDirs]
     : linkedSharedEvoDir
       ? ['.evo/', '.evo/.cache/']
       : ['.evo/.cache/'];
 
   const stealthExcluded = ensureGitInfoExclude(workspaceRoot, excludeCandidates);
 
+  let warmupReport: any = undefined;
+  if (opts.warmup) {
+    try {
+      const bootSummary = runBootstrap(workspaceRoot, { maxCommits: 25 });
+      const scoreReport = buildScoreReport(workspaceRoot);
+      warmupReport = {
+        ...scoreReport,
+        bootSummary,
+        scoreReport,
+      };
+    } catch {}
+  }
+
   return {
     initializedHarnesses: targets,
     updatedFiles,
     mcpConfigFiles,
+    commandFiles: Array.from(new Set(commandFilesList)),
     stealthExcluded,
     linkedSharedEvoDir,
+    warmupReport,
   };
 }
 
@@ -703,6 +754,9 @@ export function runUninstall(
 ): { cleanedFiles: string[] } {
   const cleanedFilesList: string[] = [];
   const dirsToPrune: string[] = [
+    '.claude/commands',
+    '.cursor/commands',
+    '.gemini/commands',
     '.cursor/rules',
     '.cursor',
     '.roo/rules',
@@ -736,6 +790,11 @@ export function runUninstall(
           ...a.ruleFiles,
           ...a.mcpFiles,
           ...a.dirs.map((d) => (d.endsWith('/') ? d : `${d}/`)),
+        ]),
+        ...Object.keys(SLASH_COMMAND_DEFINITIONS).flatMap((file) => [
+          `.claude/commands/${file}`,
+          `.cursor/commands/${file}`,
+          `.gemini/commands/${file}`,
         ]),
       ];
   removeGitInfoExclude(workspaceRoot, patternsToRemove);

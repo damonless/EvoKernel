@@ -240,6 +240,10 @@ export class EvoStorage {
     this.coreInvariantsPath = path.join(this.rulesDir, 'core-invariants.md');
   }
 
+  public get telemetryDbPath(): string {
+    return path.join(this.cacheDir, 'telemetry.db');
+  }
+
   public ensureInitialized(): EvoConfig {
     for (const dir of [
       this.evoDir,

@@ -22,71 +22,107 @@ export function redactSensitiveDiagnostics(text: string, workspaceRoot?: string)
   if (!text) return '';
   let out = text;
 
-  // 1. Path redactions (<WORKSPACE> and <HOME>) - case and slash insensitive
+  // 1. Path redactions (<WORKSPACE> and <HOME>) - case and slash/backslash/json-escaped insensitive
   if (workspaceRoot) {
     const cleanWs = path.resolve(workspaceRoot);
-    const ws1 = cleanWs.replace(/\\/g, '/');
-    const ws2 = cleanWs.replace(/\//g, '\\');
-    const reWs = new RegExp(escapeRegExp(ws1) + '|' + escapeRegExp(ws2), 'gi');
-    out = out.replace(reWs, '<WORKSPACE>');
+    const segs = cleanWs.split(/[\\/]+/).filter(Boolean).map(escapeRegExp);
+    if (segs.length > 0) {
+      const reWs = new RegExp(segs.join('[\\\\/]+'), 'gi');
+      out = out.replace(reWs, '<WORKSPACE>');
+    }
   }
 
   const home = path.resolve(os.homedir());
   if (home) {
-    const home1 = home.replace(/\\/g, '/');
-    const home2 = home.replace(/\//g, '\\');
-    const reHome = new RegExp(escapeRegExp(home1) + '|' + escapeRegExp(home2), 'gi');
-    out = out.replace(reHome, '<HOME>');
+    const segs = home.split(/[\\/]+/).filter(Boolean).map(escapeRegExp);
+    if (segs.length > 0) {
+      const reHome = new RegExp(segs.join('[\\\\/]+'), 'gi');
+      out = out.replace(reHome, '<HOME>');
+    }
   }
 
-  // 2. 18 Categories of sensitive credentials/tokens
-  // (1) OpenAI / AI service keys (sk-..., sk-proj-...)
-  out = out.replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_API_KEY]');
-  // (2) GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_, github_pat_)
-  out = out.replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82})\b/g, '[REDACTED_GITHUB_TOKEN]');
-  // (3) GitLab tokens (glpat-)
-  out = out.replace(/\bglpat-[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_GITLAB_TOKEN]');
-  // (4) Slack tokens (xoxb-, xoxp-, xoxa-, xoxr-)
-  out = out.replace(/\bxox[bpar]-[A-Za-z0-9-]{20,}\b/g, '[REDACTED_SLACK_TOKEN]');
-  // (5) AWS Access Key ID
-  out = out.replace(/\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY_ID]');
-  // (6) AWS Secret Access Key
+  // Generic user profile pattern: C:\Users\<user>, /Users/<user>, /home/<user>
   out = out.replace(
-    /\b(aws_secret_access_key|secret_key|secretKey)(\s*[:=]\s*["']?)[A-Za-z0-9/+=]{40}(["']?)/gi,
+    /(?:[A-Za-z]:[\\/]+Users|[\\/](?:Users|home))[\\/]+[^\\/\r\n"':<>|]+/gi,
+    '<HOME>'
+  );
+
+  // 2. 18 Categories of sensitive credentials/tokens
+  // Specific credential and URI patterns first to prevent premature generic truncation
+
+  // (1) Private keys (RSA, EC, OPENSSH, PGP, DSA, etc.)
+  out = out.replace(
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    '[REDACTED_PRIVATE_KEY]'
+  );
+
+  // (2) Database connection strings with credentials (postgres://..., mysql://..., mongodb://..., redis://...)
+  out = out.replace(
+    /\b(postgres|postgresql|mysql|mongodb(?:\+srv)?|redis):\/\/[^:\s]+:[^@\s]+@[A-Za-z0-9.-]+/gi,
+    (_m, scheme) => `${scheme}://[REDACTED_USER]:[REDACTED_PW]@[HOST]`
+  );
+
+  // (3) Basic auth credentials in URLs
+  out = out.replace(/(https?:\/\/)[^:\s\/]+:[^@\s\/]+@/gi, '$1[REDACTED_CREDENTIALS]@');
+
+  // (4) JWT tokens (eyJ...)
+  out = out.replace(/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])/g, '[REDACTED_JWT]');
+
+  // (5) Anthropic API key (sk-ant-...) - MUST match before OpenAI sk-
+  out = out.replace(/\bsk-ant-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g, '[REDACTED_ANTHROPIC_KEY]');
+
+  // (6) OpenAI / AI service keys (sk-..., sk-proj-...)
+  out = out.replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g, '[REDACTED_API_KEY]');
+
+  // (7) GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_, github_pat_)
+  out = out.replace(
+    /\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82,})(?![A-Za-z0-9_])/g,
+    '[REDACTED_GITHUB_TOKEN]'
+  );
+
+  // (8) GitLab tokens (glpat-)
+  out = out.replace(/\bglpat-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g, '[REDACTED_GITLAB_TOKEN]');
+
+  // (9) Slack tokens (xoxb-, xoxp-, xoxa-, xoxr-)
+  out = out.replace(/\bxox[bpar]-[A-Za-z0-9-]{20,}(?![A-Za-z0-9-])/g, '[REDACTED_SLACK_TOKEN]');
+
+  // (10) AWS Access Key ID
+  out = out.replace(/\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY_ID]');
+
+  // (11) AWS Secret Access Key
+  out = out.replace(
+    /\b(aws_secret_access_key|awsSecretAccessKey|secret_key|secretKey)(\s*[:=]\s*["']?)[A-Za-z0-9/+=]{40}(["']?)/gi,
     (_m, p1, p2, p3) => `${p1}${p2}[REDACTED_AWS_SECRET]${p3 || ''}`
   );
-  // (7) Bearer tokens
+
+  // (12) Stripe keys (sk_live_, pk_live_, rk_live_, sk_test_, pk_test_, rk_test_)
+  out = out.replace(/\b(?:[rs]k|pk)_(?:live|test)_[A-Za-z0-9]{24,}(?![A-Za-z0-9])/g, '[REDACTED_STRIPE_KEY]');
+
+  // (13) Google Cloud API key (AIza...)
+  out = out.replace(/\bAIza[0-9A-Za-z_-]{35,}(?![A-Za-z0-9_-])/g, '[REDACTED_GOOGLE_API_KEY]');
+
+  // (14) Hugging Face token (hf_...)
+  out = out.replace(/\bhf_[A-Za-z0-9]{34,}(?![A-Za-z0-9])/g, '[REDACTED_HF_TOKEN]');
+
+  // (15) PyPI API token (pypi-...)
+  out = out.replace(/\bpypi-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g, '[REDACTED_PYPI_TOKEN]');
+
+  // (16) NPM auth tokens (npm_...)
+  out = out.replace(/\bnpm_[A-Za-z0-9]{32,}(?![A-Za-z0-9])/g, '[REDACTED_NPM_TOKEN]');
+
+  // (17) Bearer tokens
   out = out.replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/g, 'Bearer [REDACTED_TOKEN]');
-  // (8) Private keys (RSA, EC, OPENSSH, PGP, DSA, etc.)
-  out = out.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]');
-  // (9) JWT tokens (eyJ...)
-  out = out.replace(/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED_JWT]');
-  // (10) Basic auth credentials in URLs
-  out = out.replace(/https?:\/\/[^:\s\/]+:[^@\s\/]+@/g, 'https://[REDACTED_CREDENTIALS]@');
-  // (11) Generic API keys in key-value pairs (api_key, apiKey, access_token, etc.)
+
+  // (18) Generic API keys in key-value pairs (api_key, apiKey, access_token, etc.)
   out = out.replace(
     /\b(api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?token)(\s*[:=]\s*["']?)[A-Za-z0-9_\-]{16,}(["']?)/gi,
     (_m, p1, p2, p3) => `${p1}${p2}[REDACTED_SECRET]${p3 || ''}`
   );
-  // (12) Password in assignments
+
+  // (19) Password in assignments
   out = out.replace(
     /\b(password|passwd|pwd)(\s*[:=]\s*["']?)[^"' \r\n]{6,}(["']?)/gi,
     (_m, p1, p2, p3) => `${p1}${p2}[REDACTED_PASSWORD]${p3 || ''}`
-  );
-  // (13) Stripe keys (sk_live_, pk_live_, rk_live_)
-  out = out.replace(/\b[rs]k_live_[A-Za-z0-9]{24,}\b/g, '[REDACTED_STRIPE_KEY]');
-  // (14) Google Cloud API key (AIza...)
-  out = out.replace(/\bAIza[0-9A-Za-z-_]{35}\b/g, '[REDACTED_GOOGLE_API_KEY]');
-  // (15) Anthropic API key (sk-ant-...)
-  out = out.replace(/\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_ANTHROPIC_KEY]');
-  // (16) Hugging Face token (hf_...)
-  out = out.replace(/\bhf_[A-Za-z0-9]{34,}\b/g, '[REDACTED_HF_TOKEN]');
-  // (17) NPM auth tokens (npm_...)
-  out = out.replace(/\bnpm_[A-Za-z0-9]{36}\b/g, '[REDACTED_NPM_TOKEN]');
-  // (18) Database connection strings with credentials (postgres://..., mysql://..., mongodb://..., redis://...)
-  out = out.replace(
-    /\b(postgres|postgresql|mysql|mongodb(?:\+srv)?|redis):\/\/[^:\s]+:[^@\s]+@[A-Za-z0-9.-]+/gi,
-    (_m, scheme) => `${scheme}://[REDACTED_USER]:[REDACTED_PW]@[HOST]`
   );
 
   return out;

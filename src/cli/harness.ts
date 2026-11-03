@@ -10,6 +10,7 @@ import { EvoStorage } from '../core/storage.js';
 export interface HarnessInstallResult {
   updatedFiles: string[];
   mcpConfigFiles: string[];
+  commandFiles?: string[];
 }
 
 export interface HarnessAdapter {
@@ -95,6 +96,53 @@ export function upsertMdcFile(
     const updated = upsertMarkerBlock(existing, managedBlock);
     fs.writeFileSync(filePath, updated, 'utf8');
   }
+}
+
+export const SLASH_COMMAND_DEFINITIONS: Record<string, string> = {
+  'evo-status.md': `<!-- EVO:COMMAND -->
+# /evo-status
+Check EvoKernel capability statistics, memory verification freshness, and MCP tax score report.
+Run \`node .evo/boot-mcp.mjs score\` or \`npx evo-kernel score\`.
+`,
+  'evo-learn.md': `<!-- EVO:COMMAND -->
+# /evo-learn
+Crystallize diagnosed bug root causes, user corrections, or architectural guardrails into EvoKernel via \`evo_propose\`.
+`,
+  'evo-doctor.md': `<!-- EVO:COMMAND -->
+# /evo-doctor
+Run EvoKernel zero-modification physical health check and rule token budget audit via \`npx evo-kernel doctor\`.
+`,
+};
+
+export function upsertSlashCommands(commandsDir: string): string[] {
+  const created: string[] = [];
+  try {
+    fs.mkdirSync(commandsDir, { recursive: true });
+    for (const [filename, content] of Object.entries(SLASH_COMMAND_DEFINITIONS)) {
+      const fullPath = path.join(commandsDir, filename);
+      fs.writeFileSync(fullPath, content, 'utf8');
+      created.push(fullPath);
+    }
+  } catch {}
+  return created;
+}
+
+export function cleanSlashCommands(commandsDir: string): string[] {
+  const cleaned: string[] = [];
+  if (!fs.existsSync(commandsDir)) return cleaned;
+  try {
+    for (const file of fs.readdirSync(commandsDir)) {
+      const fullPath = path.join(commandsDir, file);
+      try {
+        const raw = fs.readFileSync(fullPath, 'utf8');
+        if (raw.includes('<!-- EVO:COMMAND -->')) {
+          fs.unlinkSync(fullPath);
+          cleaned.push(fullPath);
+        }
+      } catch {}
+    }
+  } catch {}
+  return cleaned;
 }
 
 // ============================================================================
@@ -1223,7 +1271,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   name = 'Claude Code';
   ruleFiles = ['CLAUDE.md'];
   mcpFiles = ['.mcp.json', '.claude/settings.json'];
-  dirs = ['.claude'];
+  dirs = ['.claude/commands', '.claude'];
 
   detectWorkspace(ws: string): boolean {
     return fs.existsSync(path.join(ws, 'CLAUDE.md')) || fs.existsSync(path.join(ws, '.claude'));
@@ -1251,9 +1299,12 @@ export class ClaudeAdapter implements HarnessAdapter {
     const settingsPath = path.join(ws, '.claude', 'settings.json');
     upsertClaudeSettings(settingsPath, ws);
 
+    const commandFiles = upsertSlashCommands(path.join(ws, '.claude', 'commands'));
+
     return {
       updatedFiles: ['CLAUDE.md'],
       mcpConfigFiles: ['.mcp.json', '.claude/settings.json'],
+      commandFiles: commandFiles.map((f) => path.relative(ws, f).replace(/\\/g, '/')),
     };
   }
 
@@ -1263,6 +1314,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     if (removeMcpJson(path.join(ws, '.mcp.json'))) cleaned.push('.mcp.json');
     if (removeClaudeSettings(path.join(ws, '.claude', 'settings.json'))) cleaned.push('.claude/settings.json');
     if (removeClaudeSettings(path.join(ws, '.claude', 'settings.local.json'))) cleaned.push('.claude/settings.local.json');
+    cleanSlashCommands(path.join(ws, '.claude', 'commands'));
     pruneEmptyDirs(ws, this.dirs);
     return cleaned;
   }
@@ -1273,7 +1325,7 @@ export class CursorAdapter implements HarnessAdapter {
   name = 'Cursor';
   ruleFiles = ['.cursor/rules/evo-kernel.mdc'];
   mcpFiles = ['.cursor/mcp.json'];
-  dirs = ['.cursor/rules', '.cursor'];
+  dirs = ['.cursor/commands', '.cursor/rules', '.cursor'];
 
   detectWorkspace(ws: string): boolean {
     return (
@@ -1300,9 +1352,12 @@ export class CursorAdapter implements HarnessAdapter {
     const mcpPath = path.join(ws, '.cursor', 'mcp.json');
     upsertMcpJson(mcpPath, ws);
 
+    const commandFiles = upsertSlashCommands(path.join(ws, '.cursor', 'commands'));
+
     return {
       updatedFiles: ['.cursor/rules/evo-kernel.mdc'],
       mcpConfigFiles: ['.cursor/mcp.json'],
+      commandFiles: commandFiles.map((f) => path.relative(ws, f).replace(/\\/g, '/')),
     };
   }
 
@@ -1322,6 +1377,7 @@ export class CursorAdapter implements HarnessAdapter {
     }
 
     if (removeMcpJson(path.join(ws, '.cursor', 'mcp.json'))) cleaned.push('.cursor/mcp.json');
+    cleanSlashCommands(path.join(ws, '.cursor', 'commands'));
     pruneEmptyDirs(ws, this.dirs);
     return cleaned;
   }
@@ -1689,7 +1745,7 @@ export class GeminiAdapter implements HarnessAdapter {
   name = 'Gemini CLI';
   ruleFiles = ['GEMINI.md'];
   mcpFiles = ['.gemini/settings.json'];
-  dirs = ['.gemini'];
+  dirs = ['.gemini/commands', '.gemini'];
 
   detectWorkspace(ws: string): boolean {
     return (
@@ -1717,9 +1773,12 @@ export class GeminiAdapter implements HarnessAdapter {
     const mcpPath = path.join(ws, '.gemini', 'settings.json');
     upsertMcpJson(mcpPath, ws);
 
+    const commandFiles = upsertSlashCommands(path.join(ws, '.gemini', 'commands'));
+
     return {
       updatedFiles: ['GEMINI.md'],
       mcpConfigFiles: ['.gemini/settings.json'],
+      commandFiles: commandFiles.map((f) => path.relative(ws, f).replace(/\\/g, '/')),
     };
   }
 
@@ -1727,6 +1786,7 @@ export class GeminiAdapter implements HarnessAdapter {
     const cleaned: string[] = [];
     if (cleanRuleFile(path.join(ws, 'GEMINI.md'))) cleaned.push('GEMINI.md');
     if (removeMcpJson(path.join(ws, '.gemini', 'settings.json'))) cleaned.push('.gemini/settings.json');
+    cleanSlashCommands(path.join(ws, '.gemini', 'commands'));
     pruneEmptyDirs(ws, this.dirs);
     return cleaned;
   }

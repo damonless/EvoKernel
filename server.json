@@ -1,0 +1,25 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schema/2025-10-17/server.json",
+  "name": "io.github.damonless.evokernel",
+  "title": "EvoKernel",
+  "description": "Deterministic self-evolving meta-kernel and cognitive memory for AI agents with offline Git worktree evolution and zero prompt-cache bloat.",
+  "version": "0.2.0",
+  "homepage": "https://github.com/damonless/EvoKernel",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/damonless/EvoKernel.git"
+  },
+  "license": "Apache-2.0",
+  "packages": [
+    {
+      "registry": "npm",
+      "package": "evo-kernel",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "executable": "evo",
+      "arguments": ["mcp"]
+    }
+  ]
+}

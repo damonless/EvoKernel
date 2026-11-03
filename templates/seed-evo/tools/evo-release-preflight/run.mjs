@@ -45,6 +45,8 @@ const pluginJson = readJsonSafe('plugin.json');
 const claudePlugin = readJsonSafe('.claude-plugin/plugin.json');
 const claudeMarketplace = readJsonSafe('.claude-plugin/marketplace.json');
 const geminiExt = readJsonSafe('gemini-extension.json');
+const serverJson = readJsonSafe('server.json');
+const cursorPlugin = readJsonSafe('.cursor-plugin/plugin.json');
 const mcpConfig = readJsonSafe('mcp_config.json');
 const dotMcp = readJsonSafe('.mcp.json');
 const cursorMcp = readJsonSafe('.cursor/mcp.json');
@@ -56,9 +58,35 @@ for (const [name, obj] of [
   ['.claude-plugin/plugin.json', claudePlugin],
   ['.claude-plugin/marketplace.json', claudeMarketplace],
   ['gemini-extension.json', geminiExt],
+  ['server.json', serverJson],
+  ['.cursor-plugin/plugin.json', cursorPlugin],
 ]) {
   if (obj && obj.version !== expectedVersion) {
     issues.push(`Version mismatch in ${name}: expected ${expectedVersion}, got ${obj.version}`);
+  }
+}
+
+if (serverJson) {
+  if (serverJson.$schema !== 'https://static.modelcontextprotocol.io/schema/2025-10-17/server.json') {
+    issues.push('server.json $schema must match MCP Registry 2025-10-17 schema');
+  }
+  if (serverJson.packages?.[0]?.version !== expectedVersion) {
+    issues.push(`server.json packages[0].version mismatch: expected ${expectedVersion}, got ${serverJson.packages?.[0]?.version}`);
+  }
+}
+
+if (claudePlugin) {
+  if (!claudePlugin.hooks?.PostToolUse || !claudePlugin.hooks?.Stop) {
+    issues.push('.claude-plugin/plugin.json must define PostToolUse and Stop hooks');
+  }
+}
+
+if (pkg?.files) {
+  if (!pkg.files.includes('server.json')) {
+    issues.push('package.json files array missing "server.json"');
+  }
+  if (!pkg.files.includes('.cursor-plugin')) {
+    issues.push('package.json files array missing ".cursor-plugin"');
   }
 }
 
