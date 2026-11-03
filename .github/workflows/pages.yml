@@ -40,13 +40,22 @@ jobs:
           node ./dist/cli/index.js ui --export public/index.html --anon
 
       - name: "Pages: Setup"
+        id: pages_setup
         uses: actions/configure-pages@v5
+        continue-on-error: true
 
       - name: "Pages: Upload Artifact"
+        if: steps.pages_setup.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
       - name: "Pages: Deploy"
+        if: steps.pages_setup.outcome == 'success'
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: "Pages: Skipped Notice"
+        if: steps.pages_setup.outcome != 'success'
+        run: |
+          echo "::notice title=GitHub Pages Not Enabled::GitHub Pages is not yet enabled in repository settings (Settings -> Pages -> Build and deployment -> Source: GitHub Actions). Static UI cockpit export succeeded at ./public/index.html."

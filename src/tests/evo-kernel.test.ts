@@ -4339,6 +4339,131 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       fs.rmSync(baseDir, { recursive: true, force: true });
     }
   });
+
+  test('46. Issue #20: Uninitialized workspace GLOBAL fallback isolation, multi-token query relevance gating for Action Required, and global project-prefix rejection', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-issue20-test-'));
+    const globalWs = path.join(baseDir, '.evo', 'global');
+    const uninitProject = path.join(baseDir, '6-10k-uninitialized');
+    const initProject = path.join(baseDir, 'initialized-project');
+    fs.mkdirSync(globalWs, { recursive: true });
+    fs.mkdirSync(uninitProject, { recursive: true });
+    fs.mkdirSync(initProject, { recursive: true });
+    fs.writeFileSync(path.join(uninitProject, 'main.c'), 'int main(void) { return 0; }\n', 'utf8');
+    fs.writeFileSync(path.join(initProject, 'main.c'), 'int main(void) { return 0; }\n', 'utf8');
+
+    const prevGlobal = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = globalWs;
+
+    // Initialize globalWs with a generic rule ("delay" / "延时") and a global tool
+    const globalStorage = new EvoStorage(globalWs);
+    globalStorage.ensureInitialized();
+    const globalDispatcher = new EvoMcpDispatcher(globalWs);
+
+    try {
+      // 1. Proposing a project-prefixed capability ID into ~/.evo/global must be rejected by Gate 1
+      const projPrefixRes = globalDispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'rule',
+        id: '3ku-chg-ac-power-limit-derating',
+        title: 'Project Prefixed Rule',
+        l0_summary: 'Should be rejected in global fallback tree due to project prefix.',
+        scope_glob: '**/*.{c,h}',
+        core: false,
+        transfer_scenarios: [
+          'AC charger derating validation across embedded boards',
+          'Input current limiting in power conversion firmware',
+        ],
+        content: '1. Verify AC power derating curve before applying charger current limit.',
+      });
+      assert.equal(projPrefixRes.isError, true, 'Project-prefixed ID in global fallback store must be rejected');
+      assert.match(projPrefixRes.content[0].text, /Project-prefixed capability ID/);
+
+      // 2. Propose a valid cross-project rule into globalWs that mentions "delay" / "延时" and "power" / "电源"
+      //    but has nothing to do with "EPO" or "emergency"
+      const globalRuleRes = globalDispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'rule',
+        id: 'adc-sampling-filter-window-guard',
+        title: 'ADC Sampling Filter Window Guard',
+        l0_summary: 'Verify analog power rail settling delay before latching ADC window.',
+        scope_glob: '**/*.{c,h}',
+        core: true,
+        content: '1. Wait for power rail settling delay (延时) before enabling ADC window comparator.',
+      });
+      assert.equal(Boolean(globalRuleRes.isError), false, globalRuleRes.content[0]?.text);
+
+      const globalToolRes = globalDispatcher.handleToolCall('evo_propose', {
+        workspace: globalWs,
+        kind: 'tool',
+        id: 'global-diag-helper',
+        title: 'Global Diag Helper',
+        l0_summary: 'Global diagnostic micro-tool.',
+        runtime: 'node',
+        script_code: 'if (process.argv.includes("--self-test")) process.exit(0); console.log("ok");',
+      });
+      assert.equal(Boolean(globalToolRes.isError), false, globalToolRes.content[0]?.text);
+
+      // 3. Call evo_search with an uninitialized workspace path (uninitProject has NO .evo/)
+      const uninitSearch = globalDispatcher.handleToolCall('evo_search', {
+        workspace: uninitProject,
+        query: 'EPO emergency power off shutdown delay',
+      });
+      const uninitText = uninitSearch.content[0].text;
+
+      // Must NOT create .evo/ in uninitProject
+      assert.equal(fs.existsSync(path.join(uninitProject, '.evo')), false, 'evo_search must not create .evo/ in uninitialized workspace');
+
+      // Global fallback hits must be labeled [GLOBAL], core budget for uninitialized local workspace must be 0/1500,
+      // and global tools must NOT be disguised as "Available workspace tools"
+      assert.match(uninitText, /\[RULE\] \[GLOBAL\] adc-sampling-filter-window-guard/);
+      assert.match(uninitText, /\[Core Budget: 0\/1500 tokens\]/);
+      assert.doesNotMatch(uninitText, /Available workspace tools.*global-diag-helper/);
+
+      // Multi-word technical query ("EPO emergency power off shutdown delay") matching only generic words ("power", "delay")
+      // while missing specific anchors ("EPO", "emergency") must NOT emit mandatory "Action Required: Call evo_inspect"
+      assert.doesNotMatch(
+        uninitText,
+        /Action Required: Call evo_inspect/,
+        `Low-overlap single-generic-concept match must not trigger Action Required:\n${uninitText}`
+      );
+      assert.match(uninitText, /Tip: Call evo_inspect/);
+
+      // 4. Now initialize initProject and add a true high-relevance local rule for EPO emergency shutdown
+      const initStorage = new EvoStorage(initProject);
+      initStorage.ensureInitialized();
+      const localEpoRes = globalDispatcher.handleToolCall('evo_propose', {
+        workspace: initProject,
+        kind: 'rule',
+        id: 'epo-emergency-shutdown-sequence',
+        title: 'EPO Emergency Power Off Shutdown Sequence',
+        l0_summary: 'Verify EPO emergency power off pin debounce and shutdown delay timer.',
+        scope_glob: '**/*.{c,h}',
+        core: false,
+        transfer_scenarios: [
+          'Auditing emergency power off (EPO) hardware interrupt and relay opening delay',
+          'Validating safety shutdown state machine transitions in power firmware',
+        ],
+        content: '1. Check EPO emergency shutdown delay counter before opening main contactor.',
+      });
+      assert.equal(Boolean(localEpoRes.isError), false, localEpoRes.content[0]?.text);
+
+      const initSearch = globalDispatcher.handleToolCall('evo_search', {
+        workspace: initProject,
+        query: 'EPO emergency power off shutdown delay',
+      });
+      const initText = initSearch.content[0].text;
+
+      // Local high-relevance hit has no [GLOBAL] badge, ranks #1 above the [GLOBAL] hit, and triggers Action Required ONLY for the high-overlap hit
+      assert.match(initText, /• \[RULE\] epo-emergency-shutdown-sequence/);
+      assert.match(initText, /• \[RULE\] \[GLOBAL\] adc-sampling-filter-window-guard/);
+      assert.match(initText, /Action Required: Call evo_inspect\(id, "L2", workspace\) on matched guardrails\/SOPs \[epo-emergency-shutdown-sequence\]/);
+    } finally {
+      if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobal;
+      globalDispatcher.close();
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
 });
 
 

@@ -1248,6 +1248,18 @@ export class EvoGatekeeper {
       };
     }
 
+    if (
+      isGlobalFallbackRoot(this.storage.rootDir) &&
+      /^(?:\d+[a-z0-9]*|proj-[a-z0-9]+|project-[a-z0-9]+)-/i.test(cleanId)
+    ) {
+      return {
+        passed: false,
+        gate_failed: 'SCHEMA_SECURITY',
+        error_code: 'ERR_INVALID_SCHEMA',
+        message: `Project-prefixed capability ID "${cleanId}" cannot be stored in the global fallback tree (~/.evo/global). Use a cross-project domain-neutral ID or propose into the active project workspace.`,
+      };
+    }
+
     if (!cleanId || cleanId.length < 3) {
       return {
         passed: false,

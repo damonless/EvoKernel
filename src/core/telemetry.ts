@@ -24,7 +24,11 @@ export function redactSensitiveDiagnostics(text: string, workspaceRoot?: string)
 
   // 1. Path redactions (<WORKSPACE> and <HOME>) - case and slash/backslash/json-escaped insensitive
   if (workspaceRoot) {
-    const cleanWs = path.resolve(workspaceRoot);
+    const trimmedWs = workspaceRoot.trim();
+    const cleanWs =
+      /^[A-Za-z]:[\\/]/.test(trimmedWs) || trimmedWs.startsWith('/')
+        ? trimmedWs.replace(/[\\/]+$/, '')
+        : path.resolve(trimmedWs);
     const segs = cleanWs.split(/[\\/]+/).filter(Boolean).map(escapeRegExp);
     if (segs.length > 0) {
       const reWs = new RegExp(segs.join('[\\\\/]+'), 'gi');
@@ -391,6 +395,120 @@ export function extractQueryTokens(query: string): string[] {
   }
 
   return Array.from(finalTokens);
+}
+
+const GENERIC_QUERY_CONCEPT_TOKENS = new Set([
+  'power',
+  'delay',
+  'shutdown',
+  'off',
+  'on',
+  'mode',
+  'state',
+  'check',
+  'rule',
+  'skill',
+  'tool',
+  'report',
+  'doc',
+  'file',
+  'code',
+  'bug',
+  'fix',
+  'error',
+  'test',
+  'system',
+  'control',
+  'config',
+  'data',
+  'status',
+  'value',
+  'time',
+  'init',
+  'run',
+  'build',
+  '电压',
+  '电源',
+  '延时',
+  '延迟',
+  '关闭',
+  '关断',
+  '状态',
+  '模式',
+  '检查',
+  '报告',
+  '文档',
+  '系统',
+  '配置',
+]);
+
+interface QueryConceptGroup {
+  literal: string;
+  isGeneric: boolean;
+  terms: string[];
+}
+
+function buildQueryConceptGroups(query: string): QueryConceptGroup[] {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  const asciiLiterals = (trimmed.match(/[A-Za-z0-9_-]{2,}/g) || []).map((t) => t.toLowerCase());
+  const cjkBigrams = extractCjkBigrams(trimmed);
+  const seen = new Set<string>();
+  const groups: QueryConceptGroup[] = [];
+
+  for (const lit of [...asciiLiterals, ...cjkBigrams]) {
+    if (seen.has(lit)) continue;
+    seen.add(lit);
+    const syns = BILINGUAL_TECH_SYNONYMS[lit] || BILINGUAL_TECH_SYNONYMS[lit.toLowerCase()] || [];
+    const terms = Array.from(new Set([lit, ...syns.map((s) => s.toLowerCase())]));
+    groups.push({
+      literal: lit,
+      isGeneric: GENERIC_QUERY_CONCEPT_TOKENS.has(lit),
+      terms,
+    });
+  }
+  return groups;
+}
+
+function evaluateConceptOverlap(
+  conceptGroups: QueryConceptGroup[],
+  row: Record<string, unknown>
+): { matchedConcepts: number; matchedSpecific: number; lowOverlap: boolean } {
+  if (conceptGroups.length < 2) {
+    return { matchedConcepts: conceptGroups.length, matchedSpecific: conceptGroups.length, lowOverlap: false };
+  }
+  const searchable = [
+    String(row.id || ''),
+    String(row.title || ''),
+    String(row.l0_summary || ''),
+    String(row.keywords || ''),
+    String(row.body || ''),
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  let matchedConcepts = 0;
+  let matchedSpecific = 0;
+  let totalSpecific = 0;
+
+  for (const g of conceptGroups) {
+    if (!g.isGeneric) totalSpecific++;
+    const hit = g.terms.some((term) => term.length >= 2 && searchable.includes(term));
+    if (hit) {
+      matchedConcepts++;
+      if (!g.isGeneric) matchedSpecific++;
+    }
+  }
+
+  // A hit is low-overlap when:
+  // 1. The query has >= 2 distinct concepts with at least 1 specific technical anchor (e.g. "EPO", "emergency"),
+  //    and the candidate matches 0 specific anchors (only matching generic domain words like "power", "delay").
+  // 2. Or the query has >= 3 distinct concepts (all generic) and the candidate only matches <= 1 concept.
+  const lowOverlap =
+    (conceptGroups.length >= 2 && totalSpecific >= 1 && matchedSpecific === 0) ||
+    (conceptGroups.length >= 3 && matchedConcepts <= 1);
+
+  return { matchedConcepts, matchedSpecific, lowOverlap };
 }
 
 const CODE_EXTENSIONS_FOR_SCOPE = new Set([
@@ -1006,6 +1124,7 @@ export class EvoTelemetry {
   ): SearchHit[] {
     this.syncFromDisk();
     const tokens = extractQueryTokens(query);
+    const conceptGroups = buildQueryConceptGroups(query);
 
     const fetchLimit = Math.max(limit * 3, 24);
     let rows: Array<Record<string, unknown>> = [];
@@ -1016,7 +1135,7 @@ export class EvoTelemetry {
         const sql =
           kind === 'all'
             ? `
-              SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count,
+              SELECT f.id, f.kind, f.keywords, f.body, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count,
                      t.helped_count, t.hurt_count, t.contested_count, bm25(capability_fts) as rank
               FROM capability_fts f
               JOIN telemetry t ON f.id = t.id
@@ -1025,7 +1144,7 @@ export class EvoTelemetry {
               LIMIT ?
             `
             : `
-              SELECT f.id, f.kind, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count,
+              SELECT f.id, f.kind, f.keywords, f.body, t.title, t.l0_summary, t.scope_glob, t.hit_count, t.success_count, t.fail_count,
                      t.helped_count, t.hurt_count, t.contested_count, bm25(capability_fts) as rank
               FROM capability_fts f
               JOIN telemetry t ON f.id = t.id
@@ -1102,6 +1221,13 @@ export class EvoTelemetry {
         }
       }
 
+      const overlap = evaluateConceptOverlap(conceptGroups, r);
+      if (overlap.lowOverlap) {
+        rawScore *= 0.25;
+      } else if (conceptGroups.length >= 2 && overlap.matchedConcepts >= 2) {
+        rawScore *= 1 + Math.min(overlap.matchedConcepts - 1, 3) * 0.15;
+      }
+
       if (itemKind === 'memory') {
         const mem = this.storage.getMemory(id);
         if (mem) {
@@ -1127,6 +1253,8 @@ export class EvoTelemetry {
               hit_count: Number(r.hit_count || 0),
               success_rate: rate,
               score: rawScore,
+              low_overlap: overlap.lowOverlap || undefined,
+              matched_concepts: overlap.matchedConcepts,
               memory_status: 'VERIFIED',
               memory_badge: `[VERIFIED ${ver.verified_count}/${ver.total_symbols} symbols @ ${ver.current_commit}]`,
             };
@@ -1141,6 +1269,8 @@ export class EvoTelemetry {
               hit_count: Number(r.hit_count || 0),
               success_rate: `BRANCH:${branchLabel}`,
               score: rawScore * 0.9,
+              low_overlap: overlap.lowOverlap || undefined,
+              matched_concepts: overlap.matchedConcepts,
               memory_status: 'OTHER_BRANCH',
               memory_badge: `[BRANCH: ${branchLabel}@${ver.recorded_commit} (${ver.verified_count}/${ver.total_symbols} in HEAD)]`,
             };
@@ -1158,6 +1288,8 @@ export class EvoTelemetry {
               hit_count: Number(r.hit_count || 0),
               success_rate: 'STALE (needs re-verification)',
               score: rawScore * 0.25, // Demote stale memories in ranking
+              low_overlap: overlap.lowOverlap || undefined,
+              matched_concepts: overlap.matchedConcepts,
               memory_status: 'STALE',
               memory_badge: `[STALE: ${drifted || 'symbols drifted'}]`,
             };
@@ -1174,6 +1306,8 @@ export class EvoTelemetry {
         hit_count: Number(r.hit_count || 0),
         success_rate: rate,
         score: rawScore,
+        low_overlap: overlap.lowOverlap || undefined,
+        matched_concepts: overlap.matchedConcepts,
       };
     });
 

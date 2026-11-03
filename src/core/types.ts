@@ -256,6 +256,8 @@ export interface SearchHit {
   success_rate: string;
   score: number;
   tier?: 'LOCAL' | 'GLOBAL';
+  low_overlap?: boolean;
+  matched_concepts?: number;
   memory_status?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE';
   memory_badge?: string;
 }

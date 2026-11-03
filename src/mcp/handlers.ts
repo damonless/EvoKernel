@@ -242,6 +242,7 @@ export function isSubpathOf(parent: string, child: string): boolean {
 interface WorkspaceContext {
   rootDir: string;
   requestWorkspaceDir?: string;
+  hasLocalEvo?: boolean;
   storage: EvoStorage;
   telemetry?: EvoTelemetry;
   gatekeeper?: EvoGatekeeper;
@@ -460,7 +461,7 @@ export class EvoMcpDispatcher {
     }
   }
 
-  private getGlobalFallbackContexts(): WorkspaceContext[] {
+  private getGlobalFallbackContexts(includeActiveEvoDir = false): WorkspaceContext[] {
     const fallbacks: WorkspaceContext[] = [];
     const activeEvoDir = path.resolve(this.storage.evoDir);
     const candidates: string[] = [];
@@ -483,7 +484,7 @@ export class EvoMcpDispatcher {
       candidates.push(envGlobal);
     }
 
-    const seenEvoDirs = new Set<string>([activeEvoDir]);
+    const seenEvoDirs = new Set<string>(includeActiveEvoDir ? [] : [activeEvoDir]);
     for (const cand of candidates) {
       if (!hasValidEvoStructure(path.join(cand, '.evo'))) continue;
       const ctx = this.getOrCreateContext(cand);
@@ -500,6 +501,7 @@ export class EvoMcpDispatcher {
     const rawWs = args.workspace ?? args.workspace_path;
     let targetRoot = this.defaultRoot;
     let candidate = this.defaultRoot;
+    let hasLocalEvo = true;
 
     if (typeof rawWs === 'string' && rawWs.trim()) {
       const trimmed = rawWs.trim();
@@ -589,6 +591,18 @@ export class EvoMcpDispatcher {
           // but preserve candidate for evo_run cwd & scope_glob filtering!
           const rootWithEvo = this.clientRoots.find((r) => hasValidEvoStructure(path.join(r, '.evo')));
           targetRoot = rootWithEvo || this.defaultRoot;
+          if (!isGlobalFallbackTarget && !rootWithEvo) {
+            const defaultNorm = this.defaultRoot.replace(/\\/g, '/').toLowerCase();
+            const defaultIsGlobal =
+              defaultNorm.endsWith('/.evo/global') ||
+              Boolean(
+                process.env.EVO_GLOBAL_DIR &&
+                  path.resolve(process.env.EVO_GLOBAL_DIR).toLowerCase() === this.defaultRoot.toLowerCase()
+              );
+            if (defaultIsGlobal || !isSubpathOf(this.defaultRoot, candidate)) {
+              hasLocalEvo = false;
+            }
+          }
         }
       }
     }
@@ -600,6 +614,7 @@ export class EvoMcpDispatcher {
     const isWriteTool = toolName === 'evo_propose' || toolName === 'evo_compact';
     const ctx = this.getOrCreateContext(targetRoot, isWriteTool);
     ctx.requestWorkspaceDir = candidate;
+    ctx.hasLocalEvo = hasLocalEvo;
     this.storage = ctx.storage;
     this.telemetry = ctx.telemetry;
     this.gatekeeper = ctx.gatekeeper;
@@ -764,18 +779,20 @@ export class EvoMcpDispatcher {
     const kind = (args.kind ? String(args.kind) : 'all') as EvoKind | 'all';
     const limit = Number(args.limit || 8);
     const targetCtx = activeCtx || this.getOrCreateContext(this.activeWorkspaceDir);
+    const hasLocalEvo = targetCtx.hasLocalEvo !== false;
 
-    const localHits = targetCtx.telemetry
-      ? targetCtx.telemetry
-          .search(query, kind, limit, this.activeWorkspaceDir)
-          .map((h) => ({ ...h, tier: 'LOCAL' as const }))
-      : [];
+    const localHits =
+      hasLocalEvo && targetCtx.telemetry
+        ? targetCtx.telemetry
+            .search(query, kind, limit, this.activeWorkspaceDir)
+            .map((h) => ({ ...h, tier: 'LOCAL' as const }))
+        : [];
 
     const mergedHits: SearchHit[] = [...localHits];
     const seenIds = new Set<string>(localHits.map((h) => h.id));
 
     if (kind !== 'memory') {
-      for (const gCtx of this.getGlobalFallbackContexts()) {
+      for (const gCtx of this.getGlobalFallbackContexts(!hasLocalEvo)) {
         const globalKind = kind === 'all' ? 'all' : kind;
         const gHits = gCtx.telemetry
           ? gCtx.telemetry.search(query, globalKind, limit, this.activeWorkspaceDir)
@@ -803,9 +820,10 @@ export class EvoMcpDispatcher {
       })
       .slice(0, limit);
 
-    const { totalTokens } = targetCtx.storage.getCoreRulesTokenUsage();
+    const totalTokens = hasLocalEvo ? targetCtx.storage.getCoreRulesTokenUsage().totalTokens : 0;
     const maxTokens = targetCtx.storage.getConfig().maxCoreRuleTokens;
-    const wsTools = (kind === 'all' || kind === 'tool') ? targetCtx.storage.listTools() : [];
+    const wsTools =
+      hasLocalEvo && (kind === 'all' || kind === 'tool') ? targetCtx.storage.listTools() : [];
     const hasToolHit = hits.some((h) => h.kind === 'tool');
     const toolFooter =
       wsTools.length > 0 && !hasToolHit
@@ -840,10 +858,11 @@ export class EvoMcpDispatcher {
     const topGuardrailIds = hits
       .filter(
         (h) =>
-          h.kind === 'rule' ||
-          h.kind === 'skill' ||
-          (h.kind === 'memory' &&
-            (h.memory_status === 'VERIFIED' || h.memory_status === 'OTHER_BRANCH'))
+          !h.low_overlap &&
+          (h.kind === 'rule' ||
+            h.kind === 'skill' ||
+            (h.kind === 'memory' &&
+              (h.memory_status === 'VERIFIED' || h.memory_status === 'OTHER_BRANCH')))
       )
       .slice(0, 3)
       .map((h) => h.id);
