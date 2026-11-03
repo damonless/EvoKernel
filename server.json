@@ -9,7 +9,7 @@
     "type": "git",
     "url": "https://github.com/damonless/EvoKernel.git"
   },
-  "license": "Apache-2.0",
+  "license": "MIT",
   "packages": [
     {
       "registry": "npm",

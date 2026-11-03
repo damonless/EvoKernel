@@ -12,7 +12,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#零依赖原生架构)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#1-为什么采用固定-5-工具的元-mcp-网关)
-[![Tests](https://img.shields.io/badge/tests-264%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
+[![Tests](https://img.shields.io/badge/tests-266%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 [![Harnesses](https://img.shields.io/badge/10%20Harnesses-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Cline%20%7C%20Roo%20%7C%20Copilot%20%7C%20Codex%20%7C%20OpenCode%20%7C%20Gemini%20%7C%20Antigravity-8A2BE2?style=flat-square)](#-10-大智能体接入矩阵-10-agent-harness-matrix)
 
 **[English](README.md) · [简体中文](README.zh-CN.md)**

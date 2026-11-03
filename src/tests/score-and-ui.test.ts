@@ -239,7 +239,7 @@ describe('EvoKernel P1 & P2: Score, UI Cockpit, Slash Commands & Manifest Parity
           rules: [{ id: 'rule-angle', title: 'Generic <T> Guard', l0_summary: 'Test <T> & "quotes"', l1_contract: 'contract', l2_sop: 'sop' }],
           skills: [{ id: 'skill-1', name: 'Skill 1' }],
           tools: [{ id: 'tool-1', script_code: 'console.log("hello\\nworld");' }],
-          memories: [{ id: 'mem-1', l0_summary: 'Memory L0', freshness: { overall_status: 'VERIFIED', callers: ['src/app.ts:10'] } }],
+          memories: [{ id: 'mem-1', l0_summary: 'Memory L0 onclick="alert(1)" onload=bad()', freshness: { overall_status: 'VERIFIED', callers: ['src/app.ts:10'] } }],
           gatekeeperEvents: [{ timestamp: '2026-11-02T12:00:00.000Z', passed: false, kind: 'rule', target_id: 'rule-angle', diagnostics: 'Error in <WORKSPACE>/src/index.ts' }],
         },
         { token: 'tok"en\\with\'special', isExport: false, anon: true }
@@ -249,6 +249,7 @@ describe('EvoKernel P1 & P2: Score, UI Cockpit, Slash Commands & Manifest Parity
       assert.doesNotThrow(() => {
         new vm.Script(complexMatch[1]);
       }, 'Complex snapshot inline script must compile without syntax errors');
+      assert.equal(/\bon[a-z]+\s*=/i.test(complexHtml), false, 'Complex HTML with onclick= in snapshot data must escape = so /\bon[a-z]+\s*=/i is false');
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
@@ -343,6 +344,7 @@ describe('EvoKernel P1 & P2: Score, UI Cockpit, Slash Commands & Manifest Parity
     const serverJson = JSON.parse(fs.readFileSync(serverJsonPath, 'utf8'));
     assert.equal(serverJson.$schema, 'https://static.modelcontextprotocol.io/schema/2025-10-17/server.json');
     assert.equal(serverJson.version, pkg.version);
+    assert.equal(serverJson.license, pkg.license);
     assert.equal(serverJson.packages?.[0]?.version, pkg.version);
 
     // 2. .cursor-plugin/plugin.json

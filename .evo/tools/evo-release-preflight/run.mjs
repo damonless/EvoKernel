@@ -53,6 +53,7 @@ const cursorMcp = readJsonSafe('.cursor/mcp.json');
 readJsonSafe('hooks.json');
 
 const expectedVersion = pkg?.version || '0.2.0';
+const expectedLicense = pkg?.license || 'MIT';
 for (const [name, obj] of [
   ['plugin.json', pluginJson],
   ['.claude-plugin/plugin.json', claudePlugin],
@@ -63,6 +64,9 @@ for (const [name, obj] of [
 ]) {
   if (obj && obj.version !== expectedVersion) {
     issues.push(`Version mismatch in ${name}: expected ${expectedVersion}, got ${obj.version}`);
+  }
+  if (obj && typeof obj.license === 'string' && obj.license !== expectedLicense) {
+    issues.push(`License mismatch in ${name}: expected ${expectedLicense}, got ${obj.license}`);
   }
 }
 

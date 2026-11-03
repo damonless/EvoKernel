@@ -2,7 +2,7 @@
 id: issue-8-workspace-isolation-and-atomic-compact
 title: "Issue #8: Workspace Write-Through Isolation, Atomic Compact, Code-Only Scope Scan & C Comment Grounding"
 l0_summary: "Fixes workspace write-through pollution, non-atomic evo_compact data loss, CJK 2-gram recall, and C semicolon comments."
-created_commit: "284faa2"
+created_commit: "f11808d"
 created_branch: "feat/p1-p2-ui-and-growth"
 target_symbols: ["src/mcp/handlers.ts#bindActiveContext","src/mcp/handlers.ts#handleCompact","src/core/gatekeeper.ts#evaluateAndCommit","src/core/telemetry.ts#collectWorkspaceCodeExtensions","src/core/memory.ts#findSymbolDeclarationInLines"]
 ast_fingerprints: {"src/mcp/handlers.ts#bindActiveContext":{"symbol":"src/mcp/handlers.ts#bindActiveContext","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":499,"end_line":608,"signature":"private bindActiveContext(toolName: string, args: Record<string, unknown>): WorkspaceContext","ast_hash":"f86e215871f74e63"},"src/mcp/handlers.ts#handleCompact":{"symbol":"src/mcp/handlers.ts#handleCompact","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":1396,"end_line":1598,"signature":"private handleCompact(args: Record<string, unknown>, activeCtx?: WorkspaceContext)","ast_hash":"af6821784854d714"},"src/core/gatekeeper.ts#evaluateAndCommit":{"symbol":"src/core/gatekeeper.ts#evaluateAndCommit","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"method","start_line":1173,"end_line":1194,"signature":"public evaluateAndCommit(","ast_hash":"7af8cafdf3322408"},"src/core/telemetry.ts#collectWorkspaceCodeExtensions":{"symbol":"src/core/telemetry.ts#collectWorkspaceCodeExtensions","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":474,"end_line":522,"signature":"export function collectWorkspaceCodeExtensions(workspaceRoot: string): Set<string>","ast_hash":"0b494b26cfaa7dd6"},"src/core/memory.ts#findSymbolDeclarationInLines":{"symbol":"src/core/memory.ts#findSymbolDeclarationInLines","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":950,"end_line":1135,"signature":"function findSymbolDeclarationInLines(","ast_hash":"e07af6454ada9734"}}
@@ -10,7 +10,7 @@ tags: ["workspace-isolation","evo-compact","cjk-search","ast-grounding","issue-8
 origin: "evolved"
 supersedes_id: "issue-8-workspace-isolation-and-atomic-compact"
 created_at: "2026-10-22T16:37:31.003Z"
-updated_at: "2026-11-03T00:42:32.597Z"
+updated_at: "2026-11-03T01:22:49.569Z"
 ---
 
 ## Symptom

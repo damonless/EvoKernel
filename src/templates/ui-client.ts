@@ -10,7 +10,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   const anon = Boolean(options.anon);
 
   // Inlined Snapshot JSON with safe entity escaping (\u003c for <)
-  const safeSnapshotJson = JSON.stringify(snapshot).replace(/</g, '\\u003c');
+  const safeSnapshotJson = JSON.stringify(snapshot).replace(/</g, '\\u003c').replace(/=/g, '\\u003d');
 
   const clientScript = `
 (function() {
