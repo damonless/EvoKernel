@@ -2,14 +2,14 @@
 id: ghost-workspace-resurrection-and-sqlite-handle-lock
 title: "Issue #19: Ghost Workspace Resurrection Prevention & Windows SQLite Handle Release"
 l0_summary: "Prevent ghost .evo/ resurrection on moved workspaces, ignore .evo/.cache zombie shells, and release Windows SQLite locks."
-created_commit: "737bc6a"
+created_commit: "05af8b3"
 created_branch: "main"
 target_symbols: ["src/core/storage.ts#hasValidEvoStructure","src/core/storage.ts#isHollowEvoZombieDir","src/core/storage.ts#findNearestEvoWorkspace","src/mcp/handlers.ts#EvoMcpDispatcher","src/core/telemetry.ts#EvoTelemetry"]
 ast_fingerprints: {"src/core/storage.ts#hasValidEvoStructure":{"symbol":"src/core/storage.ts#hasValidEvoStructure","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":82,"end_line":100,"signature":"export function hasValidEvoStructure(candidateEvo: string): boolean","ast_hash":"10fc920b46b4284b"},"src/core/storage.ts#isHollowEvoZombieDir":{"symbol":"src/core/storage.ts#isHollowEvoZombieDir","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":102,"end_line":123,"signature":"export function isHollowEvoZombieDir(dirPath: string): boolean","ast_hash":"6ada89792ae2b271"},"src/core/storage.ts#findNearestEvoWorkspace":{"symbol":"src/core/storage.ts#findNearestEvoWorkspace","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":125,"end_line":148,"signature":"export function findNearestEvoWorkspace(startDir: string): string | null","ast_hash":"a0c443e4b0e8d0b3"},"src/mcp/handlers.ts#EvoMcpDispatcher":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"class","start_line":254,"end_line":1639,"signature":"export class EvoMcpDispatcher","ast_hash":"f83712d3b353ee3f"},"src/core/telemetry.ts#EvoTelemetry":{"symbol":"src/core/telemetry.ts#EvoTelemetry","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"class","start_line":660,"end_line":1675,"signature":"export class EvoTelemetry","ast_hash":"7600c0e0da8a3e38"}}
 tags: ["workspace-isolation","sqlite-lock","windows-ntfs","issue-19"]
 origin: "evolved"
 created_at: "2026-11-02T13:45:30.573Z"
-updated_at: "2026-11-04T06:14:36.004Z"
+updated_at: "2026-11-04T06:24:34.771Z"
 ---
 
 ## Symptom
