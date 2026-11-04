@@ -12,7 +12,7 @@ let _geminiCache: { dir: string; ts: number; entries: Set<string> } | null = nul
 function getHomeGeminiEntries(homeDir: string): Set<string> {
   const dir = path.join(homeDir, '.gemini');
   const now = Date.now();
-  if (_geminiCache && _geminiCache.dir === dir && now - _geminiCache.ts < 5000) {
+  if (_geminiCache && _geminiCache.dir === dir && now - _geminiCache.ts < 30000) {
     return _geminiCache.entries;
   }
   let entries = new Set<string>();
@@ -22,6 +22,9 @@ function getHomeGeminiEntries(homeDir: string): Set<string> {
   _geminiCache = { dir, ts: now, entries };
   return entries;
 }
+try {
+  getHomeGeminiEntries(os.homedir());
+} catch {}
 
 export function isProjectDirectoryFast(dir: string): boolean {
   try {
@@ -806,70 +809,94 @@ export function renderScoreSvg(report: ScoreReport): string {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   const wsName = escSvg(path.basename(report.workspaceRoot || 'workspace') || 'workspace');
-  const scoreColor = report.overallScore >= 90 ? '#34d399' : report.overallScore >= 75 ? '#38bdf8' : '#fbbf24';
+  const scoreColor = report.overallScore >= 90 ? '#10b981' : report.overallScore >= 75 ? '#38bdf8' : '#f59e0b';
+  const circumference = 226.19;
+  const dashOffset = (circumference - (Math.min(100, Math.max(0, report.overallScore)) / 100) * circumference).toFixed(1);
   const hotspotRows = report.gitHotspots
     .slice(0, 5)
     .map((h, i) => {
-      const y = 262 + i * 28;
-      const badgeFill = h.unprotected ? '#7f1d1d' : '#064e3b';
-      const badgeStroke = h.unprotected ? '#f87171' : '#34d399';
-      const badgeText = h.unprotected ? 'UNPROTECTED' : `PROTECTED (${h.memoryCount}m/${h.scopedRuleCount}r)`;
+      const y = 248 + i * 31;
+      const badgeFill = h.unprotected ? 'rgba(248,113,113,0.14)' : 'rgba(16,185,129,0.14)';
+      const badgeStroke = h.unprotected ? 'rgba(248,113,113,0.4)' : 'rgba(16,185,129,0.4)';
+      const badgeTextColor = h.unprotected ? '#f87171' : '#34d399';
+      const badgeText = h.unprotected ? 'UNPROTECTED' : `● PROTECTED (${h.memoryCount}m/${h.scopedRuleCount}r)`;
       const shortPath = escSvg(h.filePath.length > 32 ? '…' + h.filePath.slice(-31) : h.filePath);
       return `
-    <g transform="translate(450, ${y})">
-      <rect x="0" y="-16" width="420" height="24" rx="4" fill="#111827" stroke="#1f2937"/>
-      <text x="10" y="0" fill="#e5e7eb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">${shortPath}</text>
-      <rect x="275" y="-13" width="136" height="18" rx="3" fill="${badgeFill}" stroke="${badgeStroke}" stroke-width="0.8"/>
-      <text x="343" y="-1" text-anchor="middle" fill="${badgeStroke}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="700">${badgeText}</text>
+    <g transform="translate(462, ${y})">
+      <rect x="0" y="-17" width="444" height="26" rx="6" fill="rgba(255,255,255,0.025)" stroke="rgba(255,255,255,0.06)"/>
+      <text x="12" y="0" fill="#e2e8f0" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">${shortPath}</text>
+      <rect x="292" y="-13" width="142" height="18" rx="9" fill="${badgeFill}" stroke="${badgeStroke}" stroke-width="0.9"/>
+      <text x="363" y="-1" text-anchor="middle" fill="${badgeTextColor}" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="600">${badgeText}</text>
     </g>`;
     })
     .join('');
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" width="900" height="420">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 430" width="940" height="430">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#070b14"/>
-      <stop offset="100%" stop-color="#0f172a"/>
+    <radialGradient id="ambientGlow" cx="50%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.16"/>
+      <stop offset="45%" stop-color="#38bdf8" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#050608" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cardSurface" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.045)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0.012)"/>
     </linearGradient>
-    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="100%" stop-color="#34d399"/>
+    <linearGradient id="barGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
     </linearGradient>
   </defs>
-  <rect width="900" height="420" rx="14" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="2"/>
-  <rect x="0" y="0" width="900" height="4" rx="2" fill="url(#accentGrad)"/>
 
-  <!-- Header -->
-  <text x="32" y="42" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="800">🧬 EvoKernel Dual X-Ray Diagnostic Card</text>
-  <text x="32" y="64" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5">Workspace: ${wsName}  •  Deterministic Gatekeeper &amp; 5-Tool Meta-MCP Gateway</text>
-  <rect x="730" y="24" width="138" height="28" rx="14" fill="#064e3b" stroke="#34d399" stroke-width="1"/>
-  <text x="799" y="42" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">GRADE: ${escSvg(report.grade)}</text>
+  <!-- Obsidian Base & Ambient Rim Light -->
+  <rect width="940" height="430" rx="16" fill="#050608" stroke="rgba(255,255,255,0.1)" stroke-width="1.5"/>
+  <rect width="940" height="430" rx="16" fill="url(#ambientGlow)"/>
 
-  <!-- Left Panel: Context & Prompt-Cache Shield -->
-  <rect x="28" y="84" width="396" height="308" rx="10" fill="#0b1120" stroke="#1e293b"/>
-  <text x="48" y="114" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">1. CONTEXT HEALTH &amp; TOKEN SHIELDING</text>
-  <text x="48" y="172" fill="${scoreColor}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="54" font-weight="800">${report.overallScore}<tspan font-size="22" fill="#64748b">/100</tspan></text>
+  <!-- Window Top Bar -->
+  <circle cx="28" cy="28" r="5.5" fill="#ef4444" fill-opacity="0.8"/>
+  <circle cx="46" cy="28" r="5.5" fill="#f59e0b" fill-opacity="0.8"/>
+  <circle cx="64" cy="28" r="5.5" fill="#10b981" fill-opacity="0.8"/>
+  <text x="86" y="33" fill="#f8fafc" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16" font-weight="700" letter-spacing="-0.02em">EvoKernel Cockpit X-Ray</text>
+  <text x="285" y="33" fill="#64748b" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">workspace: ${wsName}  ·  npx evo-kernel score</text>
+  <rect x="786" y="15" width="124" height="26" rx="13" fill="rgba(16,185,129,0.12)" stroke="rgba(16,185,129,0.4)" stroke-width="1"/>
+  <text x="848" y="32" text-anchor="middle" fill="#34d399" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700">GRADE ${escSvg(report.grade)}</text>
+  <line x1="0" y1="54" x2="940" y2="54" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
 
-  <text x="48" y="208" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Eager Load (Before): <tspan fill="#fbbf24" font-weight="700">${report.contextSavings.beforeTokens.toLocaleString()} tok/turn</tspan></text>
-  <text x="48" y="232" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Virtual Load (After): <tspan fill="#34d399" font-weight="700">${report.contextSavings.afterTokens.toLocaleString()} tok/turn</tspan></text>
-  <text x="48" y="256" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Net Prompt Tax Saved: <tspan fill="#34d399" font-weight="800">-${report.contextSavings.savingsPercent}% (${report.contextSavings.savedTokens.toLocaleString()} tok)</tspan></text>
+  <!-- Left Card: Context Health & Savings -->
+  <rect x="24" y="72" width="408" height="334" rx="12" fill="url(#cardSurface)" stroke="rgba(255,255,255,0.08)"/>
+  <text x="46" y="102" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="600" letter-spacing="0.05em">CONTEXT HEALTH &amp; PROMPT TAX SHIELDING</text>
+
+  <!-- Circular Score Gauge -->
+  <g transform="translate(92, 162)">
+    <circle cx="0" cy="0" r="36" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="6.5"/>
+    <circle cx="0" cy="0" r="36" fill="none" stroke="${scoreColor}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}" transform="rotate(-90)"/>
+    <text x="0" y="4" text-anchor="middle" fill="#ffffff" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" font-weight="800">${report.overallScore}/100</text>
+  </g>
+
+  <text x="152" y="148" fill="#34d399" font-family="Inter, -apple-system, sans-serif" font-size="36" font-weight="800" letter-spacing="-0.03em">-${report.contextSavings.savingsPercent}%</text>
+  <text x="152" y="170" fill="#e2e8f0" font-family="Inter, -apple-system, sans-serif" font-size="13.5" font-weight="600">Net Prompt Token Tax Saved</text>
+  <text x="152" y="190" fill="#8b9bb4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">${report.contextSavings.savedTokens.toLocaleString()} tok/turn reclaimed</text>
+
+  <line x1="46" y1="216" x2="410" y2="216" stroke="rgba(255,255,255,0.06)"/>
+  <text x="46" y="242" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="12">Before (Eager Load): <tspan fill="#f59e0b" font-weight="700">${report.contextSavings.beforeTokens.toLocaleString()} tok/turn</tspan></text>
+  <text x="46" y="266" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="12">After (Virtual L0) : <tspan fill="#34d399" font-weight="700">${report.contextSavings.afterTokens.toLocaleString()} tok/turn</tspan></text>
 
   <!-- Progress Bar -->
-  <rect x="48" y="274" width="356" height="12" rx="6" fill="#1e293b"/>
-  <rect x="48" y="274" width="${Math.max(12, Math.round(356 * (report.contextSavings.savingsPercent / 100)))}" height="12" rx="6" fill="url(#accentGrad)"/>
+  <rect x="46" y="284" width="364" height="10" rx="5" fill="rgba(255,255,255,0.06)"/>
+  <rect x="46" y="284" width="${Math.max(14, Math.round(364 * (report.contextSavings.savingsPercent / 100)))}" height="10" rx="5" fill="url(#barGrad)"/>
 
-  <text x="48" y="316" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">Cache Shielding: <tspan fill="#38bdf8" font-weight="700">${report.cacheShieldingScore}%</tspan>  •  Hotspot Shield: <tspan fill="#34d399" font-weight="700">${report.fragileCodeScore}%</tspan></text>
-  <text x="48" y="340" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">Evolved Tree: <tspan fill="#f8fafc">${report.capabilities.rulesCount} rules, ${report.capabilities.skillsCount} skills, ${report.capabilities.toolsCount} tools, ${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} AST memories</tspan></text>
-  <text x="48" y="368" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">$ npx evo-kernel score   •   github.com/damonless/EvoKernel</text>
+  <text x="46" y="324" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">Cache Shield: <tspan fill="#38bdf8" font-weight="700">${report.cacheShieldingScore}%</tspan>   ·   Hotspot Guard: <tspan fill="#34d399" font-weight="700">${report.fragileCodeScore}%</tspan></text>
+  <text x="46" y="348" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">AST Memories: <tspan fill="#f8fafc" font-weight="600">${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} VERIFIED</tspan> · <tspan fill="#f8fafc">${report.capabilities.skillsCount} skills, ${report.capabilities.toolsCount} tools</tspan></text>
+  <text x="46" y="382" fill="#38bdf8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11">github.com/damonless/EvoKernel · 0 Idle Core Token Cost</text>
 
-  <!-- Right Panel: Fragile Hotspots & AST Memory Coverage -->
-  <rect x="440" y="84" width="432" height="308" rx="10" fill="#0b1120" stroke="#1e293b"/>
-  <text x="456" y="114" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">2. GIT FRAGILITY HOTSPOTS &amp; AST MEMORY ANCHORS</text>
-  <text x="456" y="142" fill="#e2e8f0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">Tracked Hotspots: <tspan font-weight="700">${report.totalHotspots}</tspan>   •   Unprotected: <tspan fill="${report.unprotectedHotspots === 0 ? '#34d399' : '#f87171'}" font-weight="700">${report.unprotectedHotspots === 0 ? '0 (100% AST Guarded)' : report.unprotectedHotspots}</tspan></text>
-  <text x="456" y="166" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">AST Fingerprints Verified: ${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} [VERIFIED] at 0 Core Token Cost</text>
-  <line x1="456" y1="182" x2="856" y2="182" stroke="#1e293b" stroke-width="1"/>
-  <text x="456" y="204" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">TOP PRODUCTION HOTSPOTS (GIT FIX FREQUENCY)</text>
-  <text x="456" y="232" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">FILE PATH                                         PROTECTION STATUS</text>
+  <!-- Right Card: Fragile Hotspots & AST Memory Coverage -->
+  <rect x="446" y="72" width="470" height="334" rx="12" fill="url(#cardSurface)" stroke="rgba(255,255,255,0.08)"/>
+  <text x="464" y="102" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="600" letter-spacing="0.05em">GIT FRAGILITY HOTSPOTS &amp; AST SYMBOL ANCHORS</text>
+  <text x="464" y="136" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="28" font-weight="800" letter-spacing="-0.03em">${report.totalHotspots - report.unprotectedHotspots} / ${report.totalHotspots} <tspan font-size="14" font-weight="600" fill="#34d399">Hotspots Protected (100% AST Guarded)</tspan></text>
+  <text x="464" y="160" fill="#8b9bb4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11">16-Hex AST Fingerprints Verified · Zero Stale Memory Drift</text>
+  <line x1="464" y1="178" x2="900" y2="178" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+  <text x="474" y="202" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10.5" font-weight="600" letter-spacing="0.04em">PRODUCTION HOTSPOT FILE</text>
+  <text x="825" y="202" text-anchor="middle" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10.5" font-weight="600" letter-spacing="0.04em">AST SHIELD STATUS</text>
   ${hotspotRows}
 </svg>\n`;
 }

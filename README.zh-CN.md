@@ -21,7 +21,7 @@
 
 <br/>
 
-<img src="./assets/terminal-score-xray.svg" alt="EvoKernel Dual X-Ray Diagnostic Card" width="100%" />
+<a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-architecture.png" alt="EvoKernel 三层渐进式上下文网关与基准遥测" width="100%" /></a>
 
 </div>
 
@@ -42,6 +42,19 @@ npx evo-kernel score --svg ./evo-xray.svg
 npx evo-kernel ui
 # 或直接访问在线交互式 Demo：https://damonless.github.io/EvoKernel/
 ```
+
+<table>
+<tr>
+<td align="center" width="52%">
+  <b>Obsidian 实时驾驶舱与 AST 记忆拓扑星图 (<code>npx evo-kernel ui</code>)</b><br/>
+  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/cockpit-showcase.png" width="100%" alt="EvoKernel Obsidian Live Cockpit and AST Constellation" /></a>
+</td>
+<td align="center" width="48%">
+  <b>毫秒级 X-Ray 终端诊断卡 (<code>npx evo-kernel score</code>)</b><br/>
+  <img src="./assets/terminal-score-xray.png" width="100%" alt="EvoKernel Terminal Score X-Ray Card" />
+</td>
+</tr>
+</table>
 
 ---
 
@@ -74,7 +87,7 @@ npx evo-kernel ui
 **EvoKernel 用一套“离线工作区演化引擎 + 借脑宿主 + 确定性沙盒门禁 + 固定元路由网关 + 下游 MCP 虚拟化代理”彻底解决上述问题：**
 
 <div align="center">
-  <img src="./assets/hero-architecture.svg" alt="EvoKernel Architecture Diagram" width="100%" />
+  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/cockpit-showcase.png" alt="EvoKernel Obsidian 实时驾驶舱与 AST 记忆星图" width="100%" /></a>
 </div>
 
 ---

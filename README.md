@@ -21,7 +21,7 @@
 
 <br/>
 
-<img src="./assets/terminal-score-xray.svg" alt="EvoKernel Dual X-Ray Diagnostic Card" width="100%" />
+<a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-architecture.png" alt="EvoKernel 3-Tier Context OS & Benchmark Telemetry" width="100%" /></a>
 
 </div>
 
@@ -42,6 +42,19 @@ npx evo-kernel score --svg ./evo-xray.svg
 npx evo-kernel ui
 # Or open our live hosted demo: https://damonless.github.io/EvoKernel/
 ```
+
+<table>
+<tr>
+<td align="center" width="52%">
+  <b>Obsidian Live Cockpit &amp; AST Constellation (<code>npx evo-kernel ui</code>)</b><br/>
+  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/cockpit-showcase.png" width="100%" alt="EvoKernel Obsidian Live Cockpit and AST Constellation" /></a>
+</td>
+<td align="center" width="48%">
+  <b>Instant X-Ray Diagnostic Card (<code>npx evo-kernel score</code>)</b><br/>
+  <img src="./assets/terminal-score-xray.png" width="100%" alt="EvoKernel Terminal Score X-Ray Card" />
+</td>
+</tr>
+</table>
 
 ---
 
@@ -74,7 +87,7 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 **EvoKernel solves all five with a deterministic local compiler, worktree evolution engine & routing kernel:**
 
 <div align="center">
-  <img src="./assets/hero-architecture.svg" alt="EvoKernel Architecture Diagram" width="100%" />
+  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/cockpit-showcase.png" alt="EvoKernel Obsidian Live Cockpit & AST Memory Constellation" width="100%" /></a>
 </div>
 
 ---
