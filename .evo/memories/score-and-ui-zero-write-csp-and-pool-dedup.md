@@ -2,7 +2,7 @@
 id: score-and-ui-zero-write-csp-and-pool-dedup
 title: "Zero-Write Score & UI Cockpit, Strict SHA-256 CSP, Object MCP Pool Deduplication & Credential Redaction"
 l0_summary: "Zero-write evo score/ui/doctor, strict CSP sha256 with \\u003c/\\u003d snapshot escaping, object mcp-pool dedup, and credential redaction."
-created_commit: "43de240"
+created_commit: "0947458"
 created_branch: "main"
 target_symbols: ["src/cli/score.ts#inspectMcpTaxSnapshot","src/cli/score.ts#buildScoreReport","src/cli/ui.ts#buildUiSnapshot","src/cli/ui.ts#exportUiHtml","src/templates/ui-client.ts#renderUiClientHtml","src/core/telemetry.ts#redactSensitiveDiagnostics"]
 ast_fingerprints: {"src/cli/score.ts#inspectMcpTaxSnapshot":{"symbol":"src/cli/score.ts#inspectMcpTaxSnapshot","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":149,"end_line":370,"signature":"export function inspectMcpTaxSnapshot(","ast_hash":"9df4ffd578377e5c"},"src/cli/score.ts#buildScoreReport":{"symbol":"src/cli/score.ts#buildScoreReport","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":600,"end_line":796,"signature":"export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions): ScoreReport","ast_hash":"2fee9a8a452e528c"},"src/cli/ui.ts#buildUiSnapshot":{"symbol":"src/cli/ui.ts#buildUiSnapshot","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":22,"end_line":94,"signature":"export function buildUiSnapshot(","ast_hash":"fa74e55aa1be6eea"},"src/cli/ui.ts#exportUiHtml":{"symbol":"src/cli/ui.ts#exportUiHtml","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":228,"end_line":253,"signature":"export function exportUiHtml(","ast_hash":"df2d2c6c10366863"},"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":1181,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"9727aa42ab65a09f"},"src/core/telemetry.ts#redactSensitiveDiagnostics":{"symbol":"src/core/telemetry.ts#redactSensitiveDiagnostics","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":21,"end_line":133,"signature":"export function redactSensitiveDiagnostics(text: string, workspaceRoot?: string): string","ast_hash":"0acfa7bac98f461d"}}
@@ -10,7 +10,7 @@ tags: ["score","ui-cockpit","csp-sha256","mcp-pool","redaction","slash-commands"
 origin: "evolved"
 supersedes_id: "score-and-ui-zero-write-csp-and-pool-dedup"
 created_at: "2026-11-02T19:03:09.688Z"
-updated_at: "2026-11-04T15:04:04.945Z"
+updated_at: "2026-11-04T15:13:47.384Z"
 ---
 
 ## Symptom
