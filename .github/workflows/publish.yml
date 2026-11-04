@@ -47,4 +47,5 @@ jobs:
           if [ -z "$CLEAN_TOKEN" ]; then
             CLEAN_TOKEN="$(printf '%s' "$RAW_NPM_TOKEN" | sed 's/^.*_authToken=//; s/^Bearer[[:space:]]*//' | tr -d '[:space:]')"
           fi
+          rm -f README.zh-CN.md
           NODE_AUTH_TOKEN="$CLEAN_TOKEN" npm publish --access public --tag "$NPM_DIST_TAG"

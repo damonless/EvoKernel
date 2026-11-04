@@ -1,0 +1,15 @@
+# Smithery.ai MCP Registry Configuration
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      workspace:
+        type: string
+        description: "Optional default workspace root path for EvoKernel capability and memory resolution"
+  commandFunction: |-
+    (config) => ({
+      command: 'node',
+      args: ['./scripts/boot-mcp.mjs', 'mcp'],
+      env: config && config.workspace ? { EVO_WORKSPACE: config.workspace } : {}
+    })

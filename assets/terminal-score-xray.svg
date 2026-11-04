@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" width="900" height="420">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070b14"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="420" rx="14" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="2"/>
+  <rect x="0" y="0" width="900" height="4" rx="2" fill="url(#accentGrad)"/>
+
+  <!-- Header -->
+  <text x="32" y="42" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="800">🧬 EvoKernel Dual X-Ray Diagnostic Card</text>
+  <text x="32" y="64" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5">Workspace: EvoKernel  •  Deterministic Gatekeeper &amp; 5-Tool Meta-MCP Gateway</text>
+  <rect x="730" y="24" width="138" height="28" rx="14" fill="#064e3b" stroke="#34d399" stroke-width="1"/>
+  <text x="799" y="42" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">GRADE: A+</text>
+
+  <!-- Left Panel: Context & Prompt-Cache Shield -->
+  <rect x="28" y="84" width="396" height="308" rx="10" fill="#0b1120" stroke="#1e293b"/>
+  <text x="48" y="114" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">1. CONTEXT HEALTH &amp; TOKEN SHIELDING</text>
+  <text x="48" y="172" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="54" font-weight="800">96<tspan font-size="22" fill="#64748b">/100</tspan></text>
+
+  <text x="48" y="208" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Eager Load (Before): <tspan fill="#fbbf24" font-weight="700">13,672 tok/turn</tspan></text>
+  <text x="48" y="232" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Virtual Load (After): <tspan fill="#34d399" font-weight="700">1,531 tok/turn</tspan></text>
+  <text x="48" y="256" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Net Prompt Tax Saved: <tspan fill="#34d399" font-weight="800">-89% (12,141 tok)</tspan></text>
+
+  <!-- Progress Bar -->
+  <rect x="48" y="274" width="356" height="12" rx="6" fill="#1e293b"/>
+  <rect x="48" y="274" width="317" height="12" rx="6" fill="url(#accentGrad)"/>
+
+  <text x="48" y="316" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">Cache Shielding: <tspan fill="#38bdf8" font-weight="700">100%</tspan>  •  Hotspot Shield: <tspan fill="#34d399" font-weight="700">100%</tspan></text>
+  <text x="48" y="340" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">Evolved Tree: <tspan fill="#f8fafc">6 rules, 3 skills, 5 tools, 15/15 AST memories</tspan></text>
+  <text x="48" y="368" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">$ npx evo-kernel score   •   github.com/damonless/EvoKernel</text>
+
+  <!-- Right Panel: Fragile Hotspots & AST Memory Coverage -->
+  <rect x="440" y="84" width="432" height="308" rx="10" fill="#0b1120" stroke="#1e293b"/>
+  <text x="456" y="114" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">2. GIT FRAGILITY HOTSPOTS &amp; AST MEMORY ANCHORS</text>
+  <text x="456" y="142" fill="#e2e8f0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">Tracked Hotspots: <tspan font-weight="700">10</tspan>   •   Unprotected: <tspan fill="#34d399" font-weight="700">0 (100% AST Guarded)</tspan></text>
+  <text x="456" y="166" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">AST Fingerprints Verified: 15/15 [VERIFIED] at 0 Core Token Cost</text>
+  <line x1="456" y1="182" x2="856" y2="182" stroke="#1e293b" stroke-width="1"/>
+  <text x="456" y="204" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">TOP PRODUCTION HOTSPOTS (GIT FIX FREQUENCY)</text>
+  <text x="456" y="232" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">FILE PATH                                         PROTECTION STATUS</text>
+  
+    <g transform="translate(450, 262)">
+      <rect x="0" y="-16" width="420" height="24" rx="4" fill="#111827" stroke="#1f2937"/>
+      <text x="10" y="0" fill="#e5e7eb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">src/mcp/handlers.ts</text>
+      <rect x="275" y="-13" width="136" height="18" rx="3" fill="#064e3b" stroke="#34d399" stroke-width="0.8"/>
+      <text x="343" y="-1" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="700">PROTECTED (6m/3r)</text>
+    </g>
+    <g transform="translate(450, 290)">
+      <rect x="0" y="-16" width="420" height="24" rx="4" fill="#111827" stroke="#1f2937"/>
+      <text x="10" y="0" fill="#e5e7eb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">src/cli/index.ts</text>
+      <rect x="275" y="-13" width="136" height="18" rx="3" fill="#064e3b" stroke="#34d399" stroke-width="0.8"/>
+      <text x="343" y="-1" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="700">PROTECTED (3m/3r)</text>
+    </g>
+    <g transform="translate(450, 318)">
+      <rect x="0" y="-16" width="420" height="24" rx="4" fill="#111827" stroke="#1f2937"/>
+      <text x="10" y="0" fill="#e5e7eb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">src/core/telemetry.ts</text>
+      <rect x="275" y="-13" width="136" height="18" rx="3" fill="#064e3b" stroke="#34d399" stroke-width="0.8"/>
+      <text x="343" y="-1" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="700">PROTECTED (6m/3r)</text>
+    </g>
+    <g transform="translate(450, 346)">
+      <rect x="0" y="-16" width="420" height="24" rx="4" fill="#111827" stroke="#1f2937"/>
+      <text x="10" y="0" fill="#e5e7eb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">src/cli/init.ts</text>
+      <rect x="275" y="-13" width="136" height="18" rx="3" fill="#064e3b" stroke="#34d399" stroke-width="0.8"/>
+      <text x="343" y="-1" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="700">PROTECTED (3m/3r)</text>
+    </g>
+    <g transform="translate(450, 374)">
+      <rect x="0" y="-16" width="420" height="24" rx="4" fill="#111827" stroke="#1f2937"/>
+      <text x="10" y="0" fill="#e5e7eb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">src/cli/audit.ts</text>
+      <rect x="275" y="-13" width="136" height="18" rx="3" fill="#064e3b" stroke="#34d399" stroke-width="0.8"/>
+      <text x="343" y="-1" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="700">PROTECTED (2m/3r)</text>
+    </g>
+</svg>

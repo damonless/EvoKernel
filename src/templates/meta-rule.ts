@@ -23,7 +23,7 @@ Whenever ANY of the following occurs in this session, you MUST call \`evo_propos
 - **1-Level-Up Architectural Guardrail (\`rule\`)**: Discovered a cross-module methodology, class-of-bug invariant, or overturned a code-reading misconception (even when zero files were modified) — distill as \`kind: "rule"\` (\`l0_summary\`, wildcard \`scope_glob\`, \`core: false\` by default, \`transfer_scenarios\`). **SSOT Exclusion Principle**: Source code is the Single Source of Truth for concrete variable names, macros, and physical thresholds; NEVER copy magic numbers or >=3 concrete identifiers into a rule body (place concrete examples in \`kind: "memory"\` or a \`Case Anchor:\` / \`## 典型反例锚点\` section).
 - **User Correction / Deliverable Feedback (\`rule\` / \`skill\`)**: The user corrected an assumption, architectural bias, workflow step, or engineering deliverable format/granularity (e.g., \`.xls\`/\`.xlsx\`/\`.docx\` modification records, QA reports, or toolchain quirks like \`openpyxl\`/\`docx\`/COM/encoding) — codify immediately as a \`rule\` or \`skill\` (use \`supersedes_id\` to upgrade existing entries; NEVER stop at \`kind: "memory"\` when a general methodology or deliverable SOP was corrected).
 - **Reusable Script (\`tool\`)**: Wrote a temporary script (>15 lines, including \`/scratch/\` scripts) to analyze, transform, verify code, or generate/inspect engineering deliverables (\`.xls\`/\`.xlsx\`/\`.docx\`/reports) — register as a Micro-Tool (\`run.{mjs|py|sh|ps1}\`) with a deterministic \`--self-test\` path.
-- **Visible Evolution Receipt**: Whenever you call \`evo_propose\` or \`evo_compact\`, append at the end of your response: \`🧬 EvoKernel 演进回执：[<kind>] <id>（<新增/更新摘要>）\`.
+- **Visible Evolution Receipt**: Whenever you call \`evo_propose\` or \`evo_compact\`, append at the end of your response: \`🧬 EvoKernel Evolution Receipt (🧬 EvoKernel 演进回执): [<kind>] <id> (<summary>)\`.
 
 > **Gatekeeper Notice**: \`evo_propose\` enforces Static Security, Lexical De-Symbolization, Sandbox \`--self-test\` / AST Grounding, BM25 Deduplication, Scoped Bucket Quotas (max 3/bucket), and a **1,500-token core rule budget**. On \`ERR_BUDGET_EXCEEDED\`, \`ERR_SCOPED_BUCKET_FULL\`, or \`ERR_DUPLICATE\`, call \`evo_compact\` first.
 <!-- EVO:END -->`;
@@ -79,7 +79,7 @@ export function renderManagedBlock(
 
   if (toolsCatalogMarkdown.trim()) {
     sections.push(
-      `### 5. 已注册受控微工具目录 (Registered Micro-Tools via \`evo_run\`)\n${toolsCatalogMarkdown.trim()}`
+      `### 5. Registered Micro-Tools via \`evo_run\` (### 5. 已注册受控微工具目录)\n${toolsCatalogMarkdown.trim()}`
     );
   }
 

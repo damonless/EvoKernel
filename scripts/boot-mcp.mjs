@@ -10,6 +10,16 @@ import * as path from 'node:path';
 import * as url from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+const [nodeMaj = 0, nodeMin = 0] = (process.versions.node || '0.0.0').split('.').map((n) => Number.parseInt(n, 10));
+if (nodeMaj < 22 || (nodeMaj === 22 && nodeMin < 5)) {
+  console.error(
+    `[EvoKernel] Node.js >= 22.5.0 is required (detected ${process.version}).\n` +
+      `  EvoKernel uses zero-dependency native node:sqlite and node:module.stripTypeScriptTypes.\n` +
+      `  Quick fix: run "nvm install 22 && nvm use 22", "fnm use 22", or "volta install node@22".`
+  );
+  process.exit(1);
+}
+
 const rootDir = path.resolve(import.meta.dirname, '..');
 const distEntry = path.join(rootDir, 'dist', 'cli', 'index.js');
 const buildScript = path.join(rootDir, 'scripts', 'build.mjs');

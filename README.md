@@ -7,15 +7,21 @@
 **Stop writing static `.md` rules that rot. Stop adding 20 MCP servers that bust your Prompt Cache.**  
 *1 Meta-Rule Seed (<80 lines) · 1 Fixed-Schema Meta-MCP Gateway · 4-Stage Deterministic Sandbox Gatekeeper · Zero External Dependencies*
 
+[![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
+[![Live Cockpit Demo](https://img.shields.io/badge/Live_Cockpit-Interactive_Demo-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
+[![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#⚡-quick-demo--instant-scoring--live-cockpit-in-2-commands)
+[![Version](https://img.shields.io/badge/npm-v0.3.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.2.0-blue?style=flat-square)](package.json)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#zero-dependency-architecture)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#1-why-a-fixed-5-tool-meta-mcp-gateway)
-[![Tests](https://img.shields.io/badge/tests-267%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
-[![Harnesses](https://img.shields.io/badge/10%20Harnesses-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Cline%20%7C%20Roo%20%7C%20Copilot%20%7C%20Codex%20%7C%20OpenCode%20%7C%20Gemini%20%7C%20Antigravity-8A2BE2?style=flat-square)](#-10-agent-harness-matrix)
+[![Tests](https://img.shields.io/badge/tests-267%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 
-**[English](README.md) · [简体中文](README.zh-CN.md)**
+**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Live Interactive Cockpit](https://damonless.github.io/EvoKernel/) · [📊 Benchmarks](benchmarks/README.md)**
+
+<br/>
+
+<img src="./assets/terminal-score-xray.svg" alt="EvoKernel Dual X-Ray Diagnostic Card" width="100%" />
 
 </div>
 
@@ -27,14 +33,31 @@
 ## ⚡ Quick Demo — Instant Scoring & Live Cockpit in 2 Commands
 
 ```bash
-# 1. Instant 0-overhead diagnostic scoring (<40ms) — audits host rules, git bug hotspots, and memory coverage
+# 1. Instant 0-overhead diagnostic scoring (<25ms) — audits host rules, git bug hotspots, and AST memory coverage
 npx evo-kernel score
+# Export a shareable vector X-Ray badge/card for your README:
+npx evo-kernel score --svg ./evo-xray.svg
 
-# 2. Zero-dependency Live Cockpit UI — dark mode, telemetry X-ray, budget treemap, and memory constellation
+# 2. Zero-dependency Live Cockpit UI — dark mode, 2D budget treemap, and interactive SVG AST memory constellation
 npx evo-kernel ui
-# or export a self-contained offline HTML audit report
-npx evo-kernel ui --export ./evo-cockpit.html
+# Or open our live hosted demo: https://damonless.github.io/EvoKernel/
 ```
+
+---
+
+## 📈 Reproducible 50-Turn Engineering Benchmark (`npm run benchmark`)
+
+Simulated across **8 standard MCP servers** (`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` — **77 tools** total) + a mature repo knowledge base (10 rules, 4 skills, 5 micro-tools, 15 debugging memories) over a **50-turn coding session** with 3 mid-session capability evolutions (reproduce locally via `npm run benchmark`):
+
+| Metric | Raw Multi-MCP + Monolithic `CLAUDE.md` | **🧬 EvoKernel 5-Tool Meta-Gateway** | Verified Improvement |
+| :--- | :---: | :---: | :---: |
+| **Exposed Tool Schemas** | 77 tools | **5 fixed meta-tools** | **-93.5% schema footprint** |
+| **Eager Static Prefix / Turn** | 27,150 tokens | **1,530 tokens** | **-94.4% prompt tax** |
+| **Mid-Session Cache Invalidations** | 3 full prefix busts | **0 (100% cache hit)** | **100% KV Cache Shield** |
+| **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **661,770 tokens** | **-65.7% total token load** |
+| **50-Turn Cost (Claude Sonnet 4.5)** | \$1.15 | **\$0.31** | **-72.9% API cost** |
+| **50-Turn Cost (Claude Opus 4.5)** | \$5.76 | **\$1.56** | **-72.9% API cost** |
+| **AST Anti-Drift Memory Check** | Unverified text (drifts silently) | **0.048 ms / memory** | **Deterministic AST Grounding** |
 
 ---
 
@@ -50,42 +73,15 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 
 **EvoKernel solves all five with a deterministic local compiler, worktree evolution engine & routing kernel:**
 
-```text
-[Bug Fixed / User Correction / Deliverable Feedback / Trajectory Replay / MCP Server]
-                                │
-                                ▼
-                   ┌─────────────────────────┐
-                   │   evo_propose (MCP)     │  ◄── Piggybacks on host LLM (Zero extra API keys!)
-                   └────────────┬────────────┘
-                                │
-         ┌──────────────────────┴──────────────────────┐
-         ▼                                             ▼
-┌─────────────────────────────────┐   ╔═══════════════════════════════════════════════════╗
-│ Offline Worktree Engine         │   ║         4-Stage Deterministic Gatekeeper          ║
-│ (`evo optimize` inv & dom)      │   ║  1. Static AST & Security Audit                   ║  Blocks hardcoded paths & secrets
-│ Isolated git worktrees + probes │   ║  2. Sandbox Dry-Run & AST Grounding               ║  Scripts must exit 0; live symbol binds
-└────────────────┬────────────────┘   ║  3. FTS5 BM25 Deduplication & Anti-Confounding    ║  Blocks duplicates & ERR_CONFOUNDED_CAUSATION
-                 │                    ║  4. 1,500-Token Hard Budget & GC                  ║  Forces evo_compact merge
-                 │                    ╚═════════════════════╤═════════════════════════════╝
-                 ▼                                          ▼
-   ┌─────────────────────────────────────────────────────────────┐
-   │                  Git-Native .evo/ Tree                      │
-   │  rules/ · skills/ · tools/ · memories/ · telemetry.db       │
-   └─────────────────────────────┬───────────────────────────────┘
-                                 │
-              ┌──────────────────┴──────────────────┐
-              ▼                                     ▼
- ┌─────────────────────────┐           ┌─────────────────────────┐
- │ Fixed 5-Tool Meta-MCP   │           │ Downstream MCP Proxy    │
- │ (100% Byte-Stable KV)   │           │ (Virtualizes 10+ MCPs)  │
- └─────────────────────────┘           └─────────────────────────┘
-```
+<div align="center">
+  <img src="./assets/hero-architecture.svg" alt="EvoKernel Architecture Diagram" width="100%" />
+</div>
 
 ---
 
 ## 📊 Comprehensive Competitive Benchmark Matrix
 
-| Dimension | `MemGPT / Letta` | `Aider` | Direct MCP Proxies | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.2.0 (Ours)** |
+| Dimension | `MemGPT / Letta` | `Aider` | Direct MCP Proxies | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.3.0 (Ours)** |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Primary Focus** | Stateful conversational agent DB | Git-centric terminal pair programmer | Pass-through MCP aggregation | Static engineering prompt library | Background LLM evolutionary agent | **Deterministic self-evolving meta-kernel for coding agents** |
 | **Integration Architecture** | Heavy external service / Postgres / Python daemon | Standalone Python CLI replacing developer IDE | Raw JSON-RPC bridge passing all child tools | Preloaded Markdown templates | Hijacks `/v1/chat` reverse proxy | **Parasitic Meta-MCP + <80-line Seed injected into existing IDEs** |

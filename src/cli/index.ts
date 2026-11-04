@@ -129,15 +129,44 @@ export function readStdinTextWithTimeout(
   });
 }
 
+export const EVO_KERNEL_VERSION = '0.3.0';
+
+export function checkNodeRuntimeVersion(versionStr: string = process.versions.node || '0.0.0'): {
+  ok: boolean;
+  major: number;
+  minor: number;
+  message?: string;
+} {
+  const parts = String(versionStr).replace(/^v/i, '').split('.');
+  const major = Number.parseInt(parts[0] || '0', 10);
+  const minor = Number.parseInt(parts[1] || '0', 10);
+  const ok = major > 22 || (major === 22 && minor >= 5);
+  if (ok) {
+    return { ok: true, major, minor };
+  }
+  return {
+    ok: false,
+    major,
+    minor,
+    message:
+      `❌ EvoKernel requires Node.js >= 22.5.0 (detected v${versionStr}).\n` +
+      `   Why: EvoKernel runs with 0 external dependencies using native node:sqlite and node:module.\n` +
+      `   Fix: switch Node runtime via:\n` +
+      `     • nvm install 22 && nvm use 22\n` +
+      `     • fnm use 22\n` +
+      `     • volta install node@22`,
+  };
+}
+
 function printHelp(): void {
   console.log(`
-🧬 EvoKernel v0.2.0 — Deterministic Self-Evolving Meta-Kernel & Cognitive Memory for AI Agents
+🧬 EvoKernel v${EVO_KERNEL_VERSION} — Deterministic Self-Evolving Meta-Kernel & Cognitive Memory for AI Agents
 
 Usage:
   evo <command> [options]
 
 Commands:
-  score [--json] [--badge] [--workspace <path>]
+  score [--json] [--badge] [--svg <path>] [--html <path>] [--workspace <path>]
                       Instant 0-overhead diagnostic scoring for agent host tax, git bug hotspots, and memory coverage
   ui [--port <N>] [--open] [--token <str>] [--export <path>] [--workspace <path>]
                       Zero-dependency local cockpit UI for telemetry X-ray, budget treemap, and memory constellation
@@ -160,6 +189,7 @@ Commands:
                       Offline Git worktree optimization cycle (trajectories & deliverables -> proposals -> isolated probe)
   doctor              Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and sandbox self-tests
   uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
+  version, --version  Print EvoKernel CLI version
 `);
 }
 
@@ -606,6 +636,13 @@ export function runCli(argv: string[]): void {
     case 'uninstall': {
       const res = runUninstall(workspaceRoot);
       console.log(`🧹 Cleaned EvoKernel markers from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`);
+      break;
+    }
+
+    case 'version':
+    case '--version':
+    case '-v': {
+      console.log(EVO_KERNEL_VERSION);
       break;
     }
 

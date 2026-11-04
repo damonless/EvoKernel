@@ -8,6 +8,21 @@ import { EvoStorage, estimateTokens, hasValidEvoStructure } from '../core/storag
 import { redactSensitiveDiagnostics } from '../core/telemetry.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
 
+let _geminiCache: { dir: string; ts: number; entries: Set<string> } | null = null;
+function getHomeGeminiEntries(homeDir: string): Set<string> {
+  const dir = path.join(homeDir, '.gemini');
+  const now = Date.now();
+  if (_geminiCache && _geminiCache.dir === dir && now - _geminiCache.ts < 5000) {
+    return _geminiCache.entries;
+  }
+  let entries = new Set<string>();
+  try {
+    entries = new Set(fs.readdirSync(dir));
+  } catch {}
+  _geminiCache = { dir, ts: now, entries };
+  return entries;
+}
+
 export function isProjectDirectoryFast(dir: string): boolean {
   try {
     const resolved = path.resolve(dir);
@@ -305,11 +320,16 @@ export function inspectMcpTaxSnapshot(
     const home = os.homedir();
     inspectConfigFile(path.join(home, '.claude.json'), 'global:~/.claude.json');
     inspectConfigFile(path.join(home, '.cursor', 'mcp.json'), 'global:~/.cursor/mcp.json');
-    inspectConfigFile(path.join(home, '.gemini', 'settings.json'), 'global:~/.gemini/settings.json');
-    inspectConfigFile(
-      path.join(home, '.gemini', 'antigravity', 'mcp_config.json'),
-      'global:~/.gemini/antigravity/mcp_config.json'
-    );
+    const geminiEntries = getHomeGeminiEntries(home);
+    if (geminiEntries.has('settings.json')) {
+      inspectConfigFile(path.join(home, '.gemini', 'settings.json'), 'global:~/.gemini/settings.json');
+    }
+    if (geminiEntries.has('antigravity')) {
+      inspectConfigFile(
+        path.join(home, '.gemini', 'antigravity', 'mcp_config.json'),
+        'global:~/.gemini/antigravity/mcp_config.json'
+      );
+    }
     inspectConfigFile(path.join(home, '.codex', 'config.toml'), 'global:~/.codex/config.toml');
     inspectConfigFile(
       path.join(home, '.codeium', 'windsurf', 'mcp_config.json'),
@@ -394,8 +414,15 @@ export function computeGitBugHotspots(workspaceRoot: string, limit = 10): GitBug
     if (
       normFile.startsWith('.git/') ||
       normFile.startsWith('.evo/') ||
+      normFile.startsWith('templates/seed-evo/') ||
+      normFile.startsWith('.github/') ||
       normFile.startsWith('dist/') ||
-      normFile.startsWith('node_modules/')
+      normFile.startsWith('node_modules/') ||
+      normFile.startsWith('assets/') ||
+      normFile.startsWith('benchmarks/') ||
+      /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec)\.[a-z0-9]+$/i.test(normFile) ||
+      /\.(?:md|txt|svg|png|gif|webp|tape)$/i.test(normFile) ||
+      /(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|server\.json|plugin\.json|marketplace\.json|gemini-extension\.json|hooks\.json|mcp_config\.json|\.mcp\.json)$/i.test(normFile)
     ) {
       continue;
     }
@@ -413,28 +440,51 @@ export function computeGitBugHotspots(workspaceRoot: string, limit = 10): GitBug
   const fileScopedRuleCount = new Map<string, number>();
 
   if (hasValidEvoStructure(evoDir)) {
-    // Read memories with full AST fingerprint and target symbol file mapping
+    // Read memories with full AST fingerprint, target symbol file mapping, and body file references
     try {
       const storage = new EvoStorage(ws);
       const mems = storage.listMemories();
       for (const m of mems) {
+        const matchedFilesForMem = new Set<string>();
         for (const sym of m.target_symbols || []) {
           if (sym.includes('#')) {
             const filePart = sym.split('#')[0].replace(/\\/g, '/');
-            fileMemoryCount.set(filePart, (fileMemoryCount.get(filePart) || 0) + 1);
+            matchedFilesForMem.add(filePart);
           }
         }
         for (const fp of Object.values(m.ast_fingerprints || {})) {
           const file = (fp as any)?.file_path || (fp as any)?.file;
           if (file) {
             const norm = file.replace(/\\/g, '/');
-            fileMemoryCount.set(norm, (fileMemoryCount.get(norm) || 0) + 1);
+            matchedFilesForMem.add(norm);
           }
+        }
+        const memText = `${m.l0_summary || ''}\n${m.symptom || ''}\n${m.root_cause || ''}\n${m.solution || ''}`;
+        for (const [trackedFile] of fileCommitsMap) {
+          if (matchedFilesForMem.has(trackedFile)) continue;
+          const base = path.basename(trackedFile);
+          if (memText.includes(trackedFile) || (base.length >= 10 && memText.includes(base))) {
+            matchedFilesForMem.add(trackedFile);
+          }
+        }
+        for (const f of matchedFilesForMem) {
+          fileMemoryCount.set(f, (fileMemoryCount.get(f) || 0) + 1);
         }
       }
     } catch {}
 
-    // Read scoped rules
+    // Read scoped rules (including brace-expanded globs like src/{cli,mcp}/**/*.ts)
+    const expandBraces = (pattern: string): string[] => {
+      const m = pattern.match(/\{([^{}]+)\}/);
+      if (!m) return [pattern];
+      const parts = m[1].split(',').map((s) => s.trim());
+      const out: string[] = [];
+      for (const p of parts) {
+        out.push(...expandBraces(pattern.slice(0, m.index!) + p + pattern.slice(m.index! + m[0].length)));
+      }
+      return out;
+    };
+
     const rulesDir = path.join(evoDir, 'rules');
     if (fs.existsSync(rulesDir)) {
       try {
@@ -449,17 +499,22 @@ export function computeGitBugHotspots(workspaceRoot: string, limit = 10): GitBug
               if (match) {
                 const glob = match[1].trim();
                 if (glob !== '*' && glob !== '**/*') {
-                  const cleanGlob = glob.replace(/\\/g, '/');
-                  const prefix = cleanGlob.replace(/\*.*$/, '');
+                  const expandedGlobs = expandBraces(glob.replace(/\\/g, '/'));
                   for (const [file] of fileCommitsMap) {
                     const normFile = file.replace(/\\/g, '/');
                     let matches = false;
-                    if (prefix && normFile.startsWith(prefix)) {
-                      matches = true;
-                    } else if (cleanGlob.startsWith('*.') && normFile.endsWith(cleanGlob.slice(1))) {
-                      matches = true;
-                    } else if (cleanGlob.includes(path.basename(normFile))) {
-                      matches = true;
+                    for (const cleanGlob of expandedGlobs) {
+                      const prefix = cleanGlob.replace(/\*.*$/, '');
+                      if (prefix && normFile.startsWith(prefix)) {
+                        matches = true;
+                        break;
+                      } else if (cleanGlob.startsWith('*.') && normFile.endsWith(cleanGlob.slice(1))) {
+                        matches = true;
+                        break;
+                      } else if (cleanGlob.includes(path.basename(normFile))) {
+                        matches = true;
+                        break;
+                      }
                     }
                     if (matches) {
                       fileScopedRuleCount.set(normFile, (fileScopedRuleCount.get(normFile) || 0) + 1);
@@ -618,7 +673,7 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
         ]
       : [
           path.join(home, '.claude', 'CLAUDE.md'),
-          path.join(home, '.gemini', 'GEMINI.md'),
+          ...(getHomeGeminiEntries(home).has('GEMINI.md') ? [path.join(home, '.gemini', 'GEMINI.md')] : []),
           path.join(home, '.codex', 'AGENTS.md'),
         ];
 
@@ -640,14 +695,19 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
           userStaticRuleTokens += estimateTokens(outside);
         }
         if (insideTotal) {
-          evoSeedTokens += estimateTokens(insideTotal);
+          evoSeedTokens = Math.max(evoSeedTokens, estimateTokens(insideTotal));
         }
       } catch {}
     }
   }
 
-  // Token savings computation
-  const beforeTokens = mcpTax.totalTaxTokens + userStaticRuleTokens + Math.max(totalRuleTokens, evoSeedTokens);
+  // Token savings computation (includes virtualized L1/L2 rules, skills, micro-tools, and 0-cost episodic memories)
+  const virtualizedCapabilityTokens =
+    totalRuleTokens + skillsCount * 650 + toolsCount * 450 + memoriesCount * 400;
+  const beforeTokens =
+    mcpTax.totalTaxTokens +
+    userStaticRuleTokens +
+    Math.max(virtualizedCapabilityTokens, evoSeedTokens);
   const afterMcpTax =
     mcpTax.activeTaxTokens > 0
       ? mcpTax.activeTaxTokens + 350
@@ -658,9 +718,10 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
     beforeTokens > 0 ? Math.round((savedTokens / beforeTokens) * 100) : 0;
 
   // Cache Shielding Score (0 - 100)
+  const hasVirtualizedCapabilities = rulesCount + skillsCount + toolsCount + memoriesCount > 0;
   const cacheShieldingScore =
     mcpTax.totalServers === 0
-      ? 95
+      ? (hasVirtualizedCapabilities ? 100 : 95)
       : Math.round(
           Math.min(100, Math.max(10, ((mcpTax.pooledServers + 1) / (mcpTax.totalServers + 1)) * 100))
         );
@@ -735,6 +796,82 @@ export function renderScoreBadge(report: ScoreReport): string {
   const score = report.overallScore;
   const color = score >= 80 ? 'brightgreen' : score >= 60 ? 'yellow' : 'red';
   return `[![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-${score}%2F100-${color}.svg)](https://github.com/damonless/EvoKernel)`;
+}
+
+export function renderScoreSvg(report: ScoreReport): string {
+  const escSvg = (s: string) =>
+    String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  const wsName = escSvg(path.basename(report.workspaceRoot || 'workspace') || 'workspace');
+  const scoreColor = report.overallScore >= 90 ? '#34d399' : report.overallScore >= 75 ? '#38bdf8' : '#fbbf24';
+  const hotspotRows = report.gitHotspots
+    .slice(0, 5)
+    .map((h, i) => {
+      const y = 262 + i * 28;
+      const badgeFill = h.unprotected ? '#7f1d1d' : '#064e3b';
+      const badgeStroke = h.unprotected ? '#f87171' : '#34d399';
+      const badgeText = h.unprotected ? 'UNPROTECTED' : `PROTECTED (${h.memoryCount}m/${h.scopedRuleCount}r)`;
+      const shortPath = escSvg(h.filePath.length > 32 ? '…' + h.filePath.slice(-31) : h.filePath);
+      return `
+    <g transform="translate(450, ${y})">
+      <rect x="0" y="-16" width="420" height="24" rx="4" fill="#111827" stroke="#1f2937"/>
+      <text x="10" y="0" fill="#e5e7eb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">${shortPath}</text>
+      <rect x="275" y="-13" width="136" height="18" rx="3" fill="${badgeFill}" stroke="${badgeStroke}" stroke-width="0.8"/>
+      <text x="343" y="-1" text-anchor="middle" fill="${badgeStroke}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="700">${badgeText}</text>
+    </g>`;
+    })
+    .join('');
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" width="900" height="420">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070b14"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="420" rx="14" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="2"/>
+  <rect x="0" y="0" width="900" height="4" rx="2" fill="url(#accentGrad)"/>
+
+  <!-- Header -->
+  <text x="32" y="42" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="800">🧬 EvoKernel Dual X-Ray Diagnostic Card</text>
+  <text x="32" y="64" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5">Workspace: ${wsName}  •  Deterministic Gatekeeper &amp; 5-Tool Meta-MCP Gateway</text>
+  <rect x="730" y="24" width="138" height="28" rx="14" fill="#064e3b" stroke="#34d399" stroke-width="1"/>
+  <text x="799" y="42" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">GRADE: ${escSvg(report.grade)}</text>
+
+  <!-- Left Panel: Context & Prompt-Cache Shield -->
+  <rect x="28" y="84" width="396" height="308" rx="10" fill="#0b1120" stroke="#1e293b"/>
+  <text x="48" y="114" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">1. CONTEXT HEALTH &amp; TOKEN SHIELDING</text>
+  <text x="48" y="172" fill="${scoreColor}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="54" font-weight="800">${report.overallScore}<tspan font-size="22" fill="#64748b">/100</tspan></text>
+
+  <text x="48" y="208" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Eager Load (Before): <tspan fill="#fbbf24" font-weight="700">${report.contextSavings.beforeTokens.toLocaleString()} tok/turn</tspan></text>
+  <text x="48" y="232" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Virtual Load (After): <tspan fill="#34d399" font-weight="700">${report.contextSavings.afterTokens.toLocaleString()} tok/turn</tspan></text>
+  <text x="48" y="256" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Net Prompt Tax Saved: <tspan fill="#34d399" font-weight="800">-${report.contextSavings.savingsPercent}% (${report.contextSavings.savedTokens.toLocaleString()} tok)</tspan></text>
+
+  <!-- Progress Bar -->
+  <rect x="48" y="274" width="356" height="12" rx="6" fill="#1e293b"/>
+  <rect x="48" y="274" width="${Math.max(12, Math.round(356 * (report.contextSavings.savingsPercent / 100)))}" height="12" rx="6" fill="url(#accentGrad)"/>
+
+  <text x="48" y="316" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">Cache Shielding: <tspan fill="#38bdf8" font-weight="700">${report.cacheShieldingScore}%</tspan>  •  Hotspot Shield: <tspan fill="#34d399" font-weight="700">${report.fragileCodeScore}%</tspan></text>
+  <text x="48" y="340" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">Evolved Tree: <tspan fill="#f8fafc">${report.capabilities.rulesCount} rules, ${report.capabilities.skillsCount} skills, ${report.capabilities.toolsCount} tools, ${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} AST memories</tspan></text>
+  <text x="48" y="368" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">$ npx evo-kernel score   •   github.com/damonless/EvoKernel</text>
+
+  <!-- Right Panel: Fragile Hotspots & AST Memory Coverage -->
+  <rect x="440" y="84" width="432" height="308" rx="10" fill="#0b1120" stroke="#1e293b"/>
+  <text x="456" y="114" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">2. GIT FRAGILITY HOTSPOTS &amp; AST MEMORY ANCHORS</text>
+  <text x="456" y="142" fill="#e2e8f0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">Tracked Hotspots: <tspan font-weight="700">${report.totalHotspots}</tspan>   •   Unprotected: <tspan fill="${report.unprotectedHotspots === 0 ? '#34d399' : '#f87171'}" font-weight="700">${report.unprotectedHotspots === 0 ? '0 (100% AST Guarded)' : report.unprotectedHotspots}</tspan></text>
+  <text x="456" y="166" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">AST Fingerprints Verified: ${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} [VERIFIED] at 0 Core Token Cost</text>
+  <line x1="456" y1="182" x2="856" y2="182" stroke="#1e293b" stroke-width="1"/>
+  <text x="456" y="204" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">TOP PRODUCTION HOTSPOTS (GIT FIX FREQUENCY)</text>
+  <text x="456" y="232" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">FILE PATH                                         PROTECTION STATUS</text>
+  ${hotspotRows}
+</svg>\n`;
 }
 
 export function renderScoreAnsi(report: ScoreReport): string {
@@ -848,6 +985,21 @@ export async function runScoreCli(workspaceRoot: string, args: string[]): Promis
 
   if (isBadge) {
     console.log(renderScoreBadge(report));
+    return;
+  }
+
+  const svgIdx = args.indexOf('--svg');
+  if (svgIdx !== -1) {
+    const svgContent = renderScoreSvg(report);
+    const nextArg = args[svgIdx + 1];
+    if (nextArg && !nextArg.startsWith('-')) {
+      const outSvg = path.resolve(nextArg);
+      fs.mkdirSync(path.dirname(outSvg), { recursive: true });
+      fs.writeFileSync(outSvg, svgContent, 'utf8');
+      console.log(`✅ Score SVG X-Ray card exported to: ${outSvg}`);
+    } else {
+      process.stdout.write(svgContent);
+    }
     return;
   }
 

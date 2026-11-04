@@ -2,7 +2,7 @@
 id: issues-10-11-12-audit-hook-and-cross-lang-recall
 title: "Issues #10-#17: Subdirectory Multi-Branch Memory (./path & NTFS Case Canonicalization), Legacy Branch Discovery & Skill Budget Decoupling"
 l0_summary: "Fixes Issues #10-#17 subdirectory git show ./path, NTFS/Git case drift, legacy branch discovery, and decoupled skillBudgetLimit."
-created_commit: "09e84df"
+created_commit: "737bc6a"
 created_branch: "main"
 target_symbols: ["src/core/memory.ts#verifyMemoryFreshness","src/core/memory.ts#extractSymbolFingerprint","src/core/gatekeeper.ts#tokenizeClauseText","src/core/telemetry.ts#extractQueryTokens","src/cli/audit.ts#runAudit","src/cli/init.ts#formatToolsCatalogMarkdown","src/mcp/handlers.ts#EvoMcpDispatcher.handleSearch"]
 ast_fingerprints: {"src/core/memory.ts#verifyMemoryFreshness":{"symbol":"src/core/memory.ts#verifyMemoryFreshness","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":2226,"end_line":2843,"signature":"export function verifyMemoryFreshness(","ast_hash":"ab0afbf0e55052d5"},"src/core/memory.ts#extractSymbolFingerprint":{"symbol":"src/core/memory.ts#extractSymbolFingerprint","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":1519,"end_line":1657,"signature":"export function extractSymbolFingerprint(","ast_hash":"529d7874f27b24ee"},"src/core/gatekeeper.ts#tokenizeClauseText":{"symbol":"src/core/gatekeeper.ts#tokenizeClauseText","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"function","start_line":564,"end_line":584,"signature":"export function tokenizeClauseText(clause: string): Set<string>","ast_hash":"529f1592846fa227"},"src/core/telemetry.ts#extractQueryTokens":{"symbol":"src/core/telemetry.ts#extractQueryTokens","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":250,"end_line":398,"signature":"export function extractQueryTokens(query: string): string[]","ast_hash":"fcaa3fc76a38e40e"},"src/cli/audit.ts#runAudit":{"symbol":"src/cli/audit.ts#runAudit","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":628,"end_line":971,"signature":"export function runAudit(workspaceRoot: string, options: AuditOptions = {}): AuditReport","ast_hash":"745ba17d6b36f6a6"},"src/cli/init.ts#formatToolsCatalogMarkdown":{"symbol":"src/cli/init.ts#formatToolsCatalogMarkdown","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":52,"end_line":224,"signature":"export function formatToolsCatalogMarkdown(","ast_hash":"4024cc28ae16fa90"},"src/mcp/handlers.ts#EvoMcpDispatcher.handleSearch":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher.handleSearch","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":777,"end_line":887,"signature":"private handleSearch(args: Record<string, unknown>, activeCtx?: WorkspaceContext)","ast_hash":"ad0112269147bd36"}}
@@ -10,7 +10,7 @@ tags: ["issue-10","issue-14","issue-15","issue-16","issue-17","multi-branch-memo
 origin: "evolved"
 supersedes_id: "issues-10-11-12-audit-hook-and-cross-lang-recall"
 created_at: "2026-10-26T14:01:01.159Z"
-updated_at: "2026-11-03T05:27:25.907Z"
+updated_at: "2026-11-04T06:14:36.114Z"
 ---
 
 ## Symptom

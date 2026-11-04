@@ -2,14 +2,14 @@
 id: audit-broken-refs-and-hook-param-fix
 title: "Skill Ref Audit & Hook Param Resolution Fix"
 l0_summary: "Fix skill capability ref extraction, supersedes_id exclusion, and runHook argument discrimination."
-created_commit: "09e84df"
+created_commit: "737bc6a"
 created_branch: "main"
 target_symbols: ["validateCapabilityReferences","runHook"]
 ast_fingerprints: {"validateCapabilityReferences":{"symbol":"validateCapabilityReferences","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"function","start_line":321,"end_line":366,"signature":"export function validateCapabilityReferences(","ast_hash":"da76821b4f274c68"},"runHook":{"symbol":"runHook","file_path":"src/cli/hook.ts","file":"src/cli/hook.ts","kind":"function","start_line":1142,"end_line":1224,"signature":"export function runHook(","ast_hash":"66477da2304f60a3"}}
 tags: []
 origin: "evolved"
 created_at: "2026-10-31T09:02:45.683Z"
-updated_at: "2026-11-03T05:27:25.651Z"
+updated_at: "2026-11-04T06:14:35.930Z"
 ---
 
 ## Symptom

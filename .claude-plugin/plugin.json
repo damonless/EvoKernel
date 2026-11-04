@@ -1,6 +1,6 @@
 {
   "name": "evo-kernel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Deterministic Self-Evolving Meta-Kernel & Zero-Dep Lexical-Structural Symbol Fingerprinting with Offline Worktree Evolution, Deliverable Inspection, and Fixed 5-Tool Meta-MCP Gateway for AI Coding Agents",
   "author": {
     "name": "EvoKernel Contributors"

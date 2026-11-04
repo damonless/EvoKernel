@@ -7,15 +7,21 @@
 **告别越写越乱的静态 `.md` 规则文件。告别击穿 Prompt Cache 的海量 MCP 进程。**  
 *80 行 L0 元规则种子 · 单一固定签名元 MCP 网关 · 4 道本地确定性沙盒门禁 · 0 第三方依赖*
 
+[![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
+[![Live Cockpit Demo](https://img.shields.io/badge/Live_Cockpit-在线交互驾驶舱-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
+[![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#⚡-极速体验--两条命令完成无损体检与实时驾驶舱)
+[![Version](https://img.shields.io/badge/npm-v0.3.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.2.0-blue?style=flat-square)](package.json)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#零依赖原生架构)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#1-为什么采用固定-5-工具的元-mcp-网关)
-[![Tests](https://img.shields.io/badge/tests-267%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
-[![Harnesses](https://img.shields.io/badge/10%20Harnesses-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Cline%20%7C%20Roo%20%7C%20Copilot%20%7C%20Codex%20%7C%20OpenCode%20%7C%20Gemini%20%7C%20Antigravity-8A2BE2?style=flat-square)](#-10-大智能体接入矩阵-10-agent-harness-matrix)
+[![Tests](https://img.shields.io/badge/tests-267%2B%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 
-**[English](README.md) · [简体中文](README.zh-CN.md)**
+**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 在线交互式驾驶舱 (Live Cockpit)](https://damonless.github.io/EvoKernel/) · [📊 基准评测 (Benchmarks)](benchmarks/README.md)**
+
+<br/>
+
+<img src="./assets/terminal-score-xray.svg" alt="EvoKernel Dual X-Ray Diagnostic Card" width="100%" />
 
 </div>
 
@@ -27,14 +33,31 @@
 ## ⚡ 极速体验 — 两条命令完成无损体检与实时驾驶舱
 
 ```bash
-# 1. 毫秒级零开销宿主与仓库诊断体检（<40ms）— 快速审计宿主规则税、Git 高频 Bug 聚集地与记忆覆盖率
+# 1. 毫秒级零开销宿主与仓库诊断体检（<25ms）— 快速审计宿主规则税、Git 高频 Bug 聚集地与 AST 记忆覆盖率
 npx evo-kernel score
+# 一键导出可嵌入项目 README 的矢量 X-Ray 诊断大图：
+npx evo-kernel score --svg ./evo-xray.svg
 
-# 2. 零外部依赖本地实时驾驶舱 — 深色极客风、遥测透视、预算树图、情景记忆星座图
+# 2. 零外部依赖本地实时驾驶舱 — 深色极客风、2D 预算矩阵树图、交互式 SVG AST 记忆拓扑星图
 npx evo-kernel ui
-# 或一键导出无外链离线单个 HTML 报告
-npx evo-kernel ui --export ./evo-cockpit.html
+# 或直接访问在线交互式 Demo：https://damonless.github.io/EvoKernel/
 ```
+
+---
+
+## 📈 可复现 50 轮工程基准实测 (`npm run benchmark`)
+
+模拟典型全栈工程挂载 **8 个主流 MCP 服务**（`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` —— 共计 **77 个工具**）+ 成熟仓库知识库（10 条规则、4 个技能、5 个微工具、15 条排障记忆），在 **50 轮连续对话 + 3 次中途规则/工具演进**下的实测对比（本地执行 `npm run benchmark` 即可复现）：
+
+| 核心指标 | 传统直连多 MCP + 巨石 `CLAUDE.md` | **🧬 EvoKernel 5-Tool 虚拟网关** | 实测收益 |
+| :--- | :---: | :---: | :---: |
+| **暴露给模型的工具 Schema** | 77 个工具定义 | **5 个固定元工具原语** | **-93.5% Schema 体积** |
+| **每轮常驻静态前缀税** | 27,150 tokens | **1,530 tokens** | **-94.4% Prompt 税** |
+| **中途演进引发的缓存击穿** | 3 次全量前缀重算 | **0 次（100% 命中缓存）** | **100% KV Cache 护盾** |
+| **50 轮累计输入 Tokens** | 1,931,250 tokens | **661,770 tokens** | **-65.7% 累计负载** |
+| **50 轮账单成本 (Claude Sonnet 4.5)** | \$1.15 | **\$0.31** | **节省 72.9% API 成本** |
+| **50 轮账单成本 (Claude Opus 4.5)** | \$5.76 | **\$1.56** | **节省 72.9% API 成本** |
+| **AST 防漂移记忆校验耗时** | 无校验（重构后静默腐败） | **0.048 ms / 条记忆** | **确定性 AST 符号锚定** |
 
 ---
 
@@ -50,42 +73,15 @@ npx evo-kernel ui --export ./evo-cockpit.html
 
 **EvoKernel 用一套“离线工作区演化引擎 + 借脑宿主 + 确定性沙盒门禁 + 固定元路由网关 + 下游 MCP 虚拟化代理”彻底解决上述问题：**
 
-```text
-[修复棘手 Bug / 用户纠偏 / 交付物反馈 / 会话轨迹重放 / 挂载下游 MCP 业务服务]
-                                │
-                                ▼
-                   ┌─────────────────────────┐
-                   │   evo_propose (MCP)     │  ◄── 100% 借脑宿主当前模型（无需额外配置任何 API Key！）
-                   └────────────┬────────────┘
-                                │
-         ┌──────────────────────┴──────────────────────┐
-         ▼                                             ▼
-┌─────────────────────────────────┐   ╔═══════════════════════════════════════════════════╗
-│ 离线 Git Worktree 演化优化引擎  │   ║         4 道本地确定性编译门禁 (Gatekeeper)       ║
-│ (`evo optimize` inv & dom 闭环) │   ║  1. 静态 AST 与安全审计                           ║  拦截硬编码路径与高危代码
-│ 独立工作树隔离 + 自动化探针评估 │   ║  2. 沙盒自测 & AST 符号存在性校验                 ║  脚本 exit 0；符号真实性绑定
-└────────────────┬────────────────┘   ║  3. FTS5 BM25 相似度查重 & 防混杂归因门禁         ║  拦截重复资产 & ERR_CONFOUNDED_CAUSATION
-                 │                    ║  4. 1,500 Token 硬上限与强制 GC                   ║  核心超额强制触发 evo_compact
-                 │                    ╚═════════════════════╤═════════════════════════════╝
-                 ▼                                          ▼
-   ┌─────────────────────────────────────────────────────────────┐
-   │                  Git 透明文件树 (.evo/)                     │
-   │  rules/ · skills/ · tools/ · memories/ · telemetry.db       │
-   └─────────────────────────────┬───────────────────────────────┘
-                                 │
-              ┌──────────────────┴──────────────────┐
-              ▼                                     ▼
- ┌─────────────────────────┐           ┌─────────────────────────┐
- │ 固定 5 个元 MCP 工具    │           │ 下游 MCP 虚拟化代理池   │
- │ (100% 保住前缀 KV 缓存) │           │ (无感知集成 10+ MCP)    │
- └─────────────────────────┘           └─────────────────────────┘
-```
+<div align="center">
+  <img src="./assets/hero-architecture.svg" alt="EvoKernel Architecture Diagram" width="100%" />
+</div>
 
 ---
 
 ## 📊 行业同类项目全景对比矩阵
 
-| 对比维度 | `MemGPT / Letta` | `Aider` | 传统 MCP 代理 (直通型) | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.2.0 (本项目)** |
+| 对比维度 | `MemGPT / Letta` | `Aider` | 传统 MCP 代理 (直通型) | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.3.0 (本项目)** |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **核心定位** | 有状态对话 Agent 记忆数据库 | Git 驱动的终端结对编程工具 | 聚合多个 MCP 端口的直通桥梁 | 静态工程提示词与规则合集 | 后台 LLM 演化学习 Agent | **面向 AI 编程智能体的确定性自演进元内核** |
 | **接入形态** | 依赖外部服务 / Postgres / 独立进程 | 独立 Python CLI 替代主流 IDE | 暴露所有子工具到 host tools/list | 静态预置 Markdown 模板 | 劫持 `/v1/chat` 本地反向代理 | **寄生型单一 Meta-MCP + <80行元规则种子注入既有 IDE** |

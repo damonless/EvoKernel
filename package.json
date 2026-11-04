@@ -1,6 +1,6 @@
 {
   "name": "evo-kernel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Deterministic Self-Evolving Meta-Kernel for AI Coding Agents — Offline Git Worktree Evolution, Deliverable Canonical Inspection, Zero-Dep Lexical-Structural Symbol Fingerprinting, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway.",
   "type": "module",
   "bin": {
@@ -15,7 +15,7 @@
   "bugs": {
     "url": "https://github.com/damonless/EvoKernel/issues"
   },
-  "homepage": "https://github.com/damonless/EvoKernel",
+  "homepage": "https://damonless.github.io/EvoKernel/",
   "publishConfig": {
     "access": "public"
   },
@@ -32,14 +32,16 @@
     "gemini-extension.json",
     "server.json",
     "hooks.json",
-    "mcp_config.json"
+    "mcp_config.json",
+    "!README.zh-CN.md"
   ],
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "prepack": "node ./scripts/build.mjs",
     "start": "node ./dist/cli/index.js",
     "mcp": "node ./dist/cli/index.js mcp",
-    "test": "node ./scripts/test.mjs"
+    "test": "node ./scripts/test.mjs",
+    "benchmark": "node ./benchmarks/context-tax-benchmark.mjs"
   },
   "keywords": [
     "ai-agents",

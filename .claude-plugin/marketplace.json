@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "evo-kernel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Deterministic Self-Evolving Meta-Kernel & Zero-Dep Lexical-Structural Symbol Fingerprinting with Offline Git Worktree Evolution, Deliverable Canonical Inspection, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway",
   "owner": {
     "name": "EvoKernel Contributors",
@@ -11,7 +11,7 @@
     {
       "name": "evo-kernel",
       "description": "Deterministic Self-Evolving Meta-Kernel & Zero-Dep Lexical-Structural Symbol Fingerprinting (Rules, Skills, Micro-Tools, Deliverable Inspectors, Offline Worktree Evolution, and Multi-Branch Episodic Memories) for Claude Code and AI Agents",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "EvoKernel Contributors"
       },

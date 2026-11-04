@@ -1,0 +1,72 @@
+name: "EvoKernel Context Health & Gatekeeper Audit"
+description: "Zero-dependency Context Health X-Ray Score, Git Fragility Hotspot Coverage & AST Memory Anti-Drift Verification for AI Coding Agents"
+author: "EvoKernel Contributors"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  workspace:
+    description: "Target repository workspace path"
+    required: false
+    default: "."
+  min-score:
+    description: "Minimum required EvoKernel health score (0-100)"
+    required: false
+    default: "0"
+  export-svg:
+    description: "Optional path to export the SVG X-Ray diagnostic card"
+    required: false
+    default: ""
+
+outputs:
+  score:
+    description: "Overall EvoKernel Context Health Score (0-100)"
+    value: ${{ steps.evo_audit.outputs.score }}
+  grade:
+    description: "EvoKernel Health Grade (A+, A, B, C, D, F)"
+    value: ${{ steps.evo_audit.outputs.grade }}
+  badge:
+    description: "Markdown shields.io badge for README"
+    value: ${{ steps.evo_audit.outputs.badge }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Setup Node.js 22"
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: "Run EvoKernel X-Ray Score & Audit"
+      id: evo_audit
+      shell: bash
+      env:
+        INPUT_WORKSPACE: ${{ inputs.workspace }}
+        INPUT_MIN_SCORE: ${{ inputs.min-score }}
+        INPUT_EXPORT_SVG: ${{ inputs.export-svg }}
+      run: |
+        node "${GITHUB_ACTION_PATH}/scripts/build.mjs"
+        REPORT_JSON="$(node "${GITHUB_ACTION_PATH}/dist/cli/index.js" score --json --workspace "$INPUT_WORKSPACE")"
+        SCORE="$(node -e 'const r = JSON.parse(process.argv[1]); console.log(r.overallScore);' "$REPORT_JSON")"
+        GRADE="$(node -e 'const r = JSON.parse(process.argv[1]); console.log(r.grade);' "$REPORT_JSON")"
+        BADGE="$(node "${GITHUB_ACTION_PATH}/dist/cli/index.js" score --badge --workspace "$INPUT_WORKSPACE")"
+        echo "score=${SCORE}" >> "$GITHUB_OUTPUT"
+        echo "grade=${GRADE}" >> "$GITHUB_OUTPUT"
+        echo "badge=${BADGE}" >> "$GITHUB_OUTPUT"
+        node "${GITHUB_ACTION_PATH}/dist/cli/index.js" score --workspace "$INPUT_WORKSPACE"
+        if [ -n "$INPUT_EXPORT_SVG" ]; then
+          node "${GITHUB_ACTION_PATH}/dist/cli/index.js" score --svg "$INPUT_EXPORT_SVG" --workspace "$INPUT_WORKSPACE"
+        fi
+        if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+          {
+            echo "## 🧬 EvoKernel Context Health & Fragility X-Ray"
+            echo ""
+            echo "- **Overall Score**: \`${SCORE} / 100\` (**Grade ${GRADE}**)"
+            echo "- **Markdown Badge**: \`${BADGE}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        if [ "$SCORE" -lt "$INPUT_MIN_SCORE" ]; then
+          echo "::error::EvoKernel Score (${SCORE}) is below minimum threshold (${INPUT_MIN_SCORE})"
+          exit 1
+        fi
