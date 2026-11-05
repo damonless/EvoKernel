@@ -172,6 +172,23 @@ export function resolveActiveWorkspaceRoot(vscode: any, fallbackCwd: string = pr
         return fsPath;
       }
     }
+    // Check immediate subdirectories if parent directory was opened
+    for (const f of folders) {
+      const fsPath = f.uri?.fsPath || f.fsPath;
+      if (fsPath) {
+        try {
+          const entries = fs.readdirSync(fsPath, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isDirectory() && !entry.name.startsWith('.')) {
+              const childPath = path.join(fsPath, entry.name);
+              if (fs.existsSync(path.join(childPath, '.evo'))) {
+                return childPath;
+              }
+            }
+          }
+        } catch {}
+      }
+    }
     const firstPath = folders[0].uri?.fsPath || folders[0].fsPath;
     if (firstPath) {
       const nearest = findNearestEvoWorkspace(firstPath);

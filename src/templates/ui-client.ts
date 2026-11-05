@@ -1596,6 +1596,8 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
 
   // 2. Capabilities Kind & Status Pills
   var kindPillGroup = el('caps-kind-pills');
+  var statusPillGroup = el('caps-status-pills');
+
   if (kindPillGroup) {
     kindPillGroup.addEventListener('click', function(e) {
       var pill = e.target.closest('.filter-pill');
@@ -1603,11 +1605,25 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       activeCapsKind = pill.getAttribute('data-kind') || 'all';
       kindPillGroup.querySelectorAll('.filter-pill').forEach(function(p) { p.classList.remove('active'); });
       pill.classList.add('active');
+
+      // Auto-cooperative: reset incompatible status filters
+      if (statusPillGroup) {
+        if (activeCapsKind === 'memories' && (activeCapsStatus === 'core' || activeCapsStatus === 'scoped')) {
+          activeCapsStatus = 'all';
+        } else if (activeCapsKind === 'rules' && (activeCapsStatus === 'verified' || activeCapsStatus === 'stale')) {
+          activeCapsStatus = 'all';
+        } else if ((activeCapsKind === 'skills' || activeCapsKind === 'tools') && activeCapsStatus !== 'all') {
+          activeCapsStatus = 'all';
+        }
+        statusPillGroup.querySelectorAll('.filter-pill').forEach(function(p) {
+          p.classList.toggle('active', (p.getAttribute('data-status') || 'all') === activeCapsStatus);
+        });
+      }
+
       renderCapabilitiesTable();
     });
   }
 
-  var statusPillGroup = el('caps-status-pills');
   if (statusPillGroup) {
     statusPillGroup.addEventListener('click', function(e) {
       var pill = e.target.closest('.filter-pill');
@@ -1615,6 +1631,19 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       activeCapsStatus = pill.getAttribute('data-status') || 'all';
       statusPillGroup.querySelectorAll('.filter-pill').forEach(function(p) { p.classList.remove('active'); });
       pill.classList.add('active');
+
+      // Auto-cooperative: adjust kind filter to match status
+      if (kindPillGroup) {
+        if ((activeCapsStatus === 'core' || activeCapsStatus === 'scoped') && activeCapsKind !== 'rules' && activeCapsKind !== 'all') {
+          activeCapsKind = 'rules';
+        } else if ((activeCapsStatus === 'verified' || activeCapsStatus === 'stale') && activeCapsKind !== 'memories' && activeCapsKind !== 'all') {
+          activeCapsKind = 'memories';
+        }
+        kindPillGroup.querySelectorAll('.filter-pill').forEach(function(p) {
+          p.classList.toggle('active', (p.getAttribute('data-kind') || 'all') === activeCapsKind);
+        });
+      }
+
       renderCapabilitiesTable();
     });
   }
