@@ -8,16 +8,16 @@
 *Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
 
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
-[![Live Cockpit Demo](https://img.shields.io/badge/Live_Cockpit-Interactive_Demo-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
+[![Workbench 2.0 Demo](https://img.shields.io/badge/Workbench_2.0-Interactive_Demo-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
 [![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#-30-second-quick-start)
 [![Version](https://img.shields.io/badge/npm-v0.3.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#-zero-dependency-architecture)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#-core-architecture-5-fixed-meta-tools)
-[![Tests](https://img.shields.io/badge/tests-274%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
+[![Tests](https://img.shields.io/badge/tests-277%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 
-**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Live Interactive Cockpit](https://damonless.github.io/EvoKernel/) · [📊 Benchmarks](benchmarks/README.md)**
+**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Live Workbench 2.0](https://damonless.github.io/EvoKernel/) · [📊 Benchmarks](benchmarks/README.md)**
 
 <br/>
 
@@ -41,8 +41,8 @@ npx -y evo-kernel score
 # 2. One-Click Auto-Wiring & Virtualization — wire 10 IDEs + fold third-party MCPs
 npx -y evo-kernel init --stealth && npx -y evo-kernel virtualize
 
-# 3. Live Obsidian Cockpit with 30s Film & Deliverable Inspection
-npx -y evo-kernel ui --open
+# 3. Launch Workbench 2.0 (Zinc Theme, Orthogonal Topology & Native Micro-Window)
+npx -y evo-kernel ui --app
 npx -y evo-kernel check ./report.xlsx
 ```
 
@@ -58,11 +58,11 @@ npx -y evo-kernel check ./report.xlsx
 
 <table>
 <tr>
-<td align="center" width="52%">
-  <b>Obsidian Live Cockpit (<code>npx evo-kernel ui --open</code>)</b><br/>
-  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/cockpit-showcase.png" width="100%" alt="EvoKernel Obsidian Live Cockpit and AST Constellation" /></a>
+<td align="center" width="56%">
+  <b>EvoKernel Workbench 2.0 (<code>npx evo-kernel ui --app</code>)</b><br/>
+  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/workbench-showcase.svg" width="100%" alt="EvoKernel Workbench 2.0 Zinc Dark Cockpit and AST Topology" /></a>
 </td>
-<td align="center" width="48%">
+<td align="center" width="44%">
   <b>Instant Terminal X-Ray (<code>npx evo-kernel score</code>)</b><br/>
   <img src="./assets/terminal-score-xray.svg" width="100%" alt="EvoKernel Terminal Score X-Ray Card" />
 </td>
@@ -146,7 +146,7 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 | **Offline Worktree Optimization** | None | None | None | None | Cloud LLM evaluations | **`evo optimize`: Isolated Git worktrees, dual `inv`/`dom` cycles, automated probe evaluation & regression rollbacks** |
 | **Deliverable Inspection** | None | None | None | None | None | **Zero-dependency canonical parser for `.xlsx`, `.docx`, `.pptx`, CSV, JSON/JSONL, and Markdown** |
 | **Episodic Memory & Anti-Drift** | Semantic vector embeddings (hallucination prone) | Repo map only | None | None (static docs) | No AST verification | **Zero-Dep Lexical-Structural Symbol Fingerprinting (Fast regex/lexical AST hash, [STALE] demotion, Topology Penetration Anchors)** |
-| **Cockpit & Diagnostic Scoring** | Web UI with Postgres | None | None | None | Web UI | **`evo score` (<40ms zero-cost scan) & `evo ui` (0-dep dark cockpit, SSE live-reload, strict CSP, exportable single-file HTML)** |
+| **Workbench & Diagnostic Scoring** | Web UI with Postgres | None | None | None | Web UI | **`evo score` (<40ms zero-cost scan) & `evo ui` (0-dep Workbench 2.0, dual-mode native client, SSE live-reload, strict CSP, exportable single-file HTML)** |
 | **Causal Telemetry** | None | Git diff size | None | None | Win/loss counter | **Causal outcomes (`helped`, `hurt`, `contested`) with `ERR_CONFOUNDED_CAUSATION` protection** |
 | **Multi-Agent Harness Support** | Standalone only | Standalone only | Generic MCP clients | Claude Code / Cursor only | Generic proxy | **10 Native Harnesses (Claude, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, Antigravity)** |
 | **Cold-Start Gene Extraction** | Empty until chat sessions accumulate | Git repo scan | Empty | Static catalog | Empty until chat history grows | **`evo bootstrap` mines project stacks + git fixes in <10s** |
@@ -415,7 +415,7 @@ node ./scripts/test.mjs
 | 7 | `dist/tests/mcp-proxy.test.js` | Downstream MCP Proxy Virtualization Suite | 10 tests |
 | 8 | `dist/tests/multi-harness.test.js` | Multi-Agent Harness Matrix & Cascaded Detection Suite | 14 tests |
 | 9 | `dist/tests/optimize.test.js` | Offline Git Worktree Optimization Engine Suite | 19 tests |
-| 10 | `dist/tests/score-and-ui.test.js` | Score, Live Cockpit UI, Warmup & Slash Commands Suite | 19 tests |
+| 10 | `dist/tests/score-and-ui.test.js` | Score, Workbench 2.0 UI & Control API, Warmup & Slash Commands Suite | 22 tests |
 | 11 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & Hardening Suite | 32 tests |
 
 </details>

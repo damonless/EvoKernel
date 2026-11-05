@@ -709,6 +709,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       title.setAttribute('fill', '#fafafa');
       title.setAttribute('font-size', '11.5');
       title.setAttribute('font-weight', '500');
+      title.setAttribute('class', 'topo-node-title');
       title.textContent = n.label.length > 24 ? n.label.slice(0, 23) + '…' : n.label;
       g.appendChild(title);
 
@@ -717,7 +718,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       sub.setAttribute('y', '33');
       sub.setAttribute('fill', '#71717a');
       sub.setAttribute('font-size', '9.5');
-      sub.setAttribute('font-family', 'monospace');
+      sub.setAttribute('class', 'topo-node-sub');
       sub.textContent = n.sub.length > 28 ? '…' + n.sub.slice(-27) : n.sub;
       g.appendChild(sub);
 
@@ -1842,9 +1843,9 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       --duration-normal: 240ms;
       --duration-modal: 200ms;
 
-      /* --- Fonts & Geometry --- */
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      /* --- Modern Font Stack & Geometry --- */
+      --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Source Han Sans SC", "Noto Sans SC", "Helvetica Neue", Arial, sans-serif;
+      --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 
       --topbar-height: 44px;
       --left-rail-width: 220px;
@@ -1871,8 +1872,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       font-family: var(--font-sans);
       font-size: 13px;
       line-height: 1.5;
+      letter-spacing: -0.011em;
+      text-rendering: optimizeLegibility;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
+      font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     }
 
     /* Minimalist Scrollbars */
@@ -2493,6 +2497,17 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     .topo-node rect {
       transition: stroke 150ms ease, stroke-width 150ms ease;
     }
+    .topo-node-title {
+      font-family: var(--font-sans);
+      font-size: 11.5px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+    }
+    .topo-node-sub {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: -0.01em;
+    }
     .topo-edge {
       transition: opacity 200ms var(--ease-spring), stroke 150ms ease, stroke-width 150ms ease;
     }
@@ -2651,10 +2666,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       background: var(--bg-surface);
       border: 1px solid var(--border-subtle);
       color: var(--text-primary);
-      font-family: var(--font-mono);
-      font-size: 11px;
+      font-family: var(--font-sans);
+      font-size: 12px;
       font-weight: 500;
-      padding: 5px 10px;
+      letter-spacing: -0.01em;
+      padding: 5px 11px;
       border-radius: 6px;
       cursor: pointer;
       display: flex;
@@ -2733,12 +2749,13 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       box-shadow: var(--surface-highlight);
     }
     .bento-card-label {
-      font-family: var(--font-mono);
+      font-family: var(--font-sans);
       font-size: 10px;
-      font-weight: 700;
+      font-weight: 600;
       letter-spacing: 0.05em;
       margin-bottom: 6px;
       text-transform: uppercase;
+      color: var(--text-secondary);
     }
     .bento-card-content {
       font-size: 12.5px;
@@ -2848,13 +2865,13 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       gap: 2px;
     }
     .cmd-group-title {
-      font-family: var(--font-mono);
+      font-family: var(--font-sans);
       font-size: 10px;
-      font-weight: 700;
+      font-weight: 600;
+      letter-spacing: 0.05em;
       color: var(--text-muted);
       padding: 6px 12px 4px;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
     }
     .cmd-item {
       display: flex;

@@ -996,7 +996,7 @@ export async function runUiCli(workspaceRoot: string, args: string[]): Promise<v
         ? path.resolve(exportOpt.value.trim())
         : path.join(path.resolve(workspaceRoot), 'evo-cockpit.html');
     exportUiHtml(workspaceRoot, out, { anon: isAnon });
-    console.log(`✅ EvoKernel Live Cockpit exported to: ${out}`);
+    console.log(`✅ EvoKernel Workbench 2.0 exported to: ${out}`);
     return;
   }
 
@@ -1026,7 +1026,7 @@ export async function runUiCli(workspaceRoot: string, args: string[]): Promise<v
   }
 
   const instance = await startUiServer(workspaceRoot, { port, token, anon: isAnon });
-  console.log(`🧬 EvoKernel Live Cockpit started at: ${instance.url}`);
+  console.log(`🧬 EvoKernel Workbench 2.0 started at: ${instance.url}`);
   console.log('   Press Ctrl+C to terminate server.');
 
   const isAppMode = args.includes('--app') || args.includes('--desktop');

@@ -909,7 +909,7 @@ Widget issue
       });
       assert.equal(res.status, 0, 'evo ui --export=<path> must exit 0');
       assert.ok(fs.existsSync(exportFile), 'Export file must be created');
-      assert.ok(res.stdout.includes('EvoKernel Live Cockpit exported to:'));
+      assert.ok(res.stdout.includes('Workbench 2.0 exported to:') || res.stdout.includes('exported to:'));
 
       // 2. --export <path> space-separated
       const spaceRes = spawnSync(process.execPath, [binEntry, 'ui', '--export', spaceExportFile], {

@@ -1,4 +1,4 @@
-name: Deploy EvoKernel Cockpit to GitHub Pages
+name: Deploy EvoKernel Workbench 2.0 to GitHub Pages
 
 on:
   push:
@@ -34,10 +34,11 @@ jobs:
       - name: "Build: ESM Bundle"
         run: npm run build
 
-      - name: "Export: UI Cockpit"
+      - name: "Export: Workbench 2.0"
         run: |
-          mkdir -p public
+          mkdir -p public docs
           node ./dist/cli/index.js ui --export public/index.html --anon
+          cp public/index.html docs/index.html
 
       - name: "Pages: Setup"
         id: pages_setup
@@ -60,4 +61,4 @@ jobs:
       - name: "Pages: Skipped Notice"
         if: steps.pages_setup.outcome != 'success'
         run: |
-          echo "::notice title=GitHub Pages Not Enabled::GitHub Pages is not yet enabled in repository settings (Settings -> Pages -> Build and deployment -> Source: GitHub Actions). Static UI cockpit export succeeded at ./public/index.html."
+          echo "::notice title=GitHub Pages Not Enabled::GitHub Pages is not yet enabled in repository settings (Settings -> Pages -> Build and deployment -> Source: GitHub Actions). Static Workbench 2.0 export succeeded at ./public/index.html and ./docs/index.html."

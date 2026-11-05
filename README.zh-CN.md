@@ -8,16 +8,16 @@
 *Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
 
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
-[![Live Cockpit Demo](https://img.shields.io/badge/Live_Cockpit-在线交互驾驶舱-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
+[![Workbench 2.0 Demo](https://img.shields.io/badge/Workbench_2.0-在线交互演示-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
 [![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#-30-秒极速上手)
 [![Version](https://img.shields.io/badge/npm-v0.3.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#-零依赖原生架构)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#-核心架构5-个固定元工具原语)
-[![Tests](https://img.shields.io/badge/tests-274%2B%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
+[![Tests](https://img.shields.io/badge/tests-277%2B%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 
-**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 在线交互式驾驶舱 (Live Cockpit)](https://damonless.github.io/EvoKernel/) · [📊 基准评测 (Benchmarks)](benchmarks/README.md)**
+**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 在线交互式工作台 (Workbench 2.0)](https://damonless.github.io/EvoKernel/) · [📊 基准评测 (Benchmarks)](benchmarks/README.md)**
 
 <br/>
 
@@ -41,8 +41,8 @@ npx -y evo-kernel score
 # 2. 一键自动挂载与虚拟化 — 自动识别 10 款主流 IDE 并折叠第三方 MCP 进程
 npx -y evo-kernel init --stealth && npx -y evo-kernel virtualize
 
-# 3. 启动 Obsidian 实时驾驶舱（含 30s 架构微电影）与交付物校验
-npx -y evo-kernel ui --open
+# 3. 启动 Workbench 2.0 工业级工作台（Zinc 极简暗色、正交拓扑星图与无边框微窗口）
+npx -y evo-kernel ui --app
 npx -y evo-kernel check ./report.xlsx
 ```
 
@@ -58,11 +58,11 @@ npx -y evo-kernel check ./report.xlsx
 
 <table>
 <tr>
-<td align="center" width="52%">
-  <b>Obsidian 实时驾驶舱 (<code>npx evo-kernel ui --open</code>)</b><br/>
-  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/cockpit-showcase.png" width="100%" alt="EvoKernel Obsidian Live Cockpit and AST Constellation" /></a>
+<td align="center" width="56%">
+  <b>EvoKernel Workbench 2.0 (<code>npx evo-kernel ui --app</code>)</b><br/>
+  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/workbench-showcase.svg" width="100%" alt="EvoKernel Workbench 2.0 Zinc Dark Cockpit and AST Topology" /></a>
 </td>
-<td align="center" width="48%">
+<td align="center" width="44%">
   <b>终端矢量 X-Ray 诊断卡 (<code>npx evo-kernel score</code>)</b><br/>
   <img src="./assets/terminal-score-xray.svg" width="100%" alt="EvoKernel Terminal Score X-Ray Card" />
 </td>
@@ -146,7 +146,7 @@ node ./dist/cli/index.js doctor
 | **离线工作区演化** | 无 | 无 | 无 | 无 | 云端 LLM 离线评测 | **`evo optimize`：瞬态 Git Worktree 隔离运行、`inv`/`dom` 双正交演化、自动探针评测与回归熔断回滚** |
 | **交付物规范消费检查** | 无 | 无 | 无 | 无 | 无 | **内置零依赖通用规范核检器（覆盖 `.xlsx`, `.docx`, `.pptx`, CSV, JSON/JSONL, Markdown）** |
 | **情景记忆与防漂移** | 语义向量近似检索（重构后易幻觉） | 依赖符号跳转图谱 | 无 | 无（纯静态指南） | 无 AST 验证 | **零依赖词法/结构符号指纹（快速 AST 哈希、自动 `[STALE]` 降级、Stage-3 拓扑穿透锚点）** |
-| **驾驶舱与诊断体检** | 独立 Web + Postgres 服务 | 无 | 无 | 无 | Web 界面 | **`evo score`（<25ms 极速体检卡）与 `evo ui`（0 依赖暗黑驾驶舱、SSE 实时同步、严格 CSP、单文件导出）** |
+| **工作台与诊断体检** | 独立 Web + Postgres 服务 | 无 | 无 | 无 | Web 界面 | **`evo score`（<25ms 极速体检卡）与 `evo ui`（0 依赖 Workbench 2.0 工业级工作台、双模态原生微窗口、SSE 实时同步、严格 CSP、单文件导出）** |
 | **因果遥测与成效归因** | 无 | Git 变更行数 | 无 | 无 | 胜率计数器 | **细粒度成效记账本（`helped` / `hurt` / `contested`）与 `ERR_CONFOUNDED_CAUSATION` 防混淆** |
 | **多 Agent 宿主矩阵支持** | 仅独立模式 | 仅独立模式 | 通用 MCP 客户端 | 仅限 Claude Code / Cursor | 通用反代 | **原生支持 10 款主流编码环境（Claude, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, Antigravity）** |
 | **冷启动仓库基因挖掘** | 初始为空，依赖会话积累 | Git 仓库扫描 | 初始为空 | 静态合集 | 初始为空 | **`evo bootstrap`：10 秒内自动挖掘项目多栈基因与 Git 历史 Bug 修复沉淀** |
@@ -417,7 +417,7 @@ node ./scripts/test.mjs
 | 7 | `dist/tests/mcp-proxy.test.js` | 下游 MCP 代理与动态虚拟化测试套件 | 10 tests |
 | 8 | `dist/tests/multi-harness.test.js` | 10 款智能体宿主多环境级联探测与安装测试套件 | 14 tests |
 | 9 | `dist/tests/optimize.test.js` | 离线 Git Worktree 能力演进优化循环测试套件 | 19 tests |
-| 10 | `dist/tests/score-and-ui.test.js` | 体检评分、Live Cockpit 实时驾驶舱、热身与快捷指令套件 | 19 tests |
+| 10 | `dist/tests/score-and-ui.test.js` | 体检评分、Workbench 2.0 工作台与交互 API、热身与快捷指令套件 | 22 tests |
 | 11 | `dist/tests/surface-audit-and-hardening.test.js` | 多宿主静默失败表面审计矩阵与全链路加固测试套件 | 32 tests |
 
 </details>
