@@ -1,0 +1,57 @@
+{
+  "name": "evo-kernel-cockpit",
+  "displayName": "EvoKernel Workbench",
+  "description": "Deterministic Self-Evolving Meta-Kernel Cockpit & Cognitive Memory Workbench for AI Agents",
+  "version": "0.3.0",
+  "publisher": "damonless",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Developer Tools",
+    "Other"
+  ],
+  "keywords": [
+    "evo-kernel",
+    "workbench",
+    "cockpit",
+    "cognitive-memory",
+    "prompt-cache",
+    "mcp"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:evo.openWorkbench",
+    "onCommand:evo.viewCockpit"
+  ],
+  "main": "./index.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "evo.openWorkbench",
+        "title": "EvoKernel: Open Workbench 2.0",
+        "category": "EvoKernel",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "evo.viewCockpit",
+        "title": "EvoKernel: View Cockpit",
+        "category": "EvoKernel",
+        "icon": "$(layout-panel)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "evo.openWorkbench",
+          "when": "true"
+        },
+        {
+          "command": "evo.viewCockpit",
+          "when": "true"
+        }
+      ]
+    }
+  }
+}

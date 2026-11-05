@@ -9,10 +9,19 @@ import * as vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { buildScoreReport, inspectMcpTaxSnapshot, renderScoreSvg } from '../cli/score.js';
-import { exportUiHtml, startUiServer, buildUiSnapshot } from '../cli/ui.js';
+import {
+  exportUiHtml,
+  startUiServer,
+  buildUiSnapshot,
+  detectChromiumBrowser,
+  launchDefaultBrowser,
+  launchNativeDesktopWindow,
+  isValidLocalHttpUrl,
+} from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { runInit, runUninstall } from '../cli/init.js';
+import { runInit, runUninstall, mountIdeExtensions } from '../cli/init.js';
 import { redactSensitiveDiagnostics } from '../core/telemetry.js';
+import { EvoStorage } from '../core/storage.js';
 
 function createTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `evo-score-ui-${prefix}-`));
@@ -228,21 +237,54 @@ describe('EvoKernel P1 & P2: Score, UI Cockpit, Slash Commands & Manifest Parity
       // Assert zero inline event attributes (on*=)
       assert.equal(/\bon[a-z]+\s*=/i.test(html), false, 'Exported HTML must contain zero inline event attributes (on*=)');
 
-      // Verify #btn-watch-film and #shotcraft-modal exist in rendered UI HTML
-      assert.ok(html.includes('id="btn-watch-film"'), 'Exported HTML must contain #btn-watch-film action button');
-      assert.ok(html.includes('id="shotcraft-modal"'), 'Exported HTML must contain #shotcraft-modal Architecture Theater');
-      assert.ok(html.includes('id="film-play-toggle"'), 'Exported HTML must contain #film-play-toggle control');
-      assert.ok(html.includes('id="film-prev-btn"'), 'Exported HTML must contain #film-prev-btn control');
-      assert.ok(html.includes('id="film-next-btn"'), 'Exported HTML must contain #film-next-btn control');
-      assert.ok(html.includes('id="film-close-btn"'), 'Exported HTML must contain #film-close-btn control');
-      for (let sIdx = 0; sIdx < 5; sIdx++) {
-        assert.ok(html.includes(`id="scene-${sIdx}"`), `Exported HTML must contain #scene-${sIdx}`);
-      }
-      assert.ok(html.includes('id="constellation-card"'), 'Exported HTML must contain #constellation-card');
-      assert.ok(html.includes('const-flyline-pulse'), 'Exported HTML must contain animated constellation pulse flow');
-      assert.ok(html.includes('-89%'), 'Exported HTML KPI strip contains updated -89% prompt savings metric');
-      assert.ok(html.includes('1,531 tok L0 vs 13,672 tok Eager'), 'Exported HTML KPI strip contains updated 1,531 vs 13,672 comparison');
-      assert.ok(html.includes('16 / 16'), 'Exported HTML KPI strip contains updated 16 / 16 verified memories metric');
+      // Verify Workbench 2.0 3-column skeleton layout and DOM elements exist
+      assert.ok(html.includes('id="workbench-root"'), 'Exported HTML must contain #workbench-root container');
+      assert.ok(html.includes('id="topbar"'), 'Exported HTML must contain #topbar header');
+      assert.ok(html.includes('id="topbar-brand-name"'), 'Exported HTML must contain #topbar-brand-name');
+      assert.ok(html.includes('id="cmd-palette-trigger"'), 'Exported HTML must contain #cmd-palette-trigger');
+      assert.ok(html.includes('id="left-rail"'), 'Exported HTML must contain Column 1 #left-rail');
+      assert.ok(html.includes('id="nav-view-switcher"'), 'Exported HTML must contain #nav-view-switcher');
+      assert.ok(html.includes('id="nav-btn-capabilities"'), 'Exported HTML must contain #nav-btn-capabilities');
+      assert.ok(html.includes('id="nav-btn-topology"'), 'Exported HTML must contain #nav-btn-topology');
+      assert.ok(html.includes('id="nav-btn-hotspots"'), 'Exported HTML must contain #nav-btn-hotspots');
+      assert.ok(html.includes('id="nav-btn-gatekeeper"'), 'Exported HTML must contain #nav-btn-gatekeeper');
+      assert.ok(html.includes('id="bento-health"'), 'Exported HTML must contain #bento-health Bento card');
+      assert.ok(html.includes('id="bento-savings"'), 'Exported HTML must contain #bento-savings Bento card');
+      assert.ok(html.includes('id="bento-budget"'), 'Exported HTML must contain #bento-budget Bento card');
+      assert.ok(html.includes('id="center-stage"'), 'Exported HTML must contain Column 2 #center-stage');
+      assert.ok(html.includes('id="view-capabilities"'), 'Exported HTML must contain #view-capabilities section');
+      assert.ok(html.includes('id="capabilities-table"'), 'Exported HTML must contain #capabilities-table');
+      assert.ok(html.includes('id="view-topology"'), 'Exported HTML must contain #view-topology section');
+      assert.ok(html.includes('id="topology-svg"'), 'Exported HTML must contain #topology-svg SVG canvas');
+      assert.ok(html.includes('id="view-hotspots"'), 'Exported HTML must contain #view-hotspots section');
+      assert.ok(html.includes('id="hotspots-table"'), 'Exported HTML must contain #hotspots-table');
+      assert.ok(html.includes('id="view-gatekeeper"'), 'Exported HTML must contain #view-gatekeeper section');
+      assert.ok(html.includes('id="gatekeeper-timeline"'), 'Exported HTML must contain #gatekeeper-timeline');
+      assert.ok(html.includes('id="right-inspector"'), 'Exported HTML must contain Column 3 #right-inspector');
+      assert.ok(html.includes('id="inspector-placeholder"'), 'Exported HTML must contain #inspector-placeholder');
+      assert.ok(html.includes('id="cmd-palette-backdrop"'), 'Exported HTML must contain #cmd-palette-backdrop');
+      assert.ok(html.includes('id="toast-container"'), 'Exported HTML must contain #toast-container');
+      assert.ok(html.includes('--bg-canvas'), 'Exported HTML must contain Zinc dark tokens (--bg-canvas)');
+      assert.ok(
+        html.includes('--bg-canvas: #09090b'),
+        'Exported HTML must declare Zinc dark canvas token (--bg-canvas: #09090b)'
+      );
+      assert.ok(
+        html.includes('--text-primary: #fafafa'),
+        'Exported HTML must declare Zinc light primary text token (--text-primary: #fafafa)'
+      );
+      assert.ok(
+        html.includes('--border-subtle: #27272a'),
+        'Exported HTML must declare Zinc subtle border token (--border-subtle: #27272a)'
+      );
+      assert.ok(
+        html.includes('inset 0 1px 0 0 rgba(255, 255, 255, 0.05)'),
+        'Exported HTML must contain Cult-UI micro-inset highlight token'
+      );
+      assert.ok(
+        html.includes('cubic-bezier(0.22, 1, 0.36, 1)'),
+        'Exported HTML must contain Motion-Primitives spring transition timing function'
+      );
 
       // Verify renderScoreSvg produces needle-sweep and barGrow animation styles and classes
       const report = buildScoreReport(ws);
@@ -941,6 +983,469 @@ Widget issue
       assert.equal(missingTokenRes.status, 1, 'Must exit with code 1 when --token value is missing');
       assert.ok(missingTokenRes.stderr.includes('Missing value for --token'));
     } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('20. POST /api/action: 6 core actions, traversal guards, token auth, 1MB limit, and 405 Method Not Allowed', async () => {
+    const ws = createTempDir('api-action-test');
+    const storage = new EvoStorage(ws);
+    storage.ensureInitialized();
+
+    // Prepare fixtures: rule, skill, tool, memory
+    const rulesDir = storage.rulesDir;
+    const skillsDir = storage.skillsDir;
+    const toolsDir = storage.toolsDir;
+    const memDir = storage.memoriesDir;
+
+    // 1. Fixture: rule
+    fs.writeFileSync(
+      path.join(rulesDir, 'test-rule.md'),
+      `---\nid: test-rule\ntitle: Test Rule\nl0_summary: Test L0 Summary\nscope_glob: "*"\ncore: false\npriority: 10\ntags: []\norigin: session\ncreated_at: "2026-11-01T00:00:00.000Z"\nupdated_at: "2026-11-01T00:00:00.000Z"\n---\n## Rule Body\nInitial rule body.\n`,
+      'utf8'
+    );
+
+    // 2. Fixture: skill
+    const skillSub = path.join(skillsDir, 'test-skill');
+    fs.mkdirSync(skillSub, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillSub, 'SKILL.md'),
+      `---\nname: test-skill\ndescription: Test Skill\n---\n# Skill SOP\nInitial skill content.\n`,
+      'utf8'
+    );
+
+    // 3. Fixture: tool
+    const toolSub = path.join(toolsDir, 'test-tool');
+    fs.mkdirSync(toolSub, { recursive: true });
+    fs.writeFileSync(
+      path.join(toolSub, 'manifest.json'),
+      JSON.stringify({ id: 'test-tool', description: 'Test tool', runtime: 'node', entrypoint: 'run.mjs', entry_script: 'run.mjs' }),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(toolSub, 'run.mjs'),
+      `if (process.argv.includes('--self-test')) { console.log('OK'); process.exit(0); }\nconsole.log('Running');\n`,
+      'utf8'
+    );
+
+    // 4. Fixture: memory
+    const srcDir = path.join(ws, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    const targetSrc = path.join(srcDir, 'target.ts');
+    fs.writeFileSync(targetSrc, 'export function targetFunction() { return 1; }\n', 'utf8');
+
+    fs.writeFileSync(
+      path.join(memDir, 'test-mem.md'),
+      `---\nid: test-mem\ntitle: Test Memory\nl0_summary: Memory summary\ncreated_commit: head\ntarget_symbols: ["targetFunction"]\nast_fingerprints: {"targetFunction":{"symbol":"targetFunction","file_path":"src/target.ts","signature":"export function targetFunction()","ast_hash":"abc"}}\ntags: []\norigin: session\ncreated_at: "2026-11-01T00:00:00.000Z"\nupdated_at: "2026-11-01T00:00:00.000Z"\n---\n## Symptom\nSym\n## Root Cause\nRC\n## Solution\nSol\n`,
+      'utf8'
+    );
+
+    const instance = await startUiServer(ws, { port: 0 });
+
+    const postAction = (payload: any, options: { token?: string; contentType?: string; method?: string } = {}) => {
+      const targetToken = options.token !== undefined ? options.token : instance.token;
+      return new Promise<{ status: number; body: any }>((resolve, reject) => {
+        const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+        const req = http.request(
+          `http://127.0.0.1:${instance.port}/api/action`,
+          {
+            method: options.method || 'POST',
+            headers: {
+              ...(targetToken ? { 'X-Evo-UI-Token': targetToken } : {}),
+              'Content-Type': options.contentType !== undefined ? options.contentType : 'application/json',
+              'Content-Length': Buffer.byteLength(data),
+            },
+          },
+          (res) => {
+            let resBody = '';
+            res.on('data', (c) => (resBody += c));
+            res.on('end', () => {
+              try {
+                resolve({ status: res.statusCode || 0, body: JSON.parse(resBody) });
+              } catch {
+                resolve({ status: res.statusCode || 0, body: resBody });
+              }
+            });
+          }
+        );
+        req.on('error', reject);
+        req.write(data);
+        req.end();
+      });
+    };
+
+    try {
+      // A. Security Perimeter: Method Not Allowed
+      const getRes = await postAction({}, { method: 'GET' });
+      assert.equal(getRes.status, 405);
+      assert.equal(getRes.body.ok, false);
+
+      // B. Security Perimeter: Unauthorized (missing token)
+      const noTokenRes = await postAction({ action: 'verify-memory' }, { token: '' });
+      assert.equal(noTokenRes.status, 401);
+
+      // C. Security Perimeter: Bad Content-Type
+      const badCtRes = await postAction({ action: 'verify-memory' }, { contentType: 'text/plain' });
+      assert.equal(badCtRes.status, 400);
+
+      // D. Security Perimeter: Path Traversal Guard (open-editor)
+      const traversalRes = await postAction({ action: 'open-editor', params: { filePath: '../../etc/passwd' } });
+      assert.equal(traversalRes.status, 403);
+      assert.ok(traversalRes.body.error.includes('Path traversal'));
+
+      // E. Security Perimeter: Missing filePath (open-editor)
+      const missingPathRes = await postAction({ action: 'open-editor', params: {} });
+      assert.equal(missingPathRes.status, 400);
+
+      // F. Action 1: open-editor on existing workspace file
+      const openRes = await postAction({ action: 'open-editor', params: { filePath: 'src/target.ts', line: 1 } });
+      assert.equal(openRes.status, 200);
+      assert.equal(openRes.body.ok, true);
+      assert.equal(openRes.body.action, 'open-editor');
+      assert.ok(openRes.body.data.opened.endsWith('target.ts'));
+
+      // G. Action 2: verify-memory
+      const verifyRes = await postAction({ action: 'verify-memory', params: { id: 'test-mem' } });
+      assert.equal(verifyRes.status, 200);
+      assert.equal(verifyRes.body.ok, true);
+      assert.equal(verifyRes.body.action, 'verify-memory');
+      assert.equal(verifyRes.body.data.verifiedCount, 1);
+
+      // H. Action 3: run-tool-test (sandboxed --self-test)
+      const toolRes = await postAction({ action: 'run-tool-test', params: { id: 'test-tool' } });
+      assert.equal(toolRes.status, 200);
+      assert.equal(toolRes.body.ok, true);
+      assert.equal(toolRes.body.result.exitCode, 0);
+      assert.ok(toolRes.body.result.stdout.includes('OK'));
+
+      // I. Action 4: toggle-rule-tier (promote to core)
+      const toggleRes = await postAction({ action: 'toggle-rule-tier', params: { id: 'test-rule', core: true } });
+      assert.equal(toggleRes.status, 200);
+      assert.equal(toggleRes.body.ok, true);
+      assert.equal(toggleRes.body.data.core, true);
+      assert.ok(typeof toggleRes.body.tokenUsage === 'number');
+
+      // J. Action 5: update-content (edit rule markdown)
+      const updatedMarkdown = `---\nid: test-rule\ntitle: Test Rule Updated\nl0_summary: Updated summary\nscope_glob: "*"\ncore: true\npriority: 10\ntags: []\norigin: session\ncreated_at: "2026-11-01T00:00:00.000Z"\nupdated_at: "2026-11-01T00:00:00.000Z"\n---\n## Rule Body\nUpdated rule body content.\n`;
+      const updateRes = await postAction({
+        action: 'update-content',
+        params: { kind: 'rule', id: 'test-rule', content: updatedMarkdown },
+      });
+      assert.equal(updateRes.status, 200);
+      assert.equal(updateRes.body.ok, true);
+      assert.equal(updateRes.body.data.updated, true);
+
+      // K. Action 6: archive-item
+      const archiveRes = await postAction({
+        action: 'archive-item',
+        params: { kind: 'rule', id: 'test-rule', reason: 'Test retirement' },
+      });
+      assert.equal(archiveRes.status, 200);
+      assert.equal(archiveRes.body.ok, true);
+      assert.equal(archiveRes.body.data.archived.id, 'test-rule');
+
+      // L. Unknown action -> 400
+      const unknownRes = await postAction({ action: 'nonexistent-action' });
+      assert.equal(unknownRes.status, 400);
+      assert.ok(unknownRes.body.error.includes('Unknown action'));
+    } finally {
+      await instance.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('21. Micro-Window launcher flags (--app, --desktop), URL security validation, and cross-platform browser resolution', () => {
+    const ws = createTempDir('micro-window-test');
+    const binEntry = path.resolve(process.cwd(), 'bin', 'evo.mjs');
+
+    try {
+      // 1. URL security guard: launchDefaultBrowser rejects non-local and userinfo-spoofed URLs
+      assert.equal(launchDefaultBrowser('https://malicious.evil.com'), false);
+      assert.equal(launchDefaultBrowser('ftp://localhost'), false);
+      assert.equal(launchDefaultBrowser('javascript:alert(1)'), false);
+      assert.equal(launchDefaultBrowser('http://127.0.0.1:secret@evil.com'), false);
+      assert.equal(launchDefaultBrowser('http://127.0.0.1:secret@evil.com/'), false);
+      assert.equal(launchDefaultBrowser('http://localhost:80@evil.com/'), false);
+      assert.equal(launchDefaultBrowser('http://user:pass@127.0.0.1:4310/'), false);
+      assert.equal(launchDefaultBrowser('http://127.0.0.1'), false);
+
+      // 2. URL security guard: launchNativeDesktopWindow rejects non-local and userinfo-spoofed URLs
+      assert.equal(launchNativeDesktopWindow('https://evil.com'), false);
+      assert.equal(launchNativeDesktopWindow('file:///C:/Windows/system32/cmd.exe'), false);
+      assert.equal(launchNativeDesktopWindow('http://127.0.0.1:secret@evil.com'), false);
+      assert.equal(launchNativeDesktopWindow('http://localhost:80@evil.com/'), false);
+      assert.equal(launchNativeDesktopWindow('http://user:pass@127.0.0.1:4310/'), false);
+      assert.equal(launchNativeDesktopWindow('http://127.0.0.1'), false);
+
+      // 2b. Strict local URL validator unit assertions
+      assert.equal(isValidLocalHttpUrl('http://127.0.0.1:4310/'), true);
+      assert.equal(isValidLocalHttpUrl('http://localhost:4310/'), true);
+      assert.equal(isValidLocalHttpUrl('http://127.0.0.1:4310/?token=abc123xyz'), true);
+      assert.equal(isValidLocalHttpUrl('http://127.0.0.1:secret@evil.com'), false);
+      assert.equal(isValidLocalHttpUrl('http://localhost:80@evil.com/'), false);
+      assert.equal(isValidLocalHttpUrl('http://user:pass@127.0.0.1:4310/'), false);
+      assert.equal(isValidLocalHttpUrl('http://127.0.0.1:99999/'), false);
+      assert.equal(isValidLocalHttpUrl('http://127.0.0.1'), false);
+
+      // 3. detectChromiumBrowser returns a string or null on current host
+      const hostBrowser = detectChromiumBrowser();
+      if (hostBrowser) {
+        assert.ok(typeof hostBrowser === 'string');
+        assert.ok(hostBrowser.length > 0);
+      }
+
+      // 4. Test platform-specific candidate paths logic
+      const originalPlatform = process.platform;
+      try {
+        // Test darwin candidate structure
+        Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+        const macBrowser = detectChromiumBrowser();
+        // Returns string if on macOS or null if candidates don't exist
+        assert.ok(macBrowser === null || typeof macBrowser === 'string');
+
+        // Test linux candidate structure
+        Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+        const linuxBrowser = detectChromiumBrowser();
+        assert.ok(linuxBrowser === null || typeof linuxBrowser === 'string');
+
+        // Test win32 candidate structure
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        const winBrowser = detectChromiumBrowser();
+        assert.ok(winBrowser === null || typeof winBrowser === 'string');
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+      }
+
+      // 5. CLI help documents --app and --desktop flags
+      const uiHelp = spawnSync(process.execPath, [binEntry, 'ui', '--help'], {
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(uiHelp.status, 0);
+      assert.ok(uiHelp.stdout.includes('--app, --desktop'), 'Help output must document --app, --desktop flags');
+      assert.ok(uiHelp.stdout.includes('native chromeless desktop window'), 'Help output must describe chromeless window mode');
+
+      // 6. General help documents ui --app, --desktop
+      const genHelp = spawnSync(process.execPath, [binEntry, '--help'], {
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(genHelp.status, 0);
+      assert.ok(genHelp.stdout.includes('[--app] [--desktop]'), 'General help must document [--app] [--desktop]');
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('22. IDE extension entrypoint (activate, deactivate, handleWebviewAction), mountIdeExtensions, and non-circular MountIdeResult', async () => {
+    const ws = createTempDir('ide-extension-test');
+    const storage = new EvoStorage(ws);
+    storage.ensureInitialized();
+
+    // Prepare fixture memory & tool
+    const memDir = storage.memoriesDir;
+    const toolsDir = storage.toolsDir;
+    const srcDir = path.join(ws, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    const targetFile = path.join(srcDir, 'index.ts');
+    fs.writeFileSync(targetFile, 'export const val = 42;\n', 'utf8');
+
+    fs.writeFileSync(
+      path.join(memDir, 'ide-mem.md'),
+      `---\nid: ide-mem\ntitle: IDE Memory\nl0_summary: IDE L0\ncreated_commit: head\ntarget_symbols: ["val"]\nast_fingerprints: {"val":{"symbol":"val","file_path":"src/index.ts","signature":"export const val = 42;","ast_hash":"val1"}}\ntags: []\norigin: session\ncreated_at: "2026-11-01T00:00:00.000Z"\nupdated_at: "2026-11-01T00:00:00.000Z"\n---\n## Symptom\nS\n## Root Cause\nRC\n## Solution\nSol\n`,
+      'utf8'
+    );
+
+    const toolSub = path.join(toolsDir, 'ide-tool');
+    fs.mkdirSync(toolSub, { recursive: true });
+    fs.writeFileSync(
+      path.join(toolSub, 'manifest.json'),
+      JSON.stringify({ id: 'ide-tool', description: 'Tool', runtime: 'node', entrypoint: 'run.mjs', entry_script: 'run.mjs' }),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(toolSub, 'run.mjs'),
+      `if (process.argv.includes('--self-test')) { console.log('PASS'); process.exit(0); }\n`,
+      'utf8'
+    );
+
+    // 1. Dynamic import of compiled IDE extension module
+    const extModulePath = path.resolve(process.cwd(), 'dist', 'ide', 'vscode-extension.js');
+    assert.ok(fs.existsSync(extModulePath), 'dist/ide/vscode-extension.js must exist');
+    const ext = await import(`file://${extModulePath.replace(/\\/g, '/')}`);
+
+    // Assert entrypoint exports
+    assert.equal(typeof ext.activate, 'function');
+    assert.equal(typeof ext.deactivate, 'function');
+    assert.equal(typeof ext.handleWebviewAction, 'function');
+    assert.equal(typeof ext.getActivePanel, 'function');
+    assert.equal(typeof ext.renderWorkbenchHtml, 'function');
+    assert.equal(typeof ext.buildSecuredWebviewHtml, 'function');
+    assert.equal(typeof ext.resolveActiveWorkspaceRoot, 'function');
+
+    // 2. Mock VS Code environment
+    const registeredCommands = new Map<string, Function>();
+    let createdPanel: any = null;
+    let openedDocUri: any = null;
+    let showedDoc: any = null;
+
+    const mockVsCode = {
+      window: {
+        createWebviewPanel: (viewType: string, title: string, showOptions: any, options: any) => {
+          createdPanel = {
+            viewType,
+            title,
+            webview: {
+              html: '',
+              options,
+              postMessage: (msg: any) => {},
+              onDidReceiveMessage: (listener: Function) => ({ dispose() {} }),
+            },
+            reveal: () => {},
+            dispose: () => { createdPanel = null; },
+            onDidDispose: (cb: Function) => ({ dispose() {} }),
+          };
+          return createdPanel;
+        },
+        showWarningMessage: () => {},
+        showTextDocument: async (doc: any, opts: any) => {
+          showedDoc = { doc, opts };
+          return {};
+        },
+        activeTextEditor: undefined,
+      },
+      workspace: {
+        workspaceFolders: [{ uri: { fsPath: ws }, name: 'test', index: 0 }],
+        openTextDocument: async (uri: any) => {
+          openedDocUri = uri;
+          return { uri, fileName: typeof uri === 'string' ? uri : uri.fsPath, lineCount: 10, getText: () => '' };
+        },
+        getWorkspaceFolder: () => ({ uri: { fsPath: ws }, name: 'test', index: 0 }),
+      },
+      commands: {
+        registerCommand: (name: string, callback: Function) => {
+          registeredCommands.set(name, callback);
+          return { dispose: () => { registeredCommands.delete(name); } };
+        },
+      },
+      Uri: {
+        file: (p: string) => ({ fsPath: p, scheme: 'file', path: p, toString: () => p }),
+      },
+      Position: class {
+        line: number;
+        character: number;
+        constructor(line: number, character: number) {
+          this.line = line;
+          this.character = character;
+        }
+      },
+      Selection: class {
+        start: any;
+        end: any;
+        anchor: any;
+        active: any;
+        constructor(anchor: any, active: any) {
+          this.anchor = anchor;
+          this.active = active;
+          this.start = anchor;
+          this.end = active;
+        }
+      },
+      ViewColumn: { One: 1 },
+    };
+
+    const mockContext = { subscriptions: [] };
+
+    // 3. Test activate & command registration
+    await ext.activate(mockContext, mockVsCode);
+    assert.ok(registeredCommands.has('evo.openWorkbench'));
+    assert.ok(registeredCommands.has('evo.viewCockpit'));
+    assert.ok(mockContext.subscriptions.length >= 2);
+
+    // 4. Test opening workbench panel via registered command
+    const openWorkbenchFn = registeredCommands.get('evo.openWorkbench');
+    assert.ok(openWorkbenchFn);
+    await openWorkbenchFn!();
+    assert.ok(createdPanel, 'WebviewPanel must be created');
+    assert.equal(createdPanel.title, 'EvoKernel Workbench 2.0');
+    assert.ok(createdPanel.webview.html.includes('id="workbench-root"'));
+    assert.equal(ext.getActivePanel(), createdPanel);
+
+    // 5. Test deactivate
+    ext.deactivate();
+    assert.equal(ext.getActivePanel(), undefined);
+
+    // 6. Test in-process handleWebviewAction
+    // Action 1: open-editor
+    const openRes = await ext.handleWebviewAction('open-editor', { filePath: 'src/index.ts', line: 1 }, ws, mockVsCode);
+    assert.equal(openRes.ok, true);
+    assert.ok(showedDoc);
+
+    // Traversal rejection
+    const travRes = await ext.handleWebviewAction('open-editor', { filePath: '../../secret.txt' }, ws, mockVsCode);
+    assert.equal(travRes.ok, false);
+    assert.ok(travRes.error.includes('Forbidden'));
+
+    // Action 2: verify-memory
+    const memRes = await ext.handleWebviewAction('verify-memory', { id: 'ide-mem' }, ws, mockVsCode);
+    assert.equal(memRes.ok, true);
+    assert.equal(memRes.data.verifiedCount, 1);
+
+    // Action 3: run-tool-test
+    const toolRes = await ext.handleWebviewAction('run-tool-test', { id: 'ide-tool' }, ws, mockVsCode);
+    assert.equal(toolRes.ok, true);
+    assert.equal(toolRes.result.exitCode, 0);
+
+    // Action 4: unknown action
+    const unknownRes = await ext.handleWebviewAction('invalid', {}, ws, mockVsCode);
+    assert.equal(unknownRes.ok, false);
+
+    // 7. Test mountIdeExtensions & default auto-mounting on runInit
+    const fakeIdeDir = createTempDir('fake-ide-ext');
+    const oldIdeEnv = process.env.EVO_IDE_EXTENSIONS_DIR;
+    process.env.EVO_IDE_EXTENSIONS_DIR = fakeIdeDir;
+
+    try {
+      // Test mountIdeExtensions directly
+      const mountRes = mountIdeExtensions(ws);
+      assert.ok(Array.isArray(mountRes), 'MountIdeResult must be an array');
+      assert.ok(Array.isArray(mountRes.mounts), 'MountIdeResult.mounts must be an array');
+      assert.ok(typeof mountRes.totalMounted === 'number');
+      assert.equal(mountRes.length, 1);
+      assert.equal(mountRes[0].status, 'installed');
+
+      // Test non-circularity: JSON.stringify must succeed without throwing circular structure error
+      assert.doesNotThrow(() => {
+        const json = JSON.stringify(mountRes);
+        assert.ok(json.startsWith('['));
+      }, 'MountIdeResult must be non-circular and JSON-serializable');
+
+      // Test idempotency: re-mounting returns already-mounted / skipped
+      const remountRes = mountIdeExtensions(ws);
+      assert.equal(remountRes[0].status, 'skipped');
+
+      // Test forceCopy overrides existing junction/symlink and replaces with file copy
+      const forceCopyRes = mountIdeExtensions(ws, { forceCopy: true });
+      assert.equal(forceCopyRes[0].method, 'copy');
+      assert.equal(forceCopyRes[0].status, 'updated');
+
+      // Test default auto-mounting in runInit
+      const initWs = createTempDir('init-auto-ide');
+      try {
+        const initRes = runInit(initWs, ['claude']);
+        assert.ok(initRes.ideMounts, 'runInit must auto-mount IDE extension by default');
+        assert.ok(initRes.ideMounts.length >= 1);
+
+        // Test skipping via noIde: true
+        const noIdeRes = runInit(initWs, { noIde: true, targets: ['claude'] });
+        assert.equal(noIdeRes.ideMounts, undefined);
+      } finally {
+        fs.rmSync(initWs, { recursive: true, force: true });
+      }
+    } finally {
+      if (oldIdeEnv !== undefined) process.env.EVO_IDE_EXTENSIONS_DIR = oldIdeEnv;
+      else delete process.env.EVO_IDE_EXTENSIONS_DIR;
+      fs.rmSync(fakeIdeDir, { recursive: true, force: true });
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });

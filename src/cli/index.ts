@@ -93,8 +93,10 @@ Zero-dependency local cockpit UI for telemetry X-ray, budget treemap, and memory
 Options:
   --port <N>           Port to bind local cockpit UI server (default: 4310)
   --open               Automatically open browser after startup
+  --app, --desktop     Launch as native chromeless desktop window (1440x900)
   --token <str>        Pre-shared security token for UI authentication
   --export <path>      Export complete static HTML snapshot without starting server
+  --install-ide        Mount IDE extension into detected IDEs before starting server
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `);
@@ -112,6 +114,9 @@ Options:
   --targets <list>     Harness targets: claude, agents, gemini, cursor, or auto (default: auto)
   --link <path>        Link .evo capability tree from another repository or central storage
   --no-warmup          Skip background capability warmup and AST pre-indexing
+  --install-ide        Explicitly mount IDE extension into detected IDEs (default: true)
+  --no-ide             Skip IDE extension auto-mounting
+  --ide <targets>      Comma-separated list of target IDEs (vscode, cursor, windsurf, trae, antigravity, all)
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `);
@@ -381,7 +386,7 @@ Usage:
 Commands:
   score [--json] [--badge] [--svg <path>] [--html <path>] [--workspace <path>]
                       Instant 0-overhead diagnostic scoring for agent host tax, git bug hotspots, and memory coverage
-  ui [--port <N>] [--open] [--token <str>] [--export <path>] [--workspace <path>]
+  ui [--port <N>] [--open] [--app] [--desktop] [--token <str>] [--export <path>] [--workspace <path>]
                       Zero-dependency local cockpit UI for telemetry X-ray, budget treemap, and memory constellation
   init [--stealth] [--targets <list|auto>] [--no-warmup]
                       Detect and wire L0 Meta-Rule Seed + Single Meta-MCP + Slash Commands
@@ -556,6 +561,25 @@ export function parsePositiveIntFlag(args: string[], flag: string): number | und
   return undefined;
 }
 
+export function parseIdeTargetsArg(args: string[]): string[] | undefined {
+  const eqArg = args.find((a) => a.startsWith('--ide='));
+  if (eqArg) {
+    return eqArg
+      .slice('--ide='.length)
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  const idx = args.indexOf('--ide');
+  if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
+    return args[idx + 1]
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return undefined;
+}
+
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   let cmd = (args[0] || '').toLowerCase();
@@ -703,7 +727,18 @@ export function runCli(argv: string[]): void {
       const targets = parseTargetsArg(args, workspaceRoot);
       const linkEvoFrom = parseLinkArg(args);
       const noWarmup = args.includes('--no-warmup');
-      const res = runInit(workspaceRoot, { stealth, targets, linkEvoFrom, warmup: !noWarmup });
+      const installIde = args.includes('--install-ide') ? true : undefined;
+      const noIde = args.includes('--no-ide');
+      const ide = parseIdeTargetsArg(args);
+      const res = runInit(workspaceRoot, {
+        stealth,
+        targets,
+        linkEvoFrom,
+        warmup: !noWarmup,
+        installIde,
+        noIde,
+        ide,
+      });
       console.log('🧬 EvoKernel initialized successfully!');
       console.log(`  ├─ Harnesses wired : ${res.initializedHarnesses.join(', ')}`);
       console.log(`  ├─ Rule seeds      : ${res.updatedFiles.join(', ')}`);
@@ -713,6 +748,14 @@ export function runCli(argv: string[]): void {
       }
       if (res.linkedSharedEvoDir) {
         console.log(`  ├─ Shared .evo     : ${res.linkedSharedEvoDir}`);
+      }
+      if (res.ideMounts && res.ideMounts.length > 0) {
+        const mountSummary = res.ideMounts
+          .map((m) => `${m.name} (${m.method}: ${m.targetPath})`)
+          .join(', ');
+        console.log(`  ├─ IDE Extensions  : ${mountSummary}`);
+      } else if (noIde) {
+        console.log('  ├─ IDE Extensions  : skipped (--no-ide)');
       }
       console.log(
         `  └─ Git Exclude     : ${

@@ -29,6 +29,28 @@ export {
 import { buildScoreReport } from './score.js';
 import { runBootstrap } from './bootstrap.js';
 
+export interface IdeProfile {
+  id: string;
+  name: string;
+  relExtensionsDir: string[];
+  relRootDirs: string[][];
+}
+
+export interface IdeMountDetail {
+  ide: string;
+  name: string;
+  extensionDir: string;
+  targetPath: string;
+  method: 'junction' | 'symlink' | 'copy' | 'already-mounted';
+  status: 'installed' | 'updated' | 'skipped' | 'failed';
+  error?: string;
+}
+
+export type MountIdeResult = IdeMountDetail[] & {
+  mounts: IdeMountDetail[];
+  totalMounted: number;
+};
+
 export interface InitResult {
   initializedHarnesses: string[];
   updatedFiles: string[];
@@ -37,6 +59,7 @@ export interface InitResult {
   stealthExcluded?: string[];
   linkedSharedEvoDir?: string;
   warmupReport?: any;
+  ideMounts?: IdeMountDetail[];
 }
 
 export interface InitOptions {
@@ -44,6 +67,10 @@ export interface InitOptions {
   stealth?: boolean;
   linkEvoFrom?: string;
   warmup?: boolean;
+  installIde?: boolean;
+  noIde?: boolean;
+  ide?: string[];
+  forceCopy?: boolean;
 }
 
 export const MAX_TOOLS_CATALOG_TOKENS = 350;
@@ -749,6 +776,20 @@ export function runInit(
     } catch {}
   }
 
+  const shouldMountIde = opts.installIde ?? (!opts.noIde);
+  let ideMounts: IdeMountDetail[] | undefined;
+  if (shouldMountIde && !opts.noIde) {
+    try {
+      const mountRes = mountIdeExtensions(workspaceRoot, {
+        installIde: opts.installIde,
+        noIde: opts.noIde,
+        ide: opts.ide,
+        forceCopy: opts.forceCopy,
+      });
+      ideMounts = mountRes.mounts;
+    } catch {}
+  }
+
   return {
     initializedHarnesses: targets,
     updatedFiles,
@@ -757,7 +798,269 @@ export function runInit(
     stealthExcluded,
     linkedSharedEvoDir,
     warmupReport,
+    ideMounts,
   };
+}
+
+export const KNOWN_IDE_PROFILES: IdeProfile[] = [
+  {
+    id: 'vscode',
+    name: 'VS Code',
+    relExtensionsDir: ['.vscode', 'extensions'],
+    relRootDirs: [['.vscode']],
+  },
+  {
+    id: 'vscode-insiders',
+    name: 'VS Code Insiders',
+    relExtensionsDir: ['.vscode-insiders', 'extensions'],
+    relRootDirs: [['.vscode-insiders']],
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    relExtensionsDir: ['.cursor', 'extensions'],
+    relRootDirs: [['.cursor']],
+  },
+  {
+    id: 'windsurf',
+    name: 'Windsurf',
+    relExtensionsDir: ['.windsurf', 'extensions'],
+    relRootDirs: [['.windsurf'], ['.codeium', 'windsurf']],
+  },
+  {
+    id: 'windsurf-codeium',
+    name: 'Windsurf (Codeium)',
+    relExtensionsDir: ['.codeium', 'windsurf', 'extensions'],
+    relRootDirs: [['.codeium', 'windsurf']],
+  },
+  {
+    id: 'antigravity',
+    name: 'Antigravity',
+    relExtensionsDir: ['.antigravity', 'extensions'],
+    relRootDirs: [['.antigravity'], ['.gemini', 'antigravity']],
+  },
+  {
+    id: 'trae',
+    name: 'Trae',
+    relExtensionsDir: ['.trae', 'extensions'],
+    relRootDirs: [['.trae']],
+  },
+  {
+    id: 'vscode-server',
+    name: 'VS Code Server',
+    relExtensionsDir: ['.vscode-server', 'extensions'],
+    relRootDirs: [['.vscode-server']],
+  },
+  {
+    id: 'vscodium',
+    name: 'VSCodium',
+    relExtensionsDir: ['.vscode-oss', 'extensions'],
+    relRootDirs: [['.vscode-oss']],
+  },
+];
+
+export function resolveExtensionSourceDir(workspaceRoot?: string): string {
+  const candidates = [
+    workspaceRoot ? path.resolve(workspaceRoot, 'templates', 'ide-extension') : '',
+    path.resolve(import.meta.dirname, '..', '..', 'templates', 'ide-extension'),
+    path.resolve(import.meta.dirname, '..', 'templates', 'ide-extension'),
+    path.resolve(process.cwd(), 'templates', 'ide-extension'),
+  ].filter(Boolean);
+  return candidates.find((c) => fs.existsSync(c)) || candidates[0];
+}
+
+export function detectInstalledIdeExtensionsDirs(
+  homeDir: string = os.homedir(),
+  targetFilter?: string[]
+): { profile: IdeProfile; extensionsDir: string }[] {
+  if (process.env.EVO_IDE_EXTENSIONS_DIR) {
+    const customDirs = process.env.EVO_IDE_EXTENSIONS_DIR.split(',')
+      .map((d) => d.trim())
+      .filter(Boolean);
+    return customDirs.map((d, idx) => ({
+      profile: {
+        id: `custom-${idx}`,
+        name: `Custom IDE (${path.basename(path.dirname(d)) || idx})`,
+        relExtensionsDir: [],
+        relRootDirs: [],
+      },
+      extensionsDir: path.resolve(d),
+    }));
+  }
+
+  const results: { profile: IdeProfile; extensionsDir: string }[] = [];
+  const normalizedFilters = targetFilter?.map((t) => t.trim().toLowerCase());
+  const selectAll =
+    !normalizedFilters ||
+    normalizedFilters.length === 0 ||
+    normalizedFilters.includes('all') ||
+    normalizedFilters.includes('auto');
+
+  for (const profile of KNOWN_IDE_PROFILES) {
+    const isExplicitlyRequested = normalizedFilters?.includes(profile.id);
+    if (!selectAll && !isExplicitlyRequested) continue;
+
+    const extDir = path.join(homeDir, ...profile.relExtensionsDir);
+    const hasExtDir = fs.existsSync(extDir);
+
+    let hasRootDir = false;
+    for (const relRoot of profile.relRootDirs) {
+      if (fs.existsSync(path.join(homeDir, ...relRoot))) {
+        hasRootDir = true;
+        break;
+      }
+    }
+
+    if (hasExtDir || hasRootDir || isExplicitlyRequested) {
+      results.push({ profile, extensionsDir: extDir });
+    }
+  }
+
+  return results;
+}
+
+export function mountIdeExtensionIntoDir(
+  extensionsDir: string,
+  bundleSourceDir: string,
+  options?: { forceCopy?: boolean }
+): { method: 'junction' | 'symlink' | 'copy' | 'already-mounted'; status: 'installed' | 'updated' | 'skipped' } {
+  fs.mkdirSync(extensionsDir, { recursive: true });
+  const targetPath = path.join(extensionsDir, 'damonless.evo-kernel-cockpit');
+
+  const safeReal = (p: string) => {
+    try {
+      return fs.realpathSync.native ? fs.realpathSync.native(p) : fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+
+  const expectedReal = safeReal(bundleSourceDir);
+
+  let isLink = false;
+  let exists = false;
+  try {
+    const stat = fs.lstatSync(targetPath);
+    exists = true;
+    isLink = stat.isSymbolicLink();
+  } catch {}
+
+  if (isLink) {
+    try {
+      const currentReal = safeReal(targetPath);
+      if (!options?.forceCopy && currentReal.toLowerCase() === expectedReal.toLowerCase()) {
+        return { method: 'already-mounted', status: 'skipped' };
+      }
+      fs.unlinkSync(targetPath);
+    } catch {}
+  } else if (exists) {
+    try {
+      if (!options?.forceCopy) {
+        fs.rmSync(targetPath, { recursive: true, force: true });
+      }
+    } catch {}
+  }
+
+  if (!options?.forceCopy) {
+    try {
+      const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+      fs.symlinkSync(bundleSourceDir, targetPath, linkType);
+      return { method: linkType, status: exists ? 'updated' : 'installed' };
+    } catch {
+      // Junction/symlink failed (cross-drive EXDEV or permission), fallback to copy
+    }
+  }
+
+  fs.cpSync(bundleSourceDir, targetPath, { recursive: true, force: true });
+  return { method: 'copy', status: exists ? 'updated' : 'installed' };
+}
+
+export function mountIdeExtensions(
+  workspaceRootOrOptions?: string | { installIde?: boolean; noIde?: boolean; ide?: string[]; forceCopy?: boolean },
+  maybeOptions?: { installIde?: boolean; noIde?: boolean; ide?: string[]; forceCopy?: boolean }
+): MountIdeResult {
+  let ws: string;
+  let opts: { installIde?: boolean; noIde?: boolean; ide?: string[]; forceCopy?: boolean } | undefined;
+
+  if (typeof workspaceRootOrOptions === 'string') {
+    ws = workspaceRootOrOptions;
+    opts = maybeOptions;
+  } else {
+    ws = process.cwd();
+    opts = workspaceRootOrOptions;
+  }
+
+  if (opts?.noIde) {
+    const empty: IdeMountDetail[] = [];
+    return Object.assign([], { mounts: empty, totalMounted: 0 }) as MountIdeResult;
+  }
+
+  const sourceDir = resolveExtensionSourceDir(ws);
+  const detected = detectInstalledIdeExtensionsDirs(os.homedir(), opts?.ide);
+  const details: IdeMountDetail[] = [];
+
+  for (const item of detected) {
+    const extensionDir = item.extensionsDir;
+    const profile = item.profile;
+    const targetPath = path.join(extensionDir, 'damonless.evo-kernel-cockpit');
+    try {
+      const res = mountIdeExtensionIntoDir(extensionDir, sourceDir, { forceCopy: opts?.forceCopy });
+      details.push({
+        ide: profile.id,
+        name: profile.name,
+        extensionDir,
+        targetPath,
+        method: res.method,
+        status: res.status,
+      });
+    } catch (err: any) {
+      details.push({
+        ide: profile.id,
+        name: profile.name,
+        extensionDir,
+        targetPath,
+        method: 'copy',
+        status: 'failed',
+        error: err?.message || String(err),
+      });
+    }
+  }
+
+  const totalMounted = details.filter((m) => m.status === 'installed' || m.status === 'updated').length;
+  return Object.assign([...details], { mounts: details, totalMounted }) as MountIdeResult;
+}
+
+export function unmountIdeExtensions(): { cleanedTargets: string[]; errors: string[] } {
+  const detected = detectInstalledIdeExtensionsDirs();
+  const cleanedTargets: string[] = [];
+  const errors: string[] = [];
+
+  for (const item of detected) {
+    const extensionDir = item.extensionsDir;
+    const targetPath = path.join(extensionDir, 'damonless.evo-kernel-cockpit');
+    try {
+      let isLink = false;
+      let exists = false;
+      try {
+        const stat = fs.lstatSync(targetPath);
+        exists = true;
+        isLink = stat.isSymbolicLink();
+      } catch {}
+
+      if (exists) {
+        if (isLink) {
+          fs.unlinkSync(targetPath);
+        } else {
+          fs.rmSync(targetPath, { recursive: true, force: true });
+        }
+        cleanedTargets.push(targetPath);
+      }
+    } catch (err: any) {
+      errors.push(`${targetPath}: ${err?.message || String(err)}`);
+    }
+  }
+
+  return { cleanedTargets, errors };
 }
 
 export function runUninstall(
@@ -790,6 +1093,8 @@ export function runUninstall(
     const cleaned = adapter.uninstall(workspaceRoot);
     cleanedFilesList.push(...cleaned);
   }
+
+  unmountIdeExtensions();
 
   pruneEmptyDirs(workspaceRoot, dirsToPrune);
 

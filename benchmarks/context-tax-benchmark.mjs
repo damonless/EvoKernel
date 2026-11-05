@@ -10,7 +10,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -176,9 +176,9 @@ async function runLiveMicroBenchmarks() {
     return null;
   }
 
-  const { EvoStorage } = await import(distStoragePath);
-  const { verifyMemoryFreshness } = await import(distMemoryPath);
-  const { buildScoreReport } = await import(distScorePath);
+  const { EvoStorage } = await import(pathToFileURL(distStoragePath).href);
+  const { verifyMemoryFreshness } = await import(pathToFileURL(distMemoryPath).href);
+  const { buildScoreReport } = await import(pathToFileURL(distScorePath).href);
 
   const storage = new EvoStorage(rootDir);
   const memories = storage.listMemories();
