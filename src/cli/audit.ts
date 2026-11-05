@@ -987,7 +987,7 @@ export function renderAuditReport(report: AuditReport): string {
     for (const f of report.files) {
       const badge = f.overBudget ? '⚠️ OVER_BUDGET' : '✅ HEALTHY';
       lines.push(
-        `│   ├── [${f.scope.toUpperCase()}:${f.kind.toUpperCase()}] ${f.displayPath} — ${f.tokens} tokens (${badge})`
+        `│   ├── [${f.scope.toUpperCase()}:${f.kind.toUpperCase()}] ${f.displayPath} — ${f.tokens}/${f.budgetLimit} tokens (${badge})`
       );
     }
   }

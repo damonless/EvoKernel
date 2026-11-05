@@ -812,6 +812,7 @@ export function renderScoreSvg(report: ScoreReport): string {
   const scoreColor = report.overallScore >= 90 ? '#10b981' : report.overallScore >= 75 ? '#38bdf8' : '#f59e0b';
   const circumference = 226.19;
   const dashOffset = (circumference - (Math.min(100, Math.max(0, report.overallScore)) / 100) * circumference).toFixed(1);
+  const barWidth = Math.max(14, Math.round(364 * (report.contextSavings.savingsPercent / 100)));
   const hotspotRows = report.gitHotspots
     .slice(0, 5)
     .map((h, i) => {
@@ -833,6 +834,22 @@ export function renderScoreSvg(report: ScoreReport): string {
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 430" width="940" height="430">
   <defs>
+    <style>
+      @keyframes needleSweep {
+        from { stroke-dashoffset: ${circumference}; }
+        to { stroke-dashoffset: ${dashOffset}; }
+      }
+      @keyframes barGrow {
+        from { width: 0; }
+        to { width: ${barWidth}px; }
+      }
+      .score-gauge-ring {
+        animation: needleSweep 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+      .savings-bar-fill {
+        animation: barGrow 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+    </style>
     <radialGradient id="ambientGlow" cx="50%" cy="0%" r="70%">
       <stop offset="0%" stop-color="#10b981" stop-opacity="0.16"/>
       <stop offset="45%" stop-color="#38bdf8" stop-opacity="0.05"/>
@@ -869,7 +886,7 @@ export function renderScoreSvg(report: ScoreReport): string {
   <!-- Circular Score Gauge -->
   <g transform="translate(92, 162)">
     <circle cx="0" cy="0" r="36" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="6.5"/>
-    <circle cx="0" cy="0" r="36" fill="none" stroke="${scoreColor}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}" transform="rotate(-90)"/>
+    <circle class="score-gauge-ring" cx="0" cy="0" r="36" fill="none" stroke="${scoreColor}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}" transform="rotate(-90)"/>
     <text x="0" y="4" text-anchor="middle" fill="#ffffff" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" font-weight="800">${report.overallScore}/100</text>
   </g>
 
@@ -883,7 +900,7 @@ export function renderScoreSvg(report: ScoreReport): string {
 
   <!-- Progress Bar -->
   <rect x="46" y="284" width="364" height="10" rx="5" fill="rgba(255,255,255,0.06)"/>
-  <rect x="46" y="284" width="${Math.max(14, Math.round(364 * (report.contextSavings.savingsPercent / 100)))}" height="10" rx="5" fill="url(#barGrad)"/>
+  <rect class="savings-bar-fill" x="46" y="284" width="${barWidth}" height="10" rx="5" fill="url(#barGrad)"/>
 
   <text x="46" y="324" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">Cache Shield: <tspan fill="#38bdf8" font-weight="700">${report.cacheShieldingScore}%</tspan>   ·   Hotspot Guard: <tspan fill="#34d399" font-weight="700">${report.fragileCodeScore}%</tspan></text>
   <text x="46" y="348" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">AST Memories: <tspan fill="#f8fafc" font-weight="600">${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} VERIFIED</tspan> · <tspan fill="#f8fafc">${report.capabilities.skillsCount} skills, ${report.capabilities.toolsCount} tools</tspan></text>

@@ -1,27 +1,27 @@
 <div align="center">
 
-# 🧬 EvoKernel (evo-kernel) — Context Virtualization, Git-Worktree Self-Evolution & Anti-Drift Memory MCP for Claude Code, Cursor & Codex
+# 🧬 EvoKernel (evo-kernel)
 
-### The Deterministic Self-Evolving Meta-Kernel for AI Coding Agents
+### Cut MCP & Rule Prompt Tax by 94.4%. Keep 100% KV Cache Hit. Evolve AST-Verified Memories & Sandboxed Tools in Isolated Git Worktrees — with Zero External Dependencies.
 
-**Stop writing static `.md` rules that rot. Stop adding 20 MCP servers that bust your Prompt Cache.**  
-*1 Meta-Rule Seed (<80 lines) · 1 Fixed-Schema Meta-MCP Gateway · 4-Stage Deterministic Sandbox Gatekeeper · Zero External Dependencies*
+**The Deterministic Self-Evolving Meta-Kernel & Cognitive Context OS for AI Coding Agents**  
+*Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
 
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
 [![Live Cockpit Demo](https://img.shields.io/badge/Live_Cockpit-Interactive_Demo-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
-[![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#⚡-quick-demo--instant-scoring--live-cockpit-in-2-commands)
+[![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#-30-second-quick-start)
 [![Version](https://img.shields.io/badge/npm-v0.3.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#zero-dependency-architecture)
-[![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#1-why-a-fixed-5-tool-meta-mcp-gateway)
-[![Tests](https://img.shields.io/badge/tests-267%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
+[![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#-zero-dependency-architecture)
+[![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#-core-architecture-5-fixed-meta-tools)
+[![Tests](https://img.shields.io/badge/tests-274%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 
 **[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Live Interactive Cockpit](https://damonless.github.io/EvoKernel/) · [📊 Benchmarks](benchmarks/README.md)**
 
 <br/>
 
-<a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-architecture.png" alt="EvoKernel 3-Tier Context OS & Benchmark Telemetry" width="100%" /></a>
+<a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-shotcraft.svg" alt="EvoKernel 3-Tier Context OS & Benchmark Telemetry" width="100%" /></a>
 
 </div>
 
@@ -30,31 +30,72 @@
 
 ---
 
-## ⚡ Quick Demo — Instant Scoring & Live Cockpit in 2 Commands
+## ⚡ 30-Second Quick Start
+
+Get started in 3 commands — zero installation required:
 
 ```bash
-# 1. Instant 0-overhead diagnostic scoring (<25ms) — audits host rules, git bug hotspots, and AST memory coverage
-npx evo-kernel score
-# Export a shareable vector X-Ray badge/card for your README:
-npx evo-kernel score --svg ./evo-xray.svg
+# 1. Instant Zero-Write X-Ray (<25ms) — scan host rules, git hotspots & memory coverage
+npx -y evo-kernel score
 
-# 2. Zero-dependency Live Cockpit UI — dark mode, 2D budget treemap, and interactive SVG AST memory constellation
-npx evo-kernel ui
-# Or open our live hosted demo: https://damonless.github.io/EvoKernel/
+# 2. One-Click Auto-Wiring & Virtualization — wire 10 IDEs + fold third-party MCPs
+npx -y evo-kernel init --stealth && npx -y evo-kernel virtualize
+
+# 3. Live Obsidian Cockpit with 30s Film & Deliverable Inspection
+npx -y evo-kernel ui --open
+npx -y evo-kernel check ./report.xlsx
 ```
+
+> 💡 **Node.js 18 / 20 Instant 1-Liner (No Global Node Upgrade Needed):**  
+> `npx -y -p node@22 evo-kernel score`  
+> *Why Node.js >= 22.5.0?* EvoKernel runs purely on native `node:sqlite`, `node:module`, and `node:test` — providing **0 external npm dependencies and 0 supply-chain vulnerability risk**.
+
+<div align="center">
+  <img src="./assets/quickstart-shotcraft.svg" alt="EvoKernel 30-Second Quick Start Pipeline" width="100%" />
+</div>
+
+<br/>
 
 <table>
 <tr>
 <td align="center" width="52%">
-  <b>Obsidian Live Cockpit &amp; AST Constellation (<code>npx evo-kernel ui</code>)</b><br/>
+  <b>Obsidian Live Cockpit (<code>npx evo-kernel ui --open</code>)</b><br/>
   <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/cockpit-showcase.png" width="100%" alt="EvoKernel Obsidian Live Cockpit and AST Constellation" /></a>
 </td>
 <td align="center" width="48%">
-  <b>Instant X-Ray Diagnostic Card (<code>npx evo-kernel score</code>)</b><br/>
-  <img src="./assets/terminal-score-xray.png" width="100%" alt="EvoKernel Terminal Score X-Ray Card" />
+  <b>Instant Terminal X-Ray (<code>npx evo-kernel score</code>)</b><br/>
+  <img src="./assets/terminal-score-xray.svg" width="100%" alt="EvoKernel Terminal Score X-Ray Card" />
 </td>
 </tr>
 </table>
+
+<details>
+<summary><b>🛠️ Clone from Source & Advanced CLI Workflows (Click to expand)</b></summary>
+
+```bash
+# Clone and build from source (takes <50ms, zero npm install required)
+git clone https://github.com/damonless/EvoKernel.git
+cd EvoKernel
+node ./scripts/build.mjs
+
+# Wire L0 Meta-Rule Seed + Single Meta-MCP into your active coding agents
+node ./dist/cli/index.js init --targets auto --stealth
+
+# Cold-start mine your repository structure, project stacks & Git fix history
+node ./dist/cli/index.js bootstrap --max-commits=50
+
+# Run offline worktree optimization cycle
+node ./dist/cli/index.js optimize --dim both -k 3
+
+# Inspect capability tree, multi-branch AST memory freshness & ROI ledger
+node ./dist/cli/index.js tree
+node ./dist/cli/index.js memory verify
+node ./dist/cli/index.js stats
+node ./dist/cli/index.js audit --global
+node ./dist/cli/index.js doctor
+```
+
+</details>
 
 ---
 
@@ -87,7 +128,7 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 **EvoKernel solves all five with a deterministic local compiler, worktree evolution engine & routing kernel:**
 
 <div align="center">
-  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/cockpit-showcase.png" alt="EvoKernel Obsidian Live Cockpit & AST Memory Constellation" width="100%" /></a>
+  <img src="./assets/gatekeeper-shotcraft.svg" alt="EvoKernel 4-Stage Deterministic Gatekeeper" width="100%" />
 </div>
 
 ---
@@ -114,7 +155,7 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 
 ## 🚀 Offline Git Worktree Optimization Engine (`evo optimize`)
 
-EvoKernel v0.2.0 introduces an autonomous offline capability optimizer. It runs iterative evolution experiments inside **isolated, transient Git worktrees** without risking uncommitted changes in your main workspace:
+EvoKernel v0.3.0 introduces an autonomous offline capability optimizer. It runs iterative evolution experiments inside **isolated, transient Git worktrees** without risking uncommitted changes in your main workspace:
 
 ```bash
 # Run offline optimization across both Invariant and Domain dimensions
@@ -140,12 +181,22 @@ evo optimize --trajectory session.jsonl --deliverable report.xlsx --apply
 
 ## 📑 Zero-Dependency Deliverable Canonical Consumer-Reader (`deliverable-canonical-inspector`)
 
-AI agents frequently generate corrupted deliverables (`.xlsx`, `.docx`, `.pptx`, CSV, JSON) that look convincing on the surface but fail downstream consumption. EvoKernel includes a built-in, zero-dependency canonical deliverable validator:
+<a id="-zero-dependency-architecture"></a>
+AI agents frequently generate corrupted deliverables (`.xlsx`, `.docx`, `.pptx`, CSV, JSON, Markdown) that look convincing on the surface but fail downstream consumption. EvoKernel includes a built-in, zero-dependency canonical deliverable validator:
 
 ```bash
-# Validate any deliverable file directly via registered micro-tool
-evo_run deliverable-canonical-inspector '{"targetFile": "report.xlsx", "expectedHeaders": ["ID", "Status"]}'
+# Validate any deliverable file directly via top-level CLI:
+npx evo-kernel check report.xlsx
+
+# Structured JSON output for CI pipelines:
+npx evo-kernel check report.xlsx --json
+
+# Top-level CLI alias:
+npx evo-kernel inspect report.xlsx
 ```
+
+<details>
+<summary><b>📋 Supported Deliverable Formats & Validation Rules (Click to expand)</b></summary>
 
 ### Comprehensive Format Support:
 - **XLSX (.xlsx)**:
@@ -166,7 +217,13 @@ evo_run deliverable-canonical-inspector '{"targetFile": "report.xlsx", "expected
   - Validates `requiredKeys`, `strictKeys` per line, and flags `RAGGED_COLUMNS`.
 - **Markdown (.md)**:
   - Detects `UNCLOSED_CODE_FENCE` syntax errors.
-  - Flags template placeholders (`{{VARIABLE}}`, `[INSERT ...]`, `<placeholder>`) while ignoring valid variables inside fenced code blocks.
+  - Flags unresolved template placeholder leaks outside code fences:
+    ```markdown
+    {{VARIABLE}}
+    ```
+    while safely ignoring valid variables inside fenced code blocks.
+
+</details>
 
 ---
 
@@ -273,73 +330,6 @@ evo virtualize --restore
 
 ---
 
-## 🚀 Quick Start (60 Seconds)
-
-> **Prerequisites**: Node.js `>= 22.5` or `24+` (uses native `node:sqlite` & native TypeScript stripping — **0 third-party npm dependencies**).
-
-```bash
-# Option A: One-line npx initialization in any repository (or Claude Code: /plugin marketplace add damonless/EvoKernel)
-npx evo-kernel init --targets auto --stealth
-npx evo-kernel virtualize --dry-run
-
-# Option B: Clone and build from source (takes <50ms, zero npm install required)
-git clone https://github.com/damonless/EvoKernel.git
-cd EvoKernel
-node ./scripts/build.mjs
-
-# Wire L0 Meta-Rule Seed + Single Meta-MCP into your active coding agents
-node ./dist/cli/index.js init --targets auto --stealth
-
-# Cold-start mine your repository structure, project stacks & Git fix history
-node ./dist/cli/index.js bootstrap --max-commits=50
-
-# Run offline worktree optimization cycle
-node ./dist/cli/index.js optimize --dim both -k 3
-
-# Inspect capability tree, multi-branch AST memory freshness & ROI ledger
-node ./dist/cli/index.js tree
-node ./dist/cli/index.js memory verify
-node ./dist/cli/index.js stats
-node ./dist/cli/index.js audit --global
-node ./dist/cli/index.js doctor
-```
-
-### Live Terminal Output
-
-```text
-╭──────────────────────────────────────────────────────────────────────────╮
-│ 🧬 EvoKernel — Self-Evolving Capability Tree (.evo/)                     │
-╰──────────────────────────────────────────────────────────────────────────╯
-📦 Workspace: /path/to/your-repo
-├── 🛡️  Rules (3 active | Core Token Budget: 317/1500 tokens)
-│   ├── [CORE] gatekeeper-self-test-invariant (132 tok | hits: 4) — Every evolved Micro-Tool script must handle --self-test and exit 0.
-│   ├── [CORE] esm-typescript-imports (154 tok | hits: 7) — Always use explicit .js extensions on relative imports in ESM TypeScript.
-│   └── [STACK] stack-rust-core-invariants (126 tok | hits: 2) — Safe concurrency: prefer channels and arc mutex over raw pointers.
-├── ⚡ Skills (3 verified L0/L1/L2 playbooks)
-│   ├── [SOP] bug-to-guardrail-sop (hits: 3 | tags: debugging,evolution) — Standard workflow to turn a resolved root cause into a Rule.
-│   ├── [SOP] evo-dev-verification-sop (hits: 5 | tags: dev,release) — Verification and preflight SOP for EvoKernel releases.
-│   └── [SOP] evo-rule-architect (hits: 2 | tags: refactor,rules) — 4-stage rule decoupling and budget refactoring workflow.
-├── 🔧 Micro-Tools (5 sandboxed scripts | Fixed Meta-MCP Routed)
-│   ├── [NODE] agy-config-auditor (runs: 12 | pass: 100%) — Audits host rule budgets and memory AST symbols.
-│   ├── [NODE] deliverable-canonical-inspector (runs: 18 | pass: 100%) — Zero-dep validator for .xlsx, .docx, .pptx, CSV, JSON, MD.
-│   ├── [NODE] evo-release-preflight (runs: 8 | pass: 100%) — Audits multi-manifest parity and build freshness.
-│   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
-│   └── [NODE] workspace-metrics-scanner (runs: 9 | pass: 100%) — Scans file counts, LOC, and extension distribution.
-└── 🧠 Episodic Memories (10 troubleshooting experiences | 10 VERIFIED · 0 STALE)
-    ├── [VERIFIED] audit-broken-refs-and-hook-param-fix (confidence: HIGH | symbols: 2/2 fresh)
-    ├── [VERIFIED] codex-hooks-corrupt-file-unlink (confidence: HIGH | symbols: 2/2 fresh)
-    ├── [VERIFIED] git-fix-387153f (confidence: HIGH | symbols: 3/3 fresh)
-    ├── [VERIFIED] git-fix-d0d4e13 (confidence: HIGH | symbols: 3/3 fresh)
-    ├── [VERIFIED] harness-hook-filter-preserve-untouched-entries (confidence: HIGH | symbols: 3/3 fresh)
-    ├── [VERIFIED] issue-8-workspace-isolation-and-atomic-compact (confidence: HIGH | symbols: 5/5 fresh)
-    ├── [VERIFIED] issues-10-11-12-audit-hook-and-cross-lang-recall (confidence: HIGH | symbols: 7/7 fresh)
-    ├── [VERIFIED] multi-harness-cascaded-detection-and-reversible-teardown (confidence: HIGH | symbols: 8/8 fresh)
-    ├── [VERIFIED] open-idle-pipe-stdin-hang-fix (confidence: HIGH | symbols: 2/2 fresh)
-    └── [VERIFIED] worktree-probe-score-improvement (confidence: HIGH | symbols: 2/2 fresh)
-```
-
----
-
 ## 🧠 Core Architecture: 5 Fixed Meta-Tools
 
 EvoKernel exposes **exactly 5 immutable meta-tools** over `stdio` to ensure 100% Prompt-Cache retention:
@@ -352,6 +342,53 @@ EvoKernel exposes **exactly 5 immutable meta-tools** over `stdio` to ensure 100%
 | `evo_propose` | **Evolution** | Submits a candidate Rule, Skill, Micro-Tool, or Memory through the 4-Stage Deterministic Gatekeeper (Static AST, Sandbox Dry-Run, BM25 Deduplication, Token Budget Cap, Anti-Confounding). |
 | `evo_compact` | **GC** | Atomically merges fragmented rules or archives `[STALE]` memories into `.evo/archive/` to keep core token consumption under the 1,500-token limit. |
 
+<details>
+<summary><b>🌳 View ASCII Self-Evolving Capability Tree (.evo/) Output (Click to expand)</b></summary>
+
+```text
+╭──────────────────────────────────────────────────────────────────────────╮
+│ 🧬 EvoKernel — Self-Evolving Capability Tree (.evo/)                     │
+╰──────────────────────────────────────────────────────────────────────────╯
+📦 Workspace: /path/to/your-repo
+├── 🛡️  Rules (5 active | Core Token Budget: 286/1500 tokens)
+│   ├── [CORE] gatekeeper-self-test-invariant (132 tok | hits: 4) — Every evolved Micro-Tool script must handle --self-test and exit 0.
+│   ├── [CORE] esm-typescript-imports (154 tok | hits: 7) — Always use explicit .js extensions on relative imports in ESM TypeScript.
+│   ├── [SCOPED] core-architecture-and-ast-invariants-guard (728 tok) — Dry-run compaction, comment-stripped AST matching & Git lookups.
+│   ├── [SCOPED] multi-harness-config-and-proxy-isolation (906 tok) — Lossless config merge/restore, fail-closed user configs & proxy roots.
+│   └── [SCOPED] workspace-isolation-and-fts5-guard (537 tok) — Isolate uninitialized fallback, parent Git detection & FTS5 search.
+├── ⚡ Skills (3 verified L0/L1/L2 playbooks)
+│   ├── [SOP] bug-to-guardrail-sop (hits: 3 | tags: debugging,evolution) — Standard workflow to turn a resolved root cause into a Rule.
+│   ├── [SOP] evo-dev-verification-sop (hits: 22 | tags: dev,release) — 4-stage TDD, blast-radius check & preflight verification SOP.
+│   └── [SOP] evo-rule-architect (hits: 2 | tags: refactor,rules) — 4-stage rule decoupling and budget refactoring workflow.
+├── 🔧 Micro-Tools (5 sandboxed scripts | Fixed Meta-MCP Routed)
+│   ├── [NODE] agy-config-auditor (runs: 55 | pass: 100%) — Audits host rule budgets and memory AST symbols.
+│   ├── [NODE] deliverable-canonical-inspector (runs: 18 | pass: 100%) — Zero-dep validator for .xlsx, .docx, .pptx, CSV, JSON, MD.
+│   ├── [NODE] evo-release-preflight (runs: 30 | pass: 100%) — Audits multi-manifest parity and build freshness.
+│   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
+│   └── [NODE] workspace-metrics-scanner (runs: 13 | pass: 100%) — Scans file counts, LOC, and extension distribution.
+└── 🧠 Episodic Memories (18 fault cases | 18 VERIFIED · 0 STALE)
+    ├── [VERIFIED] audit-broken-refs-and-hook-param-fix (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] cli-help-zero-side-effect-isolation (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] codex-hooks-corrupt-file-unlink (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] generic-angle-semicolon-multiline-drift (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] ghost-workspace-resurrection-and-sqlite-handle-lock (confidence: HIGH | symbols: 5/5 fresh)
+    ├── [VERIFIED] git-fix-387153f (confidence: HIGH | symbols: 3/3 fresh)
+    ├── [VERIFIED] git-fix-d0d4e13 (confidence: HIGH | symbols: 3/3 fresh)
+    ├── [VERIFIED] harness-hook-filter-preserve-untouched-entries (confidence: HIGH | symbols: 3/3 fresh)
+    ├── [VERIFIED] issue-20-global-isolation-and-concept-overlap-fix (confidence: HIGH | symbols: 4/4 fresh)
+    ├── [VERIFIED] issue-8-workspace-isolation-and-atomic-compact (confidence: HIGH | symbols: 5/5 fresh)
+    ├── [VERIFIED] issues-10-11-12-audit-hook-and-cross-lang-recall (confidence: HIGH | symbols: 7/7 fresh)
+    ├── [VERIFIED] memory-verification-inprocess-stat-caching (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] multi-harness-cascaded-detection-and-reversible-teardown (confidence: HIGH | symbols: 8/8 fresh)
+    ├── [VERIFIED] open-idle-pipe-stdin-hang-fix (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] score-and-ui-zero-write-csp-and-pool-dedup (confidence: HIGH | symbols: 6/6 fresh)
+    ├── [VERIFIED] ui-cli-flags-port-validation-and-powershell-escaping (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] ui-shotcraft-modal-csp-invariant (confidence: HIGH | symbols: 3/3 fresh)
+    └── [VERIFIED] worktree-probe-score-improvement (confidence: HIGH | symbols: 2/2 fresh)
+```
+
+</details>
+
 ---
 
 ## 🧪 Comprehensive Verification Suite
@@ -362,18 +399,26 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-All 11 test suites (267 tests) pass in ~17 seconds:
-1. `dist/tests/bootstrap.test.js`: Bootstrap Cold-Start Expansion Suite (22 tests)
-2. `dist/tests/causal-telemetry-and-catalog.test.js`: Causal Telemetry, Outcome Attribution & Anti-Confounding Suite (18 tests)
-3. `dist/tests/deliverable-inspector.test.js`: Zero-Dependency Deliverable Canonical Consumer-Reader Suite (33 tests)
-4. `dist/tests/evo-kernel.test.js`: Core Gatekeeper, Sandbox, AST Cognitive Memory, and Invariants Suite (49 tests)
-5. `dist/tests/hook.test.js`: Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience Suite (31 tests)
-6. `dist/tests/lifecycle-guard-hooks.test.js`: Lifecycle Guard Hooks, Trigger Cues & Reference Integrity Suite (27 tests)
-7. `dist/tests/mcp-proxy.test.js`: Downstream MCP Proxy Virtualization Suite (10 tests)
-8. `dist/tests/multi-harness.test.js`: Multi-Agent Harness Matrix Suite (14 tests)
-9. `dist/tests/optimize.test.js`: Offline Git Worktree Optimization Engine Suite (19 tests)
-10. `dist/tests/score-and-ui.test.js`: Score, Live Cockpit UI, Warmup & Slash Commands Suite (12 tests)
-11. `dist/tests/surface-audit-and-hardening.test.js`: Multi-Harness Silent-Failure Audit Matrix & Hardening Suite (32 tests)
+**274+ tests across 11 test suites pass in ~17 seconds with 0 failures:**
+
+<details>
+<summary><b>🔍 View All 11 Verified Test Suites (Click to expand)</b></summary>
+
+| # | Suite File | Coverage Domain | Tests |
+| :---: | :--- | :--- | :---: |
+| 1 | `dist/tests/bootstrap.test.js` | Bootstrap Cold-Start Expansion & Multi-Stack Gene Mining | 22 tests |
+| 2 | `dist/tests/causal-telemetry-and-catalog.test.js` | Causal Telemetry, Outcome Attribution & Dynamic Catalog | 18 tests |
+| 3 | `dist/tests/deliverable-inspector.test.js` | Zero-Dep Deliverable Canonical Consumer-Reader Suite | 33 tests |
+| 4 | `dist/tests/evo-kernel.test.js` | Core Gatekeeper, Sandbox, AST Cognitive Memory & Invariants | 49 tests |
+| 5 | `dist/tests/hook.test.js` | Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience | 31 tests |
+| 6 | `dist/tests/lifecycle-guard-hooks.test.js` | Lifecycle Guard Hooks, Trigger Cues & Reference Integrity | 27 tests |
+| 7 | `dist/tests/mcp-proxy.test.js` | Downstream MCP Proxy Virtualization Suite | 10 tests |
+| 8 | `dist/tests/multi-harness.test.js` | Multi-Agent Harness Matrix & Cascaded Detection Suite | 14 tests |
+| 9 | `dist/tests/optimize.test.js` | Offline Git Worktree Optimization Engine Suite | 19 tests |
+| 10 | `dist/tests/score-and-ui.test.js` | Score, Live Cockpit UI, Warmup & Slash Commands Suite | 19 tests |
+| 11 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & Hardening Suite | 32 tests |
+
+</details>
 
 ---
 

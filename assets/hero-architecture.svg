@@ -1,154 +1,506 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 520" width="1120" height="520">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#060913"/>
-      <stop offset="50%" stop-color="#0b1120"/>
-      <stop offset="100%" stop-color="#0f172a"/>
+    <!-- Background & Glass Gradients -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#050811"/>
+      <stop offset="45%" stop-color="#080e1d"/>
+      <stop offset="100%" stop-color="#0c1527"/>
     </linearGradient>
-    <linearGradient id="cyanGreen" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#38bdf8"/>
+
+    <linearGradient id="glassBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.22)"/>
+      <stop offset="50%" stop-color="rgba(255,255,255,0.06)"/>
+      <stop offset="100%" stop-color="rgba(56,189,248,0.25)"/>
+    </linearGradient>
+
+    <linearGradient id="cardBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(14,22,38,0.92)"/>
+      <stop offset="100%" stop-color="rgba(8,12,22,0.96)"/>
+    </linearGradient>
+
+    <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10b981"/>
       <stop offset="100%" stop-color="#34d399"/>
     </linearGradient>
-    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#111c33"/>
-      <stop offset="100%" stop-color="#0b1324"/>
+
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
     </linearGradient>
-    <linearGradient id="gateGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#064e3b"/>
-      <stop offset="100%" stop-color="#0f172a"/>
+
+    <linearGradient id="rawRedGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
     </linearGradient>
-    <marker id="arrowCyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8"/>
-    </marker>
-    <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 1 L 10 5 L 0 9 z" fill="#34d399"/>
-    </marker>
+
+    <radialGradient id="meshCyan" cx="85%" cy="15%" r="55%">
+      <stop offset="0%" stop-color="rgba(56,189,248,0.14)"/>
+      <stop offset="100%" stop-color="transparent"/>
+    </radialGradient>
+
+    <radialGradient id="meshEmerald" cx="20%" cy="80%" r="50%">
+      <stop offset="0%" stop-color="rgba(16,185,129,0.12)"/>
+      <stop offset="100%" stop-color="transparent"/>
+    </radialGradient>
+
+    <!-- Filters for neon glows -->
+    <filter id="glowCyan" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="glowEmerald" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <style>
+      <![CDATA[
+      @keyframes slashStrike {
+        0%, 15% { stroke-dashoffset: 160; opacity: 0; }
+        25%, 85% { stroke-dashoffset: 0; opacity: 1; }
+        95%, 100% { stroke-dashoffset: 0; opacity: 0.85; }
+      }
+      @keyframes evoPulse {
+        0%, 100% { filter: drop-shadow(0 0 6px rgba(16,185,129,0.4)); }
+        50% { filter: drop-shadow(0 0 16px rgba(52,211,153,0.85)); }
+      }
+      @keyframes borderImpactPulse {
+        0%, 100% { stroke: #10b981; stroke-width: 1.8px; filter: drop-shadow(0 0 4px rgba(16,185,129,0.3)); }
+        50% { stroke: #34d399; stroke-width: 2.6px; filter: drop-shadow(0 0 14px rgba(52,211,153,0.8)); }
+      }
+      @keyframes gaugeSweep {
+        0% { stroke-dashoffset: 301.6; }
+        28% { stroke-dashoffset: 12.0; }
+        85% { stroke-dashoffset: 12.0; }
+        94% { stroke-dashoffset: 14.0; }
+        100% { stroke-dashoffset: 12.0; }
+      }
+      @keyframes needleSweep {
+        0% { transform: rotate(-90deg); }
+        28%, 85% { transform: rotate(255.6deg); }
+        94% { transform: rotate(250deg); }
+        100% { transform: rotate(255.6deg); }
+      }
+      @keyframes breatheSettle {
+        0%, 28% { transform: scale(1); }
+        50%, 75% { transform: scale(1.04); filter: drop-shadow(0 0 8px rgba(52,211,153,0.6)); }
+        85%, 100% { transform: scale(1); }
+      }
+      @keyframes rawBarGrow {
+        0%, 8% { width: 0px; }
+        25%, 100% { width: 250px; }
+      }
+      @keyframes evoBarGrow {
+        0%, 15% { width: 0px; }
+        35%, 100% { width: 14px; }
+      }
+      @keyframes busPulse {
+        0% { stroke-dashoffset: 40; }
+        100% { stroke-dashoffset: 0; }
+      }
+
+      .slash-line {
+        stroke-dasharray: 160;
+        animation: slashStrike 4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+      }
+      .gauge-arc {
+        stroke-dasharray: 301.6;
+        stroke-dashoffset: 12.0;
+        animation: gaugeSweep 5s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+      }
+      .gauge-needle {
+        transform-box: fill-box;
+        transform-origin: 65px 65px;
+        transform: rotate(255.6deg);
+        animation: needleSweep 5s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+      }
+      .gauge-readout {
+        transform-origin: 65px 65px;
+        animation: breatheSettle 5s ease-in-out infinite;
+      }
+      .layer0-plate {
+        animation: borderImpactPulse 2.4s ease-in-out infinite;
+      }
+      .bar-raw {
+        animation: rawBarGrow 4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+      }
+      .bar-evo {
+        animation: evoBarGrow 4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+      }
+      .conduit-dash {
+        stroke-dasharray: 6 6;
+        animation: busPulse 1.2s linear infinite;
+      }
+      .orb-stream {
+        filter: drop-shadow(0 0 4px #38bdf8);
+      }
+      .mono {
+        font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      }
+      .sans {
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      }
+      ]]>
+    </style>
   </defs>
 
-  <!-- Outer Frame -->
-  <rect width="1120" height="520" rx="16" fill="url(#bg)" stroke="#1e293b" stroke-width="2"/>
-  <rect x="0" y="0" width="1120" height="4" rx="2" fill="url(#cyanGreen)"/>
+  <!-- Canvas Background with Obsidian Gradients -->
+  <rect width="1280" height="640" fill="url(#bgGrad)"/>
+  <rect width="1280" height="640" fill="url(#meshCyan)"/>
+  <rect width="1280" height="640" fill="url(#meshEmerald)"/>
 
-  <!-- Top Banner -->
-  <text x="36" y="42" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="20" font-weight="800">🧬 EvoKernel Architecture — Deterministic Self-Evolving Meta-Kernel for AI Coding Agents</text>
-  <text x="36" y="64" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">Zero External Dependencies  •  -94.4% Prompt Schema Tax  •  100% Prompt-Cache Prefix Preservation  •  AST Anti-Drift Memory</text>
-
-  <!-- COLUMN 1: 10 AI Coding Harnesses -->
-  <rect x="28" y="88" width="236" height="404" rx="12" fill="url(#cardGrad)" stroke="#1e293b" stroke-width="1.5"/>
-  <text x="46" y="118" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" font-weight="800">1. MULTI-HARNESS HOSTS (10)</text>
-  <text x="46" y="138" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="11">Unified L0 Seed + Lifecycle Hooks</text>
-
-  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#e2e8f0">
-    <rect x="44" y="152" width="204" height="28" rx="6" fill="#0f172a" stroke="#334155"/>
-    <text x="56" y="170">⚡ Claude Code (.claude)</text>
-
-    <rect x="44" y="186" width="204" height="28" rx="6" fill="#0f172a" stroke="#334155"/>
-    <text x="56" y="204">🎯 Cursor (.cursor/rules)</text>
-
-    <rect x="44" y="220" width="204" height="28" rx="6" fill="#0f172a" stroke="#334155"/>
-    <text x="56" y="238">🚀 Antigravity / Gemini CLI</text>
-
-    <rect x="44" y="254" width="204" height="28" rx="6" fill="#0f172a" stroke="#334155"/>
-    <text x="56" y="272">🧠 OpenAI Codex (.codex)</text>
-
-    <rect x="44" y="288" width="204" height="28" rx="6" fill="#0f172a" stroke="#334155"/>
-    <text x="56" y="306">🌊 Windsurf &amp; Cline / Roo</text>
-
-    <rect x="44" y="322" width="204" height="28" rx="6" fill="#0f172a" stroke="#334155"/>
-    <text x="56" y="340">🐙 GitHub Copilot &amp; OpenCode</text>
+  <!-- Subtle Blueprint Grid -->
+  <g stroke="rgba(255,255,255,0.035)" stroke-width="1">
+    <line x1="0" y1="64" x2="1280" y2="64"/>
+    <line x1="0" y1="180" x2="1280" y2="180"/>
+    <line x1="0" y1="340" x2="1280" y2="340"/>
+    <line x1="0" y1="500" x2="1280" y2="500"/>
+    <line x1="330" y1="0" x2="330" y2="640"/>
+    <line x1="670" y1="0" x2="670" y2="640"/>
+    <line x1="970" y1="0" x2="970" y2="640"/>
   </g>
 
-  <rect x="44" y="366" width="204" height="110" rx="8" fill="#090d16" stroke="#0284c7" stroke-dasharray="4 3"/>
-  <text x="56" y="388" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">Always-On Footprint:</text>
-  <text x="56" y="408" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">• L0 Seed: ~1,150 tokens</text>
-  <text x="56" y="426" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">• 5 Meta-Tools: ~380 tokens</text>
-  <text x="56" y="446" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">✓ 100% Static Cache Prefix</text>
-  <text x="56" y="464" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">✓ 0 Schema Mutation Busts</text>
+  <!-- Top Obsidian Brand Header -->
+  <g id="top-bar">
+    <rect x="24" y="16" width="300" height="34" rx="17" fill="rgba(10,16,28,0.85)" stroke="rgba(255,255,255,0.12)"/>
+    <circle cx="42" cy="33" r="4.5" fill="#10b981" filter="url(#glowEmerald)"/>
+    <text x="56" y="38" class="sans" font-size="13" font-weight="800" fill="#ffffff" letter-spacing="-0.01em">🧬 EvoKernel v0.3.0</text>
+    <text x="180" y="38" class="mono" font-size="11" font-weight="600" fill="#34d399">L0 META-KERNEL</text>
 
-  <!-- Arrow Col 1 -> Col 2 -->
-  <line x1="264" y1="245" x2="302" y2="245" stroke="#38bdf8" stroke-width="2.2" marker-end="url(#arrowCyan)"/>
-  <line x1="302" y1="395" x2="264" y2="395" stroke="#34d399" stroke-width="2.2" marker-end="url(#arrowGreen)"/>
+    <!-- Multi-Harness Badges -->
+    <g transform="translate(336, 16)" class="mono" font-size="10.5">
+      <rect x="0" y="0" width="102" height="34" rx="8" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <text x="11" y="21" fill="#cbd5e1">Claude Code</text>
 
-  <!-- COLUMN 2: 5-Tool Meta-MCP Gateway & Deterministic Gatekeeper -->
-  <rect x="306" y="88" width="448" height="224" rx="12" fill="url(#cardGrad)" stroke="#0284c7" stroke-width="1.8"/>
-  <text x="326" y="118" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="800">2. SINGLE 5-TOOL META-MCP GATEWAY (stdio JSON-RPC 2.0)</text>
-  <text x="326" y="138" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="11.5">Folds 50+ third-party MCP tools &amp; repo knowledge behind 5 immutable primitives:</text>
+      <rect x="110" y="0" width="76" height="34" rx="8" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <text x="123" y="21" fill="#cbd5e1">Cursor</text>
 
-  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">
-    <rect x="324" y="150" width="200" height="42" rx="6" fill="#090d16" stroke="#1e293b"/>
-    <text x="336" y="168" fill="#38bdf8" font-weight="700">evo_search(query)</text>
-    <text x="336" y="184" fill="#94a3b8" font-size="10">FTS5 BM25 + CJK/EN Synonym Recall</text>
+      <rect x="194" y="0" width="94" height="34" rx="8" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <text x="207" y="21" fill="#cbd5e1">Codex CLI</text>
 
-    <rect x="536" y="150" width="200" height="42" rx="6" fill="#090d16" stroke="#1e293b"/>
-    <text x="548" y="168" fill="#38bdf8" font-weight="700">evo_inspect(id, L1|L2)</text>
-    <text x="548" y="184" fill="#94a3b8" font-size="10">Lazy Schema, SOP &amp; AST Callers</text>
+      <rect x="296" y="0" width="90" height="34" rx="8" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <text x="309" y="21" fill="#cbd5e1">Gemini CLI</text>
 
-    <rect x="324" y="200" width="200" height="42" rx="6" fill="#090d16" stroke="#1e293b"/>
-    <text x="336" y="218" fill="#38bdf8" font-weight="700">evo_run(tool_id, args)</text>
-    <text x="336" y="234" fill="#94a3b8" font-size="10">Sandboxed Micro-Tools &amp; MCP Proxy</text>
+      <rect x="394" y="0" width="84" height="34" rx="8" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <text x="407" y="21" fill="#cbd5e1">Windsurf</text>
 
-    <rect x="536" y="200" width="200" height="42" rx="6" fill="#090d16" stroke="#1e293b"/>
-    <text x="548" y="218" fill="#34d399" font-weight="700">evo_propose / compact</text>
-    <text x="548" y="234" fill="#94a3b8" font-size="10">Autonomous Capability Crystallization</text>
+      <rect x="486" y="0" width="76" height="34" rx="8" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <text x="498" y="21" fill="#cbd5e1">Copilot</text>
+    </g>
+
+    <!-- Top Status Banner -->
+    <rect x="1006" y="16" width="250" height="34" rx="17" fill="rgba(16,185,129,0.12)" stroke="rgba(16,185,129,0.35)"/>
+    <circle cx="1022" cy="33" r="3.5" fill="#34d399"/>
+    <text x="1033" y="38" class="mono" font-size="11" font-weight="700" fill="#34d399">100% KV CACHE PRESERVED</text>
   </g>
 
-  <rect x="324" y="252" width="412" height="46" rx="6" fill="#0c192c" stroke="#1e3a8a"/>
-  <text x="338" y="272" fill="#93c5fd" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">🔌 Downstream MCP Pool (.evo/mcp-pool.json):</text>
-  <text x="338" y="289" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">GitHub • Playwright • Postgres • Sentry • Linear • Context7 (0 Eager Schema Tokens)</text>
+  <!-- ==================== LEFT ZONE ==================== -->
+  <g id="left-zone">
+    <!-- Zone Container Box -->
+    <rect x="24" y="66" width="630" height="554" rx="16" fill="url(#cardBg)" stroke="url(#glassBorder)" stroke-width="1.2"/>
 
-  <!-- Gatekeeper Box (Bottom Center) -->
-  <rect x="306" y="326" width="448" height="166" rx="12" fill="url(#gateGrad)" stroke="#34d399" stroke-width="1.8"/>
-  <text x="326" y="354" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="800">3. DETERMINISTIC 4-STAGE GATEKEEPER &amp; WORKTREE EVOLUTION</text>
-  <text x="326" y="374" fill="#a7f3d0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="11.5">Every proposed Rule, Skill, Tool, or Memory must pass 4 hard verification gates:</text>
+    <!-- Section Kicker -->
+    <text x="44" y="96" class="mono" font-size="11" font-weight="700" fill="#38bdf8" letter-spacing="0.08em">UPSTREAM MCP POOL &amp; 3-TIER ISOMETRIC ARCHITECTURE</text>
+    <text x="44" y="114" class="sans" font-size="12" fill="#94a3b8">77 Upstream MCP Tools virtualized behind 5 primitives with zero token waste</text>
 
-  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#ecfdf5">
-    <rect x="324" y="386" width="198" height="40" rx="5" fill="#062c22" stroke="#10b981"/>
-    <text x="334" y="403" font-weight="700" fill="#34d399">Gate 1: Static &amp; De-Symbol</text>
-    <text x="334" y="418" fill="#a7f3d0">Blocks secrets &amp; magic-number rules</text>
+    <!-- 8 Upstream MCP Pills in 1 Stacked Column (Clean zero-overlap Bézier geometry) -->
+    <g id="mcp-servers" class="mono" font-size="10.5">
+      <g transform="translate(44, 128)">
+        <rect width="126" height="24" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="12" cy="12" r="3" fill="#38bdf8"/>
+        <text x="22" y="16" fill="#e2e8f0">github <tspan fill="#64748b" font-size="9">(14)</tspan></text>
+      </g>
+      <g transform="translate(44, 160)">
+        <rect width="126" height="24" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="12" cy="12" r="3" fill="#38bdf8"/>
+        <text x="22" y="16" fill="#e2e8f0">postgres <tspan fill="#64748b" font-size="9">(11)</tspan></text>
+      </g>
+      <g transform="translate(44, 192)">
+        <rect width="126" height="24" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="12" cy="12" r="3" fill="#38bdf8"/>
+        <text x="22" y="16" fill="#e2e8f0">playwright <tspan fill="#64748b" font-size="9">(16)</tspan></text>
+      </g>
+      <g transform="translate(44, 224)">
+        <rect width="126" height="24" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="12" cy="12" r="3" fill="#38bdf8"/>
+        <text x="22" y="16" fill="#e2e8f0">filesystem <tspan fill="#64748b" font-size="9">(12)</tspan></text>
+      </g>
+      <g transform="translate(44, 256)">
+        <rect width="126" height="24" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="12" cy="12" r="3" fill="#34d399"/>
+        <text x="22" y="16" fill="#e2e8f0">docker <tspan fill="#64748b" font-size="9">(8)</tspan></text>
+      </g>
+      <g transform="translate(44, 288)">
+        <rect width="126" height="24" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="12" cy="12" r="3" fill="#34d399"/>
+        <text x="22" y="16" fill="#e2e8f0">sentry <tspan fill="#64748b" font-size="9">(6)</tspan></text>
+      </g>
+      <g transform="translate(44, 320)">
+        <rect width="126" height="24" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="12" cy="12" r="3" fill="#34d399"/>
+        <text x="22" y="16" fill="#e2e8f0">slack <tspan fill="#64748b" font-size="9">(5)</tspan></text>
+      </g>
+      <g transform="translate(44, 352)">
+        <rect width="126" height="24" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="12" cy="12" r="3" fill="#34d399"/>
+        <text x="22" y="16" fill="#e2e8f0">memory <tspan fill="#64748b" font-size="9">(5)</tspan></text>
+      </g>
 
-    <rect x="536" y="386" width="200" height="40" rx="5" fill="#062c22" stroke="#10b981"/>
-    <text x="546" y="403" font-weight="700" fill="#34d399">Gate 2: AST &amp; --self-test</text>
-    <text x="546" y="418" fill="#a7f3d0">Verifies live symbols &amp; tool exit(0)</text>
+      <!-- MCP Total Tag -->
+      <rect x="44" y="388" width="126" height="24" rx="5" fill="rgba(239,68,68,0.08)" stroke="rgba(239,68,68,0.25)"/>
+      <text x="107" y="404" fill="#f87171" font-size="9.5" font-weight="700" text-anchor="middle">Raw: 27,150 tok/t</text>
+    </g>
 
-    <rect x="324" y="434" width="198" height="42" rx="5" fill="#062c22" stroke="#10b981"/>
-    <text x="334" y="451" font-weight="700" fill="#34d399">Gate 3: BM25 &amp; Causal Check</text>
-    <text x="334" y="466" fill="#a7f3d0">Rejects duplicates &amp; confounded runs</text>
+    <!-- Cubic Bézier Converging Flylines (bezier-source-converge-merge) -->
+    <!-- Convergence Focal Point: (366, 172) -->
+    <g id="converge-paths" stroke="rgba(56,189,248,0.22)" stroke-width="1.4" fill="none">
+      <path id="bezier1" d="M 170 140 C 235 140, 300 172, 366 172"/>
+      <path id="bezier2" d="M 170 172 C 235 172, 300 172, 366 172"/>
+      <path id="bezier3" d="M 170 204 C 235 204, 300 172, 366 172"/>
+      <path id="bezier4" d="M 170 236 C 235 220, 300 172, 366 172"/>
+      <path id="bezier5" d="M 170 268 C 235 235, 300 172, 366 172"/>
+      <path id="bezier6" d="M 170 300 C 235 250, 300 172, 366 172"/>
+      <path id="bezier7" d="M 170 332 C 235 265, 300 172, 366 172"/>
+      <path id="bezier8" d="M 170 364 C 235 280, 300 172, 366 172"/>
+    </g>
 
-    <rect x="536" y="434" width="200" height="42" rx="5" fill="#062c22" stroke="#10b981"/>
-    <text x="546" y="451" font-weight="700" fill="#34d399">Gate 4: Token &amp; Pareto Gate</text>
-    <text x="546" y="466" fill="#a7f3d0">1,500-tok cap + Git worktree probe</text>
+    <!-- Animated Glowing Orbs along Bézier curves (60fps SMIL) -->
+    <g class="orb-stream">
+      <circle r="3" fill="#38bdf8">
+        <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.0s"><mpath href="#bezier1"/></animateMotion>
+      </circle>
+      <circle r="2.8" fill="#38bdf8">
+        <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.3s"><mpath href="#bezier2"/></animateMotion>
+      </circle>
+      <circle r="3" fill="#34d399">
+        <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.6s"><mpath href="#bezier3"/></animateMotion>
+      </circle>
+      <circle r="2.8" fill="#38bdf8">
+        <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.9s"><mpath href="#bezier4"/></animateMotion>
+      </circle>
+      <circle r="3" fill="#34d399">
+        <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.15s"><mpath href="#bezier5"/></animateMotion>
+      </circle>
+      <circle r="2.8" fill="#38bdf8">
+        <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.45s"><mpath href="#bezier6"/></animateMotion>
+      </circle>
+      <circle r="3" fill="#34d399">
+        <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.75s"><mpath href="#bezier7"/></animateMotion>
+      </circle>
+      <circle r="2.8" fill="#38bdf8">
+        <animateMotion dur="2.4s" repeatCount="indefinite" begin="1.05s"><mpath href="#bezier8"/></animateMotion>
+      </circle>
+    </g>
+
+    <!-- Clean Single-Target Focal Pulse & Relay (Rule Q4: orb-flyline-relay) -->
+    <circle cx="366" cy="172" r="5" fill="#10b981" filter="url(#glowEmerald)"/>
+    <circle cx="366" cy="172" r="5" fill="none" stroke="#34d399" stroke-width="2">
+      <animate attributeName="r" values="5;22;22" keyTimes="0;0.55;1" dur="1.8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.95;0;0" keyTimes="0;0.55;1" dur="1.8s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- ==================== 3D ISOMETRIC GLASS PLATES ==================== -->
+    <!-- LAYER 0 (TOP): L0 Meta-Rule Seed & Fixed 5-Tool Gateway -->
+    <g id="layer-0" transform="translate(356, 126)">
+      <!-- Isometric glass plate drop-shadow & body with border impact pulse -->
+      <polygon points="10,0 270,0 286,22 286,108 26,108 10,86" fill="rgba(6,30,22,0.9)" stroke="#10b981" stroke-width="1.8" class="layer0-plate"/>
+      <polygon points="10,0 270,0 286,22 26,22" fill="rgba(16,185,129,0.18)"/>
+
+      <!-- Header Tag -->
+      <rect x="22" y="28" width="82" height="18" rx="4" fill="rgba(16,185,129,0.25)" stroke="#10b981"/>
+      <text x="28" y="41" class="mono" font-size="9.5" font-weight="800" fill="#34d399">L0 SEED</text>
+      <text x="110" y="41" class="sans" font-size="12" font-weight="800" fill="#ffffff">5-Tool Meta-MCP Gateway</text>
+
+      <!-- Details -->
+      <text x="24" y="62" class="mono" font-size="11" font-weight="700" fill="#34d399">1,530 tok · 100% KV Cache Shield</text>
+      <text x="24" y="78" class="mono" font-size="9.8" fill="#94a3b8">evo_search • inspect • run • propose • compact</text>
+      <text x="24" y="96" class="mono" font-size="9.5" fill="#38bdf8">✓ 0 Schema Busts · stdio JSON-RPC 2.0</text>
+    </g>
+
+    <!-- Vertical Data Bus 1 (L0 -> L1 Relay) -->
+    <line x1="500" y1="236" x2="500" y2="278" stroke="#38bdf8" stroke-width="2.5" class="conduit-dash"/>
+    <circle cx="500" cy="256" r="3.5" fill="#38bdf8" filter="url(#glowCyan)"/>
+
+    <!-- LAYER 1 (MIDDLE): L1 Native node:sqlite FTS5 BM25 Index -->
+    <g id="layer-1" transform="translate(356, 278)">
+      <polygon points="10,0 270,0 286,22 286,104 26,104 10,82" fill="rgba(12,24,42,0.92)" stroke="#38bdf8" stroke-width="1.8"/>
+      <polygon points="10,0 270,0 286,22 26,22" fill="rgba(56,189,248,0.16)"/>
+
+      <rect x="22" y="28" width="82" height="18" rx="4" fill="rgba(56,189,248,0.2)" stroke="#38bdf8"/>
+      <text x="28" y="41" class="mono" font-size="9.5" font-weight="800" fill="#38bdf8">L1 INDEX</text>
+      <text x="110" y="41" class="sans" font-size="12" font-weight="800" fill="#ffffff">Native node:sqlite FTS5</text>
+
+      <text x="24" y="62" class="mono" font-size="11" font-weight="700" fill="#38bdf8">~0.05ms Recall · BM25 Ranking</text>
+      <text x="24" y="78" class="mono" font-size="9.8" fill="#94a3b8">CJK/EN Synonym Expansion · Zero External Deps</text>
+      <text x="24" y="94" class="mono" font-size="9.5" fill="#34d399">✓ Helped / Hurt / Contested Telemetry ROI</text>
+    </g>
+
+    <!-- Vertical Data Bus 2 (L1 -> L2 Relay) -->
+    <line x1="500" y1="384" x2="500" y2="426" stroke="#818cf8" stroke-width="2.5" class="conduit-dash"/>
+    <circle cx="500" cy="406" r="3.5" fill="#818cf8"/>
+
+    <!-- LAYER 2 (BOTTOM): L2 Sandboxed Micro-Tools & 16-Hex AST Memory -->
+    <g id="layer-2" transform="translate(356, 426)">
+      <polygon points="10,0 270,0 286,22 286,104 26,104 10,82" fill="rgba(18,16,36,0.92)" stroke="#818cf8" stroke-width="1.8"/>
+      <polygon points="10,0 270,0 286,22 26,22" fill="rgba(129,140,248,0.18)"/>
+
+      <rect x="22" y="28" width="76" height="18" rx="4" fill="rgba(129,140,248,0.22)" stroke="#818cf8"/>
+      <text x="28" y="41" class="mono" font-size="9.5" font-weight="800" fill="#c7d2fe">L2 AST</text>
+      <text x="104" y="41" class="sans" font-size="12" font-weight="800" fill="#ffffff">Sandboxed AST Memories</text>
+
+      <text x="24" y="62" class="mono" font-size="11" font-weight="700" fill="#c7d2fe">0 Core Tax · 16-Hex AST Hashes</text>
+      <text x="24" y="78" class="mono" font-size="9.8" fill="#94a3b8">30s Sandboxed Micro-Tools (--self-test exit(0))</text>
+      <text x="24" y="94" class="mono" font-size="9.5" fill="#34d399">✓ Live AST Anti-Drift Topology Anchors</text>
+    </g>
+
+    <!-- Bottom Architecture Baseline Badge -->
+    <g transform="translate(44, 550)">
+      <rect width="590" height="48" rx="10" fill="rgba(6,9,16,0.85)" stroke="rgba(255,255,255,0.08)"/>
+      <circle cx="20" cy="24" r="5" fill="#10b981"/>
+      <text x="34" y="22" class="sans" font-size="11.5" font-weight="700" fill="#f8fafc">Offline Git Worktree Evolution &amp; 4-Stage Gatekeeper</text>
+      <text x="34" y="38" class="mono" font-size="10" fill="#94a3b8">Lexical De-Symbol • AST Self-Test • BM25 Dedup • 1,500-Token Hard Budget Cap</text>
+    </g>
   </g>
 
-  <!-- Arrow Col 2 -> Col 3 -->
-  <line x1="754" y1="210" x2="792" y2="210" stroke="#38bdf8" stroke-width="2.2" marker-end="url(#arrowCyan)"/>
-  <line x1="754" y1="410" x2="792" y2="410" stroke="#34d399" stroke-width="2.2" marker-end="url(#arrowGreen)"/>
+  <!-- ==================== RIGHT ZONE ==================== -->
+  <g id="right-zone">
+    <!-- TOP CARD: 50-Turn Multi-MCP Benchmark -->
+    <g transform="translate(678, 66)">
+      <rect width="578" height="268" rx="16" fill="url(#cardBg)" stroke="url(#glassBorder)" stroke-width="1.2"/>
 
-  <!-- COLUMN 3: .evo/ Cognitive Memory & Capability Tree -->
-  <rect x="796" y="88" width="296" height="404" rx="12" fill="url(#cardGrad)" stroke="#1e293b" stroke-width="1.5"/>
-  <text x="814" y="118" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" font-weight="800">4. GIT-TRACKED .evo/ BRAIN</text>
-  <text x="814" y="138" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="11">Zero-Bloat Tiered Knowledge &amp; Telemetry</text>
+      <text x="24" y="32" class="mono" font-size="11" font-weight="800" fill="#94a3b8" letter-spacing="0.08em">50-TURN MULTI-MCP BENCHMARK</text>
+      <rect x="368" y="16" width="186" height="22" rx="11" fill="rgba(16,185,129,0.12)" stroke="rgba(16,185,129,0.35)"/>
+      <circle cx="380" cy="27" r="3.5" fill="#34d399"/>
+      <text x="390" y="31" class="mono" font-size="10" font-weight="700" fill="#34d399">npm run benchmark</text>
 
-  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
-    <rect x="814" y="152" width="260" height="68" rx="7" fill="#090d16" stroke="#34d399"/>
-    <text x="826" y="172" fill="#34d399" font-weight="700">🧠 .evo/memories/ (0 Core Tax)</text>
-    <text x="826" y="190" fill="#cbd5e1" font-size="10.5">AST Structural Hashes + Git Topology</text>
-    <text x="826" y="206" fill="#94a3b8" font-size="10">[VERIFIED] vs [OTHER_BRANCH] vs [STALE]</text>
+      <!-- 2-Box Comparison Grid -->
+      <!-- Raw Multi-MCP Box (with Price-Slash Red Strikethrough) -->
+      <g transform="translate(24, 48)">
+        <rect width="254" height="116" rx="12" fill="rgba(239,68,68,0.06)" stroke="rgba(239,68,68,0.25)"/>
+        <text x="16" y="24" class="sans" font-size="12" font-weight="600" fill="#fca5a5">Raw Multi-MCP (77 Tools)</text>
 
-    <rect x="814" y="230" width="260" height="62" rx="7" fill="#090d16" stroke="#818cf8"/>
-    <text x="826" y="250" fill="#818cf8" font-weight="700">🛡️ .evo/rules/ (Core &amp; Scoped)</text>
-    <text x="826" y="268" fill="#cbd5e1" font-size="10.5">1-Level-Up Architectural Invariants</text>
-    <text x="826" y="282" fill="#94a3b8" font-size="10">Glob-routed (max 3/bucket, ≤1500 tok)</text>
+        <!-- Strikethrough Price-Slash Effect -->
+        <g>
+          <text x="16" y="58" class="mono" font-size="24" font-weight="800" fill="#ef4444">27,150</text>
+          <text x="108" y="56" class="mono" font-size="12" fill="#fca5a5">tok/turn</text>
+          <!-- Animated Strike line -->
+          <line x1="12" y1="50" x2="168" y2="50" stroke="#ef4444" stroke-width="3" stroke-linecap="round" class="slash-line"/>
+        </g>
 
-    <rect x="814" y="302" width="260" height="58" rx="7" fill="#090d16" stroke="#38bdf8"/>
-    <text x="826" y="322" fill="#38bdf8" font-weight="700">⚡ .evo/skills/ &amp; .evo/tools/</text>
-    <text x="826" y="340" fill="#cbd5e1" font-size="10.5">L1/L2 Progressive SOPs &amp; Micro-Tools</text>
-    <text x="826" y="352" fill="#94a3b8" font-size="10">Deliverable Inspector (.xlsx/.docx/.pptx)</text>
+        <text x="16" y="80" class="mono" font-size="11.5" fill="#94a3b8">1,931,250 tok / 50 turns</text>
+        <rect x="16" y="89" width="156" height="18" rx="4" fill="rgba(239,68,68,0.14)"/>
+        <text x="22" y="102" class="mono" font-size="9.5" font-weight="700" fill="#f87171">Cache Thrash · 0% Hit</text>
+      </g>
 
-    <rect x="814" y="370" width="260" height="106" rx="7" fill="#090d16" stroke="#fbbf24"/>
-    <text x="826" y="390" fill="#fbbf24" font-weight="700">📊 Native node:sqlite (WAL + FTS5)</text>
-    <text x="826" y="408" fill="#cbd5e1" font-size="10.5">• Causal Outcome Attribution</text>
-    <text x="826" y="424" fill="#cbd5e1" font-size="10.5">• Helped / Hurt / Contested ROI</text>
-    <text x="826" y="440" fill="#cbd5e1" font-size="10.5">• Live Cockpit UI (`npx evo-kernel ui`)</text>
-    <text x="826" y="458" fill="#34d399" font-size="10.5" font-weight="700">• Instant X-Ray (`npx evo-kernel score`)</text>
+      <!-- EvoKernel Box (Emerald Glow) -->
+      <g transform="translate(296, 48)" style="animation: evoPulse 3s ease-in-out infinite;">
+        <rect width="258" height="116" rx="12" fill="rgba(16,185,129,0.09)" stroke="rgba(16,185,129,0.4)" stroke-width="1.5"/>
+        <text x="16" y="24" class="sans" font-size="12" font-weight="700" fill="#6ee7b7">EvoKernel Virtualization</text>
+
+        <text x="16" y="58" class="mono" font-size="28" font-weight="900" fill="#34d399">1,530</text>
+        <text x="102" y="56" class="mono" font-size="12" font-weight="700" fill="#34d399">tok/turn</text>
+
+        <text x="16" y="80" class="mono" font-size="11.5" font-weight="700" fill="#38bdf8">-94.4% Prompt Tax Saved</text>
+        <rect x="16" y="89" width="220" height="18" rx="4" fill="rgba(16,185,129,0.2)"/>
+        <text x="22" y="102" class="mono" font-size="9.5" font-weight="700" fill="#34d399">661,770 tok / 50 turns (100% KV Hit)</text>
+      </g>
+
+      <!-- Symmetrical 2-Row Comparative Bars (Clean zero-overlap layout) -->
+      <g transform="translate(24, 176)">
+        <!-- Row 1: Raw Multi-MCP -->
+        <text x="0" y="18" class="mono" font-size="11" fill="#94a3b8">Raw Multi-MCP:</text>
+        <rect x="110" y="8" width="250" height="12" rx="6" fill="rgba(255,255,255,0.08)"/>
+        <rect x="110" y="8" width="250" height="12" rx="6" fill="url(#rawRedGrad)" class="bar-raw">
+          <animate attributeName="width" values="0;250;250" keyTimes="0;0.25;1" dur="4s" repeatCount="indefinite"/>
+        </rect>
+        <text x="530" y="18" class="mono" font-size="11" font-weight="700" fill="#f87171" text-anchor="end">27,150 tok/t (100%)</text>
+
+        <!-- Row 2: EvoKernel Virtualization -->
+        <text x="0" y="44" class="mono" font-size="11" font-weight="700" fill="#34d399">EvoKernel:</text>
+        <rect x="110" y="34" width="250" height="12" rx="6" fill="rgba(255,255,255,0.08)"/>
+        <rect x="110" y="34" width="14" height="12" rx="6" fill="url(#emeraldGrad)" filter="url(#glowEmerald)" class="bar-evo">
+          <animate attributeName="width" values="0;0;14;14" keyTimes="0;0.25;0.45;1" dur="4s" repeatCount="indefinite"/>
+        </rect>
+        <text x="530" y="44" class="mono" font-size="11" font-weight="800" fill="#34d399" text-anchor="end">1,530 tok/t (-94.4%)</text>
+
+        <!-- Benchmark Context Note -->
+        <text x="0" y="72" class="mono" font-size="10" fill="#64748b">Benchmark: 50 turns · 77 tools virtualized into 5 primitives · 0 cache thrashing</text>
+      </g>
+    </g>
+
+    <!-- BOTTOM CARD: Self-Evolving Kernel Health & Anti-Drift Gauge -->
+    <g transform="translate(678, 350)">
+      <rect width="578" height="270" rx="16" fill="url(#cardBg)" stroke="url(#glassBorder)" stroke-width="1.2"/>
+
+      <text x="24" y="32" class="mono" font-size="11" font-weight="800" fill="#94a3b8" letter-spacing="0.08em">KERNEL HEALTH &amp; ANTI-DRIFT GAUGE</text>
+      <rect x="424" y="16" width="130" height="22" rx="11" fill="rgba(56,189,248,0.12)" stroke="rgba(56,189,248,0.35)"/>
+      <text x="440" y="31" class="mono" font-size="10.5" font-weight="700" fill="#38bdf8">GRADE A+ (96/100)</text>
+
+      <!-- Circular Radial Gauge (needle-sweep-selftest with Rule R1 >=1.5s Settle Breathing) -->
+      <g transform="translate(24, 46)">
+        <svg width="130" height="130" viewBox="0 0 130 130">
+          <!-- Background Track -->
+          <circle cx="65" cy="65" r="48" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="9"/>
+          <!-- Animated Foreground Arc -->
+          <circle cx="65" cy="65" r="48" fill="none" stroke="url(#emeraldGrad)" stroke-width="9"
+                  stroke-linecap="round" stroke-dashoffset="12.0" transform="rotate(-90 65 65)" class="gauge-arc" filter="url(#glowEmerald)">
+            <animate attributeName="stroke-dashoffset" values="301.6;12.0;12.0;14.0;12.0" keyTimes="0;0.28;0.85;0.94;1" dur="5s" repeatCount="indefinite"/>
+          </circle>
+          <!-- Sweeping Needle Indicator Tip with explicit SMIL + CSS center -->
+          <g class="gauge-needle">
+            <animateTransform attributeName="transform" type="rotate" values="-90 65 65; 255.6 65 65; 255.6 65 65; 250 65 65; 255.6 65 65" keyTimes="0; 0.28; 0.85; 0.94; 1" dur="5s" repeatCount="indefinite"/>
+            <circle cx="113" cy="65" r="4.5" fill="#ffffff" filter="url(#glowEmerald)"/>
+          </g>
+          <!-- Gauge Center Readout with Settle Breathing -->
+          <g class="gauge-readout">
+            <text x="65" y="60" class="mono" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle">96</text>
+            <text x="65" y="78" class="mono" font-size="12" font-weight="700" fill="#34d399" text-anchor="middle">GRADE A+</text>
+            <text x="65" y="94" class="sans" font-size="9" fill="#94a3b8" text-anchor="middle">CONTEXT INDEX</text>
+          </g>
+        </svg>
+      </g>
+
+      <!-- 4 Telemetry Invariants Rows -->
+      <g transform="translate(176, 52)" class="mono" font-size="11.5">
+        <!-- Row 1 -->
+        <g transform="translate(0, 0)">
+          <rect width="378" height="30" rx="7" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)"/>
+          <circle cx="16" cy="15" r="4" fill="#10b981"/>
+          <text x="28" y="19" fill="#e2e8f0" font-weight="600">16/16 AST Memories [VERIFIED]</text>
+          <text x="364" y="19" fill="#34d399" font-weight="700" text-anchor="end">&lt;0.05ms</text>
+        </g>
+        <!-- Row 2 -->
+        <g transform="translate(0, 36)">
+          <rect width="378" height="30" rx="7" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)"/>
+          <circle cx="16" cy="15" r="4" fill="#38bdf8"/>
+          <text x="28" y="19" fill="#e2e8f0" font-weight="600">10/10 Fragile Hotspots Guarded</text>
+          <text x="364" y="19" fill="#38bdf8" font-weight="700" text-anchor="end">100% Shield</text>
+        </g>
+        <!-- Row 3 -->
+        <g transform="translate(0, 72)">
+          <rect width="378" height="30" rx="7" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)"/>
+          <circle cx="16" cy="15" r="4" fill="#34d399"/>
+          <text x="28" y="19" fill="#e2e8f0" font-weight="600">4-Stage Compiler Gatekeeper</text>
+          <text x="364" y="19" fill="#34d399" font-weight="700" text-anchor="end">0 Bypasses</text>
+        </g>
+        <!-- Row 4 -->
+        <g transform="translate(0, 108)">
+          <rect width="378" height="30" rx="7" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)"/>
+          <circle cx="16" cy="15" r="4" fill="#818cf8"/>
+          <text x="28" y="19" fill="#e2e8f0" font-weight="600">0 External Dependencies</text>
+          <text x="364" y="19" fill="#c7d2fe" font-weight="700" text-anchor="end">Node &gt;= 22.5</text>
+        </g>
+      </g>
+
+      <!-- Terminal X-Ray Strip -->
+      <g transform="translate(24, 206)">
+        <rect width="530" height="42" rx="8" fill="#040609" stroke="rgba(56,189,248,0.25)"/>
+        <text x="18" y="26" class="mono" font-size="13" font-weight="700" fill="#ffffff">
+          <tspan fill="#34d399">$</tspan> npx -y evo-kernel score
+        </text>
+        <rect x="360" y="10" width="154" height="22" rx="6" fill="rgba(56,189,248,0.15)" stroke="rgba(56,189,248,0.3)"/>
+        <text x="437" y="25" class="mono" font-size="10.5" font-weight="700" fill="#38bdf8" text-anchor="middle">&lt;25ms Zero-Write</text>
+      </g>
+    </g>
   </g>
 </svg>

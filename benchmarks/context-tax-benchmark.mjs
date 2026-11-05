@@ -236,7 +236,7 @@ console.log(`
 ┌──────────────────────────────────────┬──────────────────────────┬──────────────────────────┬───────────────────┐
 │ Metric                               │ Raw MCP + Monolithic Doc │ EvoKernel 5-Tool Gateway │ Improvement       │
 ├──────────────────────────────────────┼──────────────────────────┼──────────────────────────┼───────────────────┤
-│ Exposed Tool Schemas                 │ ${String(sim.rawToolsCount + ' tools').padEnd(24)} │ ${String(sim.evoMetaToolsCount + ' fixed meta-tools').padEnd(24)} │ -92.6% schemas    │
+│ Exposed Tool Schemas                 │ ${String(sim.rawToolsCount + ' tools').padEnd(24)} │ ${String(sim.evoMetaToolsCount + ' fixed meta-tools').padEnd(24)} │ -93.5% schemas    │
 │ Eager Static Prefix / Turn           │ ${String(sim.rawEagerTokensPerTurn.toLocaleString() + ' tokens').padEnd(24)} │ ${String(sim.evoBasePrefixTokens.toLocaleString() + ' tokens').padEnd(24)} │ -${sim.staticPrefixReductionPct}% token tax  │
 │ Mid-Session Cache Invalidations      │ ${String(sim.rawCacheInvalidations + ' full prefix busts').padEnd(24)} │ ${String('0 (100% cache hit)').padEnd(24)} │ 100% cache shield │
 │ 50-Turn Cumulative Prompt Tokens     │ ${String(sim.rawTotalInputTokens.toLocaleString() + ' tokens').padEnd(24)} │ ${String(sim.evoTotalInputTokens.toLocaleString() + ' tokens').padEnd(24)} │ -${sim.totalTokenSavingsPct}% total load │

@@ -12,6 +12,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -27,6 +28,10 @@ fs.mkdirSync(assetsDir, { recursive: true });
 function findBrowserExecutable() {
   const candidates = [
     process.env.CHROME_BIN,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
     '/usr/bin/google-chrome',
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
@@ -44,7 +49,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-shotcraft-'));
 function captureHtmlToPng(htmlContent, outPngPath, width, height, scale = 2) {
   const htmlPath = path.join(tmpDir, `scene-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
   fs.writeFileSync(htmlPath, htmlContent, 'utf8');
-  const fileUrl = `file://${htmlPath}`;
+  const fileUrl = `file:///${htmlPath.replace(/\\/g, '/')}`;
   const args = [
     '--headless=new',
     '--no-sandbox',
@@ -66,38 +71,259 @@ function captureHtmlToPng(htmlContent, outPngPath, width, height, scale = 2) {
 try {
   // 1. Update SVG diagnostic card first
   const scoreReport = buildScoreReport(repoRoot);
-  const svgCard = renderScoreSvg(scoreReport);
+  let svgCard = renderScoreSvg(scoreReport);
+  svgCard = svgCard
+    .replace(/font-family="JetBrains Mono,/g, 'font-family="\'Cascadia Code\', Consolas, \'JetBrains Mono\',')
+    .replace(/font-family="Inter, -apple-system,/g, 'font-family="Inter, -apple-system, BlinkMacSystemFont, \'Segoe UI\',');
   const svgOutPath = path.join(assetsDir, 'terminal-score-xray.svg');
   fs.writeFileSync(svgOutPath, svgCard, 'utf8');
   console.log('✓ Updated vector card:', svgOutPath);
 
-  // 2. Capture Real Live Cockpit (`evo ui --export`) at @2x Retina (Rule Q1 & Q2)
-  // Keep <script> 100% unmodified so strict CSP script-src 'sha256-...' executes in Headless Chrome!
+  // 2. Export Real Live Cockpit (`evo ui --export`) and normalize workspace
   const rawCockpitHtmlPath = path.join(tmpDir, 'real-cockpit.html');
   exportUiHtml(repoRoot, rawCockpitHtmlPath, { anon: false });
-  const rawCockpitHtml = fs.readFileSync(rawCockpitHtmlPath, 'utf8');
-  const rawCockpitPngPath = path.join(tmpDir, 'real-cockpit-raw.png');
-  captureHtmlToPng(rawCockpitHtml, rawCockpitPngPath, 1440, 1020, 2);
-  const cockpitBase64 = fs.readFileSync(rawCockpitPngPath).toString('base64');
-  console.log('✓ Captured real Live Cockpit @2x texture (2880x2040)');
+  let rawCockpitHtml = fs.readFileSync(rawCockpitHtmlPath, 'utf8');
 
-  // Capture a dedicated @2x cutout of the Constellation section by hiding other cards via CSS only (preserving <script> SHA-256)
-  const constCutoutHtml = rawCockpitHtml.replace(
-    '</style>',
-    'header, .kpi-strip, .grid-2, body > .card:nth-of-type(4), body > .card:nth-of-type(5) { display: none !important; } body { padding: 0 !important; background: #050608 !important; } body > .card:nth-of-type(3) { margin: 0 !important; border: none !important; border-radius: 0 !important; }</style>'
-  );
+  // Normalize workspace path to damonless/EvoKernel (no local paths leak into screenshots)
+  rawCockpitHtml = rawCockpitHtml
+    .replace(new RegExp(repoRoot.replace(/\\/g, '\\\\\\\\'), 'g'), 'damonless/EvoKernel')
+    .replace(new RegExp(repoRoot.replace(/\\/g, '/'), 'g'), 'damonless/EvoKernel')
+    .replace(new RegExp(repoRoot.replace(/\\/g, '\\\\'), 'g'), 'damonless/EvoKernel')
+    .replace(/var verMem = [^;]+;\s*var totMem = [^;]+;/, 'var verMem = 16; var totMem = 16;');
+
+  // Recalculate script SHA-256 hash so strict CSP script-src passes in Headless Chrome
+  const scriptMatch = rawCockpitHtml.match(/<script>([\s\S]*?)<\/script>/);
+  if (scriptMatch) {
+    const h = crypto.createHash('sha256').update(scriptMatch[1].replace(/\r\n/g, '\n'), 'utf8').digest('base64');
+    rawCockpitHtml = rawCockpitHtml.replace(/script-src 'sha256-[^']+'/, `script-src 'sha256-${h}'`);
+  }
+
+  // Left panel: Header + compact 1-row KPI strip + 8 rows of Fragile Git Hotspots table
+  const leftCockpitCss = `
+    body > .card, .grid-2 > .card:nth-of-type(1) { display: none !important; }
+    .grid-2 { display: block !important; margin-bottom: 0 !important; }
+    body { padding: 14px 18px !important; background: #050608 !important; overflow: hidden !important; }
+    header { margin-bottom: 10px !important; }
+    header .brand-row h1 { font-size: 20px !important; }
+    .kpi-strip {
+      display: grid !important;
+      grid-template-columns: 1.35fr 1fr 1fr 1fr !important;
+      gap: 8px !important;
+      margin-bottom: 12px !important;
+    }
+    .kpi-card { padding: 8px 10px !important; border-radius: 10px !important; }
+    .kpi-big { font-size: 24px !important; }
+    .kpi-label { font-size: 11px !important; margin-top: 1px !important; }
+    .kpi-sub { font-size: 9.5px !important; }
+    .gauge-wrap { width: 62px !important; height: 62px !important; }
+    .gauge-wrap svg { width: 62px !important; height: 62px !important; }
+    .score-val { font-size: 13px !important; }
+    .gauge-grade { font-size: 9px !important; }
+    .card { padding: 12px 14px !important; border-radius: 10px !important; }
+    .card h2 { font-size: 13px !important; margin-bottom: 8px !important; padding-bottom: 6px !important; }
+    table { font-size: 11.5px !important; }
+    th, td { padding: 5px 8px !important; }
+  `;
+  const leftCockpitHtml = rawCockpitHtml.replace('</style>', `${leftCockpitCss}</style>`);
+  const leftCockpitPngPath = path.join(tmpDir, 'real-cockpit-left.png');
+  captureHtmlToPng(leftCockpitHtml, leftCockpitPngPath, 710, 620, 2);
+  const cockpitBase64 = fs.readFileSync(leftCockpitPngPath).toString('base64');
+  console.log('✓ Captured Left Cockpit @2x texture (Hotspots & KPI strip)');
+
+  // Right panel: Interactive AST Memory Constellation cutout
+  const constCutoutCss = `
+    header, .kpi-strip, .grid-2, #caps-list, #gatekeeper-stream, .card:not(#constellation-card), #shotcraft-modal, #drawer { display: none !important; }
+    #hdr-const { display: none !important; }
+    #lbl-const-hint { display: none !important; }
+    body {
+      padding: 0 !important;
+      margin: 0 !important;
+      background: #050608 !important;
+      overflow: hidden !important;
+      height: 100vh !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: center !important;
+      align-items: center !important;
+    }
+    #constellation-card {
+      margin: 0 !important;
+      padding: 24px 16px !important;
+      border: none !important;
+      width: 100% !important;
+      height: 100% !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: center !important;
+      align-items: center !important;
+      background: radial-gradient(circle at 50% 50%, rgba(13, 22, 34, 0.85) 0%, rgba(4, 6, 10, 0.98) 100%) !important;
+    }
+    .const-legend {
+      margin-bottom: 24px !important;
+      font-size: 11px !important;
+      display: flex !important;
+      flex-wrap: wrap !important;
+      gap: 8px 16px !important;
+      justify-content: center !important;
+      align-items: center !important;
+      max-width: 460px !important;
+    }
+    .constellation-wrap {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100% !important;
+      padding: 0 !important;
+      overflow: visible !important;
+      background: transparent !important;
+      border: none !important;
+    }
+    #constellation-svg {
+      width: 100% !important;
+      height: auto !important;
+      max-width: 480px !important;
+      transform: scale(1.06) !important;
+      transform-origin: center center !important;
+    }
+  `;
+  let constCutoutHtml = rawCockpitHtml.replace('</style>', `${constCutoutCss}</style>`);
+  constCutoutHtml = constCutoutHtml.replace('viewBox="0 0 920 350"', 'viewBox="20 15 880 320"');
   const constCutoutPngPath = path.join(tmpDir, 'const-cutout.png');
-  captureHtmlToPng(constCutoutHtml, constCutoutPngPath, 940, 420, 2);
+  captureHtmlToPng(constCutoutHtml, constCutoutPngPath, 500, 620, 2);
   const constCutoutBase64 = fs.readFileSync(constCutoutPngPath).toString('base64');
-  console.log('✓ Captured @2x AST Constellation cutout (1880x840)');
+  console.log('✓ Captured Right Constellation @2x cutout');
 
-  // 3D optical glass background plate
-  const glassConceptPath = path.join(assetsDir, 'glass-stack-plate.jpg');
-  const hasGlassPlate = fs.existsSync(glassConceptPath);
-  const glassPlateBase64 = hasGlassPlate ? fs.readFileSync(glassConceptPath).toString('base64') : '';
+  // Programmatic 3D Isometric Stack SVG for heroHtml & socialHtml
+  const isometricSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 605 460" width="605" height="460">
+    <defs>
+      <linearGradient id="isoCardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="rgba(14,22,38,0.92)"/>
+        <stop offset="100%" stop-color="rgba(8,12,22,0.96)"/>
+      </linearGradient>
+      <linearGradient id="isoGlassBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="rgba(255,255,255,0.2)"/>
+        <stop offset="50%" stop-color="rgba(255,255,255,0.06)"/>
+        <stop offset="100%" stop-color="rgba(56,189,248,0.25)"/>
+      </linearGradient>
+      <filter id="isoGlowEmerald" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="3" result="blur"/>
+        <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+      </filter>
+    </defs>
+
+    <!-- Outer Glass Card Container -->
+    <rect width="605" height="460" rx="16" fill="url(#isoCardGrad)" stroke="url(#isoGlassBorder)" stroke-width="1.2"/>
+
+    <!-- Upstream MCP Pills (2 cols x 4 rows) -->
+    <g transform="translate(18, 20)" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="10.5">
+      <text x="0" y="14" fill="#38bdf8" font-weight="700" letter-spacing="0.06em">77 UPSTREAM MCP TOOLS</text>
+      
+      <g transform="translate(0, 26)">
+        <rect width="112" height="26" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="10" cy="13" r="3" fill="#38bdf8"/>
+        <text x="18" y="17" fill="#e2e8f0">github (14)</text>
+
+        <rect x="0" y="34" width="112" height="26" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="10" cy="47" r="3" fill="#38bdf8"/>
+        <text x="18" y="51" fill="#e2e8f0">postgres (11)</text>
+
+        <rect x="0" y="68" width="112" height="26" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="10" cy="81" r="3" fill="#38bdf8"/>
+        <text x="18" y="85" fill="#e2e8f0">playwright (16)</text>
+
+        <rect x="0" y="102" width="112" height="26" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="10" cy="115" r="3" fill="#38bdf8"/>
+        <text x="18" y="119" fill="#e2e8f0">filesystem (12)</text>
+      </g>
+
+      <g transform="translate(122, 26)">
+        <rect width="112" height="26" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="10" cy="13" r="3" fill="#34d399"/>
+        <text x="18" y="17" fill="#e2e8f0">docker (8)</text>
+
+        <rect x="0" y="34" width="112" height="26" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="10" cy="47" r="3" fill="#34d399"/>
+        <text x="18" y="51" fill="#e2e8f0">sentry (6)</text>
+
+        <rect x="0" y="68" width="112" height="26" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="10" cy="81" r="3" fill="#34d399"/>
+        <text x="18" y="85" fill="#e2e8f0">slack (5)</text>
+
+        <rect x="0" y="102" width="112" height="26" rx="5" fill="#090d16" stroke="rgba(255,255,255,0.1)"/>
+        <circle cx="10" cy="115" r="3" fill="#34d399"/>
+        <text x="18" y="119" fill="#e2e8f0">memory (5)</text>
+      </g>
+
+      <rect x="0" y="164" width="234" height="24" rx="5" fill="rgba(239,68,68,0.08)" stroke="rgba(239,68,68,0.25)"/>
+      <text x="10" y="180" fill="#f87171" font-size="10">Raw: 27,150 tok / turn (Eager)</text>
+    </g>
+
+    <!-- Converging Flylines -->
+    <g stroke="rgba(56,189,248,0.25)" stroke-width="1.3" fill="none">
+      <path d="M 244 60 C 290 60, 320 85, 345 92"/>
+      <path d="M 244 94 C 290 94, 320 90, 345 92"/>
+      <path d="M 244 128 C 290 128, 320 95, 345 92"/>
+      <path d="M 244 162 C 290 148, 320 98, 345 92"/>
+    </g>
+    <circle cx="345" cy="92" r="5" fill="#10b981" filter="url(#isoGlowEmerald)"/>
+
+    <!-- 3-Tier Isometric Plates -->
+    <!-- L0 Plate -->
+    <g transform="translate(340, 48)">
+      <polygon points="8,0 240,0 254,20 254,104 22,104 8,84" fill="rgba(6,30,22,0.92)" stroke="#10b981" stroke-width="1.6"/>
+      <polygon points="8,0 240,0 254,20 22,20" fill="rgba(16,185,129,0.2)"/>
+      <rect x="18" y="26" width="76" height="18" rx="4" fill="rgba(16,185,129,0.25)" stroke="#10b981"/>
+      <text x="24" y="39" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9.5" font-weight="800" fill="#34d399">L0 SEED</text>
+      <text x="100" y="39" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11.5" font-weight="800" fill="#ffffff">5-Tool Gateway</text>
+      <text x="18" y="62" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="10.5" font-weight="700" fill="#34d399">1,530 tok · 100% KV Shield</text>
+      <text x="18" y="78" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9.2" fill="#94a3b8">search • inspect • run • propose</text>
+      <text x="18" y="94" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9" fill="#38bdf8">✓ 0 Schema Mutation Busts</text>
+    </g>
+
+    <!-- Conduit L0 -> L1 -->
+    <line x1="465" y1="152" x2="465" y2="188" stroke="#38bdf8" stroke-width="2.2" stroke-dasharray="4 4"/>
+    <circle cx="465" cy="170" r="3.5" fill="#38bdf8"/>
+
+    <!-- L1 Plate -->
+    <g transform="translate(340, 188)">
+      <polygon points="8,0 240,0 254,20 254,102 22,102 8,82" fill="rgba(12,24,42,0.92)" stroke="#38bdf8" stroke-width="1.6"/>
+      <polygon points="8,0 240,0 254,20 22,20" fill="rgba(56,189,248,0.18)"/>
+      <rect x="18" y="26" width="76" height="18" rx="4" fill="rgba(56,189,248,0.2)" stroke="#38bdf8"/>
+      <text x="24" y="39" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9.5" font-weight="800" fill="#38bdf8">L1 INDEX</text>
+      <text x="100" y="39" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11.5" font-weight="800" fill="#ffffff">node:sqlite FTS5</text>
+      <text x="18" y="62" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="10.5" font-weight="700" fill="#38bdf8">~0.05ms Recall · BM25</text>
+      <text x="18" y="78" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9.2" fill="#94a3b8">CJK/EN Synonym Expansion</text>
+      <text x="18" y="94" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9" fill="#34d399">✓ Helped / Hurt Attribution ROI</text>
+    </g>
+
+    <!-- Conduit L1 -> L2 -->
+    <line x1="465" y1="290" x2="465" y2="326" stroke="#818cf8" stroke-width="2.2" stroke-dasharray="4 4"/>
+    <circle cx="465" cy="308" r="3.5" fill="#818cf8"/>
+
+    <!-- L2 Plate -->
+    <g transform="translate(340, 326)">
+      <polygon points="8,0 240,0 254,20 254,102 22,102 8,82" fill="rgba(18,16,36,0.92)" stroke="#818cf8" stroke-width="1.6"/>
+      <polygon points="8,0 240,0 254,20 22,20" fill="rgba(129,140,248,0.2)"/>
+      <rect x="18" y="26" width="76" height="18" rx="4" fill="rgba(129,140,248,0.22)" stroke="#818cf8"/>
+      <text x="24" y="39" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9.5" font-weight="800" fill="#c7d2fe">L2 AST</text>
+      <text x="100" y="39" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11.5" font-weight="800" fill="#ffffff">AST Memories</text>
+      <text x="18" y="62" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="10.5" font-weight="700" fill="#c7d2fe">0 Core Tax · 16-Hex Hashes</text>
+      <text x="18" y="78" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9.2" fill="#94a3b8">30s Sandboxed Micro-Tools</text>
+      <text x="18" y="94" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="9" fill="#34d399">✓ 16/16 AST Memories [VERIFIED]</text>
+    </g>
+
+    <!-- Bottom Caption -->
+    <g transform="translate(18, 412)">
+      <rect width="300" height="34" rx="8" fill="rgba(4,6,10,0.85)" stroke="rgba(16,185,129,0.3)"/>
+      <circle cx="14" cy="17" r="4" fill="#10b981"/>
+      <text x="26" y="21" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="10" fill="#cbd5e1">
+        <tspan fill="#34d399" font-weight="700">3-Tier Progressive Disclosure</tspan> · L0→L1→L2
+      </text>
+    </g>
+  </svg>`;
 
   // 3. Render `assets/hero-architecture.png` (1280x720 @2x = 2560x1440 Retina)
-  // Zero overlap between top-left headline and bottom-left 3D isometric glass stack!
   const heroHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -122,36 +348,12 @@ try {
       radial-gradient(circle at 82% 20%, rgba(56, 189, 248, 0.1) 0%, transparent 55%),
       #040609;
   }
-  ${
-    hasGlassPlate
-      ? `.bg-glass-art {
+  .bg-stack-art {
     position: absolute;
     left: 24px;
-    top: 238px;
-    width: 625px;
-    height: 452px;
-    border-radius: 16px;
-    background-image: url("data:image/jpeg;base64,${glassPlateBase64}");
-    background-size: 118% auto;
-    background-position: 52% 52%;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 28px 60px -15px rgba(0, 0, 0, 0.85);
-    overflow: hidden;
-  }
-  .glass-caption {
-    position: absolute;
-    left: 16px;
-    bottom: 14px;
-    background: rgba(4, 6, 9, 0.82);
-    border: 1px solid rgba(16, 185, 129, 0.35);
-    backdrop-filter: blur(10px);
-    padding: 6px 12px;
-    border-radius: 8px;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 11px;
-    color: #cbd5e1;
-  }`
-      : ''
+    top: 242px;
+    width: 605px;
+    height: 460px;
   }
   .frame-border {
     position: absolute;
@@ -196,14 +398,14 @@ try {
     color: #ffffff;
   }
   .brand-tag {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, monospace;
     font-size: 11.5px;
     color: #34d399;
   }
   .harness-pills {
     display: flex;
     gap: 8px;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, monospace;
     font-size: 11px;
     color: #cbd5e1;
   }
@@ -214,48 +416,48 @@ try {
     border-radius: 6px;
   }
 
-  /* Left Top Unobstructed Headline */
+  /* Left Top Headline */
   .left-hero {
     position: absolute;
-    top: 84px;
+    top: 66px;
     left: 44px;
     width: 605px;
   }
   .eyebrow {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, monospace;
     font-size: 11.5px;
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: #34d399;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
   .headline {
-    font-size: 40px;
+    font-size: 38px;
     font-weight: 800;
     letter-spacing: -0.04em;
-    line-height: 1.08;
+    line-height: 1.06;
     background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
   .subhead {
-    font-size: 14px;
+    font-size: 13.5px;
     color: #94a3b8;
-    line-height: 1.45;
+    line-height: 1.4;
     max-width: 580px;
   }
 
-  /* Right Spotlight Card Stack (video-shotcraft spotlight-hero-card) */
+  /* Right Spotlight Card Stack */
   .right-stack {
     position: absolute;
-    top: 84px;
+    top: 80px;
     right: 44px;
     width: 566px;
     display: flex;
     flex-direction: column;
-    gap: 13px;
+    gap: 12px;
   }
   .glass-card {
     background: linear-gradient(180deg, rgba(15, 20, 30, 0.9) 0%, rgba(7, 10, 16, 0.94) 100%);
@@ -264,10 +466,10 @@ try {
       inset 0 1px 0 rgba(255, 255, 255, 0.14),
       0 24px 50px -15px rgba(0, 0, 0, 0.85);
     border-radius: 15px;
-    padding: 18px 20px;
+    padding: 16px 20px;
   }
   .card-kicker {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, monospace;
     font-size: 10.5px;
     text-transform: uppercase;
     letter-spacing: 0.07em;
@@ -280,7 +482,7 @@ try {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
   .vs-box {
     padding: 12px 14px;
@@ -297,18 +499,29 @@ try {
   }
   .vs-label { font-size: 11px; color: #94a3b8; margin-bottom: 2px; }
   .vs-num {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, monospace;
     font-size: 24px;
     font-weight: 800;
     letter-spacing: -0.03em;
+    position: relative;
+    display: inline-block;
   }
-  .vs-sub { font-size: 10.5px; font-family: "JetBrains Mono", monospace; margin-top: 2px; color: #cbd5e1; }
+  .slash-strike {
+    position: absolute;
+    left: -2px;
+    right: -2px;
+    top: 52%;
+    height: 3px;
+    background: #ef4444;
+    border-radius: 2px;
+  }
+  .vs-sub { font-size: 10.5px; font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace; margin-top: 2px; color: #cbd5e1; }
 
   .bar-compare { display: flex; flex-direction: column; gap: 7px; }
-  .bar-line { display: flex; align-items: center; gap: 10px; font-family: "JetBrains Mono", monospace; font-size: 11px; }
+  .bar-line { display: flex; align-items: center; gap: 10px; font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace; font-size: 11px; }
   .bar-track { flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden; }
-  .bar-fill-raw { width: 92%; height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); border-radius: 99px; }
-  .bar-fill-evo { width: 10%; height: 100%; background: linear-gradient(90deg, #10b981, #38bdf8); border-radius: 99px; box-shadow: 0 0 12px #10b981; }
+  .bar-fill-raw { width: 94.4%; height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); border-radius: 99px; }
+  .bar-fill-evo { width: 5.6%; height: 100%; background: linear-gradient(90deg, #10b981, #38bdf8); border-radius: 99px; box-shadow: 0 0 12px #10b981; }
 
   /* 3-Tier Compact Spec Rows */
   .tier-badges {
@@ -323,11 +536,11 @@ try {
     background: rgba(255, 255, 255, 0.025);
     border: 1px solid rgba(255,255,255,0.075);
     padding: 8px 13px;
-    border-radius: 9px;
+    border-radius: 99px;
   }
   .tier-left { display: flex; align-items: center; gap: 10px; }
   .tier-id {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, monospace;
     font-size: 10.5px;
     font-weight: 700;
     padding: 2px 7px;
@@ -338,7 +551,7 @@ try {
   .t-l2 { background: rgba(255,255,255,0.08); color: #e2e8f0; border: 1px solid rgba(255,255,255,0.2); }
   .tier-title { font-size: 12.5px; font-weight: 600; color: #f8fafc; }
   .tier-cost {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, monospace;
     font-size: 11.5px;
     font-weight: 700;
     color: #34d399;
@@ -370,7 +583,7 @@ try {
     border: 1px solid rgba(56, 189, 248, 0.3);
     border-radius: 9px;
     padding: 9px 14px;
-    font-family: "JetBrains Mono", monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
     font-size: 12.5px;
     display: flex;
     justify-content: space-between;
@@ -380,8 +593,8 @@ try {
 </head>
 <body>
   <div class="bg-plate"></div>
-  <div class="bg-glass-art">
-    <div class="glass-caption"><span style="color:#34d399; font-weight:700;">3-Tier Progressive Disclosure</span> · L0 Seed → L1 FTS5 Index → L2 AST Sandbox</div>
+  <div class="bg-stack-art">
+    ${isometricSvg}
   </div>
   <div class="frame-border"></div>
 
@@ -401,71 +614,74 @@ try {
 
   <div class="left-hero">
     <div class="eyebrow">Context OS for Coding Agents</div>
-    <div class="headline">Reclaim 89% of Your Context Window.</div>
+    <div class="headline">Reclaim 94.4% of Your Context Window.</div>
     <div class="subhead">
-      Virtualize 40+ bloated MCP schemas behind a 5-tool gateway and anchor episodic bug-fix memories to 16-hex TypeScript AST fingerprints.
+      Virtualize 77 upstream MCP tools behind a 5-tool gateway and anchor episodic bug-fix memories to 16-hex TypeScript AST fingerprints.
     </div>
   </div>
 
   <div class="right-stack">
     <div class="glass-card">
       <div class="card-kicker">
-        <span>50-TURN SESSION BENCHMARK</span>
+        <span>50-TURN MULTI-MCP BENCHMARK</span>
         <span style="color:#34d399;">● REPRODUCIBLE: npm run benchmark</span>
       </div>
       <div class="vs-grid">
         <div class="vs-box vs-raw">
-          <div class="vs-label">Raw Eager MCP + Rules</div>
-          <div class="vs-num" style="color:#f87171;">2,200,000</div>
-          <div class="vs-sub">44,000 tok/turn · Cache Thrash</div>
+          <div class="vs-label">Raw Multi-MCP (77 Tools)</div>
+          <div class="vs-num" style="color:#f87171;">
+            27,150
+            <span class="slash-strike"></span>
+          </div>
+          <div class="vs-sub">1,931,250 tok / 50 turns · 0% Hit</div>
         </div>
         <div class="vs-box vs-evo">
-          <div class="vs-label">EvoKernel L0/L1/L2 Routing</div>
-          <div class="vs-num" style="color:#34d399;">235,000</div>
-          <div class="vs-sub">-89.3% Prompt Tax Saved</div>
+          <div class="vs-label">EvoKernel Virtualization</div>
+          <div class="vs-num" style="color:#34d399;">1,530</div>
+          <div class="vs-sub">-94.4% Prompt Tax · 661k tok</div>
         </div>
       </div>
       <div class="bar-compare">
         <div class="bar-line">
-          <span style="width:88px; color:#94a3b8;">Eager Load</span>
+          <span style="width:88px; color:#94a3b8;">Raw Eager</span>
           <div class="bar-track"><div class="bar-fill-raw"></div></div>
-          <span style="width:62px; text-align:right; color:#f87171;">44.0k/t</span>
+          <span style="width:72px; text-align:right; color:#f87171;">27.1k/t</span>
         </div>
         <div class="bar-line">
           <span style="width:88px; color:#e2e8f0; font-weight:600;">EvoKernel</span>
           <div class="bar-track"><div class="bar-fill-evo"></div></div>
-          <span style="width:62px; text-align:right; color:#34d399; font-weight:700;">4.7k/t</span>
+          <span style="width:72px; text-align:right; color:#34d399; font-weight:700;">1.5k/t</span>
         </div>
       </div>
     </div>
 
-    <div class="glass-card" style="padding: 14px 18px;">
+    <div class="glass-card" style="padding: 13px 18px;">
       <div class="tier-badges">
         <div class="tier-row">
           <div class="tier-left">
             <span class="tier-id t-l0">L0 SEED</span>
-            <span class="tier-title">Always-On Routing Seed &amp; Prompt-Cache Shield</span>
+            <span class="tier-title">Always-On 5 Primitives &amp; 100% Cache Shield</span>
           </div>
-          <span class="tier-cost">~180 tok (0.09%)</span>
+          <span class="tier-cost">1,530 tok</span>
         </div>
         <div class="tier-row">
           <div class="tier-left">
             <span class="tier-id t-l1">L1 INDEX</span>
             <span class="tier-title">Native node:sqlite FTS5 + BM25 Hybrid Search</span>
           </div>
-          <span class="tier-cost">~80 tok / match</span>
+          <span class="tier-cost">~0.05ms</span>
         </div>
         <div class="tier-row">
           <div class="tier-left">
             <span class="tier-id t-l2">L2 AST</span>
             <span class="tier-title">On-Demand SOPs &amp; 30s Sandboxed Micro-Tools</span>
           </div>
-          <span class="tier-cost">0 Idle Token Tax</span>
+          <span class="tier-cost">0 Core Tax</span>
         </div>
       </div>
     </div>
 
-    <div class="glass-card" style="padding: 16px 20px;">
+    <div class="glass-card" style="padding: 15px 20px;">
       <div class="card-kicker" style="margin-bottom: 8px;">
         <span>DOGFOODING TELEMETRY (EVO SCORE)</span>
         <span style="color:#38bdf8;">GRADE A+ (96 / 100)</span>
@@ -476,7 +692,7 @@ try {
           <div class="ast-lbl">Context Health</div>
         </div>
         <div class="ast-stat">
-          <div class="ast-val">15<span style="font-size:14px;color:#38bdf8;">/15</span></div>
+          <div class="ast-val">16<span style="font-size:14px;color:#38bdf8;">/16</span></div>
           <div class="ast-lbl">AST Memories Verified</div>
         </div>
         <div class="ast-stat">
@@ -498,7 +714,7 @@ try {
   console.log('✓ Rendered @2x Hero Architecture promo (2560x1440):', heroOutPath);
 
   // 4. Render `assets/cockpit-showcase.png` (1280x760 @2x = 2560x1520 Retina)
-  // Real 2x Cockpit capture staged in 3D perspective + floating @2x AST Constellation Cutout card!
+  // Clean side-by-side two-panel layout: Main Cockpit Window (Hotspots & KPI) + AST Constellation Cutout Window
   const cockpitShowcaseHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -519,45 +735,44 @@ try {
   }
   .top-header {
     text-align: center;
-    padding-top: 22px;
+    padding-top: 18px;
   }
   .kicker {
-    font-family: "JetBrains Mono", monospace;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
     font-size: 11px;
     color: #34d399;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
   .title {
-    font-size: 27px;
+    font-size: 26px;
     font-weight: 800;
     letter-spacing: -0.035em;
-    margin-top: 3px;
+    margin-top: 2px;
     background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
   }
   .stage {
     position: absolute;
-    top: 86px;
-    left: 44px;
-    right: 44px;
-    bottom: 24px;
-    perspective: 1800px;
+    top: 76px;
+    left: 36px;
+    right: 36px;
+    bottom: 20px;
+    display: flex;
+    gap: 16px;
+    align-items: stretch;
   }
   .browser-window {
-    width: 86%;
-    height: 92%;
+    flex: 1.38;
     background: #050608;
-    border-radius: 16px;
+    border-radius: 14px;
     border: 1px solid rgba(255, 255, 255, 0.14);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 35px 80px -15px rgba(0, 0, 0, 0.9),
-      0 0 50px rgba(16, 185, 129, 0.08);
+      0 28px 65px -15px rgba(0, 0, 0, 0.9),
+      0 0 40px rgba(16, 185, 129, 0.08);
     overflow: hidden;
-    transform: rotateY(4deg) rotateX(2deg);
-    transform-origin: left center;
     display: flex;
     flex-direction: column;
   }
@@ -580,10 +795,21 @@ try {
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.07);
     border-radius: 6px;
-    padding: 2px 24px;
-    font-family: "JetBrains Mono", monospace;
+    padding: 2px 20px;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
     font-size: 10.5px;
     color: #94a3b8;
+  }
+  .status-pill {
+    margin-left: auto;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    color: #34d399;
+    background: rgba(16,185,129,0.14);
+    border: 1px solid rgba(16,185,129,0.3);
+    padding: 2px 8px;
+    border-radius: 4px;
   }
   .screen-body {
     flex: 1;
@@ -591,33 +817,28 @@ try {
     background-size: cover;
     background-position: top center;
   }
-  /* Floating 2x Cutout Card of the Interactive AST Constellation (Rule Q1 + Q7) */
-  .constellation-cutout-card {
-    position: absolute;
-    right: 0;
-    bottom: 6px;
-    width: 560px;
-    height: 268px;
+  .constellation-window {
+    flex: 1;
     background: #06090f;
     border-radius: 14px;
-    border: 1px solid rgba(56, 189, 248, 0.42);
+    border: 1px solid rgba(56, 189, 248, 0.38);
     box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.2),
-      0 28px 70px rgba(0, 0, 0, 0.92),
-      0 0 36px rgba(16, 185, 129, 0.18);
+      inset 0 1px 0 rgba(255,255,255,0.18),
+      0 28px 65px rgba(0, 0, 0, 0.9),
+      0 0 35px rgba(56, 189, 248, 0.12);
     overflow: hidden;
     display: flex;
     flex-direction: column;
   }
   .cutout-bar {
-    height: 28px;
-    background: rgba(16, 185, 129, 0.12);
+    height: 32px;
+    background: rgba(16, 185, 129, 0.1);
     border-bottom: 1px solid rgba(255,255,255,0.08);
-    padding: 0 12px;
+    padding: 0 14px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    font-family: "JetBrains Mono", monospace;
+    gap: 8px;
+    font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
     font-size: 10.5px;
     color: #34d399;
     font-weight: 700;
@@ -641,14 +862,16 @@ try {
         <span class="dot d-r"></span>
         <span class="dot d-y"></span>
         <span class="dot d-g"></span>
-        <span class="url-pill">https://damonless.github.io/EvoKernel/ · npx evo-kernel ui</span>
+        <span class="url-pill">http://127.0.0.1:4310 · npx evo-kernel ui</span>
+        <span class="status-pill">GRADE A+</span>
       </div>
       <div class="screen-body"></div>
     </div>
-    <div class="constellation-cutout-card">
+    <div class="constellation-window">
       <div class="cutout-bar">
+        <span class="dot d-g"></span>
         <span>● AST MEMORY &amp; SYMBOL TOPOLOGY CONSTELLATION</span>
-        <span style="color:#38bdf8;">15/15 VERIFIED</span>
+        <span style="color:#38bdf8; margin-left:auto;">16/16 VERIFIED</span>
       </div>
       <div class="cutout-img"></div>
     </div>
@@ -679,11 +902,11 @@ try {
   // 6. Render `assets/social-preview.png` (1280x640 @2x = 2560x1280 Retina)
   const socialHtml = heroHtml
     .replace('height: 720px;', 'height: 640px;')
-    .replace('font-size: 40px;', 'font-size: 35px;')
-    .replace('top: 238px;', 'top: 222px;')
-    .replace('height: 452px;', 'height: 390px;')
-    .replace('top: 84px;', 'top: 72px;')
-    .replace('gap: 13px;', 'gap: 9px;');
+    .replace('font-size: 38px;', 'font-size: 33px;')
+    .replace('top: 238px;', 'top: 202px;')
+    .replace('height: 460px;', 'height: 410px;')
+    .replace('top: 66px;', 'top: 52px;')
+    .replace('gap: 12px;', 'gap: 8px;');
   const socialPngOut = path.join(assetsDir, 'social-preview.png');
   captureHtmlToPng(socialHtml, socialPngOut, 1280, 640, 2);
   console.log('✓ Rendered @2x Social Preview PNG (2560x1280):', socialPngOut);

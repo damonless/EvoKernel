@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { buildScoreReport, inspectMcpTaxSnapshot } from '../cli/score.js';
+import { buildScoreReport, inspectMcpTaxSnapshot, renderScoreSvg } from '../cli/score.js';
 import { exportUiHtml, startUiServer, buildUiSnapshot } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import { runInit, runUninstall } from '../cli/init.js';
@@ -227,6 +227,30 @@ describe('EvoKernel P1 & P2: Score, UI Cockpit, Slash Commands & Manifest Parity
 
       // Assert zero inline event attributes (on*=)
       assert.equal(/\bon[a-z]+\s*=/i.test(html), false, 'Exported HTML must contain zero inline event attributes (on*=)');
+
+      // Verify #btn-watch-film and #shotcraft-modal exist in rendered UI HTML
+      assert.ok(html.includes('id="btn-watch-film"'), 'Exported HTML must contain #btn-watch-film action button');
+      assert.ok(html.includes('id="shotcraft-modal"'), 'Exported HTML must contain #shotcraft-modal Architecture Theater');
+      assert.ok(html.includes('id="film-play-toggle"'), 'Exported HTML must contain #film-play-toggle control');
+      assert.ok(html.includes('id="film-prev-btn"'), 'Exported HTML must contain #film-prev-btn control');
+      assert.ok(html.includes('id="film-next-btn"'), 'Exported HTML must contain #film-next-btn control');
+      assert.ok(html.includes('id="film-close-btn"'), 'Exported HTML must contain #film-close-btn control');
+      for (let sIdx = 0; sIdx < 5; sIdx++) {
+        assert.ok(html.includes(`id="scene-${sIdx}"`), `Exported HTML must contain #scene-${sIdx}`);
+      }
+      assert.ok(html.includes('id="constellation-card"'), 'Exported HTML must contain #constellation-card');
+      assert.ok(html.includes('const-flyline-pulse'), 'Exported HTML must contain animated constellation pulse flow');
+      assert.ok(html.includes('-89%'), 'Exported HTML KPI strip contains updated -89% prompt savings metric');
+      assert.ok(html.includes('1,531 tok L0 vs 13,672 tok Eager'), 'Exported HTML KPI strip contains updated 1,531 vs 13,672 comparison');
+      assert.ok(html.includes('16 / 16'), 'Exported HTML KPI strip contains updated 16 / 16 verified memories metric');
+
+      // Verify renderScoreSvg produces needle-sweep and barGrow animation styles and classes
+      const report = buildScoreReport(ws);
+      const svg = renderScoreSvg(report);
+      assert.ok(svg.includes('@keyframes needleSweep'), 'renderScoreSvg must include @keyframes needleSweep');
+      assert.ok(svg.includes('@keyframes barGrow'), 'renderScoreSvg must include @keyframes barGrow');
+      assert.ok(svg.includes('score-gauge-ring'), 'renderScoreSvg must attach score-gauge-ring animation class');
+      assert.ok(svg.includes('savings-bar-fill'), 'renderScoreSvg must attach savings-bar-fill animation class');
 
       // Verify complex snapshot with special characters, HTML entities, and special token compiles cleanly
       const complexHtml = renderUiClientHtml(
@@ -484,7 +508,7 @@ Widget issue
       fs.writeFileSync(
         path.join(evoDir, 'mcp-pool.json'),
         JSON.stringify({
-          version: '0.2.0',
+          version: '0.3.0',
           updatedAt: '2026-11-01T00:00:00.000Z',
           mcpServers: {
             github: { command: 'npx', args: ['@modelcontextprotocol/server-github'] },
@@ -586,6 +610,336 @@ Widget issue
       assert.ok(rule, 'rule-test must be present');
       assert.equal(rule.hit_count, 2);
       assert.equal(rule.attribution, 'hurt');
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('13. GATE-1: bin/evo.mjs version pre-check wrapper intercepts unsupported Node (< 22.5.0) and prints friendly guidance', () => {
+    const binEntry = path.resolve(process.cwd(), 'bin', 'evo.mjs');
+    assert.ok(fs.existsSync(binEntry), 'bin/evo.mjs must exist');
+
+    const proc = spawnSync(process.execPath, [binEntry, 'version'], {
+      env: { ...process.env, EVO_SIMULATE_NODE_VERSION: '20.11.0' },
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+
+    assert.equal(proc.status, 1, 'Process must exit with code 1 on simulated Node 20.11.0');
+    assert.ok(proc.stderr.includes('Node.js >= 22.5.0 is required'), 'Stderr must state Node >= 22.5.0 requirement');
+    assert.ok(proc.stderr.includes('nvm install 22'), 'Stderr must recommend nvm/fnm/volta quick fixes');
+  });
+
+  test('14. GATE-2: evo uninstall --help and evo init --help produce zero side-effects and exit 0 without mutating workspace', () => {
+    const emptyDir = createTempDir('help-zero-side-effects');
+    const binEntry = path.resolve(process.cwd(), 'bin', 'evo.mjs');
+
+    try {
+      assert.deepEqual(fs.readdirSync(emptyDir), [], 'Directory starts empty');
+
+      // 1. evo uninstall --help
+      const uninstProc = spawnSync(process.execPath, [binEntry, 'uninstall', '--help'], {
+        cwd: emptyDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(uninstProc.status, 0, 'evo uninstall --help must exit with 0');
+      assert.ok(uninstProc.stdout.includes('evo uninstall [options]'), 'Must print uninstall help');
+      assert.deepEqual(fs.readdirSync(emptyDir), [], 'evo uninstall --help created 0 files or directories');
+
+      // 2. evo init --help
+      const initProc = spawnSync(process.execPath, [binEntry, 'init', '--help'], {
+        cwd: emptyDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(initProc.status, 0, 'evo init --help must exit with 0');
+      assert.ok(initProc.stdout.includes('evo init [options]'), 'Must print init help');
+      assert.deepEqual(fs.readdirSync(emptyDir), [], 'evo init --help created 0 files or directories');
+
+      // 3. evo --help
+      const generalHelp = spawnSync(process.execPath, [binEntry, '--help'], {
+        cwd: emptyDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(generalHelp.status, 0, 'evo --help must exit with 0');
+      assert.ok(generalHelp.stdout.includes('check <file>'), 'General help must document check command');
+      assert.deepEqual(fs.readdirSync(emptyDir), [], 'evo --help created 0 files or directories');
+
+      // 4. evo version
+      const verProc = spawnSync(process.execPath, [binEntry, 'version'], {
+        cwd: emptyDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(verProc.status, 0, 'evo version must exit with 0');
+      assert.ok(verProc.stdout.includes('0.3.0'), 'evo version must print 0.3.0');
+      assert.deepEqual(fs.readdirSync(emptyDir), [], 'evo version created 0 files or directories');
+
+      // 5. evo init -h with other flags
+      const initHProc = spawnSync(process.execPath, [binEntry, 'init', '-h', '--workspace', emptyDir], {
+        cwd: emptyDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(initHProc.status, 0, 'evo init -h must exit with 0');
+      assert.deepEqual(fs.readdirSync(emptyDir), [], 'evo init -h created 0 files or directories');
+    } finally {
+      fs.rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
+
+  test('15. GATE-4: Top-level evo check <path> inspects deliverables, outputs structured text and JSON, and sets exit codes', () => {
+    const tempDir = createTempDir('check-cli-test');
+    const binEntry = path.resolve(process.cwd(), 'bin', 'evo.mjs');
+
+    try {
+      const validMd = path.join(tempDir, 'valid.md');
+      fs.writeFileSync(validMd, '# Title\n\nClean markdown content without unresolved placeholders.\n', 'utf8');
+
+      // 1. Missing target path -> exit 1
+      const missingArg = spawnSync(process.execPath, [binEntry, 'check'], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(missingArg.status, 1, 'Missing argument must exit with code 1');
+      assert.ok(missingArg.stderr.includes('Missing target deliverable file path'), 'Must report missing file path');
+
+      // 2. Non-existent file -> exit 1
+      const missingFile = spawnSync(process.execPath, [binEntry, 'check', 'nonexistent.xlsx'], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(missingFile.status, 1, 'Non-existent file inspection must exit with code 1');
+
+      // 3. Directory path -> exit 1 with clean ERR_IS_DIRECTORY defect (no unhandled EISDIR crash)
+      const dirCheck = spawnSync(process.execPath, [binEntry, 'check', tempDir], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(dirCheck.status, 1, 'Directory inspection must exit with code 1');
+      assert.ok(dirCheck.stdout.includes('ERR_IS_DIRECTORY'), 'Must report ERR_IS_DIRECTORY');
+
+      // 4. Valid file human-readable check -> exit 0
+      const validText = spawnSync(process.execPath, [binEntry, 'check', validMd], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(validText.status, 0, 'Valid deliverable check must exit with code 0');
+      assert.ok(validText.stdout.includes('Deliverable Canonical Inspection'), 'Must print inspection header');
+      assert.ok(validText.stdout.includes('PASSED'), 'Must indicate passed status');
+
+      // 5. Flag order: evo check --workspace <dir> <file>
+      const flagOrderCheck = spawnSync(process.execPath, [binEntry, 'check', '--workspace', tempDir, 'valid.md'], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(flagOrderCheck.status, 0, 'Flag order check must exit with code 0');
+      assert.ok(flagOrderCheck.stdout.includes('PASSED'), 'Must indicate passed status');
+
+      // 6. Valid file --json flag -> exit 0 and valid JSON output
+      const validJson = spawnSync(process.execPath, [binEntry, 'check', validMd, '--json'], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(validJson.status, 0, 'Valid file with --json must exit with code 0');
+      const parsed = JSON.parse(validJson.stdout);
+      assert.equal(parsed.ok, true, 'JSON report ok must be true');
+      assert.equal(parsed.format, 'md', 'JSON format must be md');
+
+      // 7. Alias inspect <file> works identically
+      const aliasCheck = spawnSync(process.execPath, [binEntry, 'inspect', validMd], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(aliasCheck.status, 0, 'evo inspect alias must exit with code 0');
+      assert.ok(aliasCheck.stdout.includes('PASSED'), 'Must indicate passed status');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('16. All tools byte-for-byte parity between .evo/tools and templates/seed-evo/tools', () => {
+    const root = process.cwd();
+    const activeDir = path.join(root, '.evo', 'tools');
+    const seedDir = path.join(root, 'templates', 'seed-evo', 'tools');
+
+    for (const toolName of fs.readdirSync(activeDir)) {
+      const activeManifest = fs.readFileSync(path.join(activeDir, toolName, 'manifest.json'));
+      const seedManifest = fs.readFileSync(path.join(seedDir, toolName, 'manifest.json'));
+      assert.equal(
+        Buffer.compare(activeManifest, seedManifest),
+        0,
+        `${toolName}/manifest.json must be 100% byte-for-byte identical`
+      );
+
+      const activeRun = fs.readFileSync(path.join(activeDir, toolName, 'run.mjs'));
+      const seedRun = fs.readFileSync(path.join(seedDir, toolName, 'run.mjs'));
+      assert.equal(
+        Buffer.compare(activeRun, seedRun),
+        0,
+        `${toolName}/run.mjs must be 100% byte-for-byte identical`
+      );
+    }
+  });
+
+  test('17. startUiServer respects custom pre-shared token, encodes token in instance.url, and authenticates requests', async () => {
+    const ws = createTempDir('custom-token-ui');
+    const customToken = 'my_secret_#token&key=42?val=yes+ok@world~1!';
+    const instance = await startUiServer(ws, { port: 0, token: customToken });
+
+    try {
+      assert.equal(instance.token, customToken);
+      assert.ok(instance.url.includes(`?token=${encodeURIComponent(customToken)}`));
+
+      // 1. Snapshot with custom token header -> 200
+      await new Promise<void>((resolve, reject) => {
+        const req = http.get(
+          `http://127.0.0.1:${instance.port}/api/snapshot`,
+          { headers: { 'X-Evo-UI-Token': customToken } },
+          (res) => {
+            assert.equal(res.statusCode, 200);
+            resolve();
+          }
+        );
+        req.on('error', reject);
+      });
+
+      // 2. Snapshot with query token containing exotic URL characters -> 200
+      await new Promise<void>((resolve, reject) => {
+        const req = http.get(
+          `http://127.0.0.1:${instance.port}/api/snapshot?token=${encodeURIComponent(customToken)}`,
+          (res) => {
+            assert.equal(res.statusCode, 200);
+            resolve();
+          }
+        );
+        req.on('error', reject);
+      });
+
+      // 3. Snapshot with wrong token -> 401
+      await new Promise<void>((resolve, reject) => {
+        const req = http.get(
+          `http://127.0.0.1:${instance.port}/api/snapshot?token=wrong`,
+          (res) => {
+            assert.equal(res.statusCode, 401);
+            resolve();
+          }
+        );
+        req.on('error', reject);
+      });
+
+      // 4. Invalid port throws RangeError
+      await assert.rejects(
+        () => startUiServer(ws, { port: -1 }),
+        (err: any) => err instanceof RangeError && err.message.includes('options.port')
+      );
+      await assert.rejects(
+        () => startUiServer(ws, { port: Number.NaN }),
+        (err: any) => err instanceof RangeError && err.message.includes('options.port')
+      );
+    } finally {
+      await instance.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('18. evo ui CLI flag parser supports --export=<path>, --export <path>, and default help output includes default port 4310', () => {
+    const ws = createTempDir('ui-export-flag');
+    const binEntry = path.resolve(process.cwd(), 'bin', 'evo.mjs');
+    const exportFile = path.join(ws, 'custom-export.html');
+    const spaceExportFile = path.join(ws, 'space-export.html');
+
+    try {
+      // 1. --export=<path>
+      const res = spawnSync(process.execPath, [binEntry, 'ui', `--export=${exportFile}`], {
+        cwd: ws,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(res.status, 0, 'evo ui --export=<path> must exit 0');
+      assert.ok(fs.existsSync(exportFile), 'Export file must be created');
+      assert.ok(res.stdout.includes('EvoKernel Live Cockpit exported to:'));
+
+      // 2. --export <path> space-separated
+      const spaceRes = spawnSync(process.execPath, [binEntry, 'ui', '--export', spaceExportFile], {
+        cwd: ws,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(spaceRes.status, 0, 'evo ui --export <path> must exit 0');
+      assert.ok(fs.existsSync(spaceExportFile), 'Space export file must be created');
+
+      // 3. --export with default fallback
+      const defaultRes = spawnSync(process.execPath, [binEntry, 'ui', '--export'], {
+        cwd: ws,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(defaultRes.status, 0, 'evo ui --export without path must exit 0');
+      assert.ok(fs.existsSync(path.join(ws, 'evo-cockpit.html')), 'Default evo-cockpit.html must be created');
+
+      // 4. Help output states default port 4310
+      const helpRes = spawnSync(process.execPath, [binEntry, 'ui', '--help'], {
+        cwd: ws,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(helpRes.status, 0);
+      assert.ok(helpRes.stdout.includes('(default: 4310)'), 'Help must specify default port 4310');
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('19. evo ui CLI flag parser validates --port and --token, rejecting malformed inputs with clean error exit', () => {
+    const ws = createTempDir('ui-flags-validation');
+    const binEntry = path.resolve(process.cwd(), 'bin', 'evo.mjs');
+
+    try {
+      // 1. Invalid port string (--port=abc)
+      const badPortRes1 = spawnSync(process.execPath, [binEntry, 'ui', '--port=abc'], {
+        cwd: ws,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(badPortRes1.status, 1, 'Must exit with code 1 on non-numeric port');
+      assert.ok(badPortRes1.stderr.includes('Invalid port "abc"'));
+
+      // 2. Out-of-bounds port (--port 99999)
+      const badPortRes2 = spawnSync(process.execPath, [binEntry, 'ui', '--port', '99999'], {
+        cwd: ws,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(badPortRes2.status, 1, 'Must exit with code 1 on out-of-bounds port');
+      assert.ok(badPortRes2.stderr.includes('Invalid port "99999"'));
+
+      // 3. Missing port value (--port followed by another flag)
+      const missingPortRes = spawnSync(process.execPath, [binEntry, 'ui', '--port', '--open'], {
+        cwd: ws,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(missingPortRes.status, 1, 'Must exit with code 1 when --port value is missing');
+      assert.ok(missingPortRes.stderr.includes('Missing value for --port'));
+
+      // 4. Missing token value (--token with no value)
+      const missingTokenRes = spawnSync(process.execPath, [binEntry, 'ui', '--token'], {
+        cwd: ws,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      assert.equal(missingTokenRes.status, 1, 'Must exit with code 1 when --token value is missing');
+      assert.ok(missingTokenRes.stderr.includes('Missing value for --token'));
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

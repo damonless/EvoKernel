@@ -21,6 +21,7 @@ import {
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { refreshMemories, verifyMemoryFreshness } from '../core/memory.js';
+import { inspectDeliverableFile } from '../core/deliverable.js';
 
 export function printHookHelp(): void {
   console.log(`
@@ -62,6 +63,217 @@ Options:
   --json                    Output optimization summary in JSON format
   --workspace <path>        Target workspace directory (default: current directory)
   -h, --help                Show this help message
+`);
+}
+
+export function printScoreHelp(): void {
+  console.log(`
+Usage:
+  evo score [options]
+
+Instant 0-overhead diagnostic scoring for agent host tax, git bug hotspots, and memory coverage.
+
+Options:
+  --json               Output score report in JSON format
+  --badge              Output markdown badge string
+  --svg <path>         Export score badge as SVG file
+  --html <path>        Export score report as standalone HTML
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printUiHelp(): void {
+  console.log(`
+Usage:
+  evo ui [options]
+
+Zero-dependency local cockpit UI for telemetry X-ray, budget treemap, and memory constellation.
+
+Options:
+  --port <N>           Port to bind local cockpit UI server (default: 4310)
+  --open               Automatically open browser after startup
+  --token <str>        Pre-shared security token for UI authentication
+  --export <path>      Export complete static HTML snapshot without starting server
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printInitHelp(): void {
+  console.log(`
+Usage:
+  evo init [options]
+
+Detect and wire L0 Meta-Rule Seed + Single Meta-MCP + Slash Commands into project and agent harnesses.
+
+Options:
+  --stealth            Add .evo/ and config files to .git/info/exclude (clean git status)
+  --targets <list>     Harness targets: claude, agents, gemini, cursor, or auto (default: auto)
+  --link <path>        Link .evo capability tree from another repository or central storage
+  --no-warmup          Skip background capability warmup and AST pre-indexing
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printUninstallHelp(): void {
+  console.log(`
+Usage:
+  evo uninstall [options]
+
+Cleanly remove EvoKernel marker blocks, rules, and MCP registrations from host configs.
+
+Options:
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printBootstrapHelp(): void {
+  console.log(`
+Usage:
+  evo bootstrap [options]
+
+Cold-start repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories.
+
+Options:
+  --max-commits <N>    Maximum recent commits to inspect (default: 50, clamp: 1-500)
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printVirtualizeHelp(): void {
+  console.log(`
+Usage:
+  evo virtualize [options]
+
+One-click fold third-party stdio MCPs from host configs into .evo/mcp-pool.json (0 schema bloat).
+
+Options:
+  --dry-run            Simulate virtualization without writing files
+  --restore            Restore folded MCP servers back to host configs
+  --global             Scan and virtualize global host configs (~/.claude, ~/.gemini, etc.)
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printMemoryHelp(): void {
+  console.log(`
+Usage:
+  evo memory [verify|refresh] [options]
+
+Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/).
+
+Subcommands:
+  verify               Verify memory freshness against working tree AST (default)
+  refresh              Re-anchor drifted AST fingerprints to current commit/branch
+
+Options:
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printAuditHelp(): void {
+  console.log(`
+Usage:
+  evo audit [options]
+
+Scan workspace and global rules/skills for domain leaks, overlap, and token budget bloat.
+
+Options:
+  --global, -g         Include user-level global rules (~/.gemini, ~/.claude, ~/.cursor)
+  --token-budget <N>   Override per-file token budget limit (default: 1500)
+  --skill-budget <N>   Override per-skill token budget limit (default: 1000)
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printRefactorHelp(): void {
+  console.log(`
+Usage:
+  evo refactor [options]
+
+Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill.
+
+Options:
+  --apply              Apply suggested rule & skill refactoring migrations
+  --local-only         Refactor project workspace rules only (exclude global)
+  --token-budget <N>   Override per-file token budget limit (default: 1500)
+  --skill-budget <N>   Override per-skill token budget limit (default: 1000)
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printCheckHelp(): void {
+  console.log(`
+Usage:
+  evo check <file> [options]
+  evo inspect <file> [options]
+
+Canonical defect inspection and format verification for deliverable artifacts (.xlsx, .docx, .pptx, .csv, .json, .md).
+
+Options:
+  --json               Output inspection results as structured JSON
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printTreeHelp(): void {
+  console.log(`
+Usage:
+  evo tree [options]
+
+Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/).
+
+Options:
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printStatsHelp(): void {
+  console.log(`
+Usage:
+  evo stats [options]
+
+Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings.
+
+Options:
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printDoctorHelp(): void {
+  console.log(`
+Usage:
+  evo doctor [options]
+
+Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and sandbox self-tests.
+
+Options:
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
+`);
+}
+
+export function printMcpHelp(): void {
+  console.log(`
+Usage:
+  evo mcp [options]
+
+Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools).
+
+Options:
+  --workspace <path>   Target workspace directory (default: current directory)
+  -h, --help           Show this help message
 `);
 }
 
@@ -151,6 +363,7 @@ export function checkNodeRuntimeVersion(versionStr: string = process.versions.no
     message:
       `❌ EvoKernel requires Node.js >= 22.5.0 (detected v${versionStr}).\n` +
       `   Why: EvoKernel runs with 0 external dependencies using native node:sqlite and node:module.\n` +
+      `   Instant 1-liner (no global Node change): npx -y -p node@22 evo-kernel <command>\n` +
       `   Fix: switch Node runtime via:\n` +
       `     • nvm install 22 && nvm use 22\n` +
       `     • fnm use 22\n` +
@@ -187,6 +400,8 @@ Commands:
                       Universal lifecycle hook router (pre-tool | post-tool | stop | pre-commit) for anti-forgetting evolution enforcement and git pre-commit audit
   optimize [--dim inv|dom|both] [-k <N>] [--proposer-cmd <cmd>] [--probe-cmd <cmd>] [--apply]
                       Offline Git worktree optimization cycle (trajectories & deliverables -> proposals -> isolated probe)
+  check <file> [--json] [--workspace <path>]
+                      Canonical defect inspection & format verification for deliverables (.xlsx, .docx, .pptx, .csv, .json, .md) (alias: inspect)
   doctor              Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and sandbox self-tests
   uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
   version, --version  Print EvoKernel CLI version
@@ -267,8 +482,13 @@ export function resolveWorkspaceRoot(
   allowGlobalFallback: boolean,
   cwdOverride?: string
 ): string {
-  const wsFlagIdx = args.indexOf('--workspace');
-  if (wsFlagIdx !== -1 && args[wsFlagIdx + 1]) {
+  const wsEq = args.find((a) => a.startsWith('--workspace='));
+  if (wsEq) {
+    const explicit = path.resolve(wsEq.slice('--workspace='.length));
+    return findNearestEvoWorkspace(explicit) || explicit;
+  }
+  const wsFlagIdx = args.indexOf('--workspace') !== -1 ? args.indexOf('--workspace') : args.indexOf('-w');
+  if (wsFlagIdx !== -1 && args[wsFlagIdx + 1] && !args[wsFlagIdx + 1].startsWith('-')) {
     const explicit = path.resolve(args[wsFlagIdx + 1]);
     return findNearestEvoWorkspace(explicit) || explicit;
   }
@@ -345,8 +565,93 @@ export function runCli(argv: string[]): void {
     cmd = 'help';
   }
 
+  // Early version interception: ZERO side-effects (no file reads/writes, no global seed, exit code 0)
+  if (
+    cmd === 'version' ||
+    cmd === '--version' ||
+    cmd === '-v' ||
+    args.includes('--version') ||
+    (args.length === 1 && args[0] === '-v')
+  ) {
+    console.log(EVO_KERNEL_VERSION);
+    return;
+  }
+
+  // Early help interception: ZERO side-effects (no file reads/writes, no global seed, exit code 0)
+  const isHelpRequested =
+    args.includes('--help') ||
+    args.includes('-h') ||
+    cmd === 'help' ||
+    cmd === '--help' ||
+    cmd === '-h';
+
+  if (isHelpRequested) {
+    let targetSubcmd = cmd;
+    if (cmd === 'help') {
+      targetSubcmd = (args[1] || '').toLowerCase();
+    } else if (cmd === '--help' || cmd === '-h') {
+      targetSubcmd = '';
+    }
+
+    switch (targetSubcmd) {
+      case 'hook':
+        printHookHelp();
+        return;
+      case 'optimize':
+        printOptimizeHelp();
+        return;
+      case 'score':
+        printScoreHelp();
+        return;
+      case 'ui':
+        printUiHelp();
+        return;
+      case 'init':
+        printInitHelp();
+        return;
+      case 'uninstall':
+        printUninstallHelp();
+        return;
+      case 'bootstrap':
+        printBootstrapHelp();
+        return;
+      case 'virtualize':
+        printVirtualizeHelp();
+        return;
+      case 'memory':
+      case 'memories':
+        printMemoryHelp();
+        return;
+      case 'audit':
+        printAuditHelp();
+        return;
+      case 'refactor':
+        printRefactorHelp();
+        return;
+      case 'check':
+      case 'inspect':
+        printCheckHelp();
+        return;
+      case 'tree':
+        printTreeHelp();
+        return;
+      case 'stats':
+        printStatsHelp();
+        return;
+      case 'doctor':
+        printDoctorHelp();
+        return;
+      case 'mcp':
+        printMcpHelp();
+        return;
+      default:
+        printHelp();
+        return;
+    }
+  }
+
   const globalDir = resolveGlobalFallbackDir();
-  const isReadOnlyDiagnostic = ['score', 'ui', 'doctor'].includes(cmd);
+  const isReadOnlyDiagnostic = ['score', 'ui', 'doctor', 'check', 'inspect', 'tree', 'stats', 'version', '--version', '-v'].includes(cmd);
   if (!isReadOnlyDiagnostic && fs.existsSync(path.join(globalDir, '.evo'))) {
     ensureGlobalFallbackSeeded(globalDir);
   }
@@ -357,13 +662,21 @@ export function runCli(argv: string[]): void {
 
   let workspaceRoot: string;
   if (isReadOnlyDiagnostic) {
-    const wsFlagIdx = args.indexOf('--workspace');
-    const target =
-      wsFlagIdx !== -1 && args[wsFlagIdx + 1]
-        ? path.resolve(args[wsFlagIdx + 1])
-        : process.env.EVO_WORKSPACE
-        ? path.resolve(process.env.EVO_WORKSPACE)
-        : path.resolve(process.cwd());
+    let wsVal: string | undefined;
+    const wsEq = args.find((a) => a.startsWith('--workspace='));
+    if (wsEq) {
+      wsVal = wsEq.slice('--workspace='.length);
+    } else {
+      const idx = args.indexOf('--workspace') !== -1 ? args.indexOf('--workspace') : args.indexOf('-w');
+      if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
+        wsVal = args[idx + 1];
+      }
+    }
+    const target = wsVal
+      ? path.resolve(wsVal)
+      : process.env.EVO_WORKSPACE
+      ? path.resolve(process.env.EVO_WORKSPACE)
+      : path.resolve(process.cwd());
     workspaceRoot = findNearestEvoWorkspace(target) || findGitRoot(target) || target;
   } else {
     workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
@@ -633,6 +946,75 @@ export function runCli(argv: string[]): void {
       break;
     }
 
+    case 'check':
+    case 'inspect': {
+      const isJson = args.includes('--json');
+      let fileArg: string | undefined;
+      for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '--workspace' || arg === '-w') {
+          i++;
+          continue;
+        }
+        if (arg.startsWith('-')) {
+          continue;
+        }
+        fileArg = arg;
+        break;
+      }
+      if (!fileArg) {
+        console.error('❌ Error: Missing target deliverable file path.\n   Usage: evo check <file> [--json]');
+        const isTestProcess = Boolean(process.argv[1]?.includes('.test.'));
+        if (!isTestProcess) {
+          process.exit(1);
+        } else {
+          process.exitCode = 1;
+        }
+        break;
+      }
+
+      const targetPath = path.isAbsolute(fileArg)
+        ? fileArg
+        : path.resolve(workspaceRoot, fileArg);
+
+      const result = inspectDeliverableFile(targetPath);
+      const passed = result.ok && result.defects.filter((d) => d.severity === 'error').length === 0;
+
+      if (isJson) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        const relTarget = path.relative(workspaceRoot, targetPath).replace(/\\/g, '/') || fileArg;
+        console.log(`🔍 Deliverable Canonical Inspection: ${relTarget}`);
+        console.log(`  ├─ Format  : ${result.format.toUpperCase()}`);
+        console.log(`  ├─ Status  : ${passed ? '✅ PASSED' : '❌ FAILED'}`);
+        const statEntries = Object.entries(result.stats || {});
+        if (statEntries.length > 0) {
+          const statsStr = statEntries.map(([k, v]) => `${k}=${v}`).join(', ');
+          console.log(`  ├─ Metrics : ${statsStr}`);
+        }
+        if (result.defects.length === 0) {
+          console.log(`  └─ Defects : None (0)`);
+        } else {
+          console.log(`  └─ Defects (${result.defects.length}) :`);
+          for (let i = 0; i < result.defects.length; i++) {
+            const d = result.defects[i];
+            const isLast = i === result.defects.length - 1;
+            const branch = isLast ? '     └─' : '     ├─';
+            const sevBadge = d.severity === 'error' ? '[ERROR]' : '[WARN]';
+            console.log(`${branch} ${sevBadge} ${d.code} @ ${d.location}: ${d.message}`);
+          }
+        }
+      }
+
+      const isTestProcess = Boolean(process.argv[1]?.includes('.test.'));
+      if (!isTestProcess) {
+        process.exit(passed ? 0 : 1);
+      } else {
+        process.exitCode = passed ? 0 : 1;
+      }
+      break;
+    }
+
     case 'uninstall': {
       const res = runUninstall(workspaceRoot);
       console.log(`🧹 Cleaned EvoKernel markers from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`);
@@ -660,7 +1042,7 @@ const isDirectRun =
   !process.argv[1].includes('.test.') &&
   (path.resolve(process.argv[1]).toLowerCase() ===
     path.resolve(import.meta.filename).toLowerCase() ||
-    /(?:^|[\\/])(?:evo|evokernel|evo-kernel)(?:\.js|\.cmd)?$/i.test(process.argv[1]));
+    /(?:^|[\\/])(?:evo|evokernel|evo-kernel)(?:\.m?js|\.cmd)?$/i.test(process.argv[1]));
 
 if (isDirectRun) {
   runCli(process.argv);

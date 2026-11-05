@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
@@ -36,65 +37,68 @@ export function buildUiSnapshot(
     } catch {}
   }
 
-  const score = buildScoreReport(ws, { anon: options?.anon, cacheDb: db });
-  const rules: any[] = [];
-  const skills: any[] = [];
-  const tools: any[] = [];
-  const memories: any[] = [];
-  let gatekeeperEvents: any[] = [];
-  const telemMap = new Map<string, { hit_count: number; attribution: string }>();
+  try {
+    const score = buildScoreReport(ws, { anon: options?.anon, cacheDb: db });
+    const rules: any[] = [];
+    const skills: any[] = [];
+    const tools: any[] = [];
+    const memories: any[] = [];
+    let gatekeeperEvents: any[] = [];
+    const telemMap = new Map<string, { hit_count: number; attribution: string }>();
 
-  if (db) {
-    try {
-      const rows = db.prepare(
-        'SELECT id, hit_count, helped_count, hurt_count, contested FROM telemetry'
-      ).all() as any[];
-      for (const r of rows) {
-        const h = r.hit_count || 0;
-        const attr = r.contested ? 'contested' : (r.hurt_count > r.helped_count ? 'hurt' : (r.helped_count > 0 ? 'helped' : 'unverified'));
-        telemMap.set(r.id, { hit_count: h, attribution: attr });
-      }
-    } catch {}
+    if (db) {
+      try {
+        const rows = db.prepare(
+          'SELECT id, hit_count, helped_count, hurt_count, contested FROM telemetry'
+        ).all() as any[];
+        for (const r of rows) {
+          const h = r.hit_count || 0;
+          const attr = r.contested ? 'contested' : (r.hurt_count > r.helped_count ? 'hurt' : (r.helped_count > 0 ? 'helped' : 'unverified'));
+          telemMap.set(r.id, { hit_count: h, attribution: attr });
+        }
+      } catch {}
 
-    try {
-      const gRows = db.prepare(
-        'SELECT id, timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics FROM gatekeeper_events ORDER BY id DESC LIMIT 200'
-      ).all() as any[];
-      gatekeeperEvents = gRows.map((r) => ({
-        ...r,
-        passed: r.passed === 1,
-        diagnostics: redactSensitiveDiagnostics(r.diagnostics || '', ws),
-      }));
-    } catch {}
+      try {
+        const gRows = db.prepare(
+          'SELECT id, timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics FROM gatekeeper_events ORDER BY id DESC LIMIT 200'
+        ).all() as any[];
+        gatekeeperEvents = gRows.map((r) => ({
+          ...r,
+          passed: r.passed === 1,
+          diagnostics: redactSensitiveDiagnostics(r.diagnostics || '', ws),
+        }));
+      } catch {}
+    }
+
+    const attach = (item: any) => {
+      const t = telemMap.get(item.id) || { hit_count: 0, attribution: 'unverified' };
+      return { ...item, hit_count: t.hit_count, attribution: t.attribution };
+    };
+
+    if (hasValidEvoStructure(storage.evoDir)) {
+      try {
+        rules.push(...storage.listRules().map(attach));
+        skills.push(...storage.listSkills().map(attach));
+        tools.push(...storage.listTools().map(attach));
+        for (const m of storage.listMemories()) {
+          const v = verifyMemoryFreshness(ws, m, { includeCallers: true, cacheDb: db });
+          const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
+          memories.push(attach({ ...m, freshness: { ...v, callers } }));
+        }
+      } catch {}
+    }
+
+    return { score, rules, skills, tools, memories, gatekeeperEvents };
+  } finally {
+    if (openedDb && db) {
+      try { db.close(); } catch {}
+    }
   }
-
-  const attach = (item: any) => {
-    const t = telemMap.get(item.id) || { hit_count: 0, attribution: 'unverified' };
-    return { ...item, hit_count: t.hit_count, attribution: t.attribution };
-  };
-
-  if (hasValidEvoStructure(storage.evoDir)) {
-    try {
-      rules.push(...storage.listRules().map(attach));
-      skills.push(...storage.listSkills().map(attach));
-      tools.push(...storage.listTools().map(attach));
-      for (const m of storage.listMemories()) {
-        const v = verifyMemoryFreshness(ws, m, { includeCallers: true, cacheDb: db });
-        const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
-        memories.push(attach({ ...m, freshness: { ...v, callers } }));
-      }
-    } catch {}
-  }
-
-  if (openedDb && db) {
-    try { db.close(); } catch {}
-  }
-
-  return { score, rules, skills, tools, memories, gatekeeperEvents };
 }
 
 export interface UiServerOptions {
   port?: number;
+  token?: string;
   anon?: boolean;
 }
 
@@ -110,8 +114,17 @@ export async function startUiServer(
   workspaceRoot: string,
   options: UiServerOptions = {}
 ): Promise<UiServerInstance> {
+  if (
+    options.port !== undefined &&
+    (!Number.isFinite(options.port) || options.port < 0 || options.port > 65535)
+  ) {
+    throw new RangeError(`options.port must be an integer between 0 and 65535 (received ${options.port})`);
+  }
   const ws = path.resolve(workspaceRoot);
-  const token = crypto.randomBytes(16).toString('hex');
+  const token =
+    options.token && options.token.trim()
+      ? options.token.trim()
+      : crypto.randomBytes(16).toString('hex');
   const clients = new Set<http.ServerResponse>();
   let snapshot = buildUiSnapshot(ws, { anon: options.anon });
 
@@ -210,7 +223,7 @@ export async function startUiServer(
     tryListen(startPort);
   });
 
-  const url = `http://127.0.0.1:${boundPort}/?token=${token}`;
+  const url = `http://127.0.0.1:${boundPort}/?token=${encodeURIComponent(token)}`;
   return {
     port: boundPort,
     token,
@@ -252,22 +265,81 @@ export function exportUiHtml(
   fs.writeFileSync(outPath, finalHtml, 'utf8');
 }
 
+function parseCliOption(args: string[], flag: string): { matched: boolean; value?: string } {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === flag) {
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) {
+        return { matched: true, value: next };
+      }
+      return { matched: true, value: undefined };
+    }
+    if (a.startsWith(`${flag}=`)) {
+      return { matched: true, value: a.slice(flag.length + 1) };
+    }
+  }
+  return { matched: false, value: undefined };
+}
+
 export async function runUiCli(workspaceRoot: string, args: string[]): Promise<void> {
   const isAnon = args.includes('--anon');
-  const exportIdx = args.indexOf('--export');
+  const exportOpt = parseCliOption(args, '--export');
 
-  if (exportIdx !== -1) {
-    const out = args[exportIdx + 1] && !args[exportIdx + 1].startsWith('-')
-      ? path.resolve(args[exportIdx + 1])
-      : path.join(path.resolve(workspaceRoot), 'evo-cockpit.html');
+  if (exportOpt.matched) {
+    const out =
+      exportOpt.value && exportOpt.value.trim()
+        ? path.resolve(exportOpt.value.trim())
+        : path.join(path.resolve(workspaceRoot), 'evo-cockpit.html');
     exportUiHtml(workspaceRoot, out, { anon: isAnon });
     console.log(`✅ EvoKernel Live Cockpit exported to: ${out}`);
     return;
   }
 
-  const portIdx = args.indexOf('--port');
-  const port = portIdx !== -1 && args[portIdx + 1] ? parseInt(args[portIdx + 1], 10) : undefined;
-  const instance = await startUiServer(workspaceRoot, { port, anon: isAnon });
+  const portOpt = parseCliOption(args, '--port');
+  let port: number | undefined;
+  if (portOpt.matched) {
+    if (!portOpt.value) {
+      console.error('❌ Missing value for --port. Please specify a port number (e.g. --port 4310).');
+      process.exit(1);
+    }
+    const parsed = parseInt(portOpt.value, 10);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 65535) {
+      console.error(`❌ Invalid port "${portOpt.value}". Must be a valid port number between 0 and 65535.`);
+      process.exit(1);
+    }
+    port = parsed;
+  }
+
+  const tokenOpt = parseCliOption(args, '--token');
+  let token: string | undefined;
+  if (tokenOpt.matched) {
+    if (!tokenOpt.value || !tokenOpt.value.trim()) {
+      console.error('❌ Missing value for --token. Please specify a non-empty token string.');
+      process.exit(1);
+    }
+    token = tokenOpt.value.trim();
+  }
+
+  const instance = await startUiServer(workspaceRoot, { port, token, anon: isAnon });
   console.log(`🧬 EvoKernel Live Cockpit started at: ${instance.url}`);
   console.log('   Press Ctrl+C to terminate server.');
+
+  if (args.includes('--open') && !process.env.CI && !process.argv[1]?.includes('.test.')) {
+    if (instance.url.startsWith('http://127.0.0.1:')) {
+      try {
+        if (process.platform === 'win32') {
+          const psCommand = `Start-Process -FilePath ${JSON.stringify(instance.url)}`;
+          spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCommand], {
+            detached: true,
+            stdio: 'ignore',
+          }).unref();
+        } else if (process.platform === 'darwin') {
+          spawn('open', [instance.url], { detached: true, stdio: 'ignore' }).unref();
+        } else {
+          spawn('xdg-open', [instance.url], { detached: true, stdio: 'ignore' }).unref();
+        }
+      } catch {}
+    }
+  }
 }

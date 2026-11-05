@@ -585,7 +585,7 @@ export function runVirtualize(
     storage.ensureInitialized();
 
     let existingPool: McpPoolFileSchema = {
-      version: '0.2.0',
+      version: '0.3.0',
       updatedAt: new Date().toISOString(),
       mcpServers: {},
       origins: {},
@@ -593,7 +593,7 @@ export function runVirtualize(
     const rawPool = readJsonSafe(poolPath);
     if (rawPool) {
       existingPool = {
-        version: '0.2.0',
+        version: '0.3.0',
         updatedAt: new Date().toISOString(),
         mcpServers:
           rawPool.mcpServers && typeof rawPool.mcpServers === 'object'

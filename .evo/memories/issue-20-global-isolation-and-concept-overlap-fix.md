@@ -2,14 +2,14 @@
 id: issue-20-global-isolation-and-concept-overlap-fix
 title: "Issue #20 Global Fallback Isolation, Multi-Token Relevance Gating & Cross-OS Path Redaction"
 l0_summary: "Isolate uninitialized workspace GLOBAL fallback, gate Action Required on concept overlap, and normalize cross-OS path redaction."
-created_commit: "0947458"
+created_commit: "f9ee5d5"
 created_branch: "main"
 target_symbols: ["src/core/telemetry.ts#redactSensitiveDiagnostics","src/core/telemetry.ts#evaluateConceptOverlap","src/mcp/handlers.ts#bindActiveContext","src/mcp/handlers.ts#handleSearch"]
 ast_fingerprints: {"src/core/telemetry.ts#redactSensitiveDiagnostics":{"symbol":"src/core/telemetry.ts#redactSensitiveDiagnostics","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":21,"end_line":133,"signature":"export function redactSensitiveDiagnostics(text: string, workspaceRoot?: string): string","ast_hash":"0acfa7bac98f461d"},"src/core/telemetry.ts#evaluateConceptOverlap":{"symbol":"src/core/telemetry.ts#evaluateConceptOverlap","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":473,"end_line":512,"signature":"function evaluateConceptOverlap(","ast_hash":"6efcc86eb018d013"},"src/mcp/handlers.ts#bindActiveContext":{"symbol":"src/mcp/handlers.ts#bindActiveContext","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":500,"end_line":623,"signature":"private bindActiveContext(toolName: string, args: Record<string, unknown>): WorkspaceContext","ast_hash":"dcd209fa7f64334e"},"src/mcp/handlers.ts#handleSearch":{"symbol":"src/mcp/handlers.ts#handleSearch","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":777,"end_line":887,"signature":"private handleSearch(args: Record<string, unknown>, activeCtx?: WorkspaceContext)","ast_hash":"ad0112269147bd36"}}
 tags: ["mcp","telemetry","global-fallback","search","ci"]
 origin: "evolved"
 created_at: "2026-11-03T05:26:07.726Z"
-updated_at: "2026-11-04T15:13:47.241Z"
+updated_at: "2026-11-04T19:05:24.688Z"
 ---
 
 ## Symptom

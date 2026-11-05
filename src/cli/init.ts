@@ -565,6 +565,18 @@ import * as path from 'node:path';
 import * as url from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+const rawVersion = String(process.env.EVO_SIMULATE_NODE_VERSION || process.versions.node || '0.0.0').replace(/^v/i, '');
+const [nodeMaj = 0, nodeMin = 0] = rawVersion.split('.').map((n) => Number.parseInt(n, 10));
+if (nodeMaj < 22 || (nodeMaj === 22 && nodeMin < 5)) {
+  console.error(
+    \`[EvoKernel] Node.js >= 22.5.0 is required (detected v\${rawVersion}).\\n\` +
+      \`  EvoKernel uses zero-dependency native node:sqlite and node:module.stripTypeScriptTypes.\\n\` +
+      \`  Instant 1-liner (no global Node change): npx -y -p node@22 evo-kernel <command>\\n\` +
+      \`  Quick fix: run "nvm install 22 && nvm use 22", "fnm use 22", or "volta install node@22".\`
+  );
+  process.exit(1);
+}
+
 const evoDir = path.resolve(import.meta.dirname);
 const wsRoot = path.resolve(evoDir, '..');
 const homeDir = os.homedir ? os.homedir() : (process.env.HOME || process.env.USERPROFILE || '');

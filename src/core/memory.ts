@@ -1570,7 +1570,7 @@ export function extractSymbolFingerprint(
             }
           }
         } finally {
-          db.close();
+          try { db.close(); } catch {}
         }
       } catch {}
     }
@@ -1732,7 +1732,7 @@ export function findSymbolCallers(
           }
         }
       } finally {
-        db.close();
+        try { db.close(); } catch {}
       }
     } catch {}
   }
@@ -2250,7 +2250,8 @@ export function verifyMemoryFreshness(
   const procKey = `${root}:${memory.id}`;
 
   try {
-    const memFilePath = path.join(root, '.evo', 'memories', `${memory.id}.md`);
+    try {
+      const memFilePath = path.join(root, '.evo', 'memories', `${memory.id}.md`);
     const mSig = getFileSigFast(memFilePath);
     if (mSig !== 'missing') {
       memFileSig = mSig;
@@ -2316,9 +2317,10 @@ export function verifyMemoryFreshness(
                   SET report_json = ?, workspace_sources_sig = ?, has_callers = 1, cached_at = ?
                   WHERE memory_id = ?
                 `).run(JSON.stringify(proc.report), wsSig, new Date().toISOString(), memory.id);
-              } catch {}
-              if (openedDbForProc) {
-                try { dbToUpdate.close(); } catch {}
+              } catch {} finally {
+                if (openedDbForProc) {
+                  try { dbToUpdate.close(); } catch {}
+                }
               }
             }
             if (shouldCloseDb && cacheDb) {
@@ -2831,15 +2833,23 @@ export function verifyMemoryFreshness(
     }
   }
 
-  // Tier 3: True code drift (STALE)
-  return buildResult(
-    'STALE',
-    '[置信度: LOW (20–50%) · STALE]',
-    memory.created_commit === currentCommit,
-    memory.created_commit,
-    memory.created_branch,
-    0
-  );
+    // Tier 3: True code drift (STALE)
+    return buildResult(
+      'STALE',
+      '[置信度: LOW (20–50%) · STALE]',
+      memory.created_commit === currentCommit,
+      memory.created_commit,
+      memory.created_branch,
+      0
+    );
+  } finally {
+    if (shouldCloseDb && cacheDb) {
+      try {
+        cacheDb.close();
+      } catch {}
+      cacheDb = null;
+    }
+  }
 }
 
 export function extractSymbolsFromGitCommit(
@@ -3033,7 +3043,9 @@ export function refreshMemories(
     }
   } finally {
     if (telemetry) {
-      telemetry.close();
+      try {
+        telemetry.close();
+      } catch {}
     }
   }
 

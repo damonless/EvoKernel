@@ -1799,7 +1799,66 @@ export function inspectDeliverable(
     };
   }
 
-  const buf = fs.readFileSync(resolvedPath);
+  let stat;
+  try {
+    stat = fs.statSync(resolvedPath);
+  } catch (err) {
+    return {
+      ok: false,
+      format: 'unknown',
+      filePath,
+      canonicalText: '',
+      defects: [
+        {
+          code: 'ERR_FILE_NOT_FOUND',
+          severity: 'error',
+          location: filePath,
+          message: `Cannot access target deliverable "${filePath}": ${err?.message || String(err)}`,
+        },
+      ],
+      stats: {},
+    };
+  }
+
+  if (stat.isDirectory()) {
+    return {
+      ok: false,
+      format: 'unknown',
+      filePath,
+      canonicalText: '',
+      defects: [
+        {
+          code: 'ERR_IS_DIRECTORY',
+          severity: 'error',
+          location: filePath,
+          message: `Target deliverable path "${filePath}" is a directory, expected a file.`,
+        },
+      ],
+      stats: {},
+    };
+  }
+
+  let buf;
+  try {
+    buf = fs.readFileSync(resolvedPath);
+  } catch (err) {
+    return {
+      ok: false,
+      format: 'unknown',
+      filePath,
+      canonicalText: '',
+      defects: [
+        {
+          code: err?.code === 'EISDIR' ? 'ERR_IS_DIRECTORY' : 'ERR_FILE_READ_FAILED',
+          severity: 'error',
+          location: filePath,
+          message: `Failed to read target deliverable file "${filePath}": ${err?.message || String(err)}`,
+        },
+      ],
+      stats: {},
+    };
+  }
+
   return inspectDeliverableBuffer(buf, { ...options, filePath });
 }
 

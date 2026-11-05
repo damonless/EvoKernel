@@ -4,9 +4,9 @@
   "description": "Deterministic Self-Evolving Meta-Kernel for AI Coding Agents — Offline Git Worktree Evolution, Deliverable Canonical Inspection, Zero-Dep Lexical-Structural Symbol Fingerprinting, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway.",
   "type": "module",
   "bin": {
-    "evo": "./dist/cli/index.js",
-    "evokernel": "./dist/cli/index.js",
-    "evo-kernel": "./dist/cli/index.js"
+    "evo": "./bin/evo.mjs",
+    "evokernel": "./bin/evo.mjs",
+    "evo-kernel": "./bin/evo.mjs"
   },
   "repository": {
     "type": "git",
@@ -21,6 +21,7 @@
   },
   "main": "./dist/index.js",
   "files": [
+    "bin",
     "dist",
     "scripts",
     "templates",

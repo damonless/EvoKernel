@@ -1,0 +1,340 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" width="1200" height="480">
+  <defs>
+    <!-- Background Gradients -->
+    <linearGradient id="termBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#050711"/>
+      <stop offset="50%" stop-color="#080c18"/>
+      <stop offset="100%" stop-color="#0c1322"/>
+    </linearGradient>
+
+    <linearGradient id="termChrome" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#141c2c"/>
+      <stop offset="100%" stop-color="#0b101c"/>
+    </linearGradient>
+
+    <linearGradient id="glassBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="rgba(56,189,248,0.35)"/>
+      <stop offset="50%" stop-color="rgba(255,255,255,0.08)"/>
+      <stop offset="100%" stop-color="rgba(16,185,129,0.3)"/>
+    </linearGradient>
+
+    <radialGradient id="termGlow" cx="50%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="rgba(56,189,248,0.12)"/>
+      <stop offset="100%" stop-color="transparent"/>
+    </radialGradient>
+
+    <filter id="glowCyan" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <style>
+      <![CDATA[
+      /* 12-Second 3-Act Looping Animation with Rule R1 >=1.2s Settle Hold */
+      /* Frame 0 is fully visible (no blank void on load or static thumbnail) */
+      @keyframes act1Anim {
+        0%, 29% { opacity: 1; transform: translateY(0); visibility: visible; }
+        32% { opacity: 0; transform: translateY(-6px); visibility: visible; }
+        33.33%, 97% { opacity: 0; transform: translateY(6px); visibility: hidden; }
+        100% { opacity: 1; transform: translateY(0); visibility: visible; }
+      }
+      @keyframes act2Anim {
+        0%, 33.33% { opacity: 0; transform: translateY(6px); visibility: hidden; }
+        35% { opacity: 1; transform: translateY(0); visibility: visible; }
+        62% { opacity: 1; transform: translateY(0); visibility: visible; }
+        65% { opacity: 0; transform: translateY(-6px); visibility: visible; }
+        66.66%, 100% { opacity: 0; transform: translateY(6px); visibility: hidden; }
+      }
+      @keyframes act3Anim {
+        0%, 66.66% { opacity: 0; transform: translateY(6px); visibility: hidden; }
+        68% { opacity: 1; transform: translateY(0); visibility: visible; }
+        95% { opacity: 1; transform: translateY(0); visibility: visible; }
+        98% { opacity: 0; transform: translateY(-6px); visibility: visible; }
+        100% { opacity: 0; transform: translateY(6px); visibility: hidden; }
+      }
+
+      /* Tab Indicator Animations */
+      @keyframes tab1Active {
+        0%, 33.33% { fill: rgba(16,185,129,0.18); stroke: #10b981; }
+        33.34%, 100% { fill: rgba(255,255,255,0.03); stroke: rgba(255,255,255,0.08); }
+      }
+      @keyframes tab2Active {
+        0%, 33.33% { fill: rgba(255,255,255,0.03); stroke: rgba(255,255,255,0.08); }
+        33.34%, 66.66% { fill: rgba(56,189,248,0.18); stroke: #38bdf8; }
+        66.67%, 100% { fill: rgba(255,255,255,0.03); stroke: rgba(255,255,255,0.08); }
+      }
+      @keyframes tab3Active {
+        0%, 66.66% { fill: rgba(255,255,255,0.03); stroke: rgba(255,255,255,0.08); }
+        66.67%, 100% { fill: rgba(16,185,129,0.18); stroke: #10b981; }
+      }
+
+      @keyframes blinkCursor {
+        0%, 49% { opacity: 1; }
+        50%, 100% { opacity: 0; }
+      }
+
+      .act-1 { animation: act1Anim 12s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
+      .act-2 { animation: act2Anim 12s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
+      .act-3 { animation: act3Anim 12s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
+
+
+      .tab-1-box { animation: tab1Active 12s steps(1) infinite; }
+      .tab-2-box { animation: tab2Active 12s steps(1) infinite; }
+      .tab-3-box { animation: tab3Active 12s steps(1) infinite; }
+
+      .cursor { animation: blinkCursor 0.75s infinite; }
+
+      .mono { font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; }
+      .sans { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+      ]]>
+    </style>
+
+    <!-- Clip Paths for Typewriter Effect (Properly covers text ascent y in [-18, 12]) -->
+    <clipPath id="clipType1">
+      <rect x="290" y="-18" width="220" height="30">
+        <animate attributeName="width" values="220;0;220;220;0" keyTimes="0;0.005;0.06;0.30;0.33" dur="12s" repeatCount="indefinite"/>
+      </rect>
+    </clipPath>
+    <clipPath id="clipType2">
+      <rect x="290" y="-18" width="560" height="30">
+        <animate attributeName="width" values="0;0;560;560;0" keyTimes="0;0.33;0.41;0.63;0.66" dur="12s" repeatCount="indefinite"/>
+      </rect>
+    </clipPath>
+    <clipPath id="clipType3">
+      <rect x="290" y="-18" width="560" height="30">
+        <animate attributeName="width" values="0;0;560;560;0" keyTimes="0;0.66;0.74;0.96;1" dur="12s" repeatCount="indefinite"/>
+      </rect>
+    </clipPath>
+  </defs>
+
+  <!-- Canvas Background -->
+  <rect width="1200" height="480" fill="url(#termBg)"/>
+  <rect width="1200" height="480" fill="url(#termGlow)"/>
+
+  <!-- Top 3-Act Tabs (Interactive Showcase Progress) -->
+  <g id="act-tabs" transform="translate(48, 14)" class="mono" font-size="11" font-weight="700">
+    <!-- Tab 1 -->
+    <g transform="translate(0, 0)">
+      <rect width="350" height="32" rx="7" fill="rgba(16,185,129,0.18)" stroke="#10b981" class="tab-1-box"/>
+      <circle cx="16" cy="16" r="4" fill="#10b981"/>
+      <text x="28" y="20" fill="#f8fafc">01 · INSTANT X-RAY <tspan fill="#64748b" font-weight="500">(&lt;25ms score)</tspan></text>
+    </g>
+
+    <!-- Tab 2 -->
+    <g transform="translate(376, 0)">
+      <rect width="350" height="32" rx="7" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)" class="tab-2-box"/>
+      <circle cx="16" cy="16" r="4" fill="#38bdf8"/>
+      <text x="28" y="20" fill="#f8fafc">02 · 1-CLICK STEALTH INIT <tspan fill="#64748b" font-weight="500">(virtualize)</tspan></text>
+    </g>
+
+    <!-- Tab 3 -->
+    <g transform="translate(754, 0)">
+      <rect width="350" height="32" rx="7" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)" class="tab-3-box"/>
+      <circle cx="16" cy="16" r="4" fill="#10b981"/>
+      <text x="28" y="20" fill="#f8fafc">03 · DELIVERABLE &amp; COCKPIT <tspan fill="#64748b" font-weight="500">(:4310 UI)</tspan></text>
+    </g>
+  </g>
+
+  <!-- 3D Perspective Terminal Frame -->
+  <g id="terminal-window" transform="translate(48, 58)">
+    <!-- Terminal Outer Frame with Drop Shadow -->
+    <rect width="1104" height="402" rx="14" fill="#080c16" stroke="url(#glassBorder)" stroke-width="1.4"/>
+
+    <!-- Window Chrome Top Bar -->
+    <rect width="1104" height="36" rx="14" fill="url(#termChrome)"/>
+    <rect y="22" width="1104" height="14" fill="url(#termChrome)"/>
+    <line x1="0" y1="36" x2="1104" y2="36" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+
+    <!-- macOS / Obsidian Window Controls -->
+    <circle cx="22" cy="18" r="5" fill="#ef4444" opacity="0.85"/>
+    <circle cx="38" cy="18" r="5" fill="#f59e0b" opacity="0.85"/>
+    <circle cx="54" cy="18" r="5" fill="#10b981" opacity="0.85"/>
+
+    <!-- Terminal Title Badge -->
+    <rect x="360" y="8" width="384" height="20" rx="5" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.06)"/>
+    <text x="552" y="22" class="mono" font-size="10.5" fill="#94a3b8" text-anchor="middle">
+      evo-kernel-cli — zsh (80x24) · zero external dependencies · node &gt;= 22.5
+    </text>
+
+    <!-- Terminal Screen Body Area (X=24, Y=48, W=1056, H=340) -->
+    <g id="terminal-screen" transform="translate(24, 48)">
+
+      <!-- ==================== ACT 1 ==================== -->
+      <g id="act-1-layer" class="act-1">
+        <!-- Command Prompt Line -->
+        <g transform="translate(0, 24)">
+          <text x="0" y="0" class="mono" font-size="13" font-weight="700">
+            <tspan fill="#10b981">developer@workstation</tspan><tspan fill="#64748b">:</tspan><tspan fill="#38bdf8">~/my-project</tspan><tspan fill="#ffffff">$ </tspan>
+          </text>
+          <g clip-path="url(#clipType1)">
+            <text x="290" y="0" class="mono" font-size="13" font-weight="700" fill="#ffffff">npx -y evo-kernel score</text>
+          </g>
+          <g>
+            <animateTransform attributeName="transform" type="translate" values="0 0; -188 0; 0 0; 0 0" keyTimes="0; 0.005; 0.06; 1" dur="12s" repeatCount="indefinite"/>
+            <rect x="478" y="-12" width="8" height="15" fill="#38bdf8" class="cursor"/>
+          </g>
+        </g>
+
+        <!-- Output Cards Grid -->
+        <g transform="translate(0, 46)">
+          <!-- Card 1: Context Health Grade -->
+          <g transform="translate(0, 0)">
+            <rect width="338" height="156" rx="10" fill="rgba(16,185,129,0.07)" stroke="rgba(16,185,129,0.3)"/>
+            <text x="18" y="28" class="mono" font-size="11" font-weight="700" fill="#34d399">01 · CONTEXT HEALTH</text>
+            <text x="18" y="68" class="mono" font-size="34" font-weight="900" fill="#ffffff">96<tspan font-size="16" fill="#64748b">/100</tspan></text>
+            <rect x="156" y="44" width="98" height="24" rx="12" fill="rgba(16,185,129,0.2)" stroke="#10b981"/>
+            <text x="205" y="60" class="mono" font-size="11" font-weight="800" fill="#34d399" text-anchor="middle">GRADE A+</text>
+            <text x="18" y="104" class="sans" font-size="12" fill="#cbd5e1">100% KV Prefix Shielding</text>
+            <text x="18" y="124" class="mono" font-size="10.5" fill="#34d399">✓ 0 Mutation Busts · Zero Leak</text>
+          </g>
+
+          <!-- Card 2: Context Tax Saved -->
+          <g transform="translate(358, 0)">
+            <rect width="340" height="156" rx="10" fill="rgba(56,189,248,0.07)" stroke="rgba(56,189,248,0.3)"/>
+            <text x="18" y="28" class="mono" font-size="11" font-weight="700" fill="#38bdf8">02 · PROMPT TAX SAVED</text>
+            <text x="18" y="68" class="mono" font-size="34" font-weight="900" fill="#38bdf8">-89%</text>
+            <text x="136" y="62" class="mono" font-size="13" font-weight="700" fill="#94a3b8">SAVINGS</text>
+            <text x="18" y="104" class="sans" font-size="12" fill="#cbd5e1">1,531 tok L0 vs 13,672 tok Eager</text>
+            <text x="18" y="124" class="mono" font-size="10.5" fill="#38bdf8">✓ 12,141 tok/turn returned to LLM</text>
+          </g>
+
+          <!-- Card 3: AST Memory Protection -->
+          <g transform="translate(718, 0)">
+            <rect width="338" height="156" rx="10" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.1)"/>
+            <text x="18" y="28" class="mono" font-size="11" font-weight="700" fill="#cbd5e1">03 · AST MEMORY GUARD</text>
+            <text x="18" y="68" class="mono" font-size="34" font-weight="900" fill="#ffffff">10<tspan font-size="18" fill="#34d399">/10</tspan></text>
+            <text x="100" y="62" class="mono" font-size="12" font-weight="700" fill="#34d399">HOTSPOTS</text>
+            <text x="18" y="104" class="sans" font-size="12" fill="#cbd5e1">16/16 AST Memories [VERIFIED]</text>
+            <text x="18" y="124" class="mono" font-size="10.5" fill="#34d399">✓ 0 Stale Anchors · &lt;0.05ms Recall</text>
+          </g>
+
+          <!-- Benchmark Execution Footer -->
+          <g transform="translate(0, 176)">
+            <rect width="1056" height="34" rx="6" fill="#040609" stroke="rgba(255,255,255,0.06)"/>
+            <text x="16" y="22" class="mono" font-size="11.5" fill="#94a3b8">
+              <tspan fill="#34d399">✓</tspan> Zero-Write Execution · Completed in <tspan fill="#ffffff" font-weight="700">18ms</tspan> · <tspan fill="#38bdf8">0 files written</tspan> · Ready for agent integration
+            </text>
+          </g>
+        </g>
+      </g>
+
+      <!-- ==================== ACT 2 ==================== -->
+      <g id="act-2-layer" class="act-2">
+        <g transform="translate(0, 24)">
+          <text x="0" y="0" class="mono" font-size="13" font-weight="700">
+            <tspan fill="#10b981">developer@workstation</tspan><tspan fill="#64748b">:</tspan><tspan fill="#38bdf8">~/my-project</tspan><tspan fill="#ffffff">$ </tspan>
+          </text>
+          <g clip-path="url(#clipType2)">
+            <text x="290" y="0" class="mono" font-size="12" font-weight="700" fill="#ffffff">npx -y evo-kernel init --stealth &amp;&amp; npx -y evo-kernel virtualize</text>
+          </g>
+          <g>
+            <animateTransform attributeName="transform" type="translate" values="-440 0; -440 0; 0 0; 0 0" keyTimes="0; 0.33; 0.41; 1" dur="12s" repeatCount="indefinite"/>
+            <rect x="730" y="-12" width="8" height="15" fill="#34d399" class="cursor"/>
+          </g>
+        </g>
+
+        <!-- 4 Harnesses Lit Up Badges -->
+        <g transform="translate(0, 46)">
+          <text x="0" y="16" class="mono" font-size="11" font-weight="700" fill="#34d399">MULTI-HARNESS ZERO-DRIFT SYNC:</text>
+
+          <g transform="translate(0, 26)" class="mono" font-size="11">
+            <!-- Harness 1 -->
+            <rect x="0" y="0" width="252" height="42" rx="7" fill="rgba(16,185,129,0.12)" stroke="#10b981"/>
+            <text x="14" y="26" fill="#ffffff" font-weight="700">✓ Claude Code</text>
+            <text x="136" y="26" fill="#34d399" font-size="9.5">CLAUDE.md</text>
+
+            <!-- Harness 2 -->
+            <rect x="268" y="0" width="252" height="42" rx="7" fill="rgba(56,189,248,0.12)" stroke="#38bdf8"/>
+            <text x="282" y="26" fill="#ffffff" font-weight="700">✓ Cursor</text>
+            <text x="372" y="26" fill="#38bdf8" font-size="9.5">.cursor/rules</text>
+
+            <!-- Harness 3 -->
+            <rect x="536" y="0" width="252" height="42" rx="7" fill="rgba(16,185,129,0.12)" stroke="#10b981"/>
+            <text x="550" y="26" fill="#ffffff" font-weight="700">✓ Codex CLI</text>
+            <text x="668" y="26" fill="#34d399" font-size="9.5">.codex/rules</text>
+
+            <!-- Harness 4 -->
+            <rect x="804" y="0" width="252" height="42" rx="7" fill="rgba(56,189,248,0.12)" stroke="#38bdf8"/>
+            <text x="818" y="26" fill="#ffffff" font-weight="700">✓ Gemini / Antigravity</text>
+            <text x="980" y="26" fill="#38bdf8" font-size="9.5">AGENTS.md</text>
+          </g>
+
+          <!-- 2 Bento Info Cards -->
+          <g transform="translate(0, 84)">
+            <g transform="translate(0, 0)">
+              <rect width="520" height="88" rx="8" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.09)"/>
+              <text x="16" y="24" class="sans" font-size="12" font-weight="700" fill="#38bdf8">📦 MCP Virtualization Pool (.evo/mcp-pool.json)</text>
+              <text x="16" y="46" class="mono" font-size="11" fill="#cbd5e1">Folded 8 third-party MCPs into 5 meta-tools (77 tools virtualized)</text>
+              <text x="16" y="68" class="mono" font-size="10" fill="#94a3b8">github • postgres • playwright • docker • sentry • slack • memory</text>
+            </g>
+
+            <g transform="translate(536, 0)">
+              <rect width="520" height="88" rx="8" fill="rgba(16,185,129,0.06)" stroke="rgba(16,185,129,0.25)"/>
+              <text x="16" y="24" class="sans" font-size="12" font-weight="700" fill="#34d399">🔒 git status: 100% Clean Stealth Exclusion</text>
+              <text x="16" y="46" class="mono" font-size="11" fill="#cbd5e1">Injected into .git/info/exclude (Zero .gitignore pollution)</text>
+              <text x="16" y="68" class="mono" font-size="10" fill="#34d399">✓ Local branches remain pristine · 0 untracked files</text>
+            </g>
+          </g>
+
+          <!-- Footer -->
+          <g transform="translate(0, 186)">
+            <rect width="1056" height="34" rx="6" fill="#040609" stroke="rgba(255,255,255,0.06)"/>
+            <text x="16" y="22" class="mono" font-size="11.5" fill="#34d399">
+              ✓ Ready for autonomous coding: L0 Meta-Rule Seed active with 100% prompt-cache prefix preservation
+            </text>
+          </g>
+        </g>
+      </g>
+
+      <!-- ==================== ACT 3 ==================== -->
+      <g id="act-3-layer" class="act-3">
+        <g transform="translate(0, 24)">
+          <text x="0" y="0" class="mono" font-size="13" font-weight="700">
+            <tspan fill="#10b981">developer@workstation</tspan><tspan fill="#64748b">:</tspan><tspan fill="#38bdf8">~/my-project</tspan><tspan fill="#ffffff">$ </tspan>
+          </text>
+          <g clip-path="url(#clipType3)">
+            <text x="290" y="0" class="mono" font-size="12" font-weight="700" fill="#ffffff">npx -y evo-kernel check ./report.xlsx &amp;&amp; npx -y evo-kernel ui --open</text>
+          </g>
+          <g>
+            <animateTransform attributeName="transform" type="translate" values="-476 0; -476 0; 0 0; 0 0" keyTimes="0; 0.66; 0.74; 1" dur="12s" repeatCount="indefinite"/>
+            <rect x="766" y="-12" width="8" height="15" fill="#10b981" class="cursor"/>
+          </g>
+        </g>
+
+        <!-- Act 3 Results -->
+        <g transform="translate(0, 46)">
+          <!-- Top Card: Canonical Deliverable Verification -->
+          <g transform="translate(0, 0)">
+            <rect width="1056" height="88" rx="10" fill="rgba(16,185,129,0.08)" stroke="rgba(16,185,129,0.35)"/>
+            <circle cx="28" cy="28" r="10" fill="#10b981"/>
+            <text x="28" y="32" class="mono" font-size="12" font-weight="900" fill="#ffffff" text-anchor="middle">✓</text>
+            <text x="50" y="32" class="sans" font-size="14" font-weight="800" fill="#ffffff">Canonical Deliverable Inspection: <tspan fill="#34d399">PASSED (0 Defects)</tspan></text>
+            <text x="50" y="54" class="mono" font-size="11" fill="#cbd5e1">Target: ./report.xlsx (4 worksheets, 1,280 cells, zero formula drift)</text>
+            <text x="50" y="72" class="mono" font-size="10.5" fill="#94a3b8">Strict CSP active · Zero third-party script execution · Verified in 24ms</text>
+          </g>
+
+          <!-- Bottom 2 Cards: Live Cockpit & SQLite -->
+          <g transform="translate(0, 102)">
+            <g transform="translate(0, 0)">
+              <rect width="520" height="106" rx="10" fill="rgba(56,189,248,0.08)" stroke="rgba(56,189,248,0.35)"/>
+              <text x="18" y="28" class="sans" font-size="13" font-weight="800" fill="#ffffff">🌐 Live Obsidian Cockpit Server</text>
+              <rect x="18" y="40" width="310" height="26" rx="6" fill="#04060a" stroke="rgba(56,189,248,0.3)"/>
+              <text x="28" y="57" class="mono" font-size="12" font-weight="700" fill="#38bdf8">http://127.0.0.1:4310</text>
+              <rect x="340" y="40" width="160" height="26" rx="6" fill="rgba(16,185,129,0.2)"/>
+              <text x="420" y="57" class="mono" font-size="10.5" font-weight="700" fill="#34d399" text-anchor="middle">Watch 30s Film</text>
+              <text x="18" y="90" class="mono" font-size="10.5" fill="#94a3b8">Zero-write telemetry &amp; 2D token budget treemap</text>
+            </g>
+
+            <g transform="translate(536, 0)">
+              <rect width="520" height="106" rx="10" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.09)"/>
+              <text x="18" y="28" class="sans" font-size="13" font-weight="800" fill="#ffffff">📊 Native node:sqlite Telemetry Store</text>
+              <text x="18" y="52" class="mono" font-size="11" fill="#cbd5e1">WAL Mode • FTS5 Full-Text • Causal ROI Tracker</text>
+              <text x="18" y="72" class="mono" font-size="10.5" fill="#34d399">✓ 16/16 AST Memories Verified in &lt;0.05ms</text>
+              <text x="18" y="90" class="mono" font-size="10" fill="#64748b">Press 'q' or Ctrl+C in terminal to stop server</text>
+            </g>
+          </g>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

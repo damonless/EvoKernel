@@ -1,0 +1,287 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440">
+  <defs>
+    <!-- Background & Glass Gradients -->
+    <linearGradient id="gkBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#050811"/>
+      <stop offset="50%" stop-color="#080d1a"/>
+      <stop offset="100%" stop-color="#0b1224"/>
+    </linearGradient>
+
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(15,22,38,0.92)"/>
+      <stop offset="100%" stop-color="rgba(8,12,22,0.95)"/>
+    </linearGradient>
+
+    <linearGradient id="laserBeamGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(56,189,248,0)"/>
+      <stop offset="20%" stop-color="rgba(56,189,248,0.85)"/>
+      <stop offset="50%" stop-color="rgba(52,211,153,1)"/>
+      <stop offset="80%" stop-color="rgba(56,189,248,0.85)"/>
+      <stop offset="100%" stop-color="rgba(56,189,248,0.0)"/>
+    </linearGradient>
+
+    <linearGradient id="laserGlowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="rgba(52,211,153,0)"/>
+      <stop offset="50%" stop-color="rgba(52,211,153,0.35)"/>
+      <stop offset="100%" stop-color="rgba(52,211,153,0)"/>
+    </linearGradient>
+
+    <radialGradient id="meshRadial" cx="50%" cy="10%" r="60%">
+      <stop offset="0%" stop-color="rgba(16,185,129,0.12)"/>
+      <stop offset="100%" stop-color="transparent"/>
+    </radialGradient>
+
+    <filter id="glowLaser" x="-50%" y="-20%" width="200%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <filter id="glowEmerald" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <style>
+      <![CDATA[
+      /* 6-Second Laser Scanline Sweep and Bento Card Light-Up (Rule Q4 and wall-reveal-moves) */
+      @keyframes laserSweep {
+        0% { transform: translateX(20px); opacity: 0; }
+        5% { transform: translateX(77px); opacity: 1; }
+        90% { transform: translateX(1046px); opacity: 1; }
+        98%, 100% { transform: translateX(1160px); opacity: 0; }
+      }
+
+      /* Native SVG stroke and filter animation on Bento Cards */
+      @keyframes bento1Pulse {
+        0%, 18% { stroke: #ef4444; stroke-width: 2.2px; filter: drop-shadow(0 0 10px rgba(239,68,68,0.5)); }
+        24%, 100% { stroke: rgba(255,255,255,0.08); stroke-width: 1.4px; filter: none; }
+      }
+      @keyframes bento2Pulse {
+        0%, 20% { stroke: rgba(255,255,255,0.08); stroke-width: 1.4px; filter: none; }
+        28%, 44% { stroke: #38bdf8; stroke-width: 2.2px; filter: drop-shadow(0 0 10px rgba(56,189,248,0.5)); }
+        50%, 100% { stroke: rgba(255,255,255,0.08); stroke-width: 1.4px; filter: none; }
+      }
+      @keyframes bento3Pulse {
+        0%, 45% { stroke: rgba(255,255,255,0.08); stroke-width: 1.4px; filter: none; }
+        52%, 68% { stroke: #34d399; stroke-width: 2.2px; filter: drop-shadow(0 0 10px rgba(52,211,153,0.5)); }
+        74%, 100% { stroke: rgba(255,255,255,0.08); stroke-width: 1.4px; filter: none; }
+      }
+      @keyframes bento4Pulse {
+        0%, 70% { stroke: rgba(255,255,255,0.08); stroke-width: 1.4px; filter: none; }
+        78%, 94% { stroke: #10b981; stroke-width: 2.4px; filter: drop-shadow(0 0 12px rgba(16,185,129,0.6)); }
+        100% { stroke: rgba(255,255,255,0.08); stroke-width: 1.4px; filter: none; }
+      }
+
+      @keyframes rejectPulse {
+        0%, 18% { opacity: 1; filter: drop-shadow(0 0 8px rgba(239,68,68,0.6)); }
+        9% { opacity: 0.75; }
+        24%, 100% { opacity: 0.88; filter: none; }
+      }
+
+      .laser-scanline {
+        animation: laserSweep 6s cubic-bezier(0.2, 0, 0.4, 1) infinite;
+      }
+
+      .card-1 { animation: bento1Pulse 6s ease-in-out infinite; }
+      .card-2 { animation: bento2Pulse 6s ease-in-out infinite; }
+      .card-3 { animation: bento3Pulse 6s ease-in-out infinite; }
+      .card-4 { animation: bento4Pulse 6s ease-in-out infinite; }
+
+      .reject-box { animation: rejectPulse 6s ease-in-out infinite; }
+
+      .mono { font-family: "Cascadia Code", Consolas, "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; }
+      .sans { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+      ]]>
+    </style>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="1200" height="440" fill="url(#gkBg)"/>
+  <rect width="1200" height="440" fill="url(#meshRadial)"/>
+
+  <!-- Subtle Matrix Grid -->
+  <g stroke="rgba(255,255,255,0.03)" stroke-width="1">
+    <line x1="0" y1="56" x2="1200" y2="56"/>
+    <line x1="0" y1="210" x2="1200" y2="210"/>
+    <line x1="0" y1="360" x2="1200" y2="360"/>
+    <line x1="305" y1="0" x2="305" y2="440"/>
+    <line x1="590" y1="0" x2="590" y2="440"/>
+    <line x1="875" y1="0" x2="875" y2="440"/>
+  </g>
+
+  <!-- Top Executive Header -->
+  <g id="header-row" transform="translate(36, 16)">
+    <rect x="0" y="0" width="350" height="30" rx="15" fill="rgba(16,185,129,0.12)" stroke="rgba(16,185,129,0.3)"/>
+    <circle cx="16" cy="15" r="4.5" fill="#10b981" filter="url(#glowEmerald)"/>
+    <text x="28" y="19" class="mono" font-size="11" font-weight="800" fill="#ffffff">DETERMINISTIC 4-STAGE GATEKEEPER</text>
+    <text x="246" y="19" class="mono" font-size="10" font-weight="700" fill="#34d399">OFFLINE COMPILER</text>
+
+    <!-- Subtitle -->
+    <text x="368" y="20" class="sans" font-size="12" fill="#94a3b8">
+      Guarantees Zero Bad Capabilities in Production • Offline Git Worktree Isolation • AST Structural Anchoring
+    </text>
+
+    <!-- Status Badge -->
+    <rect x="1000" y="0" width="128" height="30" rx="15" fill="rgba(56,189,248,0.12)" stroke="rgba(56,189,248,0.3)"/>
+    <text x="1064" y="19" class="mono" font-size="10.5" font-weight="700" fill="#38bdf8" text-anchor="middle">0 BYPASSES · PASS</text>
+  </g>
+
+  <!-- ==================== 4 BENTO GATE CARDS ==================== -->
+  <g id="bento-gates" transform="translate(36, 62)">
+
+    <!-- ========== GATE 1: STATIC SECURITY & LEXICAL DE-SYMBOL ========== -->
+    <g id="gate-1" transform="translate(0, 0)">
+      <rect width="268" height="350" rx="14" fill="url(#cardGrad)" stroke="#ef4444" stroke-width="1.8" class="card-1"/>
+
+      <!-- Header Tag -->
+      <rect x="18" y="18" width="94" height="20" rx="4" fill="rgba(239,68,68,0.18)" stroke="#ef4444"/>
+      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#f87171">GATE 1 · STATIC</text>
+
+      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">Static &amp; Lexical Guard</text>
+      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">AST De-Symbolization Check</text>
+
+      <!-- Checklist -->
+      <g transform="translate(18, 96)" class="mono" font-size="10.5" fill="#cbd5e1">
+        <text x="0" y="0">• Blocks absolute paths</text>
+        <text x="0" y="20">• Detects leaked secrets / keys</text>
+        <text x="0" y="40">• SSOT: Rejects &gt;2 code symbols</text>
+        <text x="0" y="60">• Strips magic number thresholds</text>
+      </g>
+
+      <!-- Rejection Sample Alert Box with Active Blinking -->
+      <g transform="translate(16, 180)" class="reject-box">
+        <rect width="236" height="74" rx="8" fill="rgba(239,68,68,0.1)" stroke="rgba(239,68,68,0.35)"/>
+        <text x="10" y="20" class="mono" font-size="9" font-weight="800" fill="#f87171">[REJECTED: HARDCODED PATH / MAGIC]</text>
+        <text x="10" y="38" class="mono" font-size="9.5" fill="#fca5a5">Violates SSOT &amp; Leaks Threshold</text>
+        <text x="10" y="56" class="mono" font-size="9" fill="#94a3b8">Blocked before disk write · 0 leak</text>
+      </g>
+
+      <!-- Bottom Status Pill -->
+      <rect x="18" y="306" width="232" height="24" rx="6" fill="#040609" stroke="rgba(239,68,68,0.2)"/>
+      <circle cx="30" cy="318" r="3.5" fill="#f87171"/>
+      <text x="40" y="322" class="mono" font-size="9.5" font-weight="700" fill="#f87171">Non-compliant proposals blocked</text>
+    </g>
+
+    <!-- Connector 1 -> 2 -->
+    <g transform="translate(268, 175)">
+      <line x1="4" y1="0" x2="16" y2="0" stroke="#38bdf8" stroke-width="2" stroke-dasharray="3 3"/>
+      <polygon points="16,-4 22,0 16,4" fill="#38bdf8"/>
+    </g>
+
+    <!-- ========== GATE 2: 16-HEX AST ANCHOR & SANDBOX SELF-TEST ========== -->
+    <g id="gate-2" transform="translate(288, 0)">
+      <rect width="268" height="350" rx="14" fill="url(#cardGrad)" stroke="rgba(255,255,255,0.08)" stroke-width="1.4" class="card-2"/>
+
+      <rect x="18" y="18" width="94" height="20" rx="4" fill="rgba(56,189,248,0.18)" stroke="#38bdf8"/>
+      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#38bdf8">GATE 2 · SEMANTIC</text>
+
+      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">16-Hex AST &amp; Sandbox</text>
+      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Deterministic --self-test exit(0)</text>
+
+      <!-- Checklist -->
+      <g transform="translate(18, 96)" class="mono" font-size="10.5" fill="#cbd5e1">
+        <text x="0" y="0">• 16-hex AST structural hashing</text>
+        <text x="0" y="20">• Verifies live callers in AST</text>
+        <text x="0" y="40">• Micro-tool runs --self-test</text>
+        <text x="0" y="60">• Requires exit(0) &amp; 0 side effects</text>
+      </g>
+
+      <!-- Verification Status Box -->
+      <g transform="translate(16, 180)">
+        <rect width="236" height="74" rx="8" fill="rgba(56,189,248,0.1)" stroke="rgba(56,189,248,0.35)"/>
+        <text x="10" y="20" class="mono" font-size="10" font-weight="800" fill="#38bdf8">[VERIFIED: AST MATCH]</text>
+        <text x="10" y="38" class="mono" font-size="9.5" fill="#bae6fd">#8f3c7a2b · 16/16 anchors live</text>
+        <text x="10" y="56" class="mono" font-size="9" fill="#94a3b8">Sandbox executed in 14ms (exit 0)</text>
+      </g>
+
+      <rect x="18" y="306" width="232" height="24" rx="6" fill="#040609" stroke="rgba(56,189,248,0.2)"/>
+      <circle cx="30" cy="318" r="3.5" fill="#38bdf8"/>
+      <text x="40" y="322" class="mono" font-size="9.5" font-weight="700" fill="#38bdf8">AST anti-drift anchor guaranteed</text>
+    </g>
+
+    <!-- Connector 2 -> 3 -->
+    <g transform="translate(556, 175)">
+      <line x1="4" y1="0" x2="16" y2="0" stroke="#34d399" stroke-width="2" stroke-dasharray="3 3"/>
+      <polygon points="16,-4 22,0 16,4" fill="#34d399"/>
+    </g>
+
+    <!-- ========== GATE 3: FTS5 BM25 DEDUP & CAUSAL ATTRIBUTION ========== -->
+    <g id="gate-3" transform="translate(576, 0)">
+      <rect width="268" height="350" rx="14" fill="url(#cardGrad)" stroke="rgba(255,255,255,0.08)" stroke-width="1.4" class="card-3"/>
+
+      <rect x="18" y="18" width="102" height="20" rx="4" fill="rgba(52,211,153,0.18)" stroke="#34d399"/>
+      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#34d399">GATE 3 · STATISTICAL</text>
+
+      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">FTS5 BM25 &amp; Causal ROI</text>
+      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Dedup &amp; Anti-Confounding</text>
+
+      <!-- Checklist -->
+      <g transform="translate(18, 96)" class="mono" font-size="10.5" fill="#cbd5e1">
+        <text x="0" y="0">• FTS5 BM25 Cosine Sim ≤ 0.85</text>
+        <text x="0" y="20">• CJK / EN synonym collision guard</text>
+        <text x="0" y="40">• Multi-turn causal regression check</text>
+        <text x="0" y="60">• Helped vs Hurt attribution test</text>
+      </g>
+
+      <!-- Verification Status Box -->
+      <g transform="translate(16, 180)">
+        <rect width="236" height="74" rx="8" fill="rgba(52,211,153,0.1)" stroke="rgba(52,211,153,0.35)"/>
+        <text x="10" y="20" class="mono" font-size="10" font-weight="800" fill="#34d399">[VERIFIED: UNIQUE DELTA]</text>
+        <text x="10" y="38" class="mono" font-size="9.5" fill="#a7f3d0">ROI +18.4% · 0 duplication</text>
+        <text x="10" y="56" class="mono" font-size="9" fill="#94a3b8">No semantic collision with .evo/</text>
+      </g>
+
+      <rect x="18" y="306" width="232" height="24" rx="6" fill="#040609" stroke="rgba(52,211,153,0.2)"/>
+      <circle cx="30" cy="318" r="3.5" fill="#34d399"/>
+      <text x="40" y="322" class="mono" font-size="9.5" font-weight="700" fill="#34d399">Zero redundant bloat admitted</text>
+    </g>
+
+    <!-- Connector 3 -> 4 -->
+    <g transform="translate(844, 175)">
+      <line x1="4" y1="0" x2="16" y2="0" stroke="#10b981" stroke-width="2" stroke-dasharray="3 3"/>
+      <polygon points="16,-4 22,0 16,4" fill="#10b981"/>
+    </g>
+
+    <!-- ========== GATE 4: 1,500-TOKEN CAP & ISOLATED GIT WORKTREE ========== -->
+    <g id="gate-4" transform="translate(864, 0)">
+      <rect width="264" height="350" rx="14" fill="url(#cardGrad)" stroke="rgba(255,255,255,0.08)" stroke-width="1.4" class="card-4"/>
+
+      <rect x="18" y="18" width="114" height="20" rx="4" fill="rgba(16,185,129,0.22)" stroke="#10b981"/>
+      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#34d399">GATE 4 · WORKTREE</text>
+
+      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">1,500-Tok &amp; Worktree</text>
+      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Isolated Git Probe &amp; Commit</text>
+
+      <!-- Checklist -->
+      <g transform="translate(18, 96)" class="mono" font-size="10.5" fill="#cbd5e1">
+        <text x="0" y="0">• Strict 1,500 token budget cap</text>
+        <text x="0" y="20">• Bucket quota limit (max 3/scope)</text>
+        <text x="0" y="40">• Isolated git worktree dry-run</text>
+        <text x="0" y="60">• Atomic fast-forward merge</text>
+      </g>
+
+      <!-- Final Commit Box -->
+      <g transform="translate(16, 180)">
+        <rect width="232" height="74" rx="8" fill="rgba(16,185,129,0.14)" stroke="rgba(16,185,129,0.5)"/>
+        <text x="10" y="20" class="mono" font-size="10" font-weight="800" fill="#34d399">[COMMITTED TO .evo/]</text>
+        <text x="10" y="38" class="mono" font-size="9.5" fill="#6ee7b7">1,492 / 1,500 tok · Quota OK</text>
+        <text x="10" y="56" class="mono" font-size="9" fill="#94a3b8">Clean worktree merge into HEAD</text>
+      </g>
+
+      <rect x="18" y="306" width="228" height="24" rx="6" fill="#040609" stroke="rgba(16,185,129,0.25)"/>
+      <circle cx="30" cy="318" r="3.5" fill="#10b981"/>
+      <text x="40" y="322" class="mono" font-size="9.5" font-weight="700" fill="#34d399">Production capability live in .evo/</text>
+    </g>
+  </g>
+
+  <!-- ==================== SWEEPING LASER SCANLINE ==================== -->
+  <g class="laser-scanline" pointer-events="none">
+    <!-- Laser Beam Line -->
+    <line x1="0" y1="50" x2="0" y2="420" stroke="url(#laserBeamGrad)" stroke-width="2" filter="url(#glowLaser)"/>
+    <!-- Laser Core Glow -->
+    <rect x="-18" y="50" width="36" height="370" fill="url(#laserGlowGrad)"/>
+    <!-- Top & Bottom Laser Emitter Dots -->
+    <circle cx="0" cy="50" r="3" fill="#38bdf8" filter="url(#glowLaser)"/>
+    <circle cx="0" cy="420" r="3" fill="#34d399" filter="url(#glowLaser)"/>
+  </g>
+</svg>
