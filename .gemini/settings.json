@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "evo-kernel": {
+      "command": "node",
+      "args": [
+        "./scripts/boot-mcp.mjs",
+        "mcp"
+      ]
+    }
+  }
+}

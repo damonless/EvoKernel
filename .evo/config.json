@@ -1,6 +1,8 @@
 {
   "version": "0.1.0",
   "maxCoreRuleTokens": 1500,
+  "maxScopedRulesPerBucket": 3,
+  "maxTotalScopedRules": 12,
   "maxL0SummaryChars": 140,
   "duplicateBm25Threshold": 0.68,
   "sandboxTimeoutMs": 5000,
@@ -8,6 +10,7 @@
     "claude",
     "agents",
     "gemini",
-    "cursor"
+    "cursor",
+    "antigravity"
   ]
 }
