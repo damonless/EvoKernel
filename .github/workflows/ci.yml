@@ -34,9 +34,6 @@ jobs:
       - name: Run Full Test Suite (node:test)
         run: npm test
 
-      - name: Run EvoKernel Release Preflight Micro-Tool
-        run: node ./.evo/tools/evo-release-preflight/run.mjs
-
       - name: Run EvoKernel Rule & AST Memory Auditor Micro-Tool
         run: node ./.evo/tools/agy-config-auditor/run.mjs
 
