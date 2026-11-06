@@ -10,7 +10,13 @@ import { renderUiClientHtml } from '../templates/ui-client.js';
 import { EvoStorage, findNearestEvoWorkspace, sanitizeId } from '../core/storage.js';
 import type { EvoKind } from '../core/types.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { verifyMemoryFreshness } from '../core/memory.js';
+import {
+  buildFingerprintsForTargets,
+  clearMemoryVerificationCache,
+  resolveCurrentGitBranch,
+  resolveCurrentGitCommit,
+  verifyMemoryFreshness,
+} from '../core/memory.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { syncManagedRuleBlocks } from '../cli/init.js';
 import { isSubpathOf } from '../mcp/handlers.js';
@@ -381,7 +387,238 @@ export async function handleWebviewAction(
         return {
           ok: true,
           snapshot,
-          data: { archived: { kind: rawKind, id: cleanId }, reason },
+          data: { archived: { kind: rawKind, id: cleanId }, reason, snapshot },
+        };
+      }
+
+      case 'restore-item': {
+        const rawKind = typeof params?.kind === 'string' ? params.kind.trim().toLowerCase() : '';
+        const rawId = typeof params?.id === 'string' ? params.id.trim() : '';
+        if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind)) {
+          return { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory` };
+        }
+        if (!rawId) return { ok: false, error: 'Bad Request: Missing item id' };
+
+        const cleanId = sanitizeId(rawId);
+        const storage = new EvoStorage(ws);
+        const restored = storage.restoreCapability(cleanId, rawKind as EvoKind);
+        if (!restored) {
+          return { ok: false, error: `Not Found: Archived ${rawKind} "${cleanId}" not found` };
+        }
+
+        if (rawKind === 'rule') {
+          syncManagedRuleBlocks(ws);
+        }
+        const telem = new EvoTelemetry(storage);
+        try { telem.syncFromDisk(true); } finally { telem.close(); }
+
+        const snapshot = buildUiSnapshot(ws);
+        return {
+          ok: true,
+          snapshot,
+          data: { restored: { kind: rawKind, id: cleanId }, snapshot },
+        };
+      }
+
+      case 'toggle-enabled': {
+        if (typeof params?.enabled !== 'boolean') {
+          return { ok: false, error: 'Bad Request: Parameter "enabled" must be a boolean' };
+        }
+        const targetEnabled = params.enabled;
+        const batchItems = Array.isArray(params.items)
+          ? params.items
+          : [{ kind: params.kind, id: params.id }];
+        if (batchItems.length === 0) {
+          return { ok: false, error: 'Bad Request: Missing target item(s)' };
+        }
+
+        const storage = new EvoStorage(ws);
+        let touchedRules = false;
+        let updatedCount = 0;
+        const now = new Date().toISOString();
+
+        for (const entry of batchItems) {
+          const rawKind = typeof entry?.kind === 'string' ? entry.kind.trim().toLowerCase() : '';
+          const rawId = typeof entry?.id === 'string' ? entry.id.trim() : '';
+          if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind) || !rawId) {
+            return { ok: false, error: 'Bad Request: Invalid kind or id in toggle-enabled' };
+          }
+          const cleanId = sanitizeId(rawId);
+          if (rawKind === 'rule') {
+            const rule = storage.getRule(cleanId);
+            if (!rule) {
+              if (batchItems.length === 1) return { ok: false, error: `Not Found: Rule "${cleanId}" not found` };
+              continue;
+            }
+            if (targetEnabled && rule.core && rule.enabled === false) {
+              const { totalTokens } = storage.getCoreRulesTokenUsage();
+              const maxBudget = storage.getConfig()?.maxCoreRuleTokens ?? 1500;
+              if (totalTokens + rule.tokens > maxBudget) {
+                return {
+                  ok: false,
+                  error: `Bad Request: Core rule budget exceeded (${totalTokens + rule.tokens}/${maxBudget} tokens)`,
+                  code: 'ERR_BUDGET_EXCEEDED',
+                  details: { currentTokens: totalTokens, candidateTokens: rule.tokens, maxTokens: maxBudget },
+                };
+              }
+            }
+            storage.saveRule({ ...rule, enabled: targetEnabled, updated_at: now });
+            touchedRules = true;
+            updatedCount++;
+          } else if (rawKind === 'skill') {
+            const skill = storage.getSkill(cleanId);
+            if (!skill) {
+              if (batchItems.length === 1) return { ok: false, error: `Not Found: Skill "${cleanId}" not found` };
+              continue;
+            }
+            storage.saveSkill({ ...skill, enabled: targetEnabled, updated_at: now });
+            updatedCount++;
+          } else if (rawKind === 'tool') {
+            const tool = storage.getTool(cleanId);
+            if (!tool) {
+              if (batchItems.length === 1) return { ok: false, error: `Not Found: Tool "${cleanId}" not found` };
+              continue;
+            }
+            const { script_code, script_path: _sp, ...manifest } = tool;
+            storage.saveTool({ ...manifest, enabled: targetEnabled, updated_at: now }, script_code);
+            updatedCount++;
+          } else if (rawKind === 'memory') {
+            const mem = storage.getMemory(cleanId);
+            if (!mem) {
+              if (batchItems.length === 1) return { ok: false, error: `Not Found: Memory "${cleanId}" not found` };
+              continue;
+            }
+            storage.saveMemory({ ...mem, enabled: targetEnabled, updated_at: now });
+            updatedCount++;
+          }
+        }
+
+        if (touchedRules) {
+          syncManagedRuleBlocks(ws);
+        }
+        const telem = new EvoTelemetry(storage);
+        try { telem.syncFromDisk(true); } finally { telem.close(); }
+
+        const snapshot = buildUiSnapshot(ws);
+        const latestUsage = storage.getCoreRulesTokenUsage().totalTokens;
+        return {
+          ok: true,
+          snapshot,
+          tokenUsage: latestUsage,
+          data: { updatedCount, enabled: targetEnabled, tokenUsage: latestUsage, snapshot },
+        };
+      }
+
+      case 'approve-item': {
+        const storage = new EvoStorage(ws);
+        const approveAll = Boolean(params?.approveAll);
+        const now = new Date().toISOString();
+        let approvedCount = 0;
+
+        if (approveAll) {
+          for (const r of storage.listRules()) {
+            if (r.review_status === 'pending') {
+              storage.saveRule({ ...r, review_status: 'approved', updated_at: now });
+              approvedCount++;
+            }
+          }
+          for (const s of storage.listSkills()) {
+            if (s.review_status === 'pending') {
+              storage.saveSkill({ ...s, review_status: 'approved', updated_at: now });
+              approvedCount++;
+            }
+          }
+          for (const t of storage.listTools()) {
+            if (t.review_status === 'pending') {
+              const { script_code, script_path: _sp, ...manifest } = t;
+              storage.saveTool({ ...manifest, review_status: 'approved', updated_at: now }, script_code);
+              approvedCount++;
+            }
+          }
+          for (const m of storage.listMemories()) {
+            if (m.review_status === 'pending') {
+              storage.saveMemory({ ...m, review_status: 'approved', updated_at: now });
+              approvedCount++;
+            }
+          }
+        } else {
+          const rawKind = typeof params?.kind === 'string' ? params.kind.trim().toLowerCase() : '';
+          const rawId = typeof params?.id === 'string' ? params.id.trim() : '';
+          if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind) || !rawId) {
+            return { ok: false, error: 'Bad Request: Invalid kind or id for approve-item' };
+          }
+          const cleanId = sanitizeId(rawId);
+          if (rawKind === 'rule') {
+            const r = storage.getRule(cleanId);
+            if (!r) return { ok: false, error: `Not Found: Rule "${cleanId}" not found` };
+            storage.saveRule({ ...r, review_status: 'approved', updated_at: now });
+            approvedCount = 1;
+          } else if (rawKind === 'skill') {
+            const s = storage.getSkill(cleanId);
+            if (!s) return { ok: false, error: `Not Found: Skill "${cleanId}" not found` };
+            storage.saveSkill({ ...s, review_status: 'approved', updated_at: now });
+            approvedCount = 1;
+          } else if (rawKind === 'tool') {
+            const t = storage.getTool(cleanId);
+            if (!t) return { ok: false, error: `Not Found: Tool "${cleanId}" not found` };
+            const { script_code, script_path: _sp, ...manifest } = t;
+            storage.saveTool({ ...manifest, review_status: 'approved', updated_at: now }, script_code);
+            approvedCount = 1;
+          } else if (rawKind === 'memory') {
+            const m = storage.getMemory(cleanId);
+            if (!m) return { ok: false, error: `Not Found: Memory "${cleanId}" not found` };
+            storage.saveMemory({ ...m, review_status: 'approved', updated_at: now });
+            approvedCount = 1;
+          }
+        }
+
+        const snapshot = buildUiSnapshot(ws);
+        return {
+          ok: true,
+          snapshot,
+          data: { approvedCount, approveAll, snapshot },
+        };
+      }
+
+      case 'rebind-memory-ast': {
+        const rawId = typeof params?.id === 'string' ? params.id.trim() : '';
+        if (!rawId) return { ok: false, error: 'Bad Request: Missing memory id' };
+        const cleanId = sanitizeId(rawId);
+        const storage = new EvoStorage(ws);
+        const mem = storage.getMemory(cleanId);
+        if (!mem) return { ok: false, error: `Not Found: Memory "${cleanId}" not found` };
+
+        const { fingerprints, resolvedSymbols, missingSymbols } = buildFingerprintsForTargets(
+          ws,
+          mem.target_symbols || []
+        );
+        const nextFingerprints = { ...(mem.ast_fingerprints || {}), ...fingerprints };
+        const updatedMem = {
+          ...mem,
+          ast_fingerprints: nextFingerprints,
+          created_commit: resolveCurrentGitCommit(ws),
+          created_branch: resolveCurrentGitBranch(ws),
+          updated_at: new Date().toISOString(),
+        };
+        storage.saveMemory(updatedMem);
+        clearMemoryVerificationCache();
+
+        const telem = new EvoTelemetry(storage);
+        try { telem.syncFromDisk(true); } finally { telem.close(); }
+
+        const snapshot = buildUiSnapshot(ws);
+        const retriggered = (snapshot.memories || []).find((m: any) => m.id === cleanId);
+        return {
+          ok: true,
+          snapshot,
+          data: {
+            id: cleanId,
+            resolvedSymbols,
+            missingSymbols,
+            overallStatus: retriggered?.freshness?.overall_status || 'VERIFIED',
+            memory: retriggered || updatedMem,
+            snapshot,
+          },
         };
       }
 
@@ -396,7 +633,7 @@ export async function handleWebviewAction(
         if (!rule) return { ok: false, error: `Not Found: Rule "${cleanId}" not found` };
 
         const targetCore = params.core;
-        if (targetCore && !rule.core) {
+        if (targetCore && !rule.core && rule.enabled !== false) {
           const { totalTokens } = storage.getCoreRulesTokenUsage();
           const maxBudget = storage.getConfig()?.maxCoreRuleTokens ?? 1500;
           if (totalTokens + rule.tokens > maxBudget) {
@@ -421,7 +658,7 @@ export async function handleWebviewAction(
           ok: true,
           snapshot,
           tokenUsage: latestUsage,
-          data: { id: cleanId, core: targetCore, tokenUsage: latestUsage },
+          data: { id: cleanId, core: targetCore, tokenUsage: latestUsage, snapshot },
         };
       }
 

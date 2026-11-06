@@ -109,11 +109,12 @@ export const META_MCP_TOOLS = [
         },
         title: {
           type: 'string',
-          description: 'Short human-readable title.',
+          description: 'Short, plain-spoken human title (avoid opaque academic jargon; clearly state the scenario or fix).',
         },
         l0_summary: {
           type: 'string',
-          description: 'One-sentence L0 abstract (<= 140 chars) for fast relevance scanning.',
+          description:
+            'Plain-spoken 1-sentence human takeaway ("Scenario -> Root Cause -> Fix / Guardrail", <= 35 words / <= 140 chars) for fast human & agent scanning.',
         },
         supersedes_id: {
           type: 'string',
@@ -823,7 +824,9 @@ export class EvoMcpDispatcher {
     const totalTokens = hasLocalEvo ? targetCtx.storage.getCoreRulesTokenUsage().totalTokens : 0;
     const maxTokens = targetCtx.storage.getConfig().maxCoreRuleTokens;
     const wsTools =
-      hasLocalEvo && (kind === 'all' || kind === 'tool') ? targetCtx.storage.listTools() : [];
+      hasLocalEvo && (kind === 'all' || kind === 'tool')
+        ? targetCtx.storage.listTools().filter((t) => t.enabled !== false)
+        : [];
     const hasToolHit = hits.some((h) => h.kind === 'tool');
     const toolFooter =
       wsTools.length > 0 && !hasToolHit

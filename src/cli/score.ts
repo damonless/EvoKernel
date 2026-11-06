@@ -621,40 +621,26 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
   const evoDir = path.join(ws, '.evo');
   if (mode === 'project' && hasValidEvoStructure(evoDir)) {
     try {
-      const rDir = path.join(evoDir, 'rules');
-      if (fs.existsSync(rDir)) {
-        const walk = (d: string) => {
-          for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-            const p = path.join(d, e.name);
-            if (e.isDirectory()) walk(p);
-            else if (e.isFile() && e.name.endsWith('.md')) {
-              rulesCount++;
-              if (p.includes(path.join(rDir, 'scoped'))) scopedRulesCount++;
-              totalRuleTokens += estimateTokens(fs.readFileSync(p, 'utf8'));
-            }
-          }
-        };
-        walk(rDir);
+      const storage = new EvoStorage(ws);
+      const activeRules = storage.listRules().filter((r) => r.enabled !== false);
+      rulesCount = activeRules.length;
+      scopedRulesCount = activeRules.filter((r) => !r.core).length;
+      totalRuleTokens = activeRules.reduce((acc, r) => acc + (r.tokens || estimateTokens(r.content)), 0);
+
+      const activeSkills = storage.listSkills().filter((s) => s.enabled !== false);
+      skillsCount = activeSkills.length;
+
+      const activeTools = storage.listTools().filter((t) => t.enabled !== false);
+      toolsCount = activeTools.length;
+
+      const activeMemories = storage.listMemories().filter((m) => m.enabled !== false);
+      memoriesCount = activeMemories.length;
+      for (const m of activeMemories) {
+        try {
+          const v = verifyMemoryFreshness(ws, m, { includeCallers: false, cacheDb: options?.cacheDb });
+          if (v.overall_status === 'VERIFIED') verifiedMemoriesCount++;
+        } catch {}
       }
-      const sDir = path.join(evoDir, 'skills');
-      if (fs.existsSync(sDir)) {
-        skillsCount = fs.readdirSync(sDir).filter((f) => !f.startsWith('.')).length;
-      }
-      const tDir = path.join(evoDir, 'tools');
-      if (fs.existsSync(tDir)) {
-        toolsCount = fs.readdirSync(tDir).filter((f) => !f.startsWith('.')).length;
-      }
-      try {
-        const storage = new EvoStorage(ws);
-        const mems = storage.listMemories();
-        memoriesCount = mems.length;
-        for (const m of mems) {
-          try {
-            const v = verifyMemoryFreshness(ws, m, { includeCallers: false, cacheDb: options?.cacheDb });
-            if (v.overall_status === 'VERIFIED') verifiedMemoriesCount++;
-          } catch {}
-        }
-      } catch {}
     } catch {}
   }
 

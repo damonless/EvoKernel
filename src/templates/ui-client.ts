@@ -24,10 +24,20 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   var activeCapsKind = 'all';
   var activeCapsStatus = 'all';
   var capsSearchQuery = '';
+  var capsSortByTokens = false;
+  var healthDiagExpanded = false;
   var activeGkFilter = 'all';
   var selectedCapability = null; // { kind: string, item: any }
   var inspectorMode = 'preview'; // 'preview' | 'edit'
   var lang = 'en';
+  try {
+    var savedLang = window.localStorage ? window.localStorage.getItem('evo_ui_lang') : null;
+    if (savedLang === 'zh' || savedLang === 'en') {
+      lang = savedLang;
+    } else if (typeof navigator !== 'undefined' && navigator.language && navigator.language.toLowerCase().indexOf('zh') === 0) {
+      lang = 'zh';
+    }
+  } catch (e) {}
 
   // Command Palette State
   var cmdPaletteOpen = false;
@@ -37,7 +47,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   var i18n = {
     en: {
       brandName: 'EvoKernel',
-      brandSubtitle: 'Workbench 2.0',
+      brandSubtitle: 'Workbench 2.1',
       activeWorkspace: 'Active Workspace',
       searchPlaceholder: 'Search capabilities, files, actions...',
       serverLive: 'LIVE',
@@ -49,12 +59,12 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       viewGk: 'Gatekeeper',
       telemetryHeader: 'TELEMETRY',
       healthTitle: 'Health Score',
-      healthSub: 'Zero-leak AST shielding',
+      healthSub: 'Click to inspect score deductions',
       taxTitle: 'Prompt Tax Saved',
       budgetTitle: 'Core Rule Budget',
-      budgetStatusOk: 'Within safe limit',
-      budgetStatusWarn: 'Nearing 1500-token cap',
-      budgetStatusExceeded: 'Budget exceeded!',
+      budgetStatusOk: 'Within safe limit (click to filter)',
+      budgetStatusWarn: 'Nearing 1500-token cap (click to filter)',
+      budgetStatusExceeded: 'Budget exceeded! Click to inspect',
       treemapTitle: 'Virtual Footprint',
       capsViewTitle: 'Capabilities Matrix',
       capsViewSub: 'High-density inspection of rules, skills, tools, and episodic memories',
@@ -64,10 +74,21 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       tools: 'Tools',
       memories: 'Memories',
       allStatus: 'All Status',
+      statusPending: '🔔 Pending',
+      statusActive: 'Active',
+      statusPaused: 'Paused',
       statusVerified: 'Verified',
       statusStale: 'Stale',
       statusCore: 'Core',
       statusScoped: 'Scoped',
+      statusArchived: '🗑️ Archived',
+      batchApprovePending: '✓ Approve All Pending',
+      batchPauseStale: '🧹 Pause Stale Items',
+      badgePending: '🔔 Pending Review',
+      badgeEnabled: '🟢 Enabled',
+      badgePaused: '⏸ Paused',
+      badgeArchived: '🗑️ Archived',
+      hitsSuffix: 'hits',
       topoTitle: 'Orthogonal Capability & AST Topology',
       topoSub: 'Rules & Skills → Cognitive Memories → AST Source Files & Callers',
       legendVerified: 'Verified',
@@ -81,15 +102,23 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       gkPassAll: 'All evolved capabilities passed 4-Stage Deterministic Gatekeeper.',
       noSelectionTitle: 'No Capability Selected',
       noSelectionSub: 'Select any Rule, Skill, Tool, or Memory from the data table or topology graph to inspect.',
+      tldrLabel: '💡 One-Sentence Takeaway (TL;DR)',
       openInIde: '↗ Open in IDE',
       verifyAst: '✓ Verify AST',
       verifyingAst: 'Verifying...',
+      rebindAst: '🔄 Re-bind Current Code (AST)',
+      rebindingAst: 'Re-binding...',
       promoteCore: '↑ Promote to Core',
       demoteScoped: '↓ Demote to Scoped',
       runSelfTest: '▶ Run Self-Test',
       edit: '✎ Edit',
       preview: '👁 Preview',
       archive: '⌫ Archive',
+      restore: '↩ Restore',
+      approve: '✓ Approve',
+      pauseItem: '⏸ Pause',
+      resumeItem: '▶ Enable',
+      undoArchive: '↩ Undo',
       astAnchors: 'AST Code Anchors',
       saveChanges: 'Save Changes',
       cancel: 'Cancel',
@@ -97,7 +126,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     },
     zh: {
       brandName: 'EvoKernel',
-      brandSubtitle: '工作台 2.0',
+      brandSubtitle: '工作台 2.1',
       activeWorkspace: '当前工作区',
       searchPlaceholder: '全局搜索能力、文件、指令 (⌘K)...',
       serverLive: '实时在线',
@@ -109,12 +138,12 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       viewGk: '门禁审计',
       telemetryHeader: '实时遥测',
       healthTitle: '健康评分',
-      healthSub: '零泄漏 AST 符号护栏',
+      healthSub: '点击查看扣分项与一键修复',
       taxTitle: 'Prompt 净省税率',
       budgetTitle: '核心规则预算',
-      budgetStatusOk: '处于安全预算内',
-      budgetStatusWarn: '接近 1500 token 上限',
-      budgetStatusExceeded: '超出核心预算上限！',
+      budgetStatusOk: '安全预算内（点击筛选核心规则）',
+      budgetStatusWarn: '接近 1500 上限（点击筛选降级）',
+      budgetStatusExceeded: '超出核心预算！（点击排查大规则）',
       treemapTitle: '虚拟化内存占用',
       capsViewTitle: '自演化能力矩阵',
       capsViewSub: '高密度透视规则、技能、沙盒微工具与认知记忆',
@@ -124,10 +153,21 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       tools: '微工具',
       memories: '认知记忆',
       allStatus: '全状态',
+      statusPending: '🔔 待审核',
+      statusActive: '已启用',
+      statusPaused: '已搁置',
       statusVerified: '已验证',
       statusStale: '已失效',
       statusCore: '核心',
       statusScoped: '局部',
+      statusArchived: '🗑️ 回收站',
+      batchApprovePending: '✓ 全部确认待审',
+      batchPauseStale: '🧹 批量搁置失效项',
+      badgePending: '🔔 待审核',
+      badgeEnabled: '🟢 已启用',
+      badgePaused: '⏸ 已搁置',
+      badgeArchived: '🗑️ 已归档',
+      hitsSuffix: '次命中',
       topoTitle: '正交能力与 AST 调用拓扑图',
       topoSub: '规则与技能 → 认知记忆 → 源码 AST 文件与调用链',
       legendVerified: '已验证',
@@ -141,15 +181,23 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       gkPassAll: '所有演进能力均已严格通过确定性四阶门禁。',
       noSelectionTitle: '未选中任何能力',
       noSelectionSub: '请在数据表格或拓扑图中点击任意规则、技能、工具或记忆进行深度透视。',
+      tldrLabel: '💡 一句话核心结论 (TL;DR)',
       openInIde: '↗ 在 IDE 中打开',
       verifyAst: '✓ 验证 AST 状态',
       verifyingAst: '验证计算中...',
+      rebindAst: '🔄 更新绑定当前代码 (Re-bind AST)',
+      rebindingAst: '重新锚定中...',
       promoteCore: '↑ 提升为核心规则',
       demoteScoped: '↓ 降级为局部规则',
       runSelfTest: '▶ 执行沙盒自测',
       edit: '✎ 在线编辑',
       preview: '👁 结构化预览',
       archive: '⌫ 归档',
+      restore: '↩ 恢复',
+      approve: '✓ 确认',
+      pauseItem: '⏸ 搁置',
+      resumeItem: '▶ 启用',
+      undoArchive: '↩ 撤销 (Undo)',
       astAnchors: 'AST 源码锚点',
       saveChanges: '保存变更',
       cancel: '取消',
@@ -171,10 +219,74 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       .replace(/'/g, '&#39;');
   }
 
+  function formatRichText(s) {
+    var safe = esc(s);
+    return safe.replace(/\`([^\`]+)\`/g, '<code class="inline-code-pill">$1</code>');
+  }
+
   function formatKind(k) {
     if (!k) return '';
     if (k === 'memories' || k === 'memory') return 'MEMORY';
     return String(k).replace(/s$/, '').toUpperCase();
+  }
+
+  function singularKind(k) {
+    if (!k) return 'rule';
+    if (k === 'memories' || k === 'memory') return 'memory';
+    return String(k).replace(/s$/, '');
+  }
+
+  function formatWorkspaceDisplayPath(rawPath) {
+    var p = String(rawPath || '~/workspace');
+    if (p.length <= 36) return p;
+    var sep = p.indexOf('\\\\') !== -1 ? '\\\\' : '/';
+    var parts = p.split(/[\\\\/]/).filter(Boolean);
+    if (parts.length <= 2) return p;
+    var tail = parts.slice(-2).join(sep);
+    var head = parts[0];
+    if ((head + sep + '…' + sep + tail).length <= 42) {
+      return head + sep + '…' + sep + tail;
+    }
+    return '…' + sep + parts[parts.length - 1];
+  }
+
+  function charVisualCols(code) {
+    return code > 0x2E7F ? 2 : 1;
+  }
+
+  function truncateVisual(str, maxCols) {
+    var s = String(str || '');
+    var cols = 0;
+    var out = '';
+    for (var i = 0; i < s.length; i++) {
+      var w = charVisualCols(s.charCodeAt(i));
+      if (cols + w > maxCols) {
+        return out + '…';
+      }
+      out += s.charAt(i);
+      cols += w;
+    }
+    return s;
+  }
+
+  function truncateVisualTail(str, maxCols) {
+    var s = String(str || '');
+    var totalCols = 0;
+    for (var j = 0; j < s.length; j++) {
+      totalCols += charVisualCols(s.charCodeAt(j));
+    }
+    if (totalCols <= maxCols) return s;
+    var cols = 0;
+    var out = '';
+    for (var i = s.length - 1; i >= 0; i--) {
+      var w = charVisualCols(s.charCodeAt(i));
+      if (cols + w > maxCols - 1) {
+        return '…' + out;
+      }
+      out = s.charAt(i) + out;
+      cols += w;
+    }
+    return s;
   }
 
   // ==========================================
@@ -220,7 +332,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           if (msg.error) {
             resolve({ ok: false, error: msg.error });
           } else {
-            resolve({ ok: true, data: msg.data, result: msg.result, snapshot: msg.snapshot, action: action });
+            resolve({ ok: true, data: msg.data, result: msg.result, snapshot: msg.snapshot, tokenUsage: msg.tokenUsage, action: action });
           }
         };
 
@@ -250,9 +362,9 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   }
 
   // ==========================================
-  // TOAST NOTIFICATION SYSTEM
+  // TOAST NOTIFICATION SYSTEM (WITH UNDO SUPPORT)
   // ==========================================
-  function showToast(type, message, durationMs) {
+  function showToast(type, message, durationMs, actionSpec) {
     var container = el('toast-container');
     if (!container) return;
     var toast = document.createElement('div');
@@ -260,7 +372,23 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     var icon = type === 'success'
       ? '<span style="color:var(--status-ok);">✓</span>'
       : (type === 'error' ? '<span style="color:var(--status-danger);">✕</span>' : '<span style="color:var(--status-info);">ℹ</span>');
-    toast.innerHTML = icon + '<span>' + esc(message) + '</span>';
+    var msgSpan = document.createElement('span');
+    msgSpan.innerHTML = icon + ' <span style="margin-left:4px;">' + esc(message) + '</span>';
+    toast.appendChild(msgSpan);
+
+    if (actionSpec && actionSpec.label && typeof actionSpec.run === 'function') {
+      var actBtn = document.createElement('button');
+      actBtn.type = 'button';
+      actBtn.className = 'toast-undo-btn';
+      actBtn.textContent = actionSpec.label;
+      actBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+        actionSpec.run();
+      });
+      toast.appendChild(actBtn);
+    }
+
     container.appendChild(toast);
     setTimeout(function() {
       toast.style.opacity = '0';
@@ -268,7 +396,41 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       setTimeout(function() {
         if (toast.parentNode) toast.parentNode.removeChild(toast);
       }, 220);
-    }, durationMs || 3500);
+    }, durationMs || (actionSpec ? 5500 : 3500));
+  }
+
+  function archiveAndOfferUndo(kindPlural, itemId) {
+    var sKind = singularKind(kindPlural);
+    var dict = i18n[lang] || i18n.en;
+    callKernelAction('archive-item', { kind: sKind, id: itemId }).then(function(res) {
+      if (res.ok) {
+        if (res.snapshot) snapshot = res.snapshot;
+        if (selectedCapability && selectedCapability.item && selectedCapability.item.id === itemId) {
+          selectedCapability = null;
+        }
+        renderTelemetry();
+        renderCapabilitiesTable();
+        renderInspector();
+        showToast('success', (lang === 'zh' ? '已归档 ' : 'Archived ') + itemId, 5500, {
+          label: dict.undoArchive,
+          run: function() {
+            callKernelAction('restore-item', { kind: sKind, id: itemId }).then(function(rRes) {
+              if (rRes.ok) {
+                if (rRes.snapshot) snapshot = rRes.snapshot;
+                renderTelemetry();
+                renderCapabilitiesTable();
+                renderInspector();
+                showToast('success', (lang === 'zh' ? '已恢复 ' : 'Restored ') + itemId);
+              } else {
+                showToast('error', rRes.error || 'Restore failed');
+              }
+            });
+          }
+        });
+      } else {
+        showToast('error', res.error || 'Archive failed');
+      }
+    });
   }
 
   // ==========================================
@@ -327,11 +489,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       el('bento-saved-detail').textContent = (savings.afterTokens || 0).toLocaleString() + ' tok vs ' + (savings.beforeTokens || 0).toLocaleString() + ' tok';
     }
 
-    // 3. Core Rule Budget (1500 tokens limit)
+    // 3. Core Rule Budget (1500 tokens limit — dynamically summed from active core rules)
     var coreTokens = savings.evoSeedTokens || 0;
-    if (coreTokens === 0 && snapshot.rules) {
+    if (Array.isArray(snapshot.rules)) {
       coreTokens = snapshot.rules
-        .filter(function(r) { return r.core; })
+        .filter(function(r) { return r.core && r.enabled !== false; })
         .reduce(function(acc, r) {
           return acc + (r.token_count || r.tokens || Math.ceil((r.l0_summary || '').length / 4));
         }, 0);
@@ -360,11 +522,10 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     var treemap = el('micro-treemap');
     if (treemap) {
       treemap.innerHTML = '';
-      var toolCount = (snapshot.tools || []).length;
-      var skillCount = (snapshot.skills || []).length;
-      var memoryCount = (snapshot.memories || []).length;
-      var ruleCount = (snapshot.rules || []).length;
-      var totalCaps = Math.max(1, toolCount + skillCount + memoryCount + ruleCount);
+      var toolCount = (snapshot.tools || []).filter(function(x) { return x.enabled !== false; }).length;
+      var skillCount = (snapshot.skills || []).filter(function(x) { return x.enabled !== false; }).length;
+      var memoryCount = (snapshot.memories || []).filter(function(x) { return x.enabled !== false; }).length;
+      var ruleCount = (snapshot.rules || []).filter(function(x) { return x.enabled !== false; }).length;
 
       var segs = [
         { name: 'Tools', count: toolCount, color: '#10b981' },
@@ -392,13 +553,135 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     var gkCount = (snapshot.gatekeeperEvents ? snapshot.gatekeeperEvents.length : 0);
     if (el('badge-count-gk')) el('badge-count-gk').textContent = String(gkCount);
 
-    // Topbar workspace
+    // Topbar workspace with smart middle truncation preserving folder name
     var wsRoot = score.workspaceRoot || '~/workspace';
     if (isAnon) wsRoot = '~/workspace';
     if (el('topbar-ws-path')) {
-      el('topbar-ws-path').textContent = wsRoot;
+      el('topbar-ws-path').textContent = formatWorkspaceDisplayPath(wsRoot);
       el('topbar-ws-path').title = wsRoot;
     }
+    if (el('topbar-workspace-pill')) {
+      el('topbar-workspace-pill').title = wsRoot;
+    }
+
+    renderHealthDiagnosticsBanner(coreTokens);
+  }
+
+  function renderHealthDiagnosticsBanner(coreTokens) {
+    var banner = el('health-diagnostics-banner');
+    if (!banner) return;
+    if (!healthDiagExpanded) {
+      banner.style.display = 'none';
+      return;
+    }
+    banner.style.display = 'flex';
+    var staleMems = (snapshot.memories || []).filter(function(m) {
+      return m.enabled !== false && m.freshness && m.freshness.overall_status === 'STALE';
+    });
+    var unprotHotspots = ((snapshot.score && snapshot.score.gitHotspots) || []).filter(function(h) {
+      return h.unprotected;
+    });
+    var pendingCount = countPendingCapabilities();
+    var itemsHtml = [];
+
+    if (staleMems.length > 0) {
+      itemsHtml.push(
+        '<div class="diag-chip diag-chip-danger" data-diag-action="filter-stale">' +
+          '<span>⚠️ ' + (lang === 'zh' ? (staleMems.length + ' 条记忆因代码变更已失效 (STALE)') : (staleMems.length + ' AST memories drifted (STALE)')) + '</span>' +
+          '<span class="diag-chip-cta">' + (lang === 'zh' ? '筛选修复 →' : 'Filter →') + '</span>' +
+        '</div>'
+      );
+    }
+    if (unprotHotspots.length > 0) {
+      itemsHtml.push(
+        '<div class="diag-chip diag-chip-warn" data-diag-action="goto-hotspots">' +
+          '<span>🔥 ' + (lang === 'zh' ? (unprotHotspots.length + ' 个高频故障文件缺少 AST 记忆护栏') : (unprotHotspots.length + ' fragile git hotspots unprotected')) + '</span>' +
+          '<span class="diag-chip-cta">' + (lang === 'zh' ? '查看热点 →' : 'Inspect →') + '</span>' +
+        '</div>'
+      );
+    }
+    if (coreTokens >= 1200) {
+      itemsHtml.push(
+        '<div class="diag-chip diag-chip-warn" data-diag-action="filter-core">' +
+          '<span>📦 ' + (lang === 'zh' ? ('核心规则占用 ' + coreTokens + '/1500 tok') : ('Core rules using ' + coreTokens + '/1500 tok')) + '</span>' +
+          '<span class="diag-chip-cta">' + (lang === 'zh' ? '按体积排查 →' : 'Sort by size →') + '</span>' +
+        '</div>'
+      );
+    }
+    if (pendingCount > 0) {
+      itemsHtml.push(
+        '<div class="diag-chip diag-chip-info" data-diag-action="filter-pending">' +
+          '<span>🔔 ' + (lang === 'zh' ? (pendingCount + ' 项新演化能力待您审核确认') : (pendingCount + ' newly evolved items pending review')) + '</span>' +
+          '<span class="diag-chip-cta">' + (lang === 'zh' ? '立即审核 →' : 'Review →') + '</span>' +
+        '</div>'
+      );
+    }
+    if (itemsHtml.length === 0) {
+      itemsHtml.push(
+        '<div class="diag-chip diag-chip-ok">' +
+          '<span>✅ ' + (lang === 'zh' ? '工作区全部指标健康，无失效记忆或预算超标' : 'All workspace health metrics are optimal') + '</span>' +
+        '</div>'
+      );
+    }
+
+    banner.innerHTML =
+      '<div class="diag-banner-hdr">' +
+        '<strong>' + (lang === 'zh' ? '🩺 健康度诊断与一键修复向导' : '🩺 Health Score Diagnostics & Quick Fixes') + '</strong>' +
+        '<button type="button" class="btn-action" id="btn-close-diag-banner" style="padding:1px 7px;font-size:11px;">✕</button>' +
+      '</div>' +
+      '<div class="diag-chips-row">' + itemsHtml.join('') + '</div>';
+
+    var closeBtn = banner.querySelector('#btn-close-diag-banner');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function() {
+        healthDiagExpanded = false;
+        banner.style.display = 'none';
+      });
+    }
+    banner.querySelectorAll('[data-diag-action]').forEach(function(chip) {
+      chip.addEventListener('click', function() {
+        var act = chip.getAttribute('data-diag-action');
+        if (act === 'filter-stale') {
+          applyQuickFilter('memories', 'stale', false);
+        } else if (act === 'goto-hotspots') {
+          switchView('hotspots');
+        } else if (act === 'filter-core') {
+          applyQuickFilter('rules', 'core', true);
+        } else if (act === 'filter-pending') {
+          applyQuickFilter('all', 'pending', false);
+        }
+      });
+    });
+  }
+
+  function countPendingCapabilities() {
+    var total = 0;
+    ['rules', 'skills', 'tools', 'memories'].forEach(function(k) {
+      (snapshot[k] || []).forEach(function(it) {
+        if (it.review_status === 'pending') total++;
+      });
+    });
+    return total;
+  }
+
+  function applyQuickFilter(kindVal, statusVal, sortByTokens) {
+    switchView('capabilities');
+    activeCapsKind = kindVal || 'all';
+    activeCapsStatus = statusVal || 'all';
+    capsSortByTokens = Boolean(sortByTokens);
+    var kp = el('caps-kind-pills');
+    if (kp) {
+      kp.querySelectorAll('.filter-pill').forEach(function(p) {
+        p.classList.toggle('active', (p.getAttribute('data-kind') || 'all') === activeCapsKind);
+      });
+    }
+    var sp = el('caps-status-pills');
+    if (sp) {
+      sp.querySelectorAll('.filter-pill').forEach(function(p) {
+        p.classList.toggle('active', (p.getAttribute('data-status') || 'all') === activeCapsStatus);
+      });
+    }
+    renderCapabilitiesTable();
   }
 
   // ==========================================
@@ -408,40 +691,95 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     var tbody = el('capabilities-table-body');
     var emptyState = el('caps-empty-state');
     var countLabel = el('caps-count-label');
+    var dict = i18n[lang] || i18n.en;
     if (!tbody) return;
     tbody.innerHTML = '';
 
-    var kinds = ['rules', 'skills', 'tools', 'memories'];
+    var pendingCount = countPendingCapabilities();
+    var archivedCount = (snapshot.archived || []).length;
+    var staleList = [];
+    (snapshot.memories || []).forEach(function(m) {
+      if (m.enabled !== false && m.freshness && m.freshness.overall_status === 'STALE') {
+        staleList.push({ kind: 'memory', id: m.id });
+      }
+    });
+
+    var pillPending = el('pill-status-pending');
+    if (pillPending) {
+      pillPending.textContent = dict.statusPending + (pendingCount > 0 ? ' (' + pendingCount + ')' : '');
+    }
+    var pillArchived = el('pill-status-archived');
+    if (pillArchived) {
+      pillArchived.textContent = dict.statusArchived + (archivedCount > 0 ? ' (' + archivedCount + ')' : '');
+    }
+
+    var btnApproveAll = el('btn-batch-approve-pending');
+    if (btnApproveAll) {
+      btnApproveAll.style.display = pendingCount > 0 ? 'inline-flex' : 'none';
+      btnApproveAll.textContent = dict.batchApprovePending + ' (' + pendingCount + ')';
+    }
+    var btnPauseStale = el('btn-batch-pause-stale');
+    if (btnPauseStale) {
+      btnPauseStale.style.display = staleList.length > 0 ? 'inline-flex' : 'none';
+      btnPauseStale.textContent = dict.batchPauseStale + ' (' + staleList.length + ')';
+    }
+
     var q = (capsSearchQuery || '').toLowerCase().trim();
     var rows = [];
 
-    kinds.forEach(function(k) {
-      if (activeCapsKind !== 'all' && activeCapsKind !== k) return;
-      var list = snapshot[k] || [];
-      list.forEach(function(item) {
-        var isCore = (k === 'rules') ? Boolean(item.core) : false;
-        var memStatus = item.freshness ? item.freshness.overall_status : (k === 'memories' ? 'VERIFIED' : '');
-
-        if (activeCapsStatus === 'verified' && memStatus !== 'VERIFIED') return;
-        if (activeCapsStatus === 'stale' && memStatus !== 'STALE') return;
-        if (activeCapsStatus === 'core' && (!isCore || k !== 'rules')) return;
-        if (activeCapsStatus === 'scoped' && (isCore || k !== 'rules')) return;
-
+    if (activeCapsStatus === 'archived') {
+      (snapshot.archived || []).forEach(function(arc) {
+        var kPlural = arc.kind === 'memory' ? 'memories' : (arc.kind + 's');
+        if (activeCapsKind !== 'all' && activeCapsKind !== kPlural) return;
         if (q) {
-          var str = [
-            item.id || '',
-            item.title || item.name || '',
-            item.l0_summary || item.description || '',
-            item.symptom || '',
-            item.scope_glob || '',
-            (item.target_symbols || []).join(' ')
-          ].join(' ').toLowerCase();
-          if (str.indexOf(q) === -1) return;
+          var sArc = [arc.id || '', arc.title || '', arc.l0_summary || ''].join(' ').toLowerCase();
+          if (sArc.indexOf(q) === -1) return;
         }
-
-        rows.push({ kind: k, item: item });
+        rows.push({ kind: kPlural, item: arc, isArchived: true });
       });
-    });
+    } else {
+      var kinds = ['rules', 'skills', 'tools', 'memories'];
+      kinds.forEach(function(k) {
+        if (activeCapsKind !== 'all' && activeCapsKind !== k) return;
+        var list = snapshot[k] || [];
+        list.forEach(function(item) {
+          var isCore = (k === 'rules') ? Boolean(item.core) : false;
+          var isEnabled = item.enabled !== false;
+          var isPending = item.review_status === 'pending';
+          var memStatus = item.freshness ? item.freshness.overall_status : (k === 'memories' ? 'VERIFIED' : '');
+
+          if (activeCapsStatus === 'pending' && !isPending) return;
+          if (activeCapsStatus === 'active' && !isEnabled) return;
+          if (activeCapsStatus === 'paused' && isEnabled) return;
+          if (activeCapsStatus === 'verified' && memStatus !== 'VERIFIED') return;
+          if (activeCapsStatus === 'stale' && memStatus !== 'STALE') return;
+          if (activeCapsStatus === 'core' && (!isCore || k !== 'rules')) return;
+          if (activeCapsStatus === 'scoped' && (isCore || k !== 'rules')) return;
+
+          if (q) {
+            var str = [
+              item.id || '',
+              item.title || item.name || '',
+              item.l0_summary || item.description || '',
+              item.symptom || '',
+              item.scope_glob || '',
+              (item.target_symbols || []).join(' ')
+            ].join(' ').toLowerCase();
+            if (str.indexOf(q) === -1) return;
+          }
+
+          rows.push({ kind: k, item: item, isArchived: false });
+        });
+      });
+    }
+
+    if (capsSortByTokens) {
+      rows.sort(function(a, b) {
+        var ta = a.item.tokens || a.item.token_count || 0;
+        var tb = b.item.tokens || b.item.token_count || 0;
+        return tb - ta;
+      });
+    }
 
     if (countLabel) countLabel.textContent = rows.length + ' items';
 
@@ -454,8 +792,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     rows.forEach(function(row) {
       var k = row.kind;
       var it = row.item;
+      var isArchived = Boolean(row.isArchived);
+      var isEnabled = it.enabled !== false;
+      var isPending = it.review_status === 'pending';
       var tr = document.createElement('tr');
-      tr.className = 'row-interactive';
+      tr.className = 'row-interactive' + (!isEnabled && !isArchived ? ' row-paused' : '');
       tr.setAttribute('data-kind', k);
       tr.setAttribute('data-id', it.id);
       if (selectedCapability && selectedCapability.item && selectedCapability.item.id === it.id) {
@@ -465,16 +806,25 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       var kindBadge = '<span class="badge-kind">' + formatKind(k) + '</span>';
       var titleText = esc(it.title || it.name || it.id || '');
       var idText = esc(it.id || '');
+      var summaryRaw = String(it.l0_summary || it.description || '').trim();
+      var summaryHtml = summaryRaw && summaryRaw !== (it.title || it.name || '')
+        ? '<div class="item-sub-summary" title="' + esc(summaryRaw) + '">' + esc(summaryRaw) + '</div>'
+        : '';
       var titleCol = '<div class="item-title-wrap">' +
-        '<span class="item-main-title">' + titleText + '</span>' +
-        '<span class="item-sub-id">' + idText + '</span>' +
+        '<div class="item-title-line">' +
+          '<span class="item-main-title" title="' + titleText + '">' + titleText + '</span>' +
+          '<span class="item-sub-id" title="' + idText + '">' + idText + '</span>' +
+        '</div>' +
+        summaryHtml +
         '</div>';
 
       var statusCol = '';
       if (k === 'rules') {
+        var globVal = it.scope_glob || '*';
+        var tokBadge = it.tokens ? ' <span style="color:#71717a;">· ' + it.tokens + 't</span>' : '';
         statusCol = it.core
-          ? '<span class="badge-status"><span class="dot dot-ok"></span> CORE</span>'
-          : '<span class="badge-status">SCOPED <span style="color:#71717a;">(' + esc(it.scope_glob || '*') + ')</span></span>';
+          ? '<span class="badge-status"><span class="dot dot-ok"></span> CORE' + tokBadge + '</span>'
+          : '<span class="badge-status badge-scoped" title="' + esc(globVal) + '">SCOPED <span class="scoped-glob-text">(' + esc(globVal) + ')</span></span>';
       } else if (k === 'memories') {
         var st = (it.freshness && it.freshness.overall_status) || 'VERIFIED';
         var dotCls = st === 'VERIFIED' ? 'dot-ok' : (st === 'STALE' ? 'dot-danger' : 'dot-warn');
@@ -486,15 +836,29 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       }
 
       var hits = it.hit_count || 0;
-      var attr = it.attribution || 'unverified';
-      var attrDot = attr === 'helped' ? 'dot-ok' : (attr === 'hurt' ? 'dot-danger' : (attr === 'contested' ? 'dot-warn' : ''));
-      var attrHtml = '<span class="badge-status">' +
-        (attrDot ? '<span class="dot ' + attrDot + '"></span> ' : '') +
-        attr + ' · ' + hits + 'h</span>';
+      var attrHtml = '';
+      if (isArchived) {
+        attrHtml = '<span class="badge-status">' + esc(dict.badgeArchived) + '</span>';
+      } else if (!isEnabled) {
+        attrHtml = '<span class="badge-status" style="color:var(--text-muted);">' + esc(dict.badgePaused) + '</span>';
+      } else if (isPending) {
+        attrHtml = '<span class="badge-status" style="border-color:var(--status-warn-border);color:var(--status-warn);">' + esc(dict.badgePending) + '</span>';
+      } else {
+        attrHtml = '<span class="badge-status">' + esc(dict.badgeEnabled) + ' · ' + hits + ' ' + esc(dict.hitsSuffix) + '</span>';
+      }
 
-      var actionCol = '<div style="text-align: right; display: flex; gap: 6px; justify-content: flex-end;">' +
-        '<button type="button" class="btn-action row-inspect-btn" data-kind="' + k + '" data-id="' + esc(it.id) + '">Inspect</button>' +
+      var actionCol = '';
+      if (isArchived) {
+        actionCol = '<div class="row-actions-wrap">' +
+          '<button type="button" class="btn-action row-restore-btn" data-kind="' + k + '" data-id="' + esc(it.id) + '">' + esc(dict.restore) + '</button>' +
         '</div>';
+      } else {
+        actionCol = '<div class="row-actions-wrap">' +
+          (isPending ? '<button type="button" class="btn-action row-approve-btn" style="border-color:var(--status-ok-border);color:var(--status-ok);" title="Approve">' + esc(dict.approve) + '</button>' : '') +
+          '<button type="button" class="btn-action row-toggle-btn" title="' + esc(isEnabled ? dict.pauseItem : dict.resumeItem) + '">' + esc(isEnabled ? dict.pauseItem : dict.resumeItem) + '</button>' +
+          '<button type="button" class="btn-action btn-danger row-archive-btn" title="' + esc(dict.archive) + '">⌫</button>' +
+        '</div>';
+      }
 
       tr.innerHTML = '<td>' + kindBadge + '</td>' +
         '<td>' + titleCol + '</td>' +
@@ -503,17 +867,79 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         '<td>' + actionCol + '</td>';
 
       tr.addEventListener('click', function(e) {
-        if (e.target.closest('.row-inspect-btn')) {
-          e.stopPropagation();
+        if (e.target.closest('.row-actions-wrap')) {
+          return;
         }
         selectCapability(k, it);
       });
 
-      var inspectBtn = tr.querySelector('.row-inspect-btn');
-      if (inspectBtn) {
-        inspectBtn.addEventListener('click', function(e) {
+      var approveBtn = tr.querySelector('.row-approve-btn');
+      if (approveBtn) {
+        approveBtn.addEventListener('click', function(e) {
           e.stopPropagation();
-          selectCapability(k, it);
+          callKernelAction('approve-item', { kind: singularKind(k), id: it.id }).then(function(res) {
+            if (res.ok) {
+              if (res.snapshot) snapshot = res.snapshot;
+              else it.review_status = 'approved';
+              renderTelemetry();
+              renderCapabilitiesTable();
+              if (selectedCapability && selectedCapability.item && selectedCapability.item.id === it.id) {
+                selectedCapability.item.review_status = 'approved';
+                renderInspector();
+              }
+              showToast('success', (lang === 'zh' ? '已确认 ' : 'Approved ') + it.id);
+            } else {
+              showToast('error', res.error || 'Approve failed');
+            }
+          });
+        });
+      }
+
+      var toggleBtn = tr.querySelector('.row-toggle-btn');
+      if (toggleBtn) {
+        toggleBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var nextEnabled = it.enabled === false;
+          callKernelAction('toggle-enabled', { kind: singularKind(k), id: it.id, enabled: nextEnabled }).then(function(res) {
+            if (res.ok) {
+              if (res.snapshot) snapshot = res.snapshot;
+              else it.enabled = nextEnabled;
+              renderTelemetry();
+              renderCapabilitiesTable();
+              if (selectedCapability && selectedCapability.item && selectedCapability.item.id === it.id) {
+                selectedCapability.item.enabled = nextEnabled;
+                renderInspector();
+              }
+              showToast('success', (nextEnabled ? (lang === 'zh' ? '已启用 ' : 'Enabled ') : (lang === 'zh' ? '已搁置 ' : 'Paused ')) + it.id);
+            } else {
+              showToast('error', res.error || 'Toggle failed');
+            }
+          });
+        });
+      }
+
+      var archiveBtn = tr.querySelector('.row-archive-btn');
+      if (archiveBtn) {
+        archiveBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          archiveAndOfferUndo(k, it.id);
+        });
+      }
+
+      var restoreBtn = tr.querySelector('.row-restore-btn');
+      if (restoreBtn) {
+        restoreBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          callKernelAction('restore-item', { kind: singularKind(k), id: it.id }).then(function(res) {
+            if (res.ok) {
+              if (res.snapshot) snapshot = res.snapshot;
+              renderTelemetry();
+              renderCapabilitiesTable();
+              showToast('success', (lang === 'zh' ? '已从回收站恢复 ' : 'Restored ') + it.id);
+            } else {
+              showToast('error', res.error || 'Restore failed');
+            }
+          });
         });
       }
 
@@ -530,9 +956,9 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     svg.innerHTML = '';
     var ns = 'http://www.w3.org/2000/svg';
 
-    var rules = snapshot.rules || [];
-    var skills = snapshot.skills || [];
-    var memories = snapshot.memories || [];
+    var rules = (snapshot.rules || []).filter(function(r) { return r.enabled !== false; });
+    var skills = (snapshot.skills || []).filter(function(s) { return s.enabled !== false; });
+    var memories = (snapshot.memories || []).filter(function(m) { return m.enabled !== false; });
 
     var leftNodes = [];
     rules.forEach(function(r) {
@@ -544,6 +970,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
 
     var midNodes = [];
     var rightMap = {};
+    var rightFileSet = {};
     var rightNodes = [];
 
     memories.forEach(function(m) {
@@ -560,30 +987,43 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       var fps = m.ast_fingerprints || {};
       var syms = m.target_symbols || [];
       syms.forEach(function(sym) {
-        if (!rightMap[sym]) {
-          rightMap[sym] = {
-            id: 'ast:' + sym,
-            label: sym.replace(/^.*[\\\\/]/, ''),
-            sub: sym,
-            fullSymbol: sym,
+        var normSym = String(sym || '').replace(/\\\\/g, '/');
+        var fileOnly = normSym.split('#')[0];
+        rightFileSet[fileOnly] = normSym;
+        if (!rightMap[normSym]) {
+          var fpEntry = fps[sym] || fps[normSym] || {};
+          var hashStr = fpEntry.ast_hash || fpEntry.structural_hash || '';
+          var symTail = normSym.indexOf('#') !== -1 ? normSym.split('#').slice(1).join('#') : normSym.replace(/^.*[\\\\/]/, '');
+          var fileBase = fileOnly.replace(/^.*[\\\\/]/, '');
+          rightMap[normSym] = {
+            id: 'ast:' + normSym,
+            label: symTail && symTail !== fileBase ? (fileBase + '#' + symTail) : fileBase,
+            sub: hashStr ? (fileOnly + ' · ' + hashStr.slice(0, 8)) : fileOnly,
+            fullSymbol: normSym,
+            fileOnly: fileOnly,
             callers: (m.freshness && m.freshness.callers) || []
           };
-          rightNodes.push(rightMap[sym]);
+          rightNodes.push(rightMap[normSym]);
         }
       });
       Object.keys(fps).forEach(function(k) {
         var fp = fps[k] || {};
-        var fpath = fp.file_path || fp.file;
-        if (fpath && !rightMap[fpath]) {
-          rightMap[fpath] = {
-            id: 'ast:' + fpath,
-            label: fpath.replace(/^.*[\\\\/]/, ''),
-            sub: fp.structural_hash ? fp.structural_hash.slice(0, 16) : fpath,
-            fullSymbol: fpath,
-            callers: []
-          };
-          rightNodes.push(rightMap[fpath]);
+        var fpath = String(fp.file_path || fp.file || '').replace(/\\\\/g, '/');
+        var normKey = String(k || '').replace(/\\\\/g, '/');
+        if (!fpath || rightMap[normKey] || rightMap[fpath] || rightFileSet[fpath]) {
+          return;
         }
+        var hashVal = fp.ast_hash || fp.structural_hash || '';
+        rightFileSet[fpath] = fpath;
+        rightMap[fpath] = {
+          id: 'ast:' + fpath,
+          label: fpath.replace(/^.*[\\\\/]/, ''),
+          sub: hashVal ? (fpath + ' · ' + hashVal.slice(0, 8)) : fpath,
+          fullSymbol: fpath,
+          fileOnly: fpath,
+          callers: []
+        };
+        rightNodes.push(rightMap[fpath]);
       });
     });
 
@@ -635,11 +1075,12 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
 
     midNodes.forEach(function(mn) {
       rightNodes.forEach(function(rn) {
-        var syms = mn.raw.target_symbols || [];
+        var syms = (mn.raw.target_symbols || []).map(function(s) { return String(s || '').replace(/\\\\/g, '/'); });
         var fps = mn.raw.ast_fingerprints || {};
         var hasSym = syms.indexOf(rn.fullSymbol) !== -1;
         var hasFp = Object.keys(fps).some(function(k) {
-          return (fps[k] && (fps[k].file_path || fps[k].file)) === rn.fullSymbol;
+          var fpFile = String((fps[k] && (fps[k].file_path || fps[k].file)) || '').replace(/\\\\/g, '/');
+          return fpFile === rn.fullSymbol || fpFile === rn.fileOnly;
         });
         if (hasSym || hasFp) {
           addEdge(mn.id, rn.id, mn, rn);
@@ -684,6 +1125,10 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       g.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
       n.el = g;
 
+      var svgTitle = document.createElementNS(ns, 'title');
+      svgTitle.textContent = n.label + (n.sub ? ' (' + n.sub + ')' : '');
+      g.appendChild(svgTitle);
+
       var rect = document.createElementNS(ns, 'rect');
       rect.setAttribute('width', String(cardW));
       rect.setAttribute('height', String(cardH));
@@ -710,7 +1155,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       title.setAttribute('font-size', '11.5');
       title.setAttribute('font-weight', '500');
       title.setAttribute('class', 'topo-node-title');
-      title.textContent = n.label.length > 24 ? n.label.slice(0, 23) + '…' : n.label;
+      title.textContent = truncateVisual(n.label, 24);
       g.appendChild(title);
 
       var sub = document.createElementNS(ns, 'text');
@@ -719,7 +1164,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       sub.setAttribute('fill', '#71717a');
       sub.setAttribute('font-size', '9.5');
       sub.setAttribute('class', 'topo-node-sub');
-      sub.textContent = n.sub.length > 28 ? '…' + n.sub.slice(-27) : n.sub;
+      sub.textContent = truncateVisualTail(n.sub, 28);
       g.appendChild(sub);
 
       g.addEventListener('mouseenter', function() { applyFocusDimming(n.id); });
@@ -939,12 +1384,12 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       var timeStr = esc((ev.timestamp || '').replace('T', ' ').slice(0, 19));
 
       var topHtml = '<div class="gk-event-hdr">' +
-        '<div style="display:flex; align-items:center; gap:8px;">' +
-        '<span class="badge-kind">' + formatKind(ev.kind) + '</span>' +
-        '<strong style="color:var(--text-primary); font-family:var(--font-mono);">' + esc(ev.target_id || '') + '</strong>' +
-        (ev.stage_failed ? '<span style="color:var(--status-danger); font-size:11px;">[' + esc(ev.stage_failed) + ']</span>' : '') +
+        '<div style="display:flex; align-items:center; gap:8px; min-width:0; overflow:hidden; flex:1;">' +
+        '<span class="badge-kind" style="flex-shrink:0;">' + formatKind(ev.kind) + '</span>' +
+        '<strong style="color:var(--text-primary); font-family:var(--font-mono); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc(ev.target_id || '') + '">' + esc(ev.target_id || '') + '</strong>' +
+        (ev.stage_failed ? '<span style="color:var(--status-danger); font-size:11px; flex-shrink:0;">[' + esc(ev.stage_failed) + ']</span>' : '') +
         '</div>' +
-        '<div style="display:flex; align-items:center; gap:8px;">' +
+        '<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">' +
         '<span class="badge-status"><span class="dot ' + dotCls + '"></span> ' + (ev.passed ? 'PASS' : 'REJECT') + '</span>' +
         '<span style="color:var(--text-muted); font-size:11px;">' + timeStr + '</span>' +
         '</div>' +
@@ -988,26 +1433,33 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     var kind = selectedCapability.kind;
     var item = selectedCapability.item;
     var dict = i18n[lang] || i18n.en;
+    var isPaused = item.enabled === false;
+    var isPending = item.review_status === 'pending';
 
     // 1. Header
     var header = document.createElement('div');
     header.className = 'inspector-header';
     var fresh = (item.freshness && item.freshness.overall_status) || (kind === 'memories' ? 'VERIFIED' : '');
     var statusBadge = '';
-    if (fresh) {
+    if (isPaused) {
+      statusBadge = '<span class="badge-status" style="color:var(--text-muted);"><span class="dot"></span> ' + esc(dict.pausedBadge) + '</span>';
+    } else if (fresh) {
       var sDot = fresh === 'VERIFIED' ? 'dot-ok' : (fresh === 'STALE' ? 'dot-danger' : 'dot-warn');
       statusBadge = '<span class="badge-status"><span class="dot ' + sDot + '"></span> ' + esc(fresh) + '</span>';
     } else if (kind === 'rules') {
       statusBadge = item.core
         ? '<span class="badge-status"><span class="dot dot-ok"></span> CORE</span>'
-        : '<span class="badge-status">SCOPED</span>';
+        : '<span class="badge-status badge-scoped">SCOPED</span>';
     } else if (kind === 'tools') {
       statusBadge = '<span class="badge-status">SANDBOX</span>';
     }
+    var pendingBadge = isPending
+      ? ' <span class="badge-status" style="color:var(--status-warn); border-color:var(--status-warn-border); background:var(--status-warn-bg);">' + esc(dict.pendingBadge) + '</span>'
+      : '';
 
     var topRow = document.createElement('div');
     topRow.className = 'inspector-top-row';
-    topRow.innerHTML = '<div class="inspector-badges"><span class="badge-kind">' + formatKind(kind) + '</span>' + statusBadge + '</div>';
+    topRow.innerHTML = '<div class="inspector-badges"><span class="badge-kind">' + formatKind(kind) + '</span>' + statusBadge + pendingBadge + '</div>';
 
     var btnClose = document.createElement('button');
     btnClose.type = 'button';
@@ -1038,6 +1490,51 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     // 2. Action Toolbar
     var toolbar = document.createElement('div');
     toolbar.className = 'inspector-toolbar';
+
+    // Button: Approve (if pending)
+    if (isPending) {
+      var btnApprove = document.createElement('button');
+      btnApprove.type = 'button';
+      btnApprove.className = 'btn-action';
+      btnApprove.style.color = 'var(--status-ok)';
+      btnApprove.style.borderColor = 'var(--status-ok-border)';
+      btnApprove.textContent = dict.approveBtn;
+      btnApprove.addEventListener('click', function() {
+        callKernelAction('approve-item', { kind: kind.replace(/s$/, ''), id: item.id }).then(function(res) {
+          if (res.ok) {
+            item.review_status = 'approved';
+            if (res.snapshot) snapshot = res.snapshot;
+            renderTelemetry();
+            renderCapabilitiesTable();
+            renderInspector();
+            showToast('success', 'Approved ' + item.id);
+          }
+        });
+      });
+      toolbar.appendChild(btnApprove);
+    }
+
+    // Button: Pause / Enable
+    var btnPause = document.createElement('button');
+    btnPause.type = 'button';
+    btnPause.className = 'btn-action';
+    btnPause.textContent = isPaused ? dict.enableBtn : dict.pauseBtn;
+    btnPause.addEventListener('click', function() {
+      var nextEnabled = isPaused ? true : false;
+      callKernelAction('toggle-enabled', { kind: kind.replace(/s$/, ''), id: item.id, enabled: nextEnabled }).then(function(res) {
+        if (res.ok) {
+          item.enabled = nextEnabled;
+          if (res.snapshot) snapshot = res.snapshot;
+          renderTelemetry();
+          renderCapabilitiesTable();
+          renderInspector();
+          showToast('success', (nextEnabled ? 'Enabled ' : 'Paused ') + item.id);
+        } else {
+          showToast('error', res.error || 'Failed to toggle status');
+        }
+      });
+    });
+    toolbar.appendChild(btnPause);
 
     // Button: Open in IDE
     var btnOpen = document.createElement('button');
@@ -1141,30 +1638,81 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     });
     toolbar.appendChild(btnEdit);
 
-    // Button: Archive
+    // Button: Archive (No window.confirm — uses Undo Toast for Webview compatibility)
     var btnArchive = document.createElement('button');
     btnArchive.type = 'button';
     btnArchive.className = 'btn-action btn-danger';
     btnArchive.textContent = dict.archive;
     btnArchive.addEventListener('click', function() {
-      if (confirm('Archive capability "' + item.id + '" to .evo/archive/?')) {
-        callKernelAction('archive-item', { kind: kind.replace(/s$/, ''), id: item.id }).then(function(res) {
-          if (res.ok) {
-            showToast('success', 'Archived ' + item.id);
-            selectedCapability = null;
-            renderInspector();
-            renderCapabilitiesTable();
-          } else {
-            showToast('error', res.error || 'Archive failed');
-          }
-        });
-      }
+      archiveAndOfferUndo(kind, item.id);
     });
     toolbar.appendChild(btnArchive);
 
     content.appendChild(toolbar);
 
-    // 3. AST Anchors Section (Memories)
+    // 2.5 One-Sentence Core Takeaway (TL;DR Card) for all capability types
+    var tldrText = item.l0_summary || item.description || item.title || '';
+    if (tldrText && inspectorMode !== 'edit') {
+      var tldrSection = document.createElement('div');
+      tldrSection.className = 'inspector-section';
+      tldrSection.innerHTML =
+        '<div class="tldr-card">' +
+          '<div class="tldr-card-label">' + esc(dict.tldrLabel) + '</div>' +
+          '<div class="tldr-card-body">' + formatRichText(tldrText) + '</div>' +
+        '</div>';
+      content.appendChild(tldrSection);
+    }
+
+    // 2.8 STALE / OTHER_BRANCH Action Banner (Memories)
+    if (kind === 'memories' && (fresh === 'STALE' || fresh === 'OTHER_BRANCH')) {
+      var staleBanner = document.createElement('div');
+      staleBanner.className = 'inspector-section';
+      staleBanner.innerHTML =
+        '<div class="stale-action-banner">' +
+          '<div class="stale-action-text">' + esc(dict.staleBannerText) + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' +
+            '<button type="button" class="btn-action" id="btn-rebind-ast" style="color:var(--status-ok);border-color:var(--status-ok-border);">' + esc(dict.rebindAstBtn) + '</button>' +
+            '<button type="button" class="btn-action" id="btn-stale-pause">' + esc(isPaused ? dict.enableBtn : dict.pauseBtn) + '</button>' +
+            '<button type="button" class="btn-action btn-danger" id="btn-stale-archive">' + esc(dict.archive) + '</button>' +
+          '</div>' +
+        '</div>';
+      content.appendChild(staleBanner);
+
+      var btnRebind = staleBanner.querySelector('#btn-rebind-ast');
+      if (btnRebind) {
+        btnRebind.addEventListener('click', function() {
+          btnRebind.textContent = dict.rebindingAst;
+          callKernelAction('rebind-memory-ast', { id: item.id }).then(function(res) {
+            btnRebind.textContent = dict.rebindAstBtn;
+            if (res.ok && res.snapshot) {
+              snapshot = res.snapshot;
+              var updated = (snapshot.memories || []).find(function(m) { return m.id === item.id; });
+              if (updated) selectedCapability.item = updated;
+              renderTelemetry();
+              renderCapabilitiesTable();
+              renderInspector();
+              showToast('success', 'AST re-bound to current branch');
+            } else {
+              showToast('error', res.error || 'Re-bind failed');
+            }
+          });
+        });
+      }
+      var btnStalePause = staleBanner.querySelector('#btn-stale-pause');
+      if (btnStalePause) {
+        btnStalePause.addEventListener('click', function() {
+          btnPause.click();
+        });
+      }
+      var btnStaleArchive = staleBanner.querySelector('#btn-stale-archive');
+      if (btnStaleArchive) {
+        btnStaleArchive.addEventListener('click', function() {
+          archiveAndOfferUndo(kind, item.id);
+        });
+      }
+    }
+
+    // 3. AST Anchors Section (Memories) — Deduplicated symbol & overflow protected
     if (kind === 'memories') {
       var anchors = (item.freshness && item.freshness.topology_anchors) || [];
       var astSection = document.createElement('div');
@@ -1175,10 +1723,16 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         var row = document.createElement('div');
         row.className = 'ast-anchor-card';
         var startLine = parseInt(String(anchor.lines || '1').split('-')[0].replace(/[^0-9]/g, ''), 10) || 1;
+        var rawSym = String(anchor.symbol || '');
+        var symName = rawSym.indexOf('#') !== -1
+          ? rawSym.split('#').slice(1).join('#')
+          : (rawSym !== anchor.file_path ? rawSym : '');
+        var fullRef = symName ? (anchor.file_path + '#' + symName) : anchor.file_path;
+
         row.innerHTML =
-          '<div class="ast-anchor-path">' +
-            '<span>' + esc(anchor.file_path) + '</span>' +
-            '<span class="ast-anchor-symbol">#' + esc(anchor.symbol) + '</span>' +
+          '<div class="ast-anchor-path" title="' + esc(fullRef) + '">' +
+            '<span class="ast-anchor-file">' + esc(anchor.file_path) + '</span>' +
+            (symName ? '<span class="ast-anchor-symbol">#' + esc(symName) + '</span>' : '') +
           '</div>' +
           '<div class="ast-anchor-meta">' +
             '<span>' + esc(anchor.lines || 'L1') + '</span>' +
@@ -1258,38 +1812,34 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         });
       });
     } else {
-      // Structured Bento Preview
+      // Structured Bento Preview with formatted inline code
       if (kind === 'memories' && (item.symptom || item.root_cause || item.solution)) {
         contentSection.innerHTML =
           '<div class="bento-card-preview" style="border-left:3px solid var(--status-danger);">' +
             '<div class="bento-card-label" style="color:var(--status-danger);">Symptom</div>' +
-            '<div class="bento-card-content">' + esc(item.symptom) + '</div>' +
+            '<div class="bento-card-content">' + formatRichText(item.symptom) + '</div>' +
           '</div>' +
           '<div class="bento-card-preview" style="border-left:3px solid var(--status-warn);">' +
             '<div class="bento-card-label" style="color:var(--status-warn);">Root Cause</div>' +
-            '<div class="bento-card-content">' + esc(item.root_cause) + '</div>' +
+            '<div class="bento-card-content">' + formatRichText(item.root_cause) + '</div>' +
           '</div>' +
           '<div class="bento-card-preview" style="border-left:3px solid var(--status-ok);">' +
             '<div class="bento-card-label" style="color:var(--status-ok);">Solution</div>' +
-            '<div class="bento-card-content">' + esc(item.solution) + '</div>' +
+            '<div class="bento-card-content">' + formatRichText(item.solution) + '</div>' +
           '</div>';
       } else if (kind === 'skills' && (item.l1_contract || item.l2_sop)) {
         contentSection.innerHTML =
           '<div class="bento-card-preview">' +
             '<div class="bento-card-label" style="color:var(--status-info);">L1 Contract</div>' +
-            '<div class="bento-card-content">' + esc(item.l1_contract) + '</div>' +
+            '<div class="bento-card-content">' + formatRichText(item.l1_contract) + '</div>' +
           '</div>' +
           '<div class="bento-card-preview">' +
             '<div class="bento-card-label" style="color:var(--status-ok);">L2 SOP</div>' +
-            '<div class="bento-card-content">' + esc(item.l2_sop) + '</div>' +
+            '<div class="bento-card-content">' + formatRichText(item.l2_sop) + '</div>' +
           '</div>';
       } else {
         contentSection.innerHTML =
-          '<div class="bento-card-preview">' +
-            '<div class="bento-card-label">Summary &amp; Description</div>' +
-            '<div class="bento-card-content">' + esc(item.l0_summary || item.description || '') + '</div>' +
-          '</div>' +
-          (item.content ? '<div class="bento-card-preview"><div class="bento-card-label">Content</div><div class="bento-card-content">' + esc(item.content) + '</div></div>' : '');
+          (item.content ? '<div class="bento-card-preview"><div class="bento-card-label">Content</div><div class="bento-card-content">' + formatRichText(item.content) + '</div></div>' : '');
       }
       content.appendChild(contentSection);
     }
@@ -1389,11 +1939,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         row.className = 'cmd-item';
         var kLabel = formatKind(c.kind);
         row.innerHTML =
-          '<div style="display:flex;align-items:center;gap:8px;">' +
-            '<span class="badge-kind">' + esc(kLabel) + '</span>' +
-            '<span>' + esc(c.title || c.id) + '</span>' +
+          '<div style="display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;flex:1;">' +
+            '<span class="badge-kind" style="flex-shrink:0;">' + esc(kLabel) + '</span>' +
+            '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(c.title || c.id) + '</span>' +
           '</div>' +
-          '<span class="kbd-shortcut">' + esc(c.id) + '</span>';
+          '<span class="kbd-shortcut" style="flex-shrink:0;">' + esc(c.id) + '</span>';
 
         var actionObj = {
           execute: function() {
@@ -1421,11 +1971,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         var row = document.createElement('div');
         row.className = 'cmd-item';
         row.innerHTML =
-          '<div style="display:flex;align-items:center;gap:8px;">' +
-            '<span class="badge-status" style="color:var(--status-warn);"><span class="dot dot-warn"></span> HOTSPOT</span>' +
-            '<span>' + esc(h.filePath) + '</span>' +
+          '<div style="display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;flex:1;">' +
+            '<span class="badge-status" style="color:var(--status-warn);flex-shrink:0;"><span class="dot dot-warn"></span> HOTSPOT</span>' +
+            '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(h.filePath) + '</span>' +
           '</div>' +
-          '<span class="kbd-shortcut">f:' + h.fragilityScore + '</span>';
+          '<span class="kbd-shortcut" style="flex-shrink:0;">f:' + h.fragilityScore + '</span>';
 
         var actionObj = {
           execute: function() {
@@ -1486,6 +2036,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         sub: 'Switch localization dictionary',
         run: function() {
           lang = lang === 'en' ? 'zh' : 'en';
+          try { window.localStorage.setItem('evo_ui_lang', lang); } catch (e) {}
           applyI18n();
         }
       }
@@ -1505,11 +2056,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         var row = document.createElement('div');
         row.className = 'cmd-item';
         row.innerHTML =
-          '<div>' +
-            '<div>' + esc(gc.title) + '</div>' +
-            '<div style="font-size:11px;color:var(--text-muted);">' + esc(gc.sub) + '</div>' +
+          '<div style="min-width:0;overflow:hidden;flex:1;">' +
+            '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(gc.title) + '</div>' +
+            '<div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(gc.sub) + '</div>' +
           '</div>' +
-          '<span class="kbd-shortcut">↵</span>';
+          '<span class="kbd-shortcut" style="flex-shrink:0;">↵</span>';
 
         var actionObj = {
           execute: function() {
@@ -1595,6 +2146,25 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     });
   }
 
+  // 1.5 Left Rail Interactive Bento Cards (Health Diagnostics & Core Budget)
+  var bentoHealth = el('bento-health');
+  if (bentoHealth) {
+    bentoHealth.style.cursor = 'pointer';
+    bentoHealth.addEventListener('click', function() {
+      healthDiagExpanded = !healthDiagExpanded;
+      switchView('capabilities');
+      renderHealthDiagnosticsBanner();
+    });
+  }
+
+  var bentoBudget = el('bento-budget');
+  if (bentoBudget) {
+    bentoBudget.style.cursor = 'pointer';
+    bentoBudget.addEventListener('click', function() {
+      applyQuickFilter('rules', 'core', true);
+    });
+  }
+
   // 2. Capabilities Kind & Status Pills
   var kindPillGroup = el('caps-kind-pills');
   var statusPillGroup = el('caps-status-pills');
@@ -1604,16 +2174,17 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       var pill = e.target.closest('.filter-pill');
       if (!pill) return;
       activeCapsKind = pill.getAttribute('data-kind') || 'all';
+      capsSortByTokens = false;
       kindPillGroup.querySelectorAll('.filter-pill').forEach(function(p) { p.classList.remove('active'); });
       pill.classList.add('active');
 
-      // Auto-cooperative: reset incompatible status filters
+      // Auto-cooperative: reset incompatible status filters (keep pending/paused/archived across all kinds)
       if (statusPillGroup) {
         if (activeCapsKind === 'memories' && (activeCapsStatus === 'core' || activeCapsStatus === 'scoped')) {
           activeCapsStatus = 'all';
         } else if (activeCapsKind === 'rules' && (activeCapsStatus === 'verified' || activeCapsStatus === 'stale')) {
           activeCapsStatus = 'all';
-        } else if ((activeCapsKind === 'skills' || activeCapsKind === 'tools') && activeCapsStatus !== 'all') {
+        } else if ((activeCapsKind === 'skills' || activeCapsKind === 'tools') && (activeCapsStatus === 'core' || activeCapsStatus === 'scoped' || activeCapsStatus === 'verified' || activeCapsStatus === 'stale')) {
           activeCapsStatus = 'all';
         }
         statusPillGroup.querySelectorAll('.filter-pill').forEach(function(p) {
@@ -1630,6 +2201,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       var pill = e.target.closest('.filter-pill');
       if (!pill) return;
       activeCapsStatus = pill.getAttribute('data-status') || 'all';
+      capsSortByTokens = false;
       statusPillGroup.querySelectorAll('.filter-pill').forEach(function(p) { p.classList.remove('active'); });
       pill.classList.add('active');
 
@@ -1646,6 +2218,44 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       }
 
       renderCapabilitiesTable();
+    });
+  }
+
+  // Batch Action Buttons (Approve All Pending / Pause All Stale)
+  var btnBatchApprove = el('btn-batch-approve-pending');
+  if (btnBatchApprove) {
+    btnBatchApprove.addEventListener('click', function() {
+      callKernelAction('approve-item', { approveAll: true }).then(function(res) {
+        if (res.ok) {
+          if (res.snapshot) snapshot = res.snapshot;
+          renderTelemetry();
+          renderCapabilitiesTable();
+          if (selectedCapability) renderInspector();
+          showToast('success', 'Approved ' + (res.approvedCount || 0) + ' pending capabilities');
+        }
+      });
+    });
+  }
+
+  var btnBatchPauseStale = el('btn-batch-pause-stale');
+  if (btnBatchPauseStale) {
+    btnBatchPauseStale.addEventListener('click', function() {
+      var staleList = (snapshot.memories || []).filter(function(m) {
+        var st = (m.freshness && m.freshness.overall_status) || 'VERIFIED';
+        return (st === 'STALE' || st === 'OTHER_BRANCH') && m.enabled !== false;
+      }).map(function(m) {
+        return { kind: 'memory', id: m.id };
+      });
+      if (staleList.length === 0) return;
+      callKernelAction('toggle-enabled', { items: staleList, enabled: false }).then(function(res) {
+        if (res.ok) {
+          if (res.snapshot) snapshot = res.snapshot;
+          renderTelemetry();
+          renderCapabilitiesTable();
+          if (selectedCapability) renderInspector();
+          showToast('success', 'Paused ' + staleList.length + ' stale memories');
+        }
+      });
     });
   }
 
@@ -1728,6 +2338,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   if (btnLang) {
     btnLang.addEventListener('click', function() {
       lang = lang === 'en' ? 'zh' : 'en';
+      try { window.localStorage.setItem('evo_ui_lang', lang); } catch (e) {}
       applyI18n();
     });
   }
@@ -1959,12 +2570,18 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       font-size: 11px;
       color: var(--text-secondary);
       max-width: 320px;
+      min-width: 0;
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
     .workspace-pill .ws-icon {
       font-size: 11px;
+      flex-shrink: 0;
+    }
+    .workspace-pill .ws-path {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .topbar-center {
@@ -2166,6 +2783,10 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       display: flex;
       flex-direction: column;
       gap: 4px;
+      transition: border-color var(--duration-micro) ease;
+    }
+    .bento-card:hover {
+      border-color: var(--border-focus);
     }
     .bento-title {
       font-size: 10.5px;
@@ -2294,6 +2915,46 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       margin-top: 2px;
     }
 
+    .health-diagnostics-banner {
+      padding: 10px 20px;
+      background: rgba(16, 185, 129, 0.04);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .health-diag-title {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .health-diag-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .health-diag-pill {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-size: 11.5px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all var(--duration-micro) ease;
+    }
+    .health-diag-pill:hover {
+      background: var(--bg-elevated);
+      border-color: var(--border-focus);
+      color: var(--text-primary);
+    }
+
     .filter-toolbar {
       display: flex;
       align-items: center;
@@ -2418,11 +3079,18 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       border: 1px solid var(--border-subtle);
       color: var(--text-secondary);
     }
+    .badge-status.badge-scoped {
+      max-width: 150px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .dot {
       display: inline-block;
       width: 6px;
       height: 6px;
       border-radius: 50%;
+      flex-shrink: 0;
     }
     .dot-ok { background: var(--status-ok); }
     .dot-warn { background: var(--status-warn); }
@@ -2432,11 +3100,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       display: flex;
       flex-direction: column;
       gap: 2px;
+      min-width: 0;
     }
     .item-main-title {
       color: var(--text-primary);
       font-weight: 500;
-      max-width: 360px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -2445,6 +3113,18 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       color: var(--text-muted);
       font-size: 10.5px;
       font-family: var(--font-mono);
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .item-sub-summary {
+      color: var(--text-secondary);
+      font-size: 11.5px;
+      max-width: 440px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .empty-state {
@@ -2712,6 +3392,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       padding: 8px 10px;
       margin-bottom: 6px;
       cursor: pointer;
+      overflow: hidden;
       transition: all var(--duration-micro) ease;
     }
     .ast-anchor-card:hover {
@@ -2725,10 +3406,25 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 6px;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .ast-anchor-file {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
     }
     .ast-anchor-symbol {
       color: var(--status-info);
       font-weight: 600;
+      max-width: 55%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .ast-anchor-meta {
       display: flex;
@@ -2738,6 +3434,52 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       font-size: 10px;
       color: var(--text-muted);
       margin-top: 4px;
+    }
+
+    .tldr-card {
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid var(--status-ok-border);
+      border-left: 3px solid var(--status-ok);
+      border-radius: var(--radius-lg);
+      padding: 10px 14px;
+      box-shadow: var(--surface-highlight);
+    }
+    .tldr-card-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--status-ok);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+    }
+    .tldr-card-body {
+      font-size: 12.5px;
+      color: var(--text-primary);
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .stale-action-banner {
+      background: var(--status-warn-bg);
+      border: 1px solid var(--status-warn-border);
+      border-left: 3px solid var(--status-warn);
+      border-radius: var(--radius-lg);
+      padding: 10px 14px;
+    }
+    .stale-action-text {
+      font-size: 12px;
+      color: var(--text-primary);
+      line-height: 1.45;
+    }
+
+    .inline-code-pill {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-subtle);
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: var(--text-primary);
     }
 
     .bento-card-preview {
@@ -2915,6 +3657,20 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       animation: toastSlideIn 200ms var(--ease-spring) forwards;
       transition: opacity 220ms ease, transform 220ms var(--ease-spring);
     }
+    .toast-undo-btn {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-focus);
+      color: var(--status-ok);
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-left: 4px;
+    }
+    .toast-undo-btn:hover {
+      background: var(--status-ok-bg);
+    }
     @keyframes toastSlideIn {
       from { opacity: 0; transform: translateY(12px) scale(0.96); }
       to { opacity: 1; transform: translateY(0) scale(1); }
@@ -3026,13 +3782,13 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         <div class="rail-section-header" id="rail-hdr-telem">TELEMETRY</div>
 
         <!-- Card 1: Health Score -->
-        <div class="bento-card" id="bento-health">
+        <div class="bento-card" id="bento-health" title="Click to toggle Health Diagnostics">
           <div class="bento-title" id="bento-title-health">Health Score</div>
           <div class="bento-metric-row">
             <span class="bento-metric-value" id="bento-health-val">--</span>
             <span class="bento-badge" id="bento-health-grade">Grade --</span>
           </div>
-          <div class="bento-subtext">Zero-leak AST shielding</div>
+          <div class="bento-subtext">Zero-leak AST shielding · Click to diagnose</div>
         </div>
 
         <!-- Card 2: Prompt Tax Saved -->
@@ -3045,7 +3801,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         </div>
 
         <!-- Card 3: Core Rule Budget -->
-        <div class="bento-card" id="bento-budget">
+        <div class="bento-card" id="bento-budget" title="Click to filter & sort Core Rules by token footprint">
           <div class="bento-title-row">
             <span class="bento-title" id="bento-title-budget">Core Budget</span>
             <span class="bento-counter" id="bento-budget-counter"><span id="bento-budget-cur">0</span> / 1500 tok</span>
@@ -3079,17 +3835,23 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             </div>
             <div class="pill-group" id="caps-status-pills">
               <button type="button" class="filter-pill active" data-status="all">All Status</button>
+              <button type="button" class="filter-pill" data-status="pending" id="pill-status-pending">Pending</button>
               <button type="button" class="filter-pill" data-status="verified">Verified</button>
               <button type="button" class="filter-pill" data-status="stale">Stale</button>
               <button type="button" class="filter-pill" data-status="core">Core</button>
               <button type="button" class="filter-pill" data-status="scoped">Scoped</button>
+              <button type="button" class="filter-pill" data-status="paused">Paused</button>
+              <button type="button" class="filter-pill" data-status="archived" id="pill-status-archived">Archived</button>
             </div>
+            <button type="button" class="btn-action" id="btn-batch-approve-pending" style="display:none;color:var(--status-ok);border-color:var(--status-ok-border);padding:3px 9px;font-size:11.5px;">✓ Approve All</button>
+            <button type="button" class="btn-action" id="btn-batch-pause-stale" style="display:none;color:var(--status-warn);border-color:var(--status-warn-border);padding:3px 9px;font-size:11.5px;">⏸ Pause All Stale</button>
             <div class="search-box">
               <input type="text" id="caps-search-input" class="search-input" placeholder="Filter capabilities (id, title, symbol, file)..." autocomplete="off" />
             </div>
             <div class="view-count-badge" id="caps-count-label">0 items</div>
           </div>
         </div>
+        <div class="health-diagnostics-banner" id="health-diagnostics-banner" style="display:none;"></div>
         <div class="table-scroll-container">
           <table class="data-table" id="capabilities-table">
             <thead>
@@ -3098,7 +3860,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
                 <th>ID &amp; Title</th>
                 <th style="width: 150px;">Scope / Status</th>
                 <th style="width: 130px;">Attribution</th>
-                <th style="width: 120px; text-align: right;">Actions</th>
+                <th style="width: 140px; text-align: right;">Actions</th>
               </tr>
             </thead>
             <tbody id="capabilities-table-body"></tbody>

@@ -60,6 +60,8 @@ export interface EvoMemory {
   tags: string[];
   origin: string;
   supersedes_id?: string;
+  enabled?: boolean;
+  review_status?: 'pending' | 'approved';
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +149,8 @@ export interface EvoRule {
   transfer_scenarios?: string[];
   confidence?: ConfidenceLevel;
   contrastive_evidence?: string;
+  enabled?: boolean;
+  review_status?: 'pending' | 'approved';
   created_at: string;
   updated_at: string;
 }
@@ -165,6 +169,8 @@ export interface EvoSkill {
   trigger_cue?: string;
   confidence?: ConfidenceLevel;
   contrastive_evidence?: string;
+  enabled?: boolean;
+  review_status?: 'pending' | 'approved';
   created_at: string;
   updated_at: string;
 }
@@ -182,6 +188,8 @@ export interface EvoToolManifest {
   origin: string;
   supersedes_id?: string;
   hook_trigger?: EvoHookTrigger;
+  enabled?: boolean;
+  review_status?: 'pending' | 'approved';
   created_at: string;
   updated_at: string;
 }
@@ -189,6 +197,19 @@ export interface EvoToolManifest {
 export interface EvoTool extends EvoToolManifest {
   script_code: string;
   script_path: string;
+}
+
+export interface ArchivedCapabilityEntry {
+  id: string;
+  kind: EvoKind;
+  title: string;
+  l0_summary: string;
+  archived_at: string;
+  archive_file: string;
+  scope_glob?: string;
+  core?: boolean;
+  tokens?: number;
+  content?: string;
 }
 
 export interface ProposalPayload {
@@ -205,6 +226,8 @@ export interface ProposalPayload {
   confidence?: ConfidenceLevel;
   contrastive_evidence?: string;
   hook_trigger?: EvoHookTrigger;
+  enabled?: boolean;
+  review_status?: 'pending' | 'approved';
   // For rules:
   scope_glob?: string;
   core?: boolean;

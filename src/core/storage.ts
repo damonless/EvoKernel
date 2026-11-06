@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
+  ArchivedCapabilityEntry,
   ConfidenceLevel,
   EvoConfig,
   EvoHookTrigger,
@@ -391,6 +392,8 @@ export class EvoStorage {
       ...(rule.transfer_scenarios && rule.transfer_scenarios.length > 0
         ? [`transfer_scenarios: ${JSON.stringify(rule.transfer_scenarios)}`]
         : []),
+      ...(rule.enabled === false ? ['enabled: false'] : []),
+      ...(rule.review_status === 'pending' ? ['review_status: "pending"'] : []),
       `created_at: ${JSON.stringify(rule.created_at)}`,
       `updated_at: ${JSON.stringify(rule.updated_at)}`,
       '---',
@@ -469,6 +472,8 @@ export class EvoStorage {
             ? (String(meta.confidence) as ConfidenceLevel)
             : undefined,
         contrastive_evidence: meta.contrastive_evidence ? String(meta.contrastive_evidence) : undefined,
+        enabled: meta.enabled === false || meta.enabled === 'false' ? false : true,
+        review_status: meta.review_status === 'pending' ? 'pending' : 'approved',
         created_at: String(meta.created_at || new Date().toISOString()),
         updated_at: String(meta.updated_at || new Date().toISOString()),
       };
@@ -478,7 +483,7 @@ export class EvoStorage {
   }
 
   public rebuildCoreInvariantsDigest(): string {
-    const coreRules = this.listRules().filter((r) => r.core);
+    const coreRules = this.listRules().filter((r) => r.core && r.enabled !== false);
     if (coreRules.length === 0) {
       if (fs.existsSync(this.coreInvariantsPath)) {
         fs.unlinkSync(this.coreInvariantsPath);
@@ -498,7 +503,7 @@ export class EvoStorage {
   }
 
   public getCoreRulesTokenUsage(): { totalTokens: number; rules: EvoRule[] } {
-    const coreRules = this.listRules().filter((r) => r.core);
+    const coreRules = this.listRules().filter((r) => r.core && r.enabled !== false);
     const totalTokens = coreRules.reduce((acc, r) => acc + r.tokens, 0);
     return { totalTokens, rules: coreRules };
   }
@@ -524,6 +529,8 @@ export class EvoStorage {
       `tags: ${JSON.stringify(skill.tags)}`,
       `origin: ${JSON.stringify(skill.origin)}`,
       ...(skill.supersedes_id ? [`supersedes_id: ${JSON.stringify(skill.supersedes_id)}`] : []),
+      ...(skill.enabled === false ? ['enabled: false'] : []),
+      ...(skill.review_status === 'pending' ? ['review_status: "pending"'] : []),
       `created_at: ${JSON.stringify(skill.created_at)}`,
       `updated_at: ${JSON.stringify(skill.updated_at)}`,
       '---',
@@ -583,6 +590,8 @@ export class EvoStorage {
         tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
         origin: String(meta.origin || 'session'),
         supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,
+        enabled: meta.enabled === false || meta.enabled === 'false' ? false : true,
+        review_status: meta.review_status === 'pending' ? 'pending' : 'approved',
         created_at: String(meta.created_at || new Date().toISOString()),
         updated_at: String(meta.updated_at || new Date().toISOString()),
       };
@@ -612,9 +621,16 @@ export class EvoStorage {
 
     const ext = getExtensionForRuntime(manifest.runtime);
     const entryScript = `run${ext}`;
+    const {
+      enabled: rawEnabled,
+      review_status: rawReviewStatus,
+      ...restManifest
+    } = manifest;
     const updatedManifest: EvoToolManifest = {
-      ...manifest,
+      ...restManifest,
       entry_script: entryScript,
+      ...(rawEnabled === false ? { enabled: false } : {}),
+      ...(rawReviewStatus === 'pending' ? { review_status: 'pending' as const } : {}),
     };
 
     const manifestPath = path.join(dir, 'manifest.json');
@@ -625,6 +641,8 @@ export class EvoStorage {
 
     return {
       ...updatedManifest,
+      enabled: rawEnabled === false ? false : true,
+      review_status: rawReviewStatus === 'pending' ? 'pending' : 'approved',
       script_code: scriptCode,
       script_path: scriptPath,
     };
@@ -641,6 +659,8 @@ export class EvoStorage {
       const scriptCode = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf8') : '';
       return {
         ...manifest,
+        enabled: manifest.enabled === false ? false : true,
+        review_status: manifest.review_status === 'pending' ? 'pending' : 'approved',
         script_code: scriptCode,
         script_path: scriptPath,
       };
@@ -710,6 +730,8 @@ export class EvoStorage {
       `tags: ${JSON.stringify(memory.tags)}`,
       `origin: ${JSON.stringify(memory.origin)}`,
       ...(memory.supersedes_id ? [`supersedes_id: ${JSON.stringify(memory.supersedes_id)}`] : []),
+      ...(memory.enabled === false ? ['enabled: false'] : []),
+      ...(memory.review_status === 'pending' ? ['review_status: "pending"'] : []),
       `created_at: ${JSON.stringify(memory.created_at)}`,
       `updated_at: ${JSON.stringify(memory.updated_at)}`,
       '---',
@@ -758,6 +780,8 @@ export class EvoStorage {
         tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
         origin: String(meta.origin || 'session'),
         supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,
+        enabled: meta.enabled === false || meta.enabled === 'false' ? false : true,
+        review_status: meta.review_status === 'pending' ? 'pending' : 'approved',
         created_at: String(meta.created_at || new Date().toISOString()),
         updated_at: String(meta.updated_at || new Date().toISOString()),
       };
@@ -866,6 +890,216 @@ export class EvoStorage {
   public listArchivedCount(): number {
     if (!fs.existsSync(this.archiveDir)) return 0;
     return fs.readdirSync(this.archiveDir).filter((f) => f.endsWith('.json')).length;
+  }
+
+  public listArchivedCapabilities(): ArchivedCapabilityEntry[] {
+    if (!fs.existsSync(this.archiveDir)) return [];
+    const activeRuleIds = new Set(this.listRules().map((r) => r.id));
+    const activeSkillIds = new Set(this.listSkills().map((s) => s.id));
+    const activeToolIds = new Set(this.listTools().map((t) => t.id));
+    const activeMemoryIds = new Set(this.listMemories().map((m) => m.id));
+    const isActive = (k: EvoKind, id: string): boolean => {
+      if (k === 'rule') return activeRuleIds.has(id);
+      if (k === 'skill') return activeSkillIds.has(id);
+      if (k === 'tool') return activeToolIds.has(id);
+      if (k === 'memory') return activeMemoryIds.has(id);
+      return false;
+    };
+
+    const byKey = new Map<string, ArchivedCapabilityEntry>();
+    const entries = fs.readdirSync(this.archiveDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      try {
+        const fullPath = path.join(this.archiveDir, entry.name);
+        const raw = JSON.parse(fs.readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
+        const item = (raw.item && typeof raw.item === 'object' ? raw.item : raw) as Record<string, unknown>;
+        let kind: EvoKind | null = null;
+        const nameMatch = entry.name.match(/_(rule|skill|tool|memory)_([^.]+)\.json$/);
+        if (nameMatch) {
+          kind = nameMatch[1] as EvoKind;
+        } else if (typeof raw.kind === 'string' && ['rule', 'skill', 'tool', 'memory'].includes(raw.kind)) {
+          kind = raw.kind as EvoKind;
+        } else if (typeof item.kind === 'string' && ['rule', 'skill', 'tool', 'memory'].includes(item.kind)) {
+          kind = item.kind as EvoKind;
+        } else if ('scope_glob' in item || 'core' in item) {
+          kind = 'rule';
+        } else if ('l2_sop' in item) {
+          kind = 'skill';
+        } else if ('runtime' in item || 'entry_script' in item) {
+          kind = 'tool';
+        } else if ('symptom' in item || 'target_symbols' in item) {
+          kind = 'memory';
+        }
+        if (!kind) continue;
+
+        const id = sanitizeId(String(item.id || (nameMatch ? nameMatch[2] : path.basename(entry.name, '.json'))));
+        if (!id || isActive(kind, id)) continue;
+
+        const archived_at = String(
+          raw.archived_at || item.updated_at || item.created_at || new Date(fs.statSync(fullPath).mtimeMs).toISOString()
+        );
+        const candidate: ArchivedCapabilityEntry = {
+          id,
+          kind,
+          title: String(item.title || id),
+          l0_summary: String(item.l0_summary || item.description || id),
+          archived_at,
+          archive_file: entry.name,
+          scope_glob: typeof item.scope_glob === 'string' ? item.scope_glob : undefined,
+          core: typeof item.core === 'boolean' ? item.core : undefined,
+          tokens: typeof item.tokens === 'number' ? item.tokens : undefined,
+          content:
+            typeof item.content === 'string'
+              ? item.content
+              : typeof item.l2_sop === 'string'
+                ? item.l2_sop
+                : typeof item.script_code === 'string'
+                  ? item.script_code
+                  : typeof item.solution === 'string'
+                    ? `## Symptom\n${item.symptom || ''}\n\n## Root Cause\n${item.root_cause || ''}\n\n## Solution\n${item.solution || ''}`
+                    : undefined,
+        };
+
+        const key = `${kind}:${id}`;
+        const prev = byKey.get(key);
+        if (!prev || (Date.parse(candidate.archived_at) || 0) >= (Date.parse(prev.archived_at) || 0)) {
+          byKey.set(key, candidate);
+        }
+      } catch {
+        // Ignore malformed archive files
+      }
+    }
+    return Array.from(byKey.values()).sort(
+      (a, b) => (Date.parse(b.archived_at) || 0) - (Date.parse(a.archived_at) || 0)
+    );
+  }
+
+  public restoreCapability(id: string, kind: EvoKind): boolean {
+    if (!fs.existsSync(this.archiveDir)) return false;
+    const cleanId = sanitizeId(id);
+    const matchingFiles: Array<{ fullPath: string; mtime: number; item: Record<string, unknown> }> = [];
+    for (const fileName of fs.readdirSync(this.archiveDir)) {
+      if (!fileName.endsWith('.json')) continue;
+      const fullPath = path.join(this.archiveDir, fileName);
+      try {
+        const raw = JSON.parse(fs.readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
+        const item = (raw.item && typeof raw.item === 'object' ? raw.item : raw) as Record<string, unknown>;
+        const nameMatch = fileName.match(/_(rule|skill|tool|memory)_([^.]+)\.json$/);
+        const fileKind = nameMatch ? (nameMatch[1] as EvoKind) : (raw.kind as EvoKind | undefined);
+        const itemId = sanitizeId(String(item.id || (nameMatch ? nameMatch[2] : '')));
+        if (itemId === cleanId && (!fileKind || fileKind === kind)) {
+          const mtime = Date.parse(String(raw.archived_at || '')) || fs.statSync(fullPath).mtimeMs;
+          matchingFiles.push({ fullPath, mtime, item });
+        }
+      } catch {
+        // Ignore malformed archive files
+      }
+    }
+
+    if (matchingFiles.length === 0) return false;
+    matchingFiles.sort((a, b) => b.mtime - a.mtime);
+    const latest = matchingFiles[0].item;
+    const now = new Date().toISOString();
+
+    if (kind === 'rule') {
+      this.saveRule({
+        id: cleanId,
+        title: String(latest.title || cleanId),
+        l0_summary: String(latest.l0_summary || cleanId),
+        scope_glob: String(latest.scope_glob || '**/*'),
+        core: Boolean(latest.core),
+        priority: Number(latest.priority ?? 50),
+        content: String(latest.content || latest.l0_summary || ''),
+        tokens: Number(latest.tokens || 40),
+        origin: String(latest.origin || 'restored'),
+        supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
+        transfer_scenarios: Array.isArray(latest.transfer_scenarios)
+          ? latest.transfer_scenarios.map(String)
+          : undefined,
+        confidence: latest.confidence as ConfidenceLevel | undefined,
+        contrastive_evidence: latest.contrastive_evidence ? String(latest.contrastive_evidence) : undefined,
+        enabled: true,
+        review_status: 'approved',
+        created_at: String(latest.created_at || now),
+        updated_at: now,
+      });
+    } else if (kind === 'skill') {
+      this.saveSkill({
+        id: cleanId,
+        name: String(latest.name || cleanId),
+        description: String(latest.description || latest.l0_summary || cleanId),
+        title: String(latest.title || cleanId),
+        l0_summary: String(latest.l0_summary || cleanId),
+        l1_contract: String(latest.l1_contract || ''),
+        l2_sop: String(latest.l2_sop || ''),
+        tags: Array.isArray(latest.tags) ? latest.tags.map(String) : [],
+        origin: String(latest.origin || 'restored'),
+        supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
+        trigger_cue: latest.trigger_cue ? String(latest.trigger_cue) : undefined,
+        confidence: latest.confidence as ConfidenceLevel | undefined,
+        contrastive_evidence: latest.contrastive_evidence ? String(latest.contrastive_evidence) : undefined,
+        enabled: true,
+        review_status: 'approved',
+        created_at: String(latest.created_at || now),
+        updated_at: now,
+      });
+    } else if (kind === 'tool') {
+      const scriptCode = String(latest.script_code || '');
+      const manifest: EvoToolManifest = {
+        id: cleanId,
+        title: String(latest.title || cleanId),
+        l0_summary: String(latest.l0_summary || cleanId),
+        runtime: (latest.runtime as ScriptRuntime) || 'node',
+        entry_script: String(latest.entry_script || 'run.mjs'),
+        input_schema: (latest.input_schema as Record<string, unknown>) || {},
+        self_test_args: (latest.self_test_args as Record<string, unknown>) || {},
+        timeout_ms: Number(latest.timeout_ms || 5000),
+        tags: Array.isArray(latest.tags) ? latest.tags.map(String) : undefined,
+        origin: String(latest.origin || 'restored'),
+        supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
+        hook_trigger: latest.hook_trigger as EvoHookTrigger | undefined,
+        enabled: true,
+        review_status: 'approved',
+        created_at: String(latest.created_at || now),
+        updated_at: now,
+      };
+      this.saveTool(manifest, scriptCode);
+    } else if (kind === 'memory') {
+      this.saveMemory({
+        id: cleanId,
+        title: String(latest.title || cleanId),
+        l0_summary: String(latest.l0_summary || cleanId),
+        symptom: String(latest.symptom || ''),
+        root_cause: String(latest.root_cause || ''),
+        solution: String(latest.solution || ''),
+        target_symbols: Array.isArray(latest.target_symbols) ? latest.target_symbols.map(String) : [],
+        ast_fingerprints:
+          latest.ast_fingerprints && typeof latest.ast_fingerprints === 'object'
+            ? (latest.ast_fingerprints as Record<string, SymbolFingerprint>)
+            : {},
+        created_commit: String(latest.created_commit || 'uncommitted'),
+        created_branch: latest.created_branch ? String(latest.created_branch) : undefined,
+        tags: Array.isArray(latest.tags) ? latest.tags.map(String) : [],
+        origin: String(latest.origin || 'restored'),
+        supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
+        enabled: true,
+        review_status: 'approved',
+        created_at: String(latest.created_at || now),
+        updated_at: now,
+      });
+    } else {
+      return false;
+    }
+
+    for (const match of matchingFiles) {
+      try {
+        if (fs.existsSync(match.fullPath)) fs.unlinkSync(match.fullPath);
+      } catch {
+        // Ignore unlink errors
+      }
+    }
+    return true;
   }
 }
 

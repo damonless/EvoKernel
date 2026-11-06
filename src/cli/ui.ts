@@ -10,7 +10,13 @@ import type { ScoreReport } from './score.js';
 import { EvoStorage, hasValidEvoStructure, sanitizeId } from '../core/storage.js';
 import type { EvoKind } from '../core/types.js';
 import { EvoTelemetry, redactSensitiveDiagnostics } from '../core/telemetry.js';
-import { verifyMemoryFreshness } from '../core/memory.js';
+import {
+  buildFingerprintsForTargets,
+  clearMemoryVerificationCache,
+  resolveCurrentGitBranch,
+  resolveCurrentGitCommit,
+  verifyMemoryFreshness,
+} from '../core/memory.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { mountIdeExtensions, syncManagedRuleBlocks } from './init.js';
@@ -22,6 +28,7 @@ export interface UiSnapshot {
   skills: any[];
   tools: any[];
   memories: any[];
+  archived: any[];
   gatekeeperEvents: any[];
 }
 
@@ -48,6 +55,7 @@ export function buildUiSnapshot(
     const skills: any[] = [];
     const tools: any[] = [];
     const memories: any[] = [];
+    const archived: any[] = [];
     let gatekeeperEvents: any[] = [];
     const telemMap = new Map<string, { hit_count: number; attribution: string }>();
 
@@ -90,10 +98,11 @@ export function buildUiSnapshot(
           const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
           memories.push(attach({ ...m, freshness: { ...v, callers } }));
         }
+        archived.push(...storage.listArchivedCapabilities());
       } catch {}
     }
 
-    return { score, rules, skills, tools, memories, gatekeeperEvents };
+    return { score, rules, skills, tools, memories, archived, gatekeeperEvents };
   } finally {
     if (openedDb && db) {
       try { db.close(); } catch {}
@@ -256,6 +265,10 @@ export function findEditorExecutable(editorName: string): string | null {
   return null;
 }
 
+export function isTestEnvironment(): boolean {
+  return Boolean(process.env.NODE_TEST_CONTEXT || process.env.EVO_TEST_MODE);
+}
+
 export function launchEditorAtLocation(filePath: string, line: number): { launched: boolean; editor?: string } {
   const targetArg = `${filePath}:${line}`;
   const candidates = ['cursor', 'code', 'windsurf'];
@@ -263,6 +276,9 @@ export function launchEditorAtLocation(filePath: string, line: number): { launch
   for (const name of candidates) {
     const execPath = findEditorExecutable(name);
     if (execPath) {
+      if (isTestEnvironment()) {
+        return { launched: false, editor: name };
+      }
       try {
         if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(execPath)) {
           spawn('cmd.exe', ['/c', execPath, '--goto', targetArg], {
@@ -278,6 +294,10 @@ export function launchEditorAtLocation(filePath: string, line: number): { launch
         return { launched: true, editor: name };
       } catch {}
     }
+  }
+
+  if (isTestEnvironment()) {
+    return { launched: false, editor: 'test-noop' };
   }
 
   // Fallback to platform system opener if no IDE CLI detected
@@ -394,6 +414,9 @@ export function launchDefaultBrowser(url: string): boolean {
   if (!isValidLocalHttpUrl(url)) {
     return false;
   }
+  if (isTestEnvironment()) {
+    return true;
+  }
   try {
     if (process.platform === 'win32') {
       const escapedUrl = url.replace(/'/g, "''");
@@ -424,6 +447,9 @@ export function launchNativeDesktopWindow(
 ): boolean {
   if (!isValidLocalHttpUrl(url)) {
     return false;
+  }
+  if (isTestEnvironment()) {
+    return true;
   }
 
   const fallback = options.fallbackToDefault !== false;
@@ -708,7 +734,290 @@ export async function startUiServer(
             sendJsonResponse(res, 200, {
               ok: true,
               action: 'archive-item',
-              data: { archived: { kind: rawKind, id: cleanId }, reason },
+              snapshot,
+              data: { archived: { kind: rawKind, id: cleanId }, reason, snapshot },
+            });
+            return;
+          }
+
+          case 'restore-item': {
+            const rawKind = typeof params.kind === 'string' ? params.kind.trim().toLowerCase() : '';
+            const rawId = typeof params.id === 'string' ? params.id.trim() : '';
+            if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind)) {
+              sendJsonResponse(res, 400, { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory` });
+              return;
+            }
+            if (!rawId) {
+              sendJsonResponse(res, 400, { ok: false, error: 'Bad Request: Missing item id' });
+              return;
+            }
+            const cleanId = sanitizeId(rawId);
+            const restored = storage.restoreCapability(cleanId, rawKind as EvoKind);
+            if (!restored) {
+              sendJsonResponse(res, 404, { ok: false, error: `Not Found: Archived ${rawKind} "${cleanId}" not found` });
+              return;
+            }
+
+            if (rawKind === 'rule') {
+              syncManagedRuleBlocks(ws);
+            }
+            const telem = new EvoTelemetry(storage);
+            try { telem.syncFromDisk(true); } finally { telem.close(); }
+
+            snapshot = buildUiSnapshot(ws, { anon: options.anon });
+            notifyChange();
+
+            sendJsonResponse(res, 200, {
+              ok: true,
+              action: 'restore-item',
+              snapshot,
+              data: { restored: { kind: rawKind, id: cleanId }, snapshot },
+            });
+            return;
+          }
+
+          case 'toggle-enabled': {
+            if (typeof params.enabled !== 'boolean') {
+              sendJsonResponse(res, 400, { ok: false, error: 'Bad Request: Parameter "enabled" must be a boolean' });
+              return;
+            }
+            const targetEnabled = params.enabled;
+            const batchItems = Array.isArray(params.items)
+              ? params.items
+              : [{ kind: params.kind, id: params.id }];
+            if (batchItems.length === 0) {
+              sendJsonResponse(res, 400, { ok: false, error: 'Bad Request: Missing target item(s)' });
+              return;
+            }
+
+            let touchedRules = false;
+            let updatedCount = 0;
+            const now = new Date().toISOString();
+
+            for (const entry of batchItems) {
+              const rawKind = typeof entry?.kind === 'string' ? entry.kind.trim().toLowerCase() : '';
+              const rawId = typeof entry?.id === 'string' ? entry.id.trim() : '';
+              if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind) || !rawId) {
+                sendJsonResponse(res, 400, { ok: false, error: 'Bad Request: Invalid kind or id in toggle-enabled' });
+                return;
+              }
+              const cleanId = sanitizeId(rawId);
+              if (rawKind === 'rule') {
+                const rule = storage.getRule(cleanId);
+                if (!rule) {
+                  if (batchItems.length === 1) {
+                    sendJsonResponse(res, 404, { ok: false, error: `Not Found: Rule "${cleanId}" not found` });
+                    return;
+                  }
+                  continue;
+                }
+                if (targetEnabled && rule.core && rule.enabled === false) {
+                  const { totalTokens } = storage.getCoreRulesTokenUsage();
+                  const maxBudget = storage.getConfig()?.maxCoreRuleTokens ?? 1500;
+                  if (totalTokens + rule.tokens > maxBudget) {
+                    sendJsonResponse(res, 400, {
+                      ok: false,
+                      error: `Bad Request: Core rule budget exceeded (${totalTokens + rule.tokens}/${maxBudget} tokens)`,
+                      code: 'ERR_BUDGET_EXCEEDED',
+                      details: { currentTokens: totalTokens, candidateTokens: rule.tokens, maxTokens: maxBudget },
+                    });
+                    return;
+                  }
+                }
+                storage.saveRule({ ...rule, enabled: targetEnabled, updated_at: now });
+                touchedRules = true;
+                updatedCount++;
+              } else if (rawKind === 'skill') {
+                const skill = storage.getSkill(cleanId);
+                if (!skill) {
+                  if (batchItems.length === 1) {
+                    sendJsonResponse(res, 404, { ok: false, error: `Not Found: Skill "${cleanId}" not found` });
+                    return;
+                  }
+                  continue;
+                }
+                storage.saveSkill({ ...skill, enabled: targetEnabled, updated_at: now });
+                updatedCount++;
+              } else if (rawKind === 'tool') {
+                const tool = storage.getTool(cleanId);
+                if (!tool) {
+                  if (batchItems.length === 1) {
+                    sendJsonResponse(res, 404, { ok: false, error: `Not Found: Tool "${cleanId}" not found` });
+                    return;
+                  }
+                  continue;
+                }
+                const { script_code, script_path: _sp, ...manifest } = tool;
+                storage.saveTool({ ...manifest, enabled: targetEnabled, updated_at: now }, script_code);
+                updatedCount++;
+              } else if (rawKind === 'memory') {
+                const mem = storage.getMemory(cleanId);
+                if (!mem) {
+                  if (batchItems.length === 1) {
+                    sendJsonResponse(res, 404, { ok: false, error: `Not Found: Memory "${cleanId}" not found` });
+                    return;
+                  }
+                  continue;
+                }
+                storage.saveMemory({ ...mem, enabled: targetEnabled, updated_at: now });
+                updatedCount++;
+              }
+            }
+
+            if (touchedRules) {
+              syncManagedRuleBlocks(ws);
+            }
+            const telem = new EvoTelemetry(storage);
+            try { telem.syncFromDisk(true); } finally { telem.close(); }
+
+            snapshot = buildUiSnapshot(ws, { anon: options.anon });
+            notifyChange();
+
+            const latestUsage = storage.getCoreRulesTokenUsage().totalTokens;
+            sendJsonResponse(res, 200, {
+              ok: true,
+              action: 'toggle-enabled',
+              snapshot,
+              tokenUsage: latestUsage,
+              data: { updatedCount, enabled: targetEnabled, tokenUsage: latestUsage, snapshot },
+            });
+            return;
+          }
+
+          case 'approve-item': {
+            const approveAll = Boolean(params.approveAll);
+            const now = new Date().toISOString();
+            let approvedCount = 0;
+
+            if (approveAll) {
+              for (const r of storage.listRules()) {
+                if (r.review_status === 'pending') {
+                  storage.saveRule({ ...r, review_status: 'approved', updated_at: now });
+                  approvedCount++;
+                }
+              }
+              for (const s of storage.listSkills()) {
+                if (s.review_status === 'pending') {
+                  storage.saveSkill({ ...s, review_status: 'approved', updated_at: now });
+                  approvedCount++;
+                }
+              }
+              for (const t of storage.listTools()) {
+                if (t.review_status === 'pending') {
+                  const { script_code, script_path: _sp, ...manifest } = t;
+                  storage.saveTool({ ...manifest, review_status: 'approved', updated_at: now }, script_code);
+                  approvedCount++;
+                }
+              }
+              for (const m of storage.listMemories()) {
+                if (m.review_status === 'pending') {
+                  storage.saveMemory({ ...m, review_status: 'approved', updated_at: now });
+                  approvedCount++;
+                }
+              }
+            } else {
+              const rawKind = typeof params.kind === 'string' ? params.kind.trim().toLowerCase() : '';
+              const rawId = typeof params.id === 'string' ? params.id.trim() : '';
+              if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind) || !rawId) {
+                sendJsonResponse(res, 400, { ok: false, error: 'Bad Request: Invalid kind or id for approve-item' });
+                return;
+              }
+              const cleanId = sanitizeId(rawId);
+              if (rawKind === 'rule') {
+                const r = storage.getRule(cleanId);
+                if (!r) {
+                  sendJsonResponse(res, 404, { ok: false, error: `Not Found: Rule "${cleanId}" not found` });
+                  return;
+                }
+                storage.saveRule({ ...r, review_status: 'approved', updated_at: now });
+                approvedCount = 1;
+              } else if (rawKind === 'skill') {
+                const s = storage.getSkill(cleanId);
+                if (!s) {
+                  sendJsonResponse(res, 404, { ok: false, error: `Not Found: Skill "${cleanId}" not found` });
+                  return;
+                }
+                storage.saveSkill({ ...s, review_status: 'approved', updated_at: now });
+                approvedCount = 1;
+              } else if (rawKind === 'tool') {
+                const t = storage.getTool(cleanId);
+                if (!t) {
+                  sendJsonResponse(res, 404, { ok: false, error: `Not Found: Tool "${cleanId}" not found` });
+                  return;
+                }
+                const { script_code, script_path: _sp, ...manifest } = t;
+                storage.saveTool({ ...manifest, review_status: 'approved', updated_at: now }, script_code);
+                approvedCount = 1;
+              } else if (rawKind === 'memory') {
+                const m = storage.getMemory(cleanId);
+                if (!m) {
+                  sendJsonResponse(res, 404, { ok: false, error: `Not Found: Memory "${cleanId}" not found` });
+                  return;
+                }
+                storage.saveMemory({ ...m, review_status: 'approved', updated_at: now });
+                approvedCount = 1;
+              }
+            }
+
+            snapshot = buildUiSnapshot(ws, { anon: options.anon });
+            notifyChange();
+
+            sendJsonResponse(res, 200, {
+              ok: true,
+              action: 'approve-item',
+              snapshot,
+              data: { approvedCount, approveAll, snapshot },
+            });
+            return;
+          }
+
+          case 'rebind-memory-ast': {
+            const rawId = typeof params.id === 'string' ? params.id.trim() : '';
+            if (!rawId) {
+              sendJsonResponse(res, 400, { ok: false, error: 'Bad Request: Missing memory id' });
+              return;
+            }
+            const cleanId = sanitizeId(rawId);
+            const mem = storage.getMemory(cleanId);
+            if (!mem) {
+              sendJsonResponse(res, 404, { ok: false, error: `Not Found: Memory "${cleanId}" not found` });
+              return;
+            }
+
+            const { fingerprints, resolvedSymbols, missingSymbols } = buildFingerprintsForTargets(
+              ws,
+              mem.target_symbols || []
+            );
+            const nextFingerprints = { ...(mem.ast_fingerprints || {}), ...fingerprints };
+            const updatedMem = {
+              ...mem,
+              ast_fingerprints: nextFingerprints,
+              created_commit: resolveCurrentGitCommit(ws),
+              created_branch: resolveCurrentGitBranch(ws),
+              updated_at: new Date().toISOString(),
+            };
+            storage.saveMemory(updatedMem);
+            clearMemoryVerificationCache();
+
+            const telem = new EvoTelemetry(storage);
+            try { telem.syncFromDisk(true); } finally { telem.close(); }
+
+            snapshot = buildUiSnapshot(ws, { anon: options.anon });
+            notifyChange();
+
+            const retriggered = (snapshot.memories || []).find((m: any) => m.id === cleanId);
+            sendJsonResponse(res, 200, {
+              ok: true,
+              action: 'rebind-memory-ast',
+              snapshot,
+              data: {
+                id: cleanId,
+                resolvedSymbols,
+                missingSymbols,
+                overallStatus: retriggered?.freshness?.overall_status || 'VERIFIED',
+                memory: retriggered || updatedMem,
+                snapshot,
+              },
             });
             return;
           }
@@ -731,7 +1040,7 @@ export async function startUiServer(
             }
 
             const targetCore = params.core;
-            if (targetCore && !rule.core) {
+            if (targetCore && !rule.core && rule.enabled !== false) {
               const { totalTokens } = storage.getCoreRulesTokenUsage();
               const maxBudget = storage.getConfig()?.maxCoreRuleTokens ?? 1500;
               if (totalTokens + rule.tokens > maxBudget) {
@@ -758,8 +1067,9 @@ export async function startUiServer(
             sendJsonResponse(res, 200, {
               ok: true,
               action: 'toggle-rule-tier',
+              snapshot,
               tokenUsage: latestUsage,
-              data: { id: cleanId, core: targetCore, tokenUsage: latestUsage },
+              data: { id: cleanId, core: targetCore, tokenUsage: latestUsage, snapshot },
             });
             return;
           }
@@ -837,7 +1147,8 @@ export async function startUiServer(
             sendJsonResponse(res, 200, {
               ok: true,
               action: 'update-content',
-              data: { id: cleanId, kind: rawKind, updated: true },
+              snapshot,
+              data: { id: cleanId, kind: rawKind, updated: true, snapshot },
             });
             return;
           }

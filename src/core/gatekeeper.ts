@@ -2018,6 +2018,8 @@ export class EvoGatekeeper {
           rawProposal.contrastive_evidence ||
           existing?.contrastive_evidence ||
           supersededRuleFromStorage?.contrastive_evidence,
+        enabled: rawProposal.enabled === false ? false : true,
+        review_status: rawProposal.review_status === 'approved' ? 'approved' : 'pending',
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -2121,6 +2123,8 @@ export class EvoGatekeeper {
           rawProposal.contrastive_evidence !== undefined
             ? rawProposal.contrastive_evidence.trim()
             : (existing?.contrastive_evidence || supersededSkill?.contrastive_evidence),
+        enabled: rawProposal.enabled === false ? false : true,
+        review_status: rawProposal.review_status === 'approved' ? 'approved' : 'pending',
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -2195,6 +2199,8 @@ export class EvoGatekeeper {
         origin: rawProposal.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
         hook_trigger: rawProposal.hook_trigger ?? baseTool?.hook_trigger,
+        enabled: rawProposal.enabled === false ? false : true,
+        review_status: rawProposal.review_status === 'approved' ? 'approved' : 'pending',
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -2288,6 +2294,8 @@ export class EvoGatekeeper {
         tags: rawProposal.tags || [],
         origin: rawProposal.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
+        enabled: rawProposal.enabled === false ? false : true,
+        review_status: rawProposal.review_status === 'approved' ? 'approved' : 'pending',
         created_at: preservedCreatedAt,
         updated_at: now,
       };

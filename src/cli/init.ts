@@ -81,13 +81,16 @@ export function formatToolsCatalogMarkdown(
   _coreDigest: string = '',
   options?: { includeGlobal?: boolean }
 ): string {
-  const tools = storage.listTools();
+  const tools = storage.listTools().filter((t) => t.enabled !== false);
   const universalScopedRules = storage
     .listRules()
     .filter(
-      (r) => !r.core && (!r.scope_glob || r.scope_glob.trim() === '**/*' || r.scope_glob.trim() === '*')
+      (r) =>
+        r.enabled !== false &&
+        !r.core &&
+        (!r.scope_glob || r.scope_glob.trim() === '**/*' || r.scope_glob.trim() === '*')
     );
-  const skills = storage.listSkills();
+  const skills = storage.listSkills().filter((s) => s.enabled !== false);
 
   // Merge ~/.evo/global tools and skills if requested
   const globalDir = process.env.EVO_GLOBAL_DIR
@@ -102,8 +105,8 @@ export function formatToolsCatalogMarkdown(
   ) {
     try {
       const globalStorage = new EvoStorage(globalDir);
-      const globalTools = globalStorage.listTools();
-      const globalSkills = globalStorage.listSkills();
+      const globalTools = globalStorage.listTools().filter((t) => t.enabled !== false);
+      const globalSkills = globalStorage.listSkills().filter((s) => s.enabled !== false);
       const toolIds = new Set(allTools.map((t) => t.id));
       for (const gt of globalTools) {
         if (!toolIds.has(gt.id)) {
@@ -990,7 +993,11 @@ export function mountIdeExtensions(
     opts = workspaceRootOrOptions;
   }
 
-  if (opts?.noIde) {
+  if (
+    opts?.noIde ||
+    (Boolean(process.env.NODE_TEST_CONTEXT || process.env.EVO_TEST_MODE) &&
+      !process.env.EVO_IDE_EXTENSIONS_DIR)
+  ) {
     const empty: IdeMountDetail[] = [];
     return Object.assign([], { mounts: empty, totalMounted: 0 }) as MountIdeResult;
   }
@@ -1031,6 +1038,12 @@ export function mountIdeExtensions(
 }
 
 export function unmountIdeExtensions(): { cleanedTargets: string[]; errors: string[] } {
+  if (
+    Boolean(process.env.NODE_TEST_CONTEXT || process.env.EVO_TEST_MODE) &&
+    !process.env.EVO_IDE_EXTENSIONS_DIR
+  ) {
+    return { cleanedTargets: [], errors: [] };
+  }
   const detected = detectInstalledIdeExtensionsDirs();
   const cleanedTargets: string[] = [];
   const errors: string[] = [];

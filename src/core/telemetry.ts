@@ -1184,7 +1184,23 @@ export class EvoTelemetry {
 
     const wsForScope = activeWorkspaceRoot || this.storage.rootDir;
     const workspaceCodeExts = wsForScope ? collectWorkspaceCodeExtensions(wsForScope) : undefined;
+    const pausedIds = new Set<string>();
+    for (const r of this.storage.listRules()) {
+      if (r.enabled === false) pausedIds.add(`rule:${r.id}`);
+    }
+    for (const s of this.storage.listSkills()) {
+      if (s.enabled === false) pausedIds.add(`skill:${s.id}`);
+    }
+    for (const t of this.storage.listTools()) {
+      if (t.enabled === false) pausedIds.add(`tool:${t.id}`);
+    }
+    for (const m of this.storage.listMemories()) {
+      if (m.enabled === false) pausedIds.add(`memory:${m.id}`);
+    }
     const filteredRows = rows.filter((r) => {
+      if (pausedIds.has(`${String(r.kind)}:${String(r.id)}`)) {
+        return false;
+      }
       if (String(r.kind) === 'rule') {
         return isScopeCompatibleWithWorkspace(
           String(r.scope_glob || '**/*'),
