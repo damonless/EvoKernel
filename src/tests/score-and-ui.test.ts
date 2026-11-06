@@ -1498,15 +1498,20 @@ Widget issue
       assert.ok(html.includes('.ast-anchor-symbol'), 'Must define .ast-anchor-symbol CSS rule');
       assert.ok(html.includes("rawSym.split('#').slice(1).join('#')"), 'Must strip duplicate file_path prefix from anchor.symbol');
 
-      // 3. Topology right-column deduplication, ast_hash fallback, and CJK visual width truncation
-      assert.ok(html.includes('rightFileSet[fileOnly] = normSym;'), 'Must deduplicate topology source nodes by fileOnly & normSym');
+      // 3. Topology right-column deduplication, bare symbol file_path resolution, SVG clipPath, ast_hash fallback, and CJK visual width truncation
+      assert.ok(html.includes('if (fileOnly) rightFileSet[fileOnly] = canonicalSym;'), 'Must deduplicate topology source nodes by fileOnly & canonicalSym');
+      assert.ok(html.includes('topo-card-clip'), 'Must define SVG clipPath #topo-card-clip to prevent card text overflow');
       assert.ok(html.includes('fpEntry.ast_hash || fpEntry.structural_hash'), 'Must fall back to ast_hash when topology anchors are empty');
       assert.ok(html.includes('function truncateVisual('), 'Must define CJK-aware truncateVisual helper');
       assert.ok(html.includes('function truncateVisualTail('), 'Must define CJK-aware truncateVisualTail helper');
 
-      // 4. Capabilities table & Gatekeeper stream overflow guards
+      // 4. Capabilities table, inline action buttons, & Diagnostics banner CSS guards
       assert.ok(!html.includes('max-width: 360px;'), '.item-main-title must not hardcode 360px cap');
       assert.ok(html.includes('.badge-status.badge-scoped'), 'Must cap .badge-scoped width with ellipsis');
+      assert.ok(html.includes('.scoped-glob-text'), 'Must define .scoped-glob-text truncation CSS rule');
+      assert.ok(html.includes('.item-title-line'), 'Must define .item-title-line flex layout CSS rule');
+      assert.ok(html.includes('.row-actions-wrap'), 'Must define .row-actions-wrap horizontal flex layout CSS rule');
+      assert.ok(html.includes('.diag-chip {'), 'Must define .diag-chip CSS rule matching rendered Health Diagnostics chips');
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
@@ -1566,6 +1571,7 @@ Widget issue
     });
 
     const instance = await startUiServer(ws, { port: 0 });
+    const telemetry = new EvoTelemetry(storage);
     const postAction = (payload: any) =>
       new Promise<{ status: number; body: any }>((resolve, reject) => {
         const data = JSON.stringify(payload);
@@ -1591,17 +1597,21 @@ Widget issue
       });
 
     try {
-      // 1. Verify zero window.confirm( in rendered UI client HTML (Webview compatibility)
+      // 1. Verify zero window.confirm( and zero undefined i18n keys / 'memorie' typo in rendered UI client HTML
       const snap0 = buildUiSnapshot(ws, false);
       const html = renderUiClientHtml(snap0, { token: instance.token, isExport: false });
       assert.equal(html.includes('confirm('), false, 'UI client must never use blocking window.confirm()');
       assert.ok(html.includes('archiveAndOfferUndo'), 'UI client must use archiveAndOfferUndo with Undo Toast');
       assert.ok(html.includes('tldr-card'), 'UI client must render plain-spoken TL;DR takeaway card');
+      for (const badKey of ['dict.pausedBadge', 'dict.pendingBadge', 'dict.approveBtn', 'dict.enableBtn', 'dict.pauseBtn', 'dict.rebindAstBtn']) {
+        assert.equal(html.includes(badKey), false, `UI client must not reference undefined i18n key ${badKey}`);
+      }
+      assert.ok(html.includes('staleBannerText:'), 'i18n dictionary must define staleBannerText');
+      assert.equal(html.includes("kind: kind.replace(/s$/, '')"), false, 'Inspector actions must use singularKind(kind) so memories do not become "memorie"');
 
       // 2. Verify active core rule contributes to token budget & search
       const activeTokens = storage.getCoreRulesTokenUsage().totalTokens;
       assert.ok(activeTokens > 0, 'Active core rule must count toward token budget');
-      const telemetry = new EvoTelemetry(storage);
       const searchBefore = telemetry.search('window.confirm');
       assert.ok(searchBefore.some((r) => r.id === 'gov-core-rule'), 'Active rule must appear in search');
 
@@ -1645,23 +1655,73 @@ Widget issue
       const reboundMem = rebindRes.body.snapshot.memories.find((m: any) => m.id === 'gov-stale-mem');
       assert.equal(reboundMem.freshness.overall_status, 'VERIFIED', 'Memory must become VERIFIED after re-binding AST');
 
-      // 6. Archive and then restore via restore-item (Undo Toast flow)
-      const archRes = await postAction({
-        action: 'archive-item',
-        params: { kind: 'rule', id: 'gov-core-rule' },
+      // 5b. If target symbol is deleted from source code, rebind-memory-ast must return 400 ERR_MISSING_AST_SYMBOL
+      fs.writeFileSync(srcFile, 'export function otherFn(x: number) { return x; }\n', 'utf8');
+      const missingSymRebind = await postAction({
+        action: 'rebind-memory-ast',
+        params: { id: 'gov-stale-mem' },
       });
-      assert.equal(archRes.status, 200);
-      assert.equal(storage.getRule('gov-core-rule'), null);
-      assert.equal(storage.listArchivedCapabilities().some((a) => a.id === 'gov-core-rule'), true);
+      assert.equal(missingSymRebind.status, 400);
+      assert.equal(missingSymRebind.body.code, 'ERR_MISSING_AST_SYMBOL');
 
-      const restoreRes = await postAction({
-        action: 'restore-item',
-        params: { kind: 'rule', id: 'gov-core-rule' },
+      // 5c. Body-only update-content from Right Inspector inline editor preserves YAML frontmatter metadata
+      const editBodyRes = await postAction({
+        action: 'update-content',
+        params: {
+          kind: 'rule',
+          id: 'gov-core-rule',
+          content: 'Updated body from inline editor without frontmatter.',
+        },
       });
-      assert.equal(restoreRes.status, 200);
-      assert.equal(restoreRes.body.ok, true);
-      assert.ok(storage.getRule('gov-core-rule'), 'Rule must be restored from .evo/archive/ to active storage');
+      assert.equal(editBodyRes.status, 200);
+      const updatedRule = storage.getRule('gov-core-rule');
+      assert.equal(updatedRule?.content, 'Updated body from inline editor without frontmatter.');
+      assert.equal(updatedRule?.title, 'When editing UI templates -> Avoid window.confirm -> Use non-blocking Undo Toast');
+      assert.equal(updatedRule?.l0_summary, 'Avoid window.confirm in IDE Webviews; use inline Undo Toast instead.');
+      assert.equal(updatedRule?.scope_glob, 'src/templates/**/*.ts');
+
+      // 6. Archive and then restore via restore-item (Undo Toast flow), including multi-file skill directory with pending status
+      storage.saveSkill({
+        id: 'multi-file-skill',
+        name: 'Multi File Skill',
+        description: 'Skill with sibling scripts directory',
+        trigger_phrases: ['multi file'],
+        l1_contract: 'Contract',
+        l2_sop: 'SOP',
+        enabled: false,
+        review_status: 'pending',
+        origin: 'session',
+        created_at: '2026-11-06T00:00:00.000Z',
+        updated_at: '2026-11-06T00:00:00.000Z',
+      });
+      const skillHelperDir = path.join(ws, '.evo', 'skills', 'multi-file-skill', 'scripts');
+      fs.mkdirSync(skillHelperDir, { recursive: true });
+      fs.writeFileSync(path.join(skillHelperDir, 'helper.mjs'), 'export const HELPER = 42;\n', 'utf8');
+
+      const archSkillRes = await postAction({
+        action: 'archive-item',
+        params: { kind: 'skill', id: 'multi-file-skill' },
+      });
+      assert.equal(archSkillRes.status, 200);
+      assert.equal(storage.getSkill('multi-file-skill'), null);
+      assert.equal(fs.existsSync(path.join(ws, '.evo', 'skills', 'multi-file-skill')), false);
+
+      const restoreSkillRes = await postAction({
+        action: 'restore-item',
+        params: { kind: 'skill', id: 'multi-file-skill' },
+      });
+      assert.equal(restoreSkillRes.status, 200);
+      const restoredSkill = storage.getSkill('multi-file-skill');
+      assert.ok(restoredSkill, 'Multi-file skill must be restored');
+      assert.equal(restoredSkill?.enabled, false, 'Restored skill must preserve enabled: false state');
+      assert.equal(restoredSkill?.review_status, 'pending', 'Restored skill must preserve review_status: pending');
+      assert.equal(
+        fs.readFileSync(path.join(skillHelperDir, 'helper.mjs'), 'utf8'),
+        'export const HELPER = 42;\n',
+        'Restored skill must preserve sibling files in subdirectories'
+      );
     } finally {
+      telemetry.close();
       await instance.close();
       try {
         fs.rmSync(ws, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

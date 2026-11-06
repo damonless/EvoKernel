@@ -108,6 +108,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       verifyingAst: 'Verifying...',
       rebindAst: '🔄 Re-bind Current Code (AST)',
       rebindingAst: 'Re-binding...',
+      staleBannerText: '⚠️ Target code changed or switched branches since this memory was recorded. Choose how to handle it:',
       promoteCore: '↑ Promote to Core',
       demoteScoped: '↓ Demote to Scoped',
       runSelfTest: '▶ Run Self-Test',
@@ -187,6 +188,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       verifyingAst: '验证计算中...',
       rebindAst: '🔄 更新绑定当前代码 (Re-bind AST)',
       rebindingAst: '重新锚定中...',
+      staleBannerText: '⚠️ 该记忆绑定的源码已发生修改或分支切换。您可以一键重新锚定当前代码、暂时搁置或归档：',
       promoteCore: '↑ 提升为核心规则',
       demoteScoped: '↓ 降级为局部规则',
       runSelfTest: '▶ 执行沙盒自测',
@@ -573,6 +575,15 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     if (!healthDiagExpanded) {
       banner.style.display = 'none';
       return;
+    }
+    if (typeof coreTokens !== 'number') {
+      var sBudget = (snapshot.score && snapshot.score.coreBudget) || {};
+      coreTokens = sBudget.usedTokens || 0;
+      if (coreTokens === 0 && Array.isArray(snapshot.rules)) {
+        snapshot.rules.forEach(function(r) {
+          if (r.core && r.enabled !== false) coreTokens += (r.tokens || r.token_count || 0);
+        });
+      }
     }
     banner.style.display = 'flex';
     var staleMems = (snapshot.memories || []).filter(function(m) {
@@ -988,22 +999,32 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       var syms = m.target_symbols || [];
       syms.forEach(function(sym) {
         var normSym = String(sym || '').replace(/\\\\/g, '/');
-        var fileOnly = normSym.split('#')[0];
-        rightFileSet[fileOnly] = normSym;
-        if (!rightMap[normSym]) {
-          var fpEntry = fps[sym] || fps[normSym] || {};
+        var fpEntry = fps[sym] || fps[normSym] || {};
+        var fpPath = String(fpEntry.file_path || fpEntry.file || '').replace(/\\\\/g, '/');
+        var fileOnly = normSym.indexOf('#') !== -1
+          ? normSym.split('#')[0]
+          : (normSym.indexOf('/') !== -1 || /\\.[a-z0-9]+$/i.test(normSym) ? normSym : (fpPath || normSym));
+        var symTail = normSym.indexOf('#') !== -1
+          ? normSym.split('#').slice(1).join('#')
+          : (normSym !== fileOnly ? normSym : '');
+        var canonicalSym = (fileOnly && symTail) ? (fileOnly + '#' + symTail) : (fileOnly || normSym);
+        if (fileOnly) rightFileSet[fileOnly] = canonicalSym;
+        if (!rightMap[canonicalSym] && !rightMap[normSym]) {
           var hashStr = fpEntry.ast_hash || fpEntry.structural_hash || '';
-          var symTail = normSym.indexOf('#') !== -1 ? normSym.split('#').slice(1).join('#') : normSym.replace(/^.*[\\\\/]/, '');
-          var fileBase = fileOnly.replace(/^.*[\\\\/]/, '');
-          rightMap[normSym] = {
-            id: 'ast:' + normSym,
+          var fileBase = (fileOnly || normSym).replace(/^.*[\\\\/]/, '');
+          var nodeEntry = {
+            id: 'ast:' + canonicalSym,
             label: symTail && symTail !== fileBase ? (fileBase + '#' + symTail) : fileBase,
-            sub: hashStr ? (fileOnly + ' · ' + hashStr.slice(0, 8)) : fileOnly,
-            fullSymbol: normSym,
-            fileOnly: fileOnly,
+            sub: hashStr ? ((fileOnly || normSym) + ' · ' + hashStr.slice(0, 8)) : (fileOnly || normSym),
+            fullSymbol: canonicalSym,
+            rawSymbol: normSym,
+            fileOnly: fileOnly || normSym.split('#')[0],
+            startLine: Number(fpEntry.start_line || 1) || 1,
             callers: (m.freshness && m.freshness.callers) || []
           };
-          rightNodes.push(rightMap[normSym]);
+          rightMap[canonicalSym] = nodeEntry;
+          rightMap[normSym] = nodeEntry;
+          rightNodes.push(nodeEntry);
         }
       });
       Object.keys(fps).forEach(function(k) {
@@ -1020,7 +1041,9 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           label: fpath.replace(/^.*[\\\\/]/, ''),
           sub: hashVal ? (fpath + ' · ' + hashVal.slice(0, 8)) : fpath,
           fullSymbol: fpath,
+          rawSymbol: normKey,
           fileOnly: fpath,
+          startLine: Number(fp.start_line || 1) || 1,
           callers: []
         };
         rightNodes.push(rightMap[fpath]);
@@ -1043,6 +1066,19 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     svg.setAttribute('width', '980');
     svg.setAttribute('height', String(totalH));
     svg.setAttribute('viewBox', '0 0 980 ' + totalH);
+
+    var defs = document.createElementNS(ns, 'defs');
+    var clipPath = document.createElementNS(ns, 'clipPath');
+    clipPath.setAttribute('id', 'topo-card-clip');
+    var clipRect = document.createElementNS(ns, 'rect');
+    clipRect.setAttribute('x', '0');
+    clipRect.setAttribute('y', '0');
+    clipRect.setAttribute('width', String(cardW - 8));
+    clipRect.setAttribute('height', String(cardH));
+    clipRect.setAttribute('rx', '6');
+    clipPath.appendChild(clipRect);
+    defs.appendChild(clipPath);
+    svg.appendChild(defs);
 
     var edges = [];
     var outgoing = new Map();
@@ -1077,7 +1113,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       rightNodes.forEach(function(rn) {
         var syms = (mn.raw.target_symbols || []).map(function(s) { return String(s || '').replace(/\\\\/g, '/'); });
         var fps = mn.raw.ast_fingerprints || {};
-        var hasSym = syms.indexOf(rn.fullSymbol) !== -1;
+        var hasSym = syms.indexOf(rn.fullSymbol) !== -1 || (rn.rawSymbol && syms.indexOf(rn.rawSymbol) !== -1);
         var hasFp = Object.keys(fps).some(function(k) {
           var fpFile = String((fps[k] && (fps[k].file_path || fps[k].file)) || '').replace(/\\\\/g, '/');
           return fpFile === rn.fullSymbol || fpFile === rn.fileOnly;
@@ -1148,6 +1184,9 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       dot.setAttribute('fill', dotColor);
       g.appendChild(dot);
 
+      var textClipGroup = document.createElementNS(ns, 'g');
+      textClipGroup.setAttribute('clip-path', 'url(#topo-card-clip)');
+
       var title = document.createElementNS(ns, 'text');
       title.setAttribute('x', '26');
       title.setAttribute('y', '19');
@@ -1156,7 +1195,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       title.setAttribute('font-weight', '500');
       title.setAttribute('class', 'topo-node-title');
       title.textContent = truncateVisual(n.label, 24);
-      g.appendChild(title);
+      textClipGroup.appendChild(title);
 
       var sub = document.createElementNS(ns, 'text');
       sub.setAttribute('x', '26');
@@ -1165,17 +1204,20 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       sub.setAttribute('font-size', '9.5');
       sub.setAttribute('class', 'topo-node-sub');
       sub.textContent = truncateVisualTail(n.sub, 28);
-      g.appendChild(sub);
+      textClipGroup.appendChild(sub);
+
+      g.appendChild(textClipGroup);
 
       g.addEventListener('mouseenter', function() { applyFocusDimming(n.id); });
       g.addEventListener('mouseleave', function() { resetFocusDimming(); });
       g.addEventListener('click', function() {
         if (n.raw && n.kind) {
           selectCapability(n.kind, n.raw);
-        } else if (n.fullSymbol) {
-          var targetPath = n.fullSymbol.split('#')[0];
-          callKernelAction('open-editor', { filePath: targetPath, line: 1 }).then(function(res) {
-            if (res.ok) showToast('success', 'Opened ' + targetPath);
+        } else if (n.fileOnly || n.fullSymbol) {
+          var targetPath = n.fileOnly || n.fullSymbol.split('#')[0];
+          var targetLine = n.startLine || 1;
+          callKernelAction('open-editor', { filePath: targetPath, line: targetLine }).then(function(res) {
+            if (res.ok) showToast('success', 'Opened ' + targetPath + (targetLine > 1 ? ':' + targetLine : ''));
             else showToast('error', res.error || 'Failed to open file');
           });
         }
@@ -1261,20 +1303,25 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     if (emptyState) emptyState.style.display = 'none';
 
     var fileToMem = {};
+    function addMemToFile(filePath, memItem) {
+      if (!filePath) return;
+      if (!fileToMem[filePath]) fileToMem[filePath] = [];
+      var exists = fileToMem[filePath].some(function(x) { return x.id === memItem.id; });
+      if (!exists) fileToMem[filePath].push(memItem);
+    }
     (snapshot.memories || []).forEach(function(m) {
+      if (m.enabled === false) return;
       var fps = m.ast_fingerprints || {};
       var syms = m.target_symbols || [];
       syms.forEach(function(s) {
         var f = s.split('#')[0].replace(/\\\\/g, '/');
-        if (!fileToMem[f]) fileToMem[f] = [];
-        fileToMem[f].push(m);
+        if (f.indexOf('/') !== -1 || /\\.[a-z0-9]+$/i.test(f)) {
+          addMemToFile(f, m);
+        }
       });
       Object.keys(fps).forEach(function(k) {
         var f = (fps[k].file_path || fps[k].file || '').replace(/\\\\/g, '/');
-        if (f) {
-          if (!fileToMem[f]) fileToMem[f] = [];
-          fileToMem[f].push(m);
-        }
+        addMemToFile(f, m);
       });
     });
 
@@ -1433,16 +1480,19 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     var kind = selectedCapability.kind;
     var item = selectedCapability.item;
     var dict = i18n[lang] || i18n.en;
+    var isArchived = Boolean(item.archived_at);
     var isPaused = item.enabled === false;
-    var isPending = item.review_status === 'pending';
+    var isPending = item.review_status === 'pending' && !isArchived;
 
     // 1. Header
     var header = document.createElement('div');
     header.className = 'inspector-header';
-    var fresh = (item.freshness && item.freshness.overall_status) || (kind === 'memories' ? 'VERIFIED' : '');
+    var fresh = !isArchived ? ((item.freshness && item.freshness.overall_status) || (kind === 'memories' ? 'VERIFIED' : '')) : '';
     var statusBadge = '';
-    if (isPaused) {
-      statusBadge = '<span class="badge-status" style="color:var(--text-muted);"><span class="dot"></span> ' + esc(dict.pausedBadge) + '</span>';
+    if (isArchived) {
+      statusBadge = '<span class="badge-status"><span class="dot"></span> ' + esc(dict.badgeArchived) + '</span>';
+    } else if (isPaused) {
+      statusBadge = '<span class="badge-status" style="color:var(--text-muted);"><span class="dot"></span> ' + esc(dict.badgePaused) + '</span>';
     } else if (fresh) {
       var sDot = fresh === 'VERIFIED' ? 'dot-ok' : (fresh === 'STALE' ? 'dot-danger' : 'dot-warn');
       statusBadge = '<span class="badge-status"><span class="dot ' + sDot + '"></span> ' + esc(fresh) + '</span>';
@@ -1454,7 +1504,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       statusBadge = '<span class="badge-status">SANDBOX</span>';
     }
     var pendingBadge = isPending
-      ? ' <span class="badge-status" style="color:var(--status-warn); border-color:var(--status-warn-border); background:var(--status-warn-bg);">' + esc(dict.pendingBadge) + '</span>'
+      ? ' <span class="badge-status" style="color:var(--status-warn); border-color:var(--status-warn-border); background:var(--status-warn-bg);">' + esc(dict.badgePending) + '</span>'
       : '';
 
     var topRow = document.createElement('div');
@@ -1491,162 +1541,200 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     var toolbar = document.createElement('div');
     toolbar.className = 'inspector-toolbar';
 
-    // Button: Approve (if pending)
-    if (isPending) {
-      var btnApprove = document.createElement('button');
-      btnApprove.type = 'button';
-      btnApprove.className = 'btn-action';
-      btnApprove.style.color = 'var(--status-ok)';
-      btnApprove.style.borderColor = 'var(--status-ok-border)';
-      btnApprove.textContent = dict.approveBtn;
-      btnApprove.addEventListener('click', function() {
-        callKernelAction('approve-item', { kind: kind.replace(/s$/, ''), id: item.id }).then(function(res) {
+    if (isArchived) {
+      var btnRestore = document.createElement('button');
+      btnRestore.type = 'button';
+      btnRestore.className = 'btn-action';
+      btnRestore.style.color = 'var(--status-ok)';
+      btnRestore.style.borderColor = 'var(--status-ok-border)';
+      btnRestore.textContent = dict.restore;
+      btnRestore.addEventListener('click', function() {
+        callKernelAction('restore-item', { kind: singularKind(kind), id: item.id }).then(function(res) {
           if (res.ok) {
-            item.review_status = 'approved';
+            if (res.snapshot) snapshot = res.snapshot;
+            var restored = (snapshot[kind] || []).find(function(x) { return x.id === item.id; });
+            if (restored) {
+              selectedCapability = { kind: kind, item: restored };
+            } else {
+              selectedCapability = null;
+            }
+            renderTelemetry();
+            renderCapabilitiesTable();
+            renderInspector();
+            showToast('success', (lang === 'zh' ? '已从回收站恢复 ' : 'Restored ') + item.id);
+          } else {
+            showToast('error', res.error || 'Restore failed');
+          }
+        });
+      });
+      toolbar.appendChild(btnRestore);
+    } else {
+      // Button: Approve (if pending)
+      if (isPending) {
+        var btnApprove = document.createElement('button');
+        btnApprove.type = 'button';
+        btnApprove.className = 'btn-action';
+        btnApprove.style.color = 'var(--status-ok)';
+        btnApprove.style.borderColor = 'var(--status-ok-border)';
+        btnApprove.textContent = dict.approve;
+        btnApprove.addEventListener('click', function() {
+          callKernelAction('approve-item', { kind: singularKind(kind), id: item.id }).then(function(res) {
+            if (res.ok) {
+              item.review_status = 'approved';
+              if (res.snapshot) snapshot = res.snapshot;
+              renderTelemetry();
+              renderCapabilitiesTable();
+              renderInspector();
+              showToast('success', (lang === 'zh' ? '已确认 ' : 'Approved ') + item.id);
+            } else {
+              showToast('error', res.error || 'Approve failed');
+            }
+          });
+        });
+        toolbar.appendChild(btnApprove);
+      }
+
+      // Button: Pause / Enable
+      var btnPause = document.createElement('button');
+      btnPause.type = 'button';
+      btnPause.className = 'btn-action';
+      btnPause.textContent = isPaused ? dict.resumeItem : dict.pauseItem;
+      btnPause.addEventListener('click', function() {
+        var nextEnabled = isPaused ? true : false;
+        callKernelAction('toggle-enabled', { kind: singularKind(kind), id: item.id, enabled: nextEnabled }).then(function(res) {
+          if (res.ok) {
+            item.enabled = nextEnabled;
             if (res.snapshot) snapshot = res.snapshot;
             renderTelemetry();
             renderCapabilitiesTable();
             renderInspector();
-            showToast('success', 'Approved ' + item.id);
+            showToast('success', (nextEnabled ? (lang === 'zh' ? '已启用 ' : 'Enabled ') : (lang === 'zh' ? '已搁置 ' : 'Paused ')) + item.id);
+          } else {
+            showToast('error', res.error || 'Failed to toggle status');
           }
         });
       });
-      toolbar.appendChild(btnApprove);
-    }
+      toolbar.appendChild(btnPause);
 
-    // Button: Pause / Enable
-    var btnPause = document.createElement('button');
-    btnPause.type = 'button';
-    btnPause.className = 'btn-action';
-    btnPause.textContent = isPaused ? dict.enableBtn : dict.pauseBtn;
-    btnPause.addEventListener('click', function() {
-      var nextEnabled = isPaused ? true : false;
-      callKernelAction('toggle-enabled', { kind: kind.replace(/s$/, ''), id: item.id, enabled: nextEnabled }).then(function(res) {
-        if (res.ok) {
-          item.enabled = nextEnabled;
-          if (res.snapshot) snapshot = res.snapshot;
-          renderTelemetry();
-          renderCapabilitiesTable();
-          renderInspector();
-          showToast('success', (nextEnabled ? 'Enabled ' : 'Paused ') + item.id);
-        } else {
-          showToast('error', res.error || 'Failed to toggle status');
+      // Button: Open in IDE
+      var btnOpen = document.createElement('button');
+      btnOpen.type = 'button';
+      btnOpen.className = 'btn-action';
+      btnOpen.textContent = dict.openInIde;
+      btnOpen.addEventListener('click', function() {
+        var filePath = '';
+        var line = 1;
+        if (kind === 'memories') {
+          var anchors = (item.freshness && item.freshness.topology_anchors) || [];
+          if (anchors[0]) {
+            filePath = anchors[0].file_path;
+            line = parseInt(String(anchors[0].lines || '1').split('-')[0].replace(/[^0-9]/g, ''), 10) || 1;
+          } else if (item.target_symbols && item.target_symbols[0]) {
+            filePath = item.target_symbols[0].split('#')[0];
+          }
+        } else if (kind === 'rules') {
+          filePath = item.core ? ('.evo/rules/' + item.id + '.md') : ('.evo/rules/scoped/' + item.id + '.md');
+        } else if (kind === 'skills') {
+          filePath = '.evo/skills/' + item.id + '/SKILL.md';
+        } else if (kind === 'tools') {
+          filePath = item.script_path || ('.evo/tools/' + item.id + '/' + (item.entry_script || 'run.mjs'));
+        }
+        if (filePath) {
+          callKernelAction('open-editor', { filePath: filePath, line: line }).then(function(res) {
+            if (res.ok) showToast('success', 'Opened in editor: ' + filePath + (line > 1 ? ':' + line : ''));
+            else showToast('error', res.error || 'Failed to open file');
+          });
         }
       });
-    });
-    toolbar.appendChild(btnPause);
+      toolbar.appendChild(btnOpen);
 
-    // Button: Open in IDE
-    var btnOpen = document.createElement('button');
-    btnOpen.type = 'button';
-    btnOpen.className = 'btn-action';
-    btnOpen.textContent = dict.openInIde;
-    btnOpen.addEventListener('click', function() {
-      var filePath = '';
-      var line = 1;
+      // Button: Verify AST (Memories)
       if (kind === 'memories') {
-        var anchors = (item.freshness && item.freshness.topology_anchors) || [];
-        if (anchors[0]) {
-          filePath = anchors[0].file_path;
-          line = parseInt(String(anchors[0].lines || '1').split('-')[0].replace(/[^0-9]/g, ''), 10) || 1;
-        } else if (item.target_symbols && item.target_symbols[0]) {
-          filePath = item.target_symbols[0].split('#')[0];
-        }
-      } else if (kind === 'rules') {
-        filePath = item.core ? ('.evo/rules/' + item.id + '.md') : ('.evo/rules/scoped/' + item.id + '.md');
-      } else if (kind === 'skills') {
-        filePath = '.evo/skills/' + item.id + '/SKILL.md';
-      } else if (kind === 'tools') {
-        filePath = item.script_path || ('.evo/tools/' + item.id + '/' + (item.entry_script || 'run.mjs'));
+        var btnVerify = document.createElement('button');
+        btnVerify.type = 'button';
+        btnVerify.className = 'btn-action';
+        btnVerify.textContent = dict.verifyAst;
+        btnVerify.addEventListener('click', function() {
+          btnVerify.textContent = dict.verifyingAst;
+          callKernelAction('verify-memory', { id: item.id }).then(function(res) {
+            btnVerify.textContent = dict.verifyAst;
+            if (res.ok && res.snapshot) {
+              snapshot = res.snapshot;
+              var updated = (snapshot.memories || []).find(function(m) { return m.id === item.id; });
+              if (updated) selectedCapability.item = updated;
+              renderInspector();
+              renderCapabilitiesTable();
+              showToast('success', 'AST verification complete');
+            } else {
+              showToast('error', res.error || 'Verification failed');
+            }
+          });
+        });
+        toolbar.appendChild(btnVerify);
       }
-      if (filePath) {
-        callKernelAction('open-editor', { filePath: filePath, line: line }).then(function(res) {
-          if (res.ok) showToast('success', 'Opened in editor: ' + filePath + (line > 1 ? ':' + line : ''));
-          else showToast('error', res.error || 'Failed to open file');
+
+      // Button: Toggle Core / Scoped (Rules)
+      if (kind === 'rules') {
+        var btnToggleCore = document.createElement('button');
+        btnToggleCore.type = 'button';
+        btnToggleCore.className = 'btn-action';
+        btnToggleCore.textContent = item.core ? dict.demoteScoped : dict.promoteCore;
+        btnToggleCore.addEventListener('click', function() {
+          callKernelAction('toggle-rule-tier', { id: item.id, core: !item.core }).then(function(res) {
+            if (res.ok) {
+              if (res.snapshot) {
+                snapshot = res.snapshot;
+                var updatedRule = (snapshot.rules || []).find(function(r) { return r.id === item.id; });
+                if (updatedRule) selectedCapability.item = updatedRule;
+              } else {
+                item.core = !item.core;
+              }
+              renderInspector();
+              renderCapabilitiesTable();
+              renderTelemetry();
+              var tokNow = (res.data && res.data.tokenUsage !== undefined) ? res.data.tokenUsage : (res.tokenUsage || 0);
+              showToast('success', 'Rule moved to ' + (selectedCapability.item.core ? 'Core (' + tokNow + '/1500 tok)' : 'Scoped'));
+            } else {
+              showToast('error', res.error || 'Failed to toggle tier');
+            }
+          });
         });
+        toolbar.appendChild(btnToggleCore);
       }
-    });
-    toolbar.appendChild(btnOpen);
 
-    // Button: Verify AST (Memories)
-    if (kind === 'memories') {
-      var btnVerify = document.createElement('button');
-      btnVerify.type = 'button';
-      btnVerify.className = 'btn-action';
-      btnVerify.textContent = dict.verifyAst;
-      btnVerify.addEventListener('click', function() {
-        btnVerify.textContent = dict.verifyingAst;
-        callKernelAction('verify-memory', { id: item.id }).then(function(res) {
-          btnVerify.textContent = dict.verifyAst;
-          if (res.ok && res.snapshot) {
-            snapshot = res.snapshot;
-            var updated = (snapshot.memories || []).find(function(m) { return m.id === item.id; });
-            if (updated) selectedCapability.item = updated;
-            renderInspector();
-            renderCapabilitiesTable();
-            showToast('success', 'AST verification complete');
-          } else {
-            showToast('error', res.error || 'Verification failed');
-          }
+      // Button: Run Self-Test (Tools)
+      if (kind === 'tools') {
+        var btnRunTest = document.createElement('button');
+        btnRunTest.type = 'button';
+        btnRunTest.className = 'btn-action';
+        btnRunTest.textContent = dict.runSelfTest;
+        btnRunTest.addEventListener('click', function() {
+          runToolSelfTest(item.id);
         });
+        toolbar.appendChild(btnRunTest);
+      }
+
+      // Button: Edit / Preview
+      var btnEdit = document.createElement('button');
+      btnEdit.type = 'button';
+      btnEdit.className = 'btn-action';
+      btnEdit.textContent = inspectorMode === 'edit' ? dict.preview : dict.edit;
+      btnEdit.addEventListener('click', function() {
+        inspectorMode = inspectorMode === 'edit' ? 'preview' : 'edit';
+        renderInspector();
       });
-      toolbar.appendChild(btnVerify);
-    }
+      toolbar.appendChild(btnEdit);
 
-    // Button: Toggle Core / Scoped (Rules)
-    if (kind === 'rules') {
-      var btnToggleCore = document.createElement('button');
-      btnToggleCore.type = 'button';
-      btnToggleCore.className = 'btn-action';
-      btnToggleCore.textContent = item.core ? dict.demoteScoped : dict.promoteCore;
-      btnToggleCore.addEventListener('click', function() {
-        callKernelAction('toggle-rule-tier', { id: item.id, core: !item.core }).then(function(res) {
-          if (res.ok) {
-            item.core = !item.core;
-            renderInspector();
-            renderCapabilitiesTable();
-            renderTelemetry();
-            showToast('success', 'Rule moved to ' + (item.core ? 'Core (' + res.tokenUsage + '/1500 tok)' : 'Scoped'));
-          } else {
-            showToast('error', res.error || 'Failed to toggle tier');
-          }
-        });
+      // Button: Archive (No window.confirm — uses Undo Toast for Webview compatibility)
+      var btnArchive = document.createElement('button');
+      btnArchive.type = 'button';
+      btnArchive.className = 'btn-action btn-danger';
+      btnArchive.textContent = dict.archive;
+      btnArchive.addEventListener('click', function() {
+        archiveAndOfferUndo(kind, item.id);
       });
-      toolbar.appendChild(btnToggleCore);
+      toolbar.appendChild(btnArchive);
     }
-
-    // Button: Run Self-Test (Tools)
-    if (kind === 'tools') {
-      var btnRunTest = document.createElement('button');
-      btnRunTest.type = 'button';
-      btnRunTest.className = 'btn-action';
-      btnRunTest.textContent = dict.runSelfTest;
-      btnRunTest.addEventListener('click', function() {
-        runToolSelfTest(item.id);
-      });
-      toolbar.appendChild(btnRunTest);
-    }
-
-    // Button: Edit / Preview
-    var btnEdit = document.createElement('button');
-    btnEdit.type = 'button';
-    btnEdit.className = 'btn-action';
-    btnEdit.textContent = inspectorMode === 'edit' ? dict.preview : dict.edit;
-    btnEdit.addEventListener('click', function() {
-      inspectorMode = inspectorMode === 'edit' ? 'preview' : 'edit';
-      renderInspector();
-    });
-    toolbar.appendChild(btnEdit);
-
-    // Button: Archive (No window.confirm — uses Undo Toast for Webview compatibility)
-    var btnArchive = document.createElement('button');
-    btnArchive.type = 'button';
-    btnArchive.className = 'btn-action btn-danger';
-    btnArchive.textContent = dict.archive;
-    btnArchive.addEventListener('click', function() {
-      archiveAndOfferUndo(kind, item.id);
-    });
-    toolbar.appendChild(btnArchive);
 
     content.appendChild(toolbar);
 
@@ -1664,15 +1752,15 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     }
 
     // 2.8 STALE / OTHER_BRANCH Action Banner (Memories)
-    if (kind === 'memories' && (fresh === 'STALE' || fresh === 'OTHER_BRANCH')) {
+    if (!isArchived && kind === 'memories' && (fresh === 'STALE' || fresh === 'OTHER_BRANCH')) {
       var staleBanner = document.createElement('div');
       staleBanner.className = 'inspector-section';
       staleBanner.innerHTML =
         '<div class="stale-action-banner">' +
           '<div class="stale-action-text">' + esc(dict.staleBannerText) + '</div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' +
-            '<button type="button" class="btn-action" id="btn-rebind-ast" style="color:var(--status-ok);border-color:var(--status-ok-border);">' + esc(dict.rebindAstBtn) + '</button>' +
-            '<button type="button" class="btn-action" id="btn-stale-pause">' + esc(isPaused ? dict.enableBtn : dict.pauseBtn) + '</button>' +
+            '<button type="button" class="btn-action" id="btn-rebind-ast" style="color:var(--status-ok);border-color:var(--status-ok-border);">' + esc(dict.rebindAst) + '</button>' +
+            '<button type="button" class="btn-action" id="btn-stale-pause">' + esc(isPaused ? dict.resumeItem : dict.pauseItem) + '</button>' +
             '<button type="button" class="btn-action btn-danger" id="btn-stale-archive">' + esc(dict.archive) + '</button>' +
           '</div>' +
         '</div>';
@@ -1683,7 +1771,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         btnRebind.addEventListener('click', function() {
           btnRebind.textContent = dict.rebindingAst;
           callKernelAction('rebind-memory-ast', { id: item.id }).then(function(res) {
-            btnRebind.textContent = dict.rebindAstBtn;
+            btnRebind.textContent = dict.rebindAst;
             if (res.ok && res.snapshot) {
               snapshot = res.snapshot;
               var updated = (snapshot.memories || []).find(function(m) { return m.id === item.id; });
@@ -1713,7 +1801,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     }
 
     // 3. AST Anchors Section (Memories) — Deduplicated symbol & overflow protected
-    if (kind === 'memories') {
+    if (!isArchived && kind === 'memories') {
       var anchors = (item.freshness && item.freshness.topology_anchors) || [];
       var astSection = document.createElement('div');
       astSection.className = 'inspector-section';
@@ -1800,11 +1888,20 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
 
       contentSection.querySelector('#btn-editor-save').addEventListener('click', function() {
         var newContent = txtInput.value;
-        callKernelAction('update-content', { kind: kind.replace(/s$/, ''), id: item.id, content: newContent }).then(function(res) {
+        callKernelAction('update-content', { kind: singularKind(kind), id: item.id, content: newContent }).then(function(res) {
           if (res.ok) {
             showToast('success', 'Changes saved to ' + item.id);
-            item.content = newContent;
+            if (res.snapshot) {
+              snapshot = res.snapshot;
+              var updatedItem = (snapshot[kind] || []).find(function(x) { return x.id === item.id; });
+              if (updatedItem) selectedCapability.item = updatedItem;
+              else item.content = newContent;
+            } else {
+              item.content = newContent;
+            }
             inspectorMode = 'preview';
+            renderTelemetry();
+            renderCapabilitiesTable();
             renderInspector();
           } else {
             showToast('error', res.error || 'Save failed');
@@ -2126,6 +2223,40 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     if (el('inspector-placeholder-title')) el('inspector-placeholder-title').textContent = dict.noSelectionTitle;
     if (el('inspector-placeholder-sub')) el('inspector-placeholder-sub').textContent = dict.noSelectionSub;
 
+    // Kind & Status Filter Pills
+    var kp = el('caps-kind-pills');
+    if (kp) {
+      var kindLabels = {
+        all: dict.allKinds,
+        rules: dict.rules,
+        skills: dict.skills,
+        tools: dict.tools,
+        memories: dict.memories
+      };
+      kp.querySelectorAll('.filter-pill').forEach(function(p) {
+        var k = p.getAttribute('data-kind');
+        if (k && kindLabels[k]) p.textContent = kindLabels[k];
+      });
+    }
+    var sp = el('caps-status-pills');
+    if (sp) {
+      var statusLabels = {
+        all: dict.allStatus,
+        pending: dict.statusPending,
+        active: dict.statusActive,
+        paused: dict.statusPaused,
+        verified: dict.statusVerified,
+        stale: dict.statusStale,
+        core: dict.statusCore,
+        scoped: dict.statusScoped,
+        archived: dict.statusArchived
+      };
+      sp.querySelectorAll('.filter-pill').forEach(function(p) {
+        var st = p.getAttribute('data-status');
+        if (st && statusLabels[st]) p.textContent = statusLabels[st];
+      });
+    }
+
     renderTelemetry();
     renderCapabilitiesTable();
     renderGatekeeperStream();
@@ -2231,7 +2362,8 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           renderTelemetry();
           renderCapabilitiesTable();
           if (selectedCapability) renderInspector();
-          showToast('success', 'Approved ' + (res.approvedCount || 0) + ' pending capabilities');
+          var approvedCount = (res.data && res.data.approvedCount !== undefined) ? res.data.approvedCount : (res.approvedCount || 0);
+          showToast('success', 'Approved ' + approvedCount + ' pending capabilities');
         }
       });
     });
@@ -2242,7 +2374,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     btnBatchPauseStale.addEventListener('click', function() {
       var staleList = (snapshot.memories || []).filter(function(m) {
         var st = (m.freshness && m.freshness.overall_status) || 'VERIFIED';
-        return (st === 'STALE' || st === 'OTHER_BRANCH') && m.enabled !== false;
+        return st === 'STALE' && m.enabled !== false;
       }).map(function(m) {
         return { kind: 'memory', id: m.id };
       });
@@ -2921,38 +3053,65 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       border-bottom: 1px solid var(--border-subtle);
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
       flex-shrink: 0;
     }
-    .health-diag-title {
-      font-size: 10.5px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+    .diag-banner-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11.5px;
+      color: var(--text-primary);
     }
-    .health-diag-pills {
+    .diag-chips-row {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
     }
-    .health-diag-pill {
+    .diag-chip {
       background: var(--bg-surface);
       border: 1px solid var(--border-subtle);
       color: var(--text-secondary);
       font-size: 11.5px;
-      padding: 4px 10px;
+      padding: 5px 10px;
       border-radius: 6px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       transition: all var(--duration-micro) ease;
     }
-    .health-diag-pill:hover {
+    .diag-chip:hover {
       background: var(--bg-elevated);
       border-color: var(--border-focus);
       color: var(--text-primary);
+    }
+    .diag-chip-danger {
+      border-color: var(--status-danger-border);
+      background: var(--status-danger-bg);
+      color: var(--text-primary);
+    }
+    .diag-chip-warn {
+      border-color: var(--status-warn-border);
+      background: var(--status-warn-bg);
+      color: var(--text-primary);
+    }
+    .diag-chip-info {
+      border-color: rgba(56, 189, 248, 0.35);
+      background: rgba(56, 189, 248, 0.08);
+      color: var(--text-primary);
+    }
+    .diag-chip-ok {
+      border-color: var(--status-ok-border);
+      background: var(--status-ok-bg);
+      color: var(--status-ok);
+      cursor: default;
+    }
+    .diag-chip-cta {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--status-ok);
     }
 
     .filter-toolbar {
@@ -3055,6 +3214,15 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     .data-table tr.row-interactive.row-selected {
       background: rgba(255, 255, 255, 0.045);
     }
+    .data-table tr.row-paused {
+      opacity: 0.55;
+    }
+    .row-actions-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+    }
 
     .badge-kind {
       display: inline-block;
@@ -3085,6 +3253,12 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .scoped-glob-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .dot {
       display: inline-block;
       width: 6px;
@@ -3102,9 +3276,16 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       gap: 2px;
       min-width: 0;
     }
+    .item-title-line {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      min-width: 0;
+    }
     .item-main-title {
       color: var(--text-primary);
       font-weight: 500;
+      min-width: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -3836,6 +4017,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             <div class="pill-group" id="caps-status-pills">
               <button type="button" class="filter-pill active" data-status="all">All Status</button>
               <button type="button" class="filter-pill" data-status="pending" id="pill-status-pending">Pending</button>
+              <button type="button" class="filter-pill" data-status="active">Active</button>
               <button type="button" class="filter-pill" data-status="verified">Verified</button>
               <button type="button" class="filter-pill" data-status="stale">Stale</button>
               <button type="button" class="filter-pill" data-status="core">Core</button>

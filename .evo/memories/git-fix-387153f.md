@@ -2,7 +2,7 @@
 id: git-fix-387153f
 title: "Historical Fix Case (387153f): Multi-Workspace MCP Context Routing & Plugin CWD Hijacking Isolation"
 l0_summary: "Fixes plugin install directory CWD hijacking, single-dispatcher cross-project contamination, and missing workspace parameters."
-created_commit: "ae1725a"
+created_commit: "223bdd6"
 created_branch: "main"
 target_symbols: ["src/core/storage.ts#isPluginOrExtensionInstallDir","src/mcp/handlers.ts#EvoMcpDispatcher","src/cli/index.ts#resolveWorkspaceRoot"]
 ast_fingerprints: {"src/core/storage.ts#isPluginOrExtensionInstallDir":{"symbol":"src/core/storage.ts#isPluginOrExtensionInstallDir","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":62,"end_line":73,"signature":"export function isPluginOrExtensionInstallDir(dirPath: string): boolean","ast_hash":"7a35351be54a8e1a"},"src/mcp/handlers.ts#EvoMcpDispatcher":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"class","start_line":255,"end_line":1642,"signature":"export class EvoMcpDispatcher","ast_hash":"6f42f2e0b2a3b9c7"},"src/cli/index.ts#resolveWorkspaceRoot":{"symbol":"src/cli/index.ts#resolveWorkspaceRoot","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":485,"end_line":519,"signature":"export function resolveWorkspaceRoot(","ast_hash":"2830196d74315060"}}
@@ -10,7 +10,7 @@ tags: ["git-history","fix","mcp","workspace-routing","plugin-isolation"]
 origin: "evolved"
 supersedes_id: "git-fix-387153f"
 created_at: "2026-10-21T15:16:26.722Z"
-updated_at: "2026-11-06T05:58:04.390Z"
+updated_at: "2026-11-06T06:25:44.555Z"
 ---
 
 ## Symptom

@@ -446,7 +446,7 @@ export function computeGitBugHotspots(workspaceRoot: string, limit = 10): GitBug
     // Read memories with full AST fingerprint, target symbol file mapping, and body file references
     try {
       const storage = new EvoStorage(ws);
-      const mems = storage.listMemories();
+      const mems = storage.listMemories().filter((m) => m.enabled !== false);
       for (const m of mems) {
         const matchedFilesForMem = new Set<string>();
         for (const sym of m.target_symbols || []) {
@@ -498,6 +498,9 @@ export function computeGitBugHotspots(workspaceRoot: string, limit = 10): GitBug
               walk(full);
             } else if (ent.isFile() && ent.name.endsWith('.md')) {
               const raw = fs.readFileSync(full, 'utf8');
+              if (/^\s*enabled:\s*(?:false|"false"|'false')\s*$/m.test(raw)) {
+                continue;
+              }
               const match = raw.match(/scope_glob:\s*["']?([^"'\r\n]+)["']?/);
               if (match) {
                 const glob = match[1].trim();

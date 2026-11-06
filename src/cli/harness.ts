@@ -756,7 +756,7 @@ export function syncDeclaredPreToolHooks(workspaceRoot: string): void {
   const storage = new EvoStorage(workspaceRoot);
   const evoExists = fs.existsSync(storage.evoDir);
   const preToolTools = evoExists
-    ? storage.listTools().filter((t) => t.hook_trigger?.event === 'pre-tool')
+    ? storage.listTools().filter((t) => t.enabled !== false && t.hook_trigger?.event === 'pre-tool')
     : [];
 
   let matcher = '*';

@@ -2,14 +2,14 @@
 id: ui-shotcraft-modal-csp-invariant
 title: "Interactive Theater Modal CSP & Constellation Cutout Invariants"
 l0_summary: "Interactive Theater Modal CSP & Constellation Cutout Scaling Invariant"
-created_commit: "ae1725a"
+created_commit: "223bdd6"
 created_branch: "main"
 target_symbols: ["src/templates/ui-client.ts#renderUiClientHtml","src/cli/score.ts#renderScoreSvg","scripts/render-promo-assets.mjs#constCutoutCss"]
-ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":3975,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"74cad27c1797065f"},"src/cli/score.ts#renderScoreSvg":{"symbol":"src/cli/score.ts#renderScoreSvg","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":790,"end_line":905,"signature":"export function renderScoreSvg(report: ScoreReport): string","ast_hash":"53180bd6b0b9146f"},"scripts/render-promo-assets.mjs#constCutoutCss":{"symbol":"scripts/render-promo-assets.mjs#constCutoutCss","file_path":"scripts/render-promo-assets.mjs","file":"scripts/render-promo-assets.mjs","kind":"variable","start_line":134,"end_line":189,"signature":"const constCutoutCss = `","ast_hash":"843b93003a643443"}}
+ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":4157,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"8bef09b8c1e03562"},"src/cli/score.ts#renderScoreSvg":{"symbol":"src/cli/score.ts#renderScoreSvg","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":793,"end_line":908,"signature":"export function renderScoreSvg(report: ScoreReport): string","ast_hash":"53180bd6b0b9146f"},"scripts/render-promo-assets.mjs#constCutoutCss":{"symbol":"scripts/render-promo-assets.mjs#constCutoutCss","file_path":"scripts/render-promo-assets.mjs","file":"scripts/render-promo-assets.mjs","kind":"variable","start_line":134,"end_line":189,"signature":"const constCutoutCss = `","ast_hash":"843b93003a643443"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-04T19:20:13.278Z"
-updated_at: "2026-11-06T05:58:04.673Z"
+updated_at: "2026-11-06T06:25:44.840Z"
 ---
 
 ## Symptom

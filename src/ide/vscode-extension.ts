@@ -7,12 +7,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { buildUiSnapshot } from '../cli/ui.js';
 import type { UiSnapshot } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { EvoStorage, findNearestEvoWorkspace, sanitizeId } from '../core/storage.js';
-import type { EvoKind } from '../core/types.js';
+import { EvoStorage, estimateTokens, findNearestEvoWorkspace, sanitizeId } from '../core/storage.js';
+import type { EvoKind, SymbolFingerprint } from '../core/types.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import {
-  buildFingerprintsForTargets,
   clearMemoryVerificationCache,
+  extractSymbolFingerprint,
+  parseSymbolTarget,
   resolveCurrentGitBranch,
   resolveCurrentGitCommit,
   verifyMemoryFreshness,
@@ -588,11 +589,45 @@ export async function handleWebviewAction(
         const mem = storage.getMemory(cleanId);
         if (!mem) return { ok: false, error: `Not Found: Memory "${cleanId}" not found` };
 
-        const { fingerprints, resolvedSymbols, missingSymbols } = buildFingerprintsForTargets(
-          ws,
-          mem.target_symbols || []
-        );
-        const nextFingerprints = { ...(mem.ast_fingerprints || {}), ...fingerprints };
+        const targetKeys =
+          mem.target_symbols && mem.target_symbols.length > 0
+            ? mem.target_symbols
+            : Object.keys(mem.ast_fingerprints || {});
+        const resolvedSymbols: string[] = [];
+        const missingSymbols: string[] = [];
+        const nextFingerprints: Record<string, SymbolFingerprint> = { ...(mem.ast_fingerprints || {}) };
+
+        for (const symKey of targetKeys) {
+          const recorded = mem.ast_fingerprints?.[symKey];
+          const parsed = parseSymbolTarget(symKey);
+          const fastQuery =
+            !parsed.fileHint &&
+            !parsed.isWholeFile &&
+            recorded?.file_path &&
+            recorded.file_path !== '(unrecorded)'
+              ? `${recorded.file_path}#${symKey}`
+              : symKey;
+          const liveRaw = extractSymbolFingerprint(ws, fastQuery);
+          if (!liveRaw) {
+            missingSymbols.push(symKey);
+          } else {
+            resolvedSymbols.push(symKey);
+            nextFingerprints[symKey] = {
+              ...liveRaw,
+              symbol: symKey,
+            };
+          }
+        }
+
+        if (missingSymbols.length > 0) {
+          return {
+            ok: false,
+            code: 'ERR_MISSING_AST_SYMBOL',
+            error: `Cannot re-bind AST: target symbol(s) missing in workspace: ${missingSymbols.join(', ')}`,
+            details: { id: cleanId, resolvedSymbols, missingSymbols },
+          };
+        }
+
         const updatedMem = {
           ...mem,
           ast_fingerprints: nextFingerprints,
@@ -675,29 +710,72 @@ export async function handleWebviewAction(
 
         const cleanId = sanitizeId(rawId);
         const storage = new EvoStorage(ws);
+        const hasFrontmatter = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.test(rawContent.trimStart());
+        const now = new Date().toISOString();
 
         if (rawKind === 'rule') {
+          const existingRule = storage.getRule(cleanId);
           const corePath = path.join(storage.rulesDir, `${cleanId}.md`);
           const scopedPath = path.join(storage.rulesDir, 'scoped', `${cleanId}.md`);
           const targetPath = fs.existsSync(corePath) ? corePath : (fs.existsSync(scopedPath) ? scopedPath : null);
-          if (!targetPath || !isSubpathOf(ws, targetPath)) {
+          if (!targetPath || !isSubpathOf(ws, targetPath) || !existingRule) {
             return { ok: false, error: `Not Found: Rule "${cleanId}" not found` };
           }
-          fs.writeFileSync(targetPath, rawContent.trim() + '\n', 'utf8');
-          storage.rebuildCoreInvariantsDigest();
+          if (hasFrontmatter) {
+            fs.writeFileSync(targetPath, rawContent.trim() + '\n', 'utf8');
+            storage.rebuildCoreInvariantsDigest();
+          } else {
+            const trimmedBody = rawContent.trim();
+            storage.saveRule({
+              ...existingRule,
+              content: trimmedBody,
+              tokens: estimateTokens(`${existingRule.l0_summary}\n${trimmedBody}`),
+              updated_at: now,
+            });
+          }
           syncManagedRuleBlocks(ws);
         } else if (rawKind === 'skill') {
+          const existingSkill = storage.getSkill(cleanId);
           const skillPath = path.join(storage.skillsDir, cleanId, 'SKILL.md');
-          if (!fs.existsSync(skillPath) || !isSubpathOf(ws, skillPath)) {
+          if (!fs.existsSync(skillPath) || !isSubpathOf(ws, skillPath) || !existingSkill) {
             return { ok: false, error: `Not Found: Skill "${cleanId}" not found` };
           }
-          fs.writeFileSync(skillPath, rawContent.trim() + '\n', 'utf8');
+          if (hasFrontmatter) {
+            fs.writeFileSync(skillPath, rawContent.trim() + '\n', 'utf8');
+          } else {
+            const body = rawContent.trim();
+            const l1Match = body.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
+            const l2Match = body.match(/## L2 SOP\s+([\s\S]*)$/i);
+            const l1_contract = l1Match ? l1Match[1].trim() : existingSkill.l1_contract;
+            const l2_sop = l2Match ? l2Match[1].trim() : body;
+            storage.saveSkill({
+              ...existingSkill,
+              l1_contract,
+              l2_sop,
+              updated_at: now,
+            });
+          }
         } else if (rawKind === 'memory') {
+          const existingMem = storage.getMemory(cleanId);
           const memPath = path.join(storage.memoriesDir, `${cleanId}.md`);
-          if (!fs.existsSync(memPath) || !isSubpathOf(ws, memPath)) {
+          if (!fs.existsSync(memPath) || !isSubpathOf(ws, memPath) || !existingMem) {
             return { ok: false, error: `Not Found: Memory "${cleanId}" not found` };
           }
-          fs.writeFileSync(memPath, rawContent.trim() + '\n', 'utf8');
+          if (hasFrontmatter) {
+            fs.writeFileSync(memPath, rawContent.trim() + '\n', 'utf8');
+          } else {
+            const body = rawContent.trim();
+            const symptomMatch = body.match(/## Symptom\s+([\s\S]*?)(?=## Root Cause|$)/i);
+            const rootCauseMatch = body.match(/## Root Cause\s+([\s\S]*?)(?=## Solution|$)/i);
+            const solutionMatch = body.match(/## Solution\s+([\s\S]*)$/i);
+            storage.saveMemory({
+              ...existingMem,
+              symptom: symptomMatch ? symptomMatch[1].trim() : body,
+              root_cause: rootCauseMatch ? rootCauseMatch[1].trim() : existingMem.root_cause,
+              solution: solutionMatch ? solutionMatch[1].trim() : existingMem.solution,
+              updated_at: now,
+            });
+          }
           const updatedMem = storage.getMemory(cleanId);
           if (updatedMem) {
             const dbPath = path.join(storage.cacheDir, 'telemetry.db');

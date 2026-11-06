@@ -469,7 +469,9 @@ export function handlePreTool(
 
   const telemetry = new EvoTelemetry(storage);
   try {
-    const candidateTools = storage.listTools().filter((t) => t.hook_trigger?.event === 'pre-tool');
+    const candidateTools = storage
+      .listTools()
+      .filter((t) => t.enabled !== false && t.hook_trigger?.event === 'pre-tool');
     const triggeredHooks: string[] = [];
 
     for (const tool of candidateTools) {
@@ -694,7 +696,7 @@ export function handlePostTool(
         : '';
 
       if (ctx.rawPath && !ctx.isInternalMeta) {
-        const rules = storage.listRules();
+        const rules = storage.listRules().filter((r) => r.enabled !== false);
         const injectedRaw = telemetry.getSessionFlag('injected_post_tool_rules') || '';
         const injectedSet = new Set(injectedRaw ? injectedRaw.split(',').filter(Boolean) : []);
         const newlyRecalled: string[] = [];
@@ -732,7 +734,9 @@ export function handlePostTool(
         ctx.isInternalMeta;
       const triggeredHooks: string[] = [];
       if (!isEvoTool) {
-        const candidateTools = storage.listTools().filter((t) => t.hook_trigger?.event === 'post-tool');
+        const candidateTools = storage
+          .listTools()
+          .filter((t) => t.enabled !== false && t.hook_trigger?.event === 'post-tool');
         for (const tool of candidateTools) {
           const trigger = tool.hook_trigger!;
           if (!toolMatchesTrigger(trigger.tools, ctx.rawToolName, ctx.innerToolName)) continue;

@@ -835,35 +835,71 @@ export class EvoStorage {
       return true;
     }
 
+    const collectExtraDirFiles = (baseDir: string, excludeNames: Set<string>): Record<string, string> => {
+      const extra: Record<string, string> = {};
+      if (!fs.existsSync(baseDir)) return extra;
+      const walk = (currDir: string) => {
+        for (const ent of fs.readdirSync(currDir, { withFileTypes: true })) {
+          const full = path.join(currDir, ent.name);
+          const rel = path.relative(baseDir, full).replace(/\\/g, '/');
+          if (ent.isDirectory()) {
+            walk(full);
+          } else if (ent.isFile() && !excludeNames.has(rel)) {
+            try {
+              extra[rel] = fs.readFileSync(full).toString('base64');
+            } catch {}
+          }
+        }
+      };
+      walk(baseDir);
+      return extra;
+    };
+
     if (kind === 'skill') {
       const skill = this.getSkill(cleanId);
       if (!skill) return false;
+      const skillDir = path.join(this.skillsDir, cleanId);
+      const extra_files = collectExtraDirFiles(skillDir, new Set(['SKILL.md']));
       fs.writeFileSync(
         archiveFile,
         JSON.stringify(
-          { reason, archived_at: new Date().toISOString(), ...(extraMeta || {}), item: skill },
+          {
+            reason,
+            archived_at: new Date().toISOString(),
+            ...(extraMeta || {}),
+            ...(Object.keys(extra_files).length > 0 ? { extra_files } : {}),
+            item: skill,
+          },
           null,
           2
         ),
         'utf8'
       );
-      fs.rmSync(path.join(this.skillsDir, cleanId), { recursive: true, force: true });
+      fs.rmSync(skillDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 });
       return true;
     }
 
     if (kind === 'tool') {
       const tool = this.getTool(cleanId);
       if (!tool) return false;
+      const toolDir = path.join(this.toolsDir, cleanId);
+      const extra_files = collectExtraDirFiles(toolDir, new Set(['manifest.json', tool.entry_script]));
       fs.writeFileSync(
         archiveFile,
         JSON.stringify(
-          { reason, archived_at: new Date().toISOString(), ...(extraMeta || {}), item: tool },
+          {
+            reason,
+            archived_at: new Date().toISOString(),
+            ...(extraMeta || {}),
+            ...(Object.keys(extra_files).length > 0 ? { extra_files } : {}),
+            item: tool,
+          },
           null,
           2
         ),
         'utf8'
       );
-      fs.rmSync(path.join(this.toolsDir, cleanId), { recursive: true, force: true });
+      fs.rmSync(toolDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 });
       return true;
     }
 
@@ -978,7 +1014,12 @@ export class EvoStorage {
   public restoreCapability(id: string, kind: EvoKind): boolean {
     if (!fs.existsSync(this.archiveDir)) return false;
     const cleanId = sanitizeId(id);
-    const matchingFiles: Array<{ fullPath: string; mtime: number; item: Record<string, unknown> }> = [];
+    const matchingFiles: Array<{
+      fullPath: string;
+      mtime: number;
+      raw: Record<string, unknown>;
+      item: Record<string, unknown>;
+    }> = [];
     for (const fileName of fs.readdirSync(this.archiveDir)) {
       if (!fileName.endsWith('.json')) continue;
       const fullPath = path.join(this.archiveDir, fileName);
@@ -990,7 +1031,7 @@ export class EvoStorage {
         const itemId = sanitizeId(String(item.id || (nameMatch ? nameMatch[2] : '')));
         if (itemId === cleanId && (!fileKind || fileKind === kind)) {
           const mtime = Date.parse(String(raw.archived_at || '')) || fs.statSync(fullPath).mtimeMs;
-          matchingFiles.push({ fullPath, mtime, item });
+          matchingFiles.push({ fullPath, mtime, raw, item });
         }
       } catch {
         // Ignore malformed archive files
@@ -1000,7 +1041,26 @@ export class EvoStorage {
     if (matchingFiles.length === 0) return false;
     matchingFiles.sort((a, b) => b.mtime - a.mtime);
     const latest = matchingFiles[0].item;
+    const latestRaw = matchingFiles[0].raw;
     const now = new Date().toISOString();
+    const preservedEnabled = latest.enabled === false || latest.enabled === 'false' ? false : true;
+    const preservedReviewStatus: 'pending' | 'approved' =
+      latest.review_status === 'pending' ? 'pending' : 'approved';
+
+    const restoreExtraDirFiles = (targetBaseDir: string, extraObj: unknown) => {
+      if (!extraObj || typeof extraObj !== 'object') return;
+      const resolvedBase = path.resolve(targetBaseDir);
+      for (const [relPath, b64] of Object.entries(extraObj as Record<string, unknown>)) {
+        if (typeof b64 !== 'string' || !relPath) continue;
+        const cleanRel = relPath.replace(/^[/\\]+/, '');
+        const destPath = path.resolve(resolvedBase, cleanRel);
+        if (!destPath.startsWith(resolvedBase + path.sep)) continue;
+        try {
+          fs.mkdirSync(path.dirname(destPath), { recursive: true });
+          fs.writeFileSync(destPath, Buffer.from(b64, 'base64'));
+        } catch {}
+      }
+    };
 
     if (kind === 'rule') {
       this.saveRule({
@@ -1019,8 +1079,8 @@ export class EvoStorage {
           : undefined,
         confidence: latest.confidence as ConfidenceLevel | undefined,
         contrastive_evidence: latest.contrastive_evidence ? String(latest.contrastive_evidence) : undefined,
-        enabled: true,
-        review_status: 'approved',
+        enabled: preservedEnabled,
+        review_status: preservedReviewStatus,
         created_at: String(latest.created_at || now),
         updated_at: now,
       });
@@ -1039,11 +1099,12 @@ export class EvoStorage {
         trigger_cue: latest.trigger_cue ? String(latest.trigger_cue) : undefined,
         confidence: latest.confidence as ConfidenceLevel | undefined,
         contrastive_evidence: latest.contrastive_evidence ? String(latest.contrastive_evidence) : undefined,
-        enabled: true,
-        review_status: 'approved',
+        enabled: preservedEnabled,
+        review_status: preservedReviewStatus,
         created_at: String(latest.created_at || now),
         updated_at: now,
       });
+      restoreExtraDirFiles(path.join(this.skillsDir, cleanId), latestRaw.extra_files);
     } else if (kind === 'tool') {
       const scriptCode = String(latest.script_code || '');
       const manifest: EvoToolManifest = {
@@ -1059,12 +1120,13 @@ export class EvoStorage {
         origin: String(latest.origin || 'restored'),
         supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
         hook_trigger: latest.hook_trigger as EvoHookTrigger | undefined,
-        enabled: true,
-        review_status: 'approved',
+        enabled: preservedEnabled,
+        review_status: preservedReviewStatus,
         created_at: String(latest.created_at || now),
         updated_at: now,
       };
       this.saveTool(manifest, scriptCode);
+      restoreExtraDirFiles(path.join(this.toolsDir, cleanId), latestRaw.extra_files);
     } else if (kind === 'memory') {
       this.saveMemory({
         id: cleanId,
@@ -1083,8 +1145,8 @@ export class EvoStorage {
         tags: Array.isArray(latest.tags) ? latest.tags.map(String) : [],
         origin: String(latest.origin || 'restored'),
         supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
-        enabled: true,
-        review_status: 'approved',
+        enabled: preservedEnabled,
+        review_status: preservedReviewStatus,
         created_at: String(latest.created_at || now),
         updated_at: now,
       });

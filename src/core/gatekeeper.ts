@@ -1878,7 +1878,7 @@ export class EvoGatekeeper {
         const targetBucket = getScopeBucketKey(scopeGlob);
         const existingScopedRules = this.storage
           .listRules()
-          .filter((r) => !r.core && !excludeSet.has(r.id));
+          .filter((r) => !r.core && r.enabled !== false && !excludeSet.has(r.id));
         const sameBucketRules = existingScopedRules.filter(
           (r) => getScopeBucketKey(r.scope_glob) === targetBucket
         );
