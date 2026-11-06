@@ -39,5 +39,5 @@ Whenever ANY of the following occurs in this session, you MUST call `evo_propose
 - `[tool] workspace-metrics-scanner`: Scans repository file counts, LOC, and extension distribution in one sandboxed call without polluting context.
 - When distilling a diagnosed bug into an episodic memory or SSOT-decoupled guardrail rule -> `evo_inspect("bug-to-guardrail-sop", "L2")`
 - When modifying EvoKernel core modules, running TDD verification, or preparing a release -> `evo_inspect("evo-dev-verification-sop", "L2")`
-- On-demand rules/skills (inspect via `evo_inspect`): `[skill] embedded-fsm-lookup-audit`, `[skill] evo-rule-architect`, `[skill] ceo-team-orchestrator`
+- On-demand rules/skills (inspect via `evo_inspect`): `[skill] embedded-fsm-lookup-audit`, `[skill] evo-rule-architect`
 <!-- EVO:END -->
