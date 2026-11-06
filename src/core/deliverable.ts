@@ -1982,3 +1982,88 @@ export function runDeliverableInspectorSelfTest(): {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// CLI & Self-Test Entrypoint
+// ---------------------------------------------------------------------------
+const isDeliverableCliDirectRun =
+  process.env.EVO_SELF_TEST === '1' ||
+  process.argv.includes('--self-test') ||
+  (Boolean(process.argv[1]) &&
+    !process.argv[1].includes('.test.') &&
+    path.resolve(process.argv[1]).toLowerCase() ===
+      path.resolve(import.meta.filename).toLowerCase());
+
+if (isDeliverableCliDirectRun) {
+  let evoArgs: Record<string, any> = {};
+  if (process.env.EVO_ARGS) {
+    try {
+      evoArgs = JSON.parse(process.env.EVO_ARGS);
+    } catch {}
+  }
+
+  for (let i = 2; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg.startsWith('{') && arg.endsWith('}')) {
+      try {
+        Object.assign(evoArgs, JSON.parse(arg));
+      } catch {}
+    } else if (arg === '--file' || arg === '--filePath') {
+      evoArgs.filePath = process.argv[++i];
+    } else if (arg === '--expected-shape') {
+      try {
+        evoArgs.expectedShape = JSON.parse(process.argv[++i]);
+      } catch {}
+    } else if (arg === '--check-placeholders') {
+      evoArgs.checkPlaceholders = process.argv[++i] !== 'false';
+    } else if (arg === '--strict') {
+      evoArgs.strict = true;
+    }
+  }
+
+  const isSelfTest =
+    process.env.EVO_SELF_TEST === '1' ||
+    process.argv.includes('--self-test') ||
+    Boolean(evoArgs['--self-test'] || evoArgs.self_test);
+
+  if (isSelfTest) {
+    try {
+      const res = runDeliverableInspectorSelfTest();
+      console.log(JSON.stringify({ self_test: 'passed', ...res }));
+      process.exit(0);
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          self_test: 'failed',
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+      process.exit(1);
+    }
+  }
+
+  if (!evoArgs.filePath) {
+    console.error(
+      JSON.stringify({
+        ok: false,
+        error: 'Missing required argument: filePath (via --file or EVO_ARGS)',
+      })
+    );
+    process.exit(1);
+  }
+
+  try {
+    const inspection = inspectDeliverable(evoArgs.filePath, evoArgs);
+    console.log(JSON.stringify(inspection, null, 2));
+    const strictExit = process.argv.includes('--strict') || Boolean(evoArgs.strict);
+    process.exit(strictExit && !inspection.ok ? 1 : 0);
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+    process.exit(1);
+  }
+}

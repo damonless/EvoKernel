@@ -99,19 +99,20 @@ node ./dist/cli/index.js doctor
 
 ---
 
-## 📈 Reproducible 50-Turn Engineering Benchmark (`npm run benchmark`)
+## 📈 50-Turn Context-Tax Analytical Model & Live Engine Micro-Benchmark (`npm run benchmark`)
 
-Simulated across **8 standard MCP servers** (`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` — **77 tools** total) + a mature repo knowledge base (10 rules, 4 skills, 5 micro-tools, 15 debugging memories) over a **50-turn coding session** with 3 mid-session capability evolutions (reproduce locally via `npm run benchmark`):
+Analytical cost/cache model across **8 standard MCP servers** (`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` — **77 tools** total) + a mature repo knowledge base (10 rules, 4 skills, 5 micro-tools, 15 debugging memories) over a **50-turn coding session** with 3 mid-session capability evolutions, paired with live local engine micro-benchmarks (reproduce locally via `npm run benchmark`).
+*Note on zero-prefix-invalidation condition*: The 0 mid-session cache invalidation guarantee holds when new capabilities are crystallized as `core: false` scoped rules, skills, micro-tools, or `memory` entries (the default in EvoKernel), which reside in `.evo/` without mutating the top-level `tools/list` schema or host `CLAUDE.md` L0 prefix.
 
-| Metric | Raw Multi-MCP + Monolithic `CLAUDE.md` | **🧬 EvoKernel 5-Tool Meta-Gateway** | Verified Improvement |
+| Metric | Raw Multi-MCP + Monolithic `CLAUDE.md` | **🧬 EvoKernel 5-Tool Meta-Gateway** | Model / Live Result |
 | :--- | :---: | :---: | :---: |
 | **Exposed Tool Schemas** | 77 tools | **5 fixed meta-tools** | **-93.5% schema footprint** |
-| **Eager Static Prefix / Turn** | 27,150 tokens | **1,530 tokens** | **-94.4% prompt tax** |
+| **Eager Static Prefix / Turn** | 27,150 tokens | **3,066 tokens** | **-88.7% prompt tax** |
 | **Mid-Session Cache Invalidations** | 3 full prefix busts | **0 (100% cache hit)** | **100% KV Cache Shield** |
-| **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **661,770 tokens** | **-65.7% total token load** |
-| **50-Turn Cost (Claude Sonnet 4.5)** | \$1.15 | **\$0.31** | **-72.9% API cost** |
-| **50-Turn Cost (Claude Opus 4.5)** | \$5.76 | **\$1.56** | **-72.9% API cost** |
-| **AST Anti-Drift Memory Check** | Unverified text (drifts silently) | **0.048 ms / memory** | **Deterministic AST Grounding** |
+| **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% total token load** |
+| **50-Turn Cost (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **-70.4% API cost** |
+| **50-Turn Cost (Claude Opus 4.5)** | \$5.76 | **\$1.70** | **-70.4% API cost** |
+| **AST Anti-Drift Memory Check** | Unverified text (drifts silently) | **~0.35 ms / memory** | **Deterministic AST Grounding** |
 
 ---
 
@@ -356,14 +357,12 @@ EvoKernel exposes **exactly 5 immutable meta-tools** over `stdio` to ensure 100%
 │   ├── [SCOPED] core-architecture-and-ast-invariants-guard (728 tok) — Dry-run compaction, comment-stripped AST matching & Git lookups.
 │   ├── [SCOPED] multi-harness-config-and-proxy-isolation (906 tok) — Lossless config merge/restore, fail-closed user configs & proxy roots.
 │   └── [SCOPED] workspace-isolation-and-fts5-guard (537 tok) — Isolate uninitialized fallback, parent Git detection & FTS5 search.
-├── ⚡ Skills (3 verified L0/L1/L2 playbooks)
+├── ⚡ Skills (2 verified L0/L1/L2 playbooks)
 │   ├── [SOP] bug-to-guardrail-sop (hits: 3 | tags: debugging,evolution) — Standard workflow to turn a resolved root cause into a Rule.
-│   ├── [SOP] evo-dev-verification-sop (hits: 22 | tags: dev,release) — 4-stage TDD, blast-radius check & preflight verification SOP.
 │   └── [SOP] evo-rule-architect (hits: 2 | tags: refactor,rules) — 4-stage rule decoupling and budget refactoring workflow.
-├── 🔧 Micro-Tools (5 sandboxed scripts | Fixed Meta-MCP Routed)
+├── 🔧 Micro-Tools (4 sandboxed scripts | Fixed Meta-MCP Routed)
 │   ├── [NODE] agy-config-auditor (runs: 55 | pass: 100%) — Audits host rule budgets and memory AST symbols.
 │   ├── [NODE] deliverable-canonical-inspector (runs: 18 | pass: 100%) — Zero-dep validator for .xlsx, .docx, .pptx, CSV, JSON, MD.
-│   ├── [NODE] evo-release-preflight (runs: 30 | pass: 100%) — Audits multi-manifest parity and build freshness.
 │   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
 │   └── [NODE] workspace-metrics-scanner (runs: 13 | pass: 100%) — Scans file counts, LOC, and extension distribution.
 └── 🧠 Episodic Memories (18 fault cases | 18 VERIFIED · 0 STALE)

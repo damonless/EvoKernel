@@ -11,7 +11,6 @@ import { EvoStorage, sanitizeId } from './storage.js';
 import { EvoTelemetry } from './telemetry.js';
 import { EvoGatekeeper } from './gatekeeper.js';
 import { inspectDeliverable } from './deliverable.js';
-import { collectWorkspaceSourceFiles, extractSymbolsFromGitCommit } from './memory.js';
 import { matchesScopeGlob } from '../cli/hook.js';
 import { syncManagedRuleBlocks } from '../cli/init.js';
 import { runAudit } from '../cli/audit.js';
@@ -1807,211 +1806,6 @@ export interface OptimizationResult {
   notes?: string;
 }
 
-export function runBuiltinOfflineProposer(options: {
-  missionFile: string;
-  contextDir: string;
-  harnessDir: string;
-  dim: 'inv' | 'dom' | 'both';
-  candidateId: string;
-  baseWorkspaceRoot: string;
-  trajectories?: string[];
-  deliverables?: string[];
-}): ProposerCandidateResult {
-  const proposals: ProposalPayload[] = [];
-  const deletedIds: Array<{ kind: EvoKind; id: string }> = [];
-
-  const baseStorage = new EvoStorage(options.baseWorkspaceRoot);
-  baseStorage.ensureInitialized();
-  const config = baseStorage.getConfig();
-  const { totalTokens } = baseStorage.getCoreRulesTokenUsage();
-
-  // Dimension A: Structural entropy reduction (inv / both)
-  if (options.dim === 'inv' || options.dim === 'both') {
-    const rules = baseStorage.listRules();
-    // 1. Look for core: true rules that have non-global scope (scope_glob !== '**/*' && scope_glob !== '*')
-    let candidateRule = rules.find(
-      (r) => r.core && r.scope_glob && r.scope_glob !== '**/*' && r.scope_glob !== '*'
-    );
-
-    // 2. Or if totalTokens exceeds maxCoreRuleTokens or high threshold, pick any core rule
-    if (!candidateRule && (totalTokens > config.maxCoreRuleTokens || totalTokens > 1000)) {
-      candidateRule = rules.find((r) => r.core);
-    }
-
-    if (candidateRule) {
-      const scenarios =
-        candidateRule.transfer_scenarios && candidateRule.transfer_scenarios.length >= 2
-          ? candidateRule.transfer_scenarios
-          : ['Subsystem architectural decoupling', 'Cross-module interface abstraction'];
-      proposals.push({
-        kind: 'rule',
-        id: candidateRule.id,
-        title: candidateRule.title,
-        l0_summary: candidateRule.l0_summary,
-        scope_glob: candidateRule.scope_glob,
-        core: false,
-        content: candidateRule.content,
-        transfer_scenarios: scenarios,
-        supersedes_id: candidateRule.id,
-      });
-    }
-  }
-
-  // Dimension B: Trajectory & historical fault mining (dom / both)
-  if (options.dim === 'dom' || options.dim === 'both') {
-    let createdDomMemory = false;
-
-    // Check options.trajectories
-    if (options.trajectories && options.trajectories.length > 0) {
-      for (const trajPath of options.trajectories) {
-        if (!fs.existsSync(trajPath)) continue;
-        let trajContent = '';
-        try {
-          trajContent = fs.readFileSync(trajPath, 'utf8');
-        } catch {
-          continue;
-        }
-
-        // Scan trajectory for referenced workspace source files or symbols
-        const sourceFiles = collectWorkspaceSourceFiles(options.baseWorkspaceRoot, 300);
-        let matchedFile: string | null = null;
-        for (const sf of sourceFiles) {
-          const rel = path.relative(options.baseWorkspaceRoot, sf).replace(/\\/g, '/');
-          if (trajContent.includes(rel) || trajContent.includes(path.basename(rel))) {
-            matchedFile = rel;
-            break;
-          }
-        }
-
-        if (matchedFile) {
-          const fullPath = path.join(options.baseWorkspaceRoot, matchedFile);
-          let raw = '';
-          try { raw = fs.readFileSync(fullPath, 'utf8'); } catch {}
-          const declRegex =
-            /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|def|fn|func|void|int|uint\d+_t|int\d+_t|bool|char)\s+([A-Za-z_][A-Za-z0-9_]*)\b/gm;
-          const match = declRegex.exec(raw);
-          const symbolName = match ? match[1] : path.basename(matchedFile, path.extname(matchedFile));
-          const targetSymbol = `${matchedFile}#${symbolName}`;
-
-          const id = `traj-${sanitizeId(path.basename(trajPath, path.extname(trajPath)))}`;
-          if (!baseStorage.getMemory(id)) {
-            proposals.push({
-              kind: 'memory',
-              id,
-              title: `Trajectory Issue (${path.basename(trajPath)}): ${symbolName}`,
-              l0_summary: `Crystallized episodic fault case discovered in trajectory ${path.basename(trajPath)}`.slice(0, 135),
-              symptom: `Observed issue or error trace captured in trajectory execution for ${targetSymbol}.`,
-              root_cause: `Defect or fragile edge-case in subsystem symbol ${targetSymbol} identified during trajectory.`,
-              solution: `Inspect ${matchedFile} around ${symbolName} and verify AST preconditions before invocation.`,
-              target_symbols: [targetSymbol],
-              tags: ['trajectory', 'dom-mining'],
-              origin: 'offline-proposer',
-            });
-            createdDomMemory = true;
-            break;
-          }
-        }
-      }
-    }
-
-    // If no trajectory memory created yet, check recent git fix commits
-    if (!createdDomMemory) {
-      try {
-        const gitLogRes = child_process.spawnSync(
-          'git',
-          ['log', '--grep=fix', '-n', '5', '--format=%H %s'],
-          { cwd: options.baseWorkspaceRoot, encoding: 'utf8', timeout: 3000 }
-        );
-        if (gitLogRes.status === 0 && gitLogRes.stdout) {
-          const lines = gitLogRes.stdout.split(/\r?\n/).filter(Boolean);
-          for (const line of lines) {
-            const firstSpace = line.indexOf(' ');
-            if (firstSpace === -1) continue;
-            const sha = line.slice(0, firstSpace).trim().slice(0, 7);
-            const subject = line.slice(firstSpace + 1).trim();
-            const memId = `git-fix-${sha}`;
-            if (baseStorage.getMemory(memId)) continue;
-
-            const diffRes = child_process.spawnSync(
-              'git',
-              ['diff-tree', '--no-commit-id', '--name-only', '-r', sha],
-              { cwd: options.baseWorkspaceRoot, encoding: 'utf8', timeout: 1500 }
-            );
-            if (diffRes.status === 0 && diffRes.stdout) {
-              const touched = diffRes.stdout
-                .split(/\r?\n/)
-                .filter(Boolean)
-                .filter((f) => !f.startsWith('.evo/') && fs.existsSync(path.join(options.baseWorkspaceRoot, f)))
-                .slice(0, 3);
-              if (touched.length > 0) {
-                const symbolTargets = extractSymbolsFromGitCommit(options.baseWorkspaceRoot, sha, touched);
-                if (symbolTargets.length > 0) {
-                  proposals.push({
-                    kind: 'memory',
-                    id: memId,
-                    title: `Historical Fix Case (${sha}): ${subject.slice(0, 70)}`,
-                    l0_summary: `Historical fix (${sha}): ${subject}`.slice(0, 135),
-                    symptom: `Regression or issue addressed in historical commit ${sha}: "${subject}"`,
-                    root_cause: `Historical bug/fix pattern affecting symbols: ${symbolTargets.join(', ')}.`,
-                    solution: `Resolved in commit ${sha} (${subject}). Inspect anchored symbols for implementation guards.`,
-                    target_symbols: symbolTargets,
-                    tags: ['git-history', 'fix', 'dom-mining'],
-                    origin: 'offline-proposer',
-                  });
-                  createdDomMemory = true;
-                  break;
-                }
-              }
-            }
-          }
-        }
-      } catch {}
-    }
-
-    // Fallback: if still no proposal created and dim requires dom, find 1st workspace source file and extract symbol
-    if (!createdDomMemory && proposals.length === 0) {
-      const sourceFiles = collectWorkspaceSourceFiles(options.baseWorkspaceRoot, 50);
-      if (sourceFiles.length > 0) {
-        const firstFile = sourceFiles[0];
-        const rel = path.relative(options.baseWorkspaceRoot, firstFile).replace(/\\/g, '/');
-        let raw = '';
-        try { raw = fs.readFileSync(firstFile, 'utf8'); } catch {}
-        const declRegex =
-          /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|def|fn|func|void|int|uint\d+_t|int\d+_t|bool|char)\s+([A-Za-z_][A-Za-z0-9_]*)\b/gm;
-        const match = declRegex.exec(raw);
-        const symbolName = match ? match[1] : path.basename(firstFile, path.extname(firstFile));
-        const targetSymbol = `${rel}#${symbolName}`;
-        const memId = `workspace-case-${sanitizeId(symbolName.toLowerCase())}`;
-        if (!baseStorage.getMemory(memId)) {
-          proposals.push({
-            kind: 'memory',
-            id: memId,
-            title: `Workspace Anchor Case: ${symbolName}`,
-            l0_summary: `Workspace anchor case for ${symbolName} in ${rel}`.slice(0, 135),
-            symptom: `Defect or behavioral ambiguity observed in workspace symbol ${targetSymbol}.`,
-            root_cause: `Subsystem invariant requires topological grounding for ${targetSymbol}.`,
-            solution: `Inspect ${rel} and ensure callers adhere to symbol contract.`,
-            target_symbols: [targetSymbol],
-            tags: ['workspace-anchor', 'dom-mining'],
-            origin: 'offline-proposer',
-          });
-        }
-      }
-    }
-  }
-
-  if (proposals.length === 0 && deletedIds.length === 0) {
-    return { keepBase: true, notes: 'Built-in offline proposer found zero compaction or invariant targets' };
-  }
-
-  return {
-    keepBase: false,
-    proposals,
-    deletedIds,
-    notes: 'Built-in offline proposer generated optimization candidate',
-  };
-}
-
 export function runOptimizationCycle(
   options: OptimizationCycleOptions = {}
 ): OptimizationResult {
@@ -2025,17 +1819,30 @@ export function runOptimizationCycle(
     leakGlobs: options.leakGlobs,
   });
 
-  const isAutoMode = Boolean(
-    options.auto ||
-    (options.apply && ((options.trajectories && options.trajectories.length > 0) || (options.deliverables && options.deliverables.length > 0)))
-  );
+  if (!options.proposerCmd) {
+    if (options.prepare || options.dryRun || (!options.apply && !options.auto)) {
+      return {
+        runId: prep.runId,
+        workspaceRoot: wsRoot,
+        mode: 'prepared',
+        decision: 'PREPARED',
+        dim: prep.dim,
+        missionFile: prep.missionFile,
+        contextDir: prep.contextDir,
+        harnessDir: prep.harnessDir,
+        trajectoriesAnalyzed: (options.trajectories || []).length,
+        deliverablesInspected: (options.deliverables || []).length,
+        candidates: [],
+        applied: false,
+        notes: 'Optimization workspace prepared with OPTIMIZE_SPEC.md and evidence context.',
+      };
+    }
 
-  if (!options.proposerCmd && (!isAutoMode || options.prepare || options.dryRun)) {
     return {
       runId: prep.runId,
       workspaceRoot: wsRoot,
       mode: 'prepared',
-      decision: 'PREPARED',
+      decision: 'KEEP_BASE',
       dim: prep.dim,
       missionFile: prep.missionFile,
       contextDir: prep.contextDir,
@@ -2044,7 +1851,7 @@ export function runOptimizationCycle(
       deliverablesInspected: (options.deliverables || []).length,
       candidates: [],
       applied: false,
-      notes: 'Optimization workspace prepared with OPTIMIZE_SPEC.md and evidence context.',
+      notes: 'External --proposer-cmd is required for automated candidate execution; prepared OPTIMIZE_SPEC.md context.',
     };
   }
 
@@ -2109,27 +1916,16 @@ export function runOptimizationCycle(
       copyCapabilitiesNonOverwriting(liveEvo, prep.harnessDir);
     }
 
-    const proposerRes = options.proposerCmd
-      ? runProposerCandidate({
-          proposerCmd: options.proposerCmd,
-          missionFile: prep.missionFile,
-          contextDir: prep.contextDir,
-          harnessDir: prep.harnessDir,
-          dim: cDim,
-          candidateId,
-          runDir: prep.runDir,
-          baseWorkspaceRoot: wsRoot,
-        })
-      : runBuiltinOfflineProposer({
-          missionFile: prep.missionFile,
-          contextDir: prep.contextDir,
-          harnessDir: prep.harnessDir,
-          dim: cDim,
-          candidateId,
-          baseWorkspaceRoot: wsRoot,
-          trajectories: options.trajectories,
-          deliverables: options.deliverables,
-        });
+    const proposerRes = runProposerCandidate({
+      proposerCmd: options.proposerCmd,
+      missionFile: prep.missionFile,
+      contextDir: prep.contextDir,
+      harnessDir: prep.harnessDir,
+      dim: cDim,
+      candidateId,
+      runDir: prep.runDir,
+      baseWorkspaceRoot: wsRoot,
+    });
 
     if (proposerRes.keepBase) {
       candidates.push({

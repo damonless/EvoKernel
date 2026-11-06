@@ -434,15 +434,44 @@ describe('EvoKernel P1 & P2: Score, UI Cockpit, Slash Commands & Manifest Parity
     assert.ok(pkg.files.includes('server.json'), 'package.json#files must include server.json');
     assert.ok(pkg.files.includes('.cursor-plugin'), 'package.json#files must include .cursor-plugin');
 
-    // 5. Preflight micro-tool manifest parity & seed sync pass
-    const preflight = spawnSync(
-      process.execPath,
-      [path.join(root, '.evo', 'tools', 'evo-release-preflight', 'run.mjs')],
-      { encoding: 'utf8', timeout: 5000 }
-    );
-    const preflightRes = JSON.parse(preflight.stdout);
-    assert.equal(preflightRes.checks.manifest_parity, 'OK', `Manifest parity failed: ${preflight.stdout}`);
-    assert.equal(preflightRes.checks.seed_sync, 'OK', `Seed sync failed: ${preflight.stdout}`);
+    // 5. Manifest version parity & local-only asset isolation
+    for (const relManifest of [
+      'plugin.json',
+      '.claude-plugin/plugin.json',
+      'gemini-extension.json',
+      '.cursor-plugin/plugin.json',
+    ]) {
+      const manifestPath = path.join(root, relManifest);
+      assert.ok(fs.existsSync(manifestPath), `${relManifest} must exist`);
+      const manifestJson = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      assert.equal(manifestJson.version, pkg.version, `${relManifest} version must match package.json`);
+    }
+
+    const localOnlyAssets = [
+      'ceo-team-orchestrator',
+      'evo-dev-verification-sop',
+      'evo-release-preflight',
+      'embedded-fsm-lookup-audit',
+    ];
+    for (const asset of localOnlyAssets) {
+      for (const relCheck of [
+        path.join('templates', 'seed-evo', 'skills', asset),
+        path.join('templates', 'seed-evo', 'tools', asset),
+        path.join('templates', 'seed-evo', 'rules', `${asset}.md`),
+        path.join('templates', 'seed-evo', 'rules', 'scoped', `${asset}.md`),
+        path.join('skills', asset),
+        path.join('.evo', 'skills', asset),
+        path.join('.evo', 'tools', asset),
+        path.join('.evo', 'rules', `${asset}.md`),
+        path.join('.evo', 'rules', 'scoped', `${asset}.md`),
+      ]) {
+        assert.equal(
+          fs.existsSync(path.join(root, relCheck)),
+          false,
+          `Local-only asset "${asset}" must NOT exist at ${relCheck}`
+        );
+      }
+    }
   });
 
   test('9. evo ui server watches memory-anchored source files and triggers change notifications over SSE', async () => {
@@ -1400,11 +1429,25 @@ Widget issue
     assert.equal(toolRes.ok, true);
     assert.equal(toolRes.result.exitCode, 0);
 
+    // Action 3b: update-content routes through Gatekeeper and rejects failing tool --self-test
+    const badToolUpdate = await ext.handleWebviewAction(
+      'update-content',
+      {
+        kind: 'tool',
+        id: 'ide-tool',
+        content: 'if (process.argv.includes("--self-test")) { console.error("FAIL"); process.exit(1); }\n',
+      },
+      ws,
+      mockVsCode
+    );
+    assert.equal(badToolUpdate.ok, false);
+    assert.equal(badToolUpdate.code, 'ERR_SANDBOX_SELF_TEST');
+
     // Action 4: unknown action
     const unknownRes = await ext.handleWebviewAction('invalid', {}, ws, mockVsCode);
     assert.equal(unknownRes.ok, false);
 
-    // 7. Test mountIdeExtensions & default auto-mounting on runInit
+    // 7. Test mountIdeExtensions & opt-in mounting on runInit
     const fakeIdeDir = createTempDir('fake-ide-ext');
     const oldIdeEnv = process.env.EVO_IDE_EXTENSIONS_DIR;
     process.env.EVO_IDE_EXTENSIONS_DIR = fakeIdeDir;
@@ -1433,15 +1476,17 @@ Widget issue
       assert.equal(forceCopyRes[0].method, 'copy');
       assert.equal(forceCopyRes[0].status, 'updated');
 
-      // Test default auto-mounting in runInit
+      // Test opt-in IDE mounting in runInit (Issue #26: default does NOT mount IDE extensions)
       const initWs = createTempDir('init-auto-ide');
       try {
         const initRes = runInit(initWs, ['claude']);
-        assert.ok(initRes.ideMounts, 'runInit must auto-mount IDE extension by default');
-        assert.ok(initRes.ideMounts.length >= 1);
+        assert.equal(initRes.ideMounts, undefined, 'Default runInit must NOT mount IDE extensions');
+
+        const optInRes = runInit(initWs, { installIde: true, targets: ['claude'] });
+        assert.ok(optInRes.ideMounts && optInRes.ideMounts.length >= 1, 'Explicit installIde: true must mount IDE extensions');
 
         // Test skipping via noIde: true
-        const noIdeRes = runInit(initWs, { noIde: true, targets: ['claude'] });
+        const noIdeRes = runInit(initWs, { installIde: true, noIde: true, targets: ['claude'] });
         assert.equal(noIdeRes.ideMounts, undefined);
       } finally {
         fs.rmSync(initWs, { recursive: true, force: true });

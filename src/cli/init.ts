@@ -256,7 +256,7 @@ export function formatToolsCatalogMarkdown(
 export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   const storage = new EvoStorage(workspaceRoot);
   const digest = storage.rebuildCoreInvariantsDigest();
-  const toolsCatalog = formatToolsCatalogMarkdown(storage, digest, { includeGlobal: true });
+  const toolsCatalog = formatToolsCatalogMarkdown(storage, digest, { includeGlobal: false });
   const block = renderManagedBlock(digest, toolsCatalog);
   const updated: string[] = [];
 
@@ -716,7 +716,7 @@ export function runInit(
   telemetry.close();
 
   const digest = storage.rebuildCoreInvariantsDigest();
-  const toolsCatalog = formatToolsCatalogMarkdown(storage, digest, { includeGlobal: true });
+  const toolsCatalog = formatToolsCatalogMarkdown(storage, digest, { includeGlobal: false });
   const managedBlock = renderManagedBlock(digest, toolsCatalog);
 
   const updatedFilesList: string[] = [];
@@ -779,7 +779,7 @@ export function runInit(
     } catch {}
   }
 
-  const shouldMountIde = opts.installIde ?? (!opts.noIde);
+  const shouldMountIde = Boolean(opts.installIde && !opts.noIde);
   let ideMounts: IdeMountDetail[] | undefined;
   if (shouldMountIde && !opts.noIde) {
     try {

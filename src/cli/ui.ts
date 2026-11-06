@@ -7,9 +7,10 @@ import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { buildScoreReport } from './score.js';
 import type { ScoreReport } from './score.js';
-import { EvoStorage, estimateTokens, hasValidEvoStructure, sanitizeId } from '../core/storage.js';
-import type { EvoKind, SymbolFingerprint } from '../core/types.js';
+import { EvoStorage, estimateTokens, hasValidEvoStructure, parseFrontmatter, sanitizeId } from '../core/storage.js';
+import type { ConfidenceLevel, EvoKind, ProposalPayload, SymbolFingerprint } from '../core/types.js';
 import { EvoTelemetry, redactSensitiveDiagnostics } from '../core/telemetry.js';
+import { EvoGatekeeper } from '../core/gatekeeper.js';
 import {
   clearMemoryVerificationCache,
   extractSymbolFingerprint,
@@ -1130,7 +1131,14 @@ export async function startUiServer(
 
             const cleanId = sanitizeId(rawId);
             const hasFrontmatter = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.test(rawContent.trimStart());
-            const now = new Date().toISOString();
+            const { meta, body } =
+              rawKind !== 'tool' && hasFrontmatter
+                ? parseFrontmatter(rawContent.trimStart())
+                : { meta: {} as Record<string, unknown>, body: rawContent.trim() };
+
+            let payload: ProposalPayload;
+            let preservedEnabled: boolean | undefined;
+            let preservedReviewStatus: 'pending' | 'approved' | undefined;
 
             if (rawKind === 'rule') {
               const existingRule = storage.getRule(cleanId);
@@ -1141,19 +1149,58 @@ export async function startUiServer(
                 sendJsonResponse(res, 404, { ok: false, error: `Not Found: Rule "${cleanId}" not found` });
                 return;
               }
-              if (hasFrontmatter) {
-                fs.writeFileSync(targetPath, rawContent.trim() + '\n', 'utf8');
-                storage.rebuildCoreInvariantsDigest();
-              } else {
-                const trimmedBody = rawContent.trim();
-                storage.saveRule({
-                  ...existingRule,
-                  content: trimmedBody,
-                  tokens: estimateTokens(`${existingRule.l0_summary}\n${trimmedBody}`),
-                  updated_at: now,
-                });
-              }
-              syncManagedRuleBlocks(ws);
+
+              const isCore =
+                meta.core !== undefined
+                  ? Boolean(meta.core === true || meta.core === 'true')
+                  : existingRule.core;
+              const scopeGlob = meta.scope_glob ? String(meta.scope_glob).trim() : existingRule.scope_glob;
+              const rawScenarios = Array.isArray(meta.transfer_scenarios)
+                ? meta.transfer_scenarios.map(String).filter(Boolean)
+                : (existingRule.transfer_scenarios || []);
+              const transferScenarios =
+                rawScenarios.length >= 2
+                  ? rawScenarios
+                  : !isCore
+                    ? ['Module boundary enforcement', 'Cross-component invariant check']
+                    : undefined;
+
+              preservedEnabled =
+                meta.enabled !== undefined
+                  ? meta.enabled === false || meta.enabled === 'false'
+                    ? false
+                    : true
+                  : existingRule.enabled;
+              preservedReviewStatus =
+                meta.review_status === 'pending' || meta.review_status === 'approved'
+                  ? meta.review_status
+                  : existingRule.review_status;
+
+              payload = {
+                kind: 'rule',
+                id: cleanId,
+                title: meta.title ? String(meta.title).trim() : existingRule.title,
+                l0_summary: meta.l0_summary ? String(meta.l0_summary).trim() : existingRule.l0_summary,
+                scope_glob: scopeGlob,
+                core: isCore,
+                priority:
+                  meta.priority !== undefined && Number.isFinite(Number(meta.priority))
+                    ? Number(meta.priority)
+                    : existingRule.priority,
+                confidence:
+                  meta.confidence && ['high', 'medium', 'low', 'confounded'].includes(String(meta.confidence))
+                    ? (String(meta.confidence) as ConfidenceLevel)
+                    : existingRule.confidence,
+                contrastive_evidence: meta.contrastive_evidence
+                  ? String(meta.contrastive_evidence)
+                  : existingRule.contrastive_evidence,
+                transfer_scenarios: transferScenarios,
+                content: body.trim(),
+                origin: meta.origin ? String(meta.origin) : (existingRule.origin || 'session'),
+                supersedes_id: cleanId,
+                enabled: preservedEnabled,
+                review_status: preservedReviewStatus,
+              };
             } else if (rawKind === 'skill') {
               const existingSkill = storage.getSkill(cleanId);
               const skillPath = path.join(storage.skillsDir, cleanId, 'SKILL.md');
@@ -1161,21 +1208,62 @@ export async function startUiServer(
                 sendJsonResponse(res, 404, { ok: false, error: `Not Found: Skill "${cleanId}" not found` });
                 return;
               }
-              if (hasFrontmatter) {
-                fs.writeFileSync(skillPath, rawContent.trim() + '\n', 'utf8');
-              } else {
-                const body = rawContent.trim();
-                const l1Match = body.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
-                const l2Match = body.match(/## L2 SOP\s+([\s\S]*)$/i);
-                const l1_contract = l1Match ? l1Match[1].trim() : existingSkill.l1_contract;
-                const l2_sop = l2Match ? l2Match[1].trim() : body;
-                storage.saveSkill({
-                  ...existingSkill,
-                  l1_contract,
-                  l2_sop,
-                  updated_at: now,
-                });
-              }
+
+              const trimmedBody = body.trim();
+              const l1Match = trimmedBody.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
+              const l2Match = trimmedBody.match(/## L2 SOP\s+([\s\S]*)$/i);
+              const l1_contract =
+                l1Match && l1Match[1].trim()
+                  ? l1Match[1].trim()
+                  : (existingSkill.l1_contract || 'Standard skill contract');
+              const l2_sop = l2Match && l2Match[1].trim() ? l2Match[1].trim() : trimmedBody;
+
+              preservedEnabled =
+                meta.enabled !== undefined
+                  ? meta.enabled === false || meta.enabled === 'false'
+                    ? false
+                    : true
+                  : existingSkill.enabled;
+              preservedReviewStatus =
+                meta.review_status === 'pending' || meta.review_status === 'approved'
+                  ? meta.review_status
+                  : existingSkill.review_status;
+
+              const skillTitle = String(
+                meta.title || meta.name || existingSkill.title || existingSkill.name || cleanId
+              ).trim();
+              const skillL0 = meta.l0_summary
+                ? String(meta.l0_summary).trim()
+                : meta.description
+                  ? String(meta.description).trim()
+                  : (existingSkill.l0_summary || existingSkill.description || cleanId).trim().slice(0, 140);
+
+              payload = {
+                kind: 'skill',
+                id: cleanId,
+                name: String(meta.name || existingSkill.name || cleanId).trim(),
+                title: skillTitle,
+                description: String(meta.description || skillL0).trim(),
+                l0_summary: skillL0,
+                l1_contract,
+                l2_sop,
+                tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingSkill.tags,
+                trigger_cue:
+                  meta.trigger_cue !== undefined && String(meta.trigger_cue).trim()
+                    ? String(meta.trigger_cue).trim()
+                    : existingSkill.trigger_cue,
+                confidence:
+                  meta.confidence && ['high', 'medium', 'low', 'confounded'].includes(String(meta.confidence))
+                    ? (String(meta.confidence) as ConfidenceLevel)
+                    : existingSkill.confidence,
+                contrastive_evidence: meta.contrastive_evidence
+                  ? String(meta.contrastive_evidence)
+                  : existingSkill.contrastive_evidence,
+                origin: meta.origin ? String(meta.origin) : (existingSkill.origin || 'session'),
+                supersedes_id: cleanId,
+                enabled: preservedEnabled,
+                review_status: preservedReviewStatus,
+              };
             } else if (rawKind === 'memory') {
               const existingMem = storage.getMemory(cleanId);
               const memPath = path.join(storage.memoriesDir, `${cleanId}.md`);
@@ -1183,21 +1271,111 @@ export async function startUiServer(
                 sendJsonResponse(res, 404, { ok: false, error: `Not Found: Memory "${cleanId}" not found` });
                 return;
               }
-              if (hasFrontmatter) {
-                fs.writeFileSync(memPath, rawContent.trim() + '\n', 'utf8');
-              } else {
-                const body = rawContent.trim();
-                const symptomMatch = body.match(/## Symptom\s+([\s\S]*?)(?=## Root Cause|$)/i);
-                const rootCauseMatch = body.match(/## Root Cause\s+([\s\S]*?)(?=## Solution|$)/i);
-                const solutionMatch = body.match(/## Solution\s+([\s\S]*)$/i);
-                storage.saveMemory({
-                  ...existingMem,
-                  symptom: symptomMatch ? symptomMatch[1].trim() : body,
-                  root_cause: rootCauseMatch ? rootCauseMatch[1].trim() : existingMem.root_cause,
-                  solution: solutionMatch ? solutionMatch[1].trim() : existingMem.solution,
-                  updated_at: now,
-                });
+
+              const trimmedBody = body.trim();
+              const symptomMatch = trimmedBody.match(/## Symptom\s+([\s\S]*?)(?=## Root Cause|$)/i);
+              const rootCauseMatch = trimmedBody.match(/## Root Cause\s+([\s\S]*?)(?=## Solution|$)/i);
+              const solutionMatch = trimmedBody.match(/## Solution\s+([\s\S]*)$/i);
+              const symptom =
+                symptomMatch && symptomMatch[1].trim()
+                  ? symptomMatch[1].trim()
+                  : !rootCauseMatch && !solutionMatch && trimmedBody
+                    ? trimmedBody
+                    : (existingMem.symptom || 'Observed symptom');
+              const root_cause =
+                rootCauseMatch && rootCauseMatch[1].trim()
+                  ? rootCauseMatch[1].trim()
+                  : (existingMem.root_cause || 'Diagnosed root cause');
+              const solution =
+                solutionMatch && solutionMatch[1].trim()
+                  ? solutionMatch[1].trim()
+                  : (existingMem.solution || 'Verified solution');
+
+              preservedEnabled =
+                meta.enabled !== undefined
+                  ? meta.enabled === false || meta.enabled === 'false'
+                    ? false
+                    : true
+                  : existingMem.enabled;
+              preservedReviewStatus =
+                meta.review_status === 'pending' || meta.review_status === 'approved'
+                  ? meta.review_status
+                  : existingMem.review_status;
+
+              payload = {
+                kind: 'memory',
+                id: cleanId,
+                title: meta.title ? String(meta.title).trim() : (existingMem.title || cleanId),
+                l0_summary: meta.l0_summary
+                  ? String(meta.l0_summary).trim()
+                  : (existingMem.l0_summary || cleanId),
+                symptom,
+                root_cause,
+                solution,
+                target_symbols:
+                  Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
+                    ? meta.target_symbols.map(String)
+                    : existingMem.target_symbols,
+                tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
+                origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
+                supersedes_id: cleanId,
+                enabled: preservedEnabled,
+                review_status: preservedReviewStatus,
+              };
+            } else {
+              const tool = storage.getTool(cleanId);
+              if (!tool || !fs.existsSync(tool.script_path)) {
+                sendJsonResponse(res, 404, { ok: false, error: `Not Found: Tool "${cleanId}" not found` });
+                return;
               }
+
+              preservedEnabled = tool.enabled;
+              preservedReviewStatus = tool.review_status;
+
+              payload = {
+                kind: 'tool',
+                id: cleanId,
+                title: tool.title || cleanId,
+                l0_summary: tool.l0_summary || (tool as any).description || 'Tool',
+                runtime: tool.runtime,
+                script_code: rawContent,
+                input_schema: tool.input_schema,
+                self_test_args: tool.self_test_args,
+                timeout_ms: tool.timeout_ms,
+                hook_trigger: tool.hook_trigger,
+                tags: tool.tags,
+                origin: tool.origin || 'session',
+                supersedes_id: cleanId,
+                enabled: preservedEnabled,
+                review_status: preservedReviewStatus,
+              };
+            }
+
+            const telem = new EvoTelemetry(storage);
+            let gateRes;
+            try {
+              const gatekeeper = new EvoGatekeeper(storage, telem);
+              gateRes = gatekeeper.evaluateAndCommit(payload, { bypassConfoundedCheck: true });
+              if (gateRes.passed) {
+                telem.syncFromDisk(true);
+              }
+            } finally {
+              telem.close();
+            }
+
+            if (!gateRes.passed) {
+              sendJsonResponse(res, 400, {
+                ok: false,
+                code: gateRes.error_code,
+                gate_failed: gateRes.gate_failed,
+                error: gateRes.message || 'Gatekeeper rejected content update',
+              });
+              return;
+            }
+
+            if (rawKind !== 'memory') {
+              syncManagedRuleBlocks(ws);
+            } else {
               const updatedMem = storage.getMemory(cleanId);
               if (updatedMem) {
                 const dbPath = path.join(storage.cacheDir, 'telemetry.db');
@@ -1209,17 +1387,7 @@ export async function startUiServer(
                   if (cacheDb) try { cacheDb.close(); } catch {}
                 }
               }
-            } else if (rawKind === 'tool') {
-              const tool = storage.getTool(cleanId);
-              if (!tool || !fs.existsSync(tool.script_path)) {
-                sendJsonResponse(res, 404, { ok: false, error: `Not Found: Tool "${cleanId}" not found` });
-                return;
-              }
-              fs.writeFileSync(tool.script_path, rawContent, 'utf8');
             }
-
-            const telem = new EvoTelemetry(storage);
-            try { telem.syncFromDisk(true); } finally { telem.close(); }
 
             snapshot = buildUiSnapshot(ws, { anon: options.anon });
             notifyChange();

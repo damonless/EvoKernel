@@ -42,11 +42,33 @@ const TOTAL_MONOLITHIC_KNOWLEDGE_TOKENS = Object.values(MONOLITHIC_KNOWLEDGE_TOK
   0
 );
 
-// EvoKernel Virtualized Footprint
+// EvoKernel Virtualized Footprint (dynamically measure live 5-tool MCP schema if built)
+let liveMetaMcpSchemaTokens = 380;
+let liveMetaMcpSchemaSource = 'static-fallback (380 tokens)';
+try {
+  const serverPath = path.join(rootDir, 'dist', 'mcp', 'server.js');
+  const handlersPath = path.join(rootDir, 'dist', 'mcp', 'handlers.js');
+  let toolsDef = null;
+  if (fs.existsSync(serverPath)) {
+    const srvMod = await import(pathToFileURL(serverPath).href);
+    toolsDef = srvMod.TOOLS_DEFINITION ?? srvMod.META_MCP_TOOLS ?? null;
+  }
+  if (!toolsDef && fs.existsSync(handlersPath)) {
+    const hdlMod = await import(pathToFileURL(handlersPath).href);
+    toolsDef = hdlMod.TOOLS_DEFINITION ?? hdlMod.META_MCP_TOOLS ?? null;
+  }
+  if (Array.isArray(toolsDef) && toolsDef.length > 0) {
+    liveMetaMcpSchemaTokens = Math.ceil(JSON.stringify(toolsDef).length / 3.8);
+    liveMetaMcpSchemaSource = `live dist/mcp schema (${toolsDef.length} tools, ${liveMetaMcpSchemaTokens} tokens @ ~3.8 chars/tok)`;
+  }
+} catch {
+  // Fallback to 380 tokens if dist/ is not yet built
+}
+
 const EVOKERNEL_FOOTPRINT = {
-  metaMcp5ToolsSchemaTokens: 380, // Fixed 5 meta-tools (evo_search, evo_inspect, evo_run, evo_propose, evo_compact)
+  metaMcp5ToolsSchemaTokens: liveMetaMcpSchemaTokens, // Fixed 5 meta-tools (evo_search, evo_inspect, evo_run, evo_propose, evo_compact)
   l0MetaRuleSeedTokens: 1150,     // Always-on L0 seed + core invariants digest
-  avgOnDemandRecallPerTurn: 240,  // Cascaded L1/L2 recall only on turns that need it (~30% of turns)
+  avgOnDemandRecallPerTurn: 240,  // Cascaded L1/L2 recall only on turns that need it (~33% of turns @ 720 tok)
 };
 
 /**
@@ -228,11 +250,15 @@ console.log(`
 ║  🧬 EvoKernel Context Tax, Prompt-Cache & AST Verification Benchmark Suite   ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-1. Workload Profile (50-Turn Engineering Session + 3 Mid-Session Evolutions)
+1. Analytical Context-Tax & Prompt-Cache Model (50-Turn Session, Scoped/Memory Evolution Assumption)
    • Mounted MCP Servers : ${sim.serversCount} servers (${MCP_WORKLOAD.map((s) => s.name).join(', ')})
    • Total Downstream    : ${sim.rawToolsCount} MCP tools + 10 Rules + 4 Skills + 5 Micro-Tools + 15 Memories
+   • Model Assumptions   : 50 turns, +450 history tokens/turn, L1/L2 recall (+720 tok) every 3rd turn
+   • Prefix Shield Cond. : 3 mid-session evolutions (turns 12, 27, 41) crystallized as core: false scoped rules
+                           or episodic memories (0 system-prefix or tools/list schema mutations)
+   • 5-Tool Schema Basis : ${liveMetaMcpSchemaSource}
 
-2. Context Window & Prompt-Cache Comparison
+2. Context Window & Prompt-Cache Analytical Comparison
 ┌──────────────────────────────────────┬──────────────────────────┬──────────────────────────┬───────────────────┐
 │ Metric                               │ Raw MCP + Monolithic Doc │ EvoKernel 5-Tool Gateway │ Improvement       │
 ├──────────────────────────────────────┼──────────────────────────┼──────────────────────────┼───────────────────┤

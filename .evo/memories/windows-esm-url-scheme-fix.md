@@ -2,14 +2,14 @@
 id: windows-esm-url-scheme-fix
 title: "Windows ESM Dynamic Import pathToFileURL Resolution"
 l0_summary: "Wrap dynamic imports in pathToFileURL().href on Windows to avoid ERR_UNSUPPORTED_ESM_URL_SCHEME"
-created_commit: "223bdd6"
+created_commit: "1c798cc"
 created_branch: "main"
 target_symbols: ["startUiServer","detectChromiumBrowser"]
-ast_fingerprints: {"startUiServer":{"symbol":"startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":489,"end_line":1322,"signature":"export async function startUiServer(","ast_hash":"961225139f9e766f"},"detectChromiumBrowser":{"symbol":"detectChromiumBrowser","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":322,"end_line":394,"signature":"export function detectChromiumBrowser(): string | null","ast_hash":"e184ef6d136ad27a"}}
+ast_fingerprints: {"startUiServer":{"symbol":"startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":490,"end_line":1490,"signature":"export async function startUiServer(","ast_hash":"12a39639b32af9c9"},"detectChromiumBrowser":{"symbol":"detectChromiumBrowser","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":323,"end_line":395,"signature":"export function detectChromiumBrowser(): string | null","ast_hash":"e184ef6d136ad27a"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-05T06:02:25.999Z"
-updated_at: "2026-11-06T06:25:44.890Z"
+updated_at: "2026-11-06T17:04:58.655Z"
 ---
 
 ## Symptom

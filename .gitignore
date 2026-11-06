@@ -6,3 +6,19 @@ dist/
 *.log
 .DS_Store
 .agents/
+
+# Local-only personal & maintenance skills/rules/tools (never push to remote)
+.evo/skills/ceo-team-orchestrator/
+.evo/skills/dual-agent-team/
+.evo/skills/evo-dev-verification-sop/
+.evo/skills/embedded-fsm-lookup-audit/
+.evo/tools/evo-release-preflight/
+.evo/rules/scoped/local-workflow-skill-isolation-guard.md
+.evo/rules/scoped/embedded-power-bms-guardrail.md
+skills/ceo-team-orchestrator/
+skills/dual-agent-team/
+skills/evo-dev-verification-sop/
+skills/embedded-fsm-lookup-audit/
+templates/seed-evo/skills/ceo-team-orchestrator/
+templates/seed-evo/skills/evo-dev-verification-sop/
+templates/seed-evo/tools/evo-release-preflight/

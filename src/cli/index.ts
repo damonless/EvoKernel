@@ -113,8 +113,9 @@ Options:
   --stealth            Add .evo/ and config files to .git/info/exclude (clean git status)
   --targets <list>     Harness targets: claude, agents, gemini, cursor, or auto (default: auto)
   --link <path>        Link .evo capability tree from another repository or central storage
-  --no-warmup          Skip background capability warmup and AST pre-indexing
-  --install-ide        Explicitly mount IDE extension into detected IDEs (default: true)
+  --warmup             Run cold-start capability warmup and AST pre-indexing after init (opt-in)
+  --no-warmup          Skip background capability warmup and AST pre-indexing (default)
+  --install-ide        Explicitly mount IDE extension into detected IDEs (opt-in, default: false)
   --no-ide             Skip IDE extension auto-mounting
   --ide <targets>      Comma-separated list of target IDEs (vscode, cursor, windsurf, trae, antigravity, all)
   --workspace <path>   Target workspace directory (default: current directory)
@@ -193,6 +194,7 @@ Options:
   --global, -g         Include user-level global rules (~/.gemini, ~/.claude, ~/.cursor)
   --token-budget <N>   Override per-file token budget limit (default: 1500)
   --skill-budget <N>   Override per-skill token budget limit (default: 1000)
+  --json               Output audit report in JSON format
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `);
@@ -248,7 +250,7 @@ export function printStatsHelp(): void {
 Usage:
   evo stats [options]
 
-Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings.
+Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings (note: 'evo doctor' is the primary diagnostics command).
 
 Options:
   --workspace <path>   Target workspace directory (default: current directory)
@@ -261,9 +263,10 @@ export function printDoctorHelp(): void {
 Usage:
   evo doctor [options]
 
-Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and sandbox self-tests.
+Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and telemetry ROI summary.
 
 Options:
+  --json               Output diagnostics report in JSON format
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `);
@@ -388,7 +391,7 @@ Commands:
                       Instant 0-overhead diagnostic scoring for agent host tax, git bug hotspots, and memory coverage
   ui [--port <N>] [--open] [--app] [--desktop] [--token <str>] [--export <path>] [--workspace <path>]
                       Zero-dependency local cockpit UI for telemetry X-ray, budget treemap, and memory constellation
-  init [--stealth] [--targets <list|auto>] [--no-warmup]
+  init [--stealth] [--targets <list|auto>] [--warmup] [--install-ide]
                       Detect and wire L0 Meta-Rule Seed + Single Meta-MCP + Slash Commands
                       (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
   bootstrap [--max-commits <N>]
@@ -396,7 +399,7 @@ Commands:
   virtualize [--dry-run] [--restore] [--global]
                       One-click fold third-party stdio MCPs from host configs into .evo/mcp-pool.json (0 schema bloat)
   memory [verify|refresh] Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
-  audit [--global] [--token-budget <N>] [--skill-budget <N>]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
+  audit [--global] [--json] [--token-budget <N>] [--skill-budget <N>]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
   refactor [--apply] [--token-budget <N>] [--skill-budget <N>]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
   tree                Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/)
   stats               Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings
@@ -407,7 +410,7 @@ Commands:
                       Offline Git worktree optimization cycle (trajectories & deliverables -> proposals -> isolated probe)
   check <file> [--json] [--workspace <path>]
                       Canonical defect inspection & format verification for deliverables (.xlsx, .docx, .pptx, .csv, .json, .md) (alias: inspect)
-  doctor              Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and sandbox self-tests
+  doctor [--json]     Primary diagnostics command: verify Node runtime, SQLite FTS5, AST Memory Anti-Drift & telemetry ROI
   uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
   version, --version  Print EvoKernel CLI version
 `);
@@ -726,7 +729,7 @@ export function runCli(argv: string[]): void {
       const stealth = args.includes('--stealth');
       const targets = parseTargetsArg(args, workspaceRoot);
       const linkEvoFrom = parseLinkArg(args);
-      const noWarmup = args.includes('--no-warmup');
+      const warmup = args.includes('--warmup') && !args.includes('--no-warmup');
       const installIde = args.includes('--install-ide') ? true : undefined;
       const noIde = args.includes('--no-ide');
       const ide = parseIdeTargetsArg(args);
@@ -734,7 +737,7 @@ export function runCli(argv: string[]): void {
         stealth,
         targets,
         linkEvoFrom,
-        warmup: !noWarmup,
+        warmup,
         installIde,
         noIde,
         ide,
@@ -831,7 +834,11 @@ export function runCli(argv: string[]): void {
     case 'audit': {
       const includeGlobal = args.includes('--global') || args.includes('-g');
       const report = runAudit(workspaceRoot, { includeGlobal, tokenBudgetLimit: parsePositiveIntFlag(args, '--token-budget'), skillBudgetLimit: parsePositiveIntFlag(args, '--skill-budget') });
-      console.log(renderAuditReport(report));
+      if (args.includes('--json')) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(renderAuditReport(report));
+      }
       if (!report.healthy) {
         process.exit(1);
       }
@@ -944,14 +951,34 @@ export function runCli(argv: string[]): void {
       let otherBranchMems = 0;
       let staleMems = 0;
       let totalMemories = 0;
+      let totalHits = 0;
+      let totalTokensSaved = 0;
+      let rulesCount = 0;
+      let skillsCount = 0;
+      let toolsCount = 0;
+      let coreRuleTokens = 0;
+      let maxCoreRuleTokens = 1500;
 
       if (hasEvo) {
+        const rules = storage.listRules();
+        const skills = storage.listSkills();
+        const tools = storage.listTools();
         const memories = storage.listMemories();
+        rulesCount = rules.length;
+        skillsCount = skills.length;
+        toolsCount = tools.length;
         totalMemories = memories.length;
+        maxCoreRuleTokens = storage.getConfig().maxCoreRuleTokens || 1500;
+        coreRuleTokens = storage.getCoreRulesTokenUsage().totalTokens;
         let docCacheDb: DatabaseSync | undefined = undefined;
         if (fs.existsSync(storage.telemetryDbPath)) {
           try {
             docCacheDb = new DatabaseSync(storage.telemetryDbPath, { readOnly: true });
+            const row = docCacheDb
+              .prepare('SELECT SUM(hit_count) AS hits, SUM(tokens_saved) AS saved FROM telemetry')
+              .get() as { hits?: number | null; saved?: number | null } | undefined;
+            totalHits = Number(row?.hits || 0);
+            totalTokensSaved = Number(row?.saved || 0);
           } catch {}
         }
         try {
@@ -966,6 +993,49 @@ export function runCli(argv: string[]): void {
             try { docCacheDb.close(); } catch {}
           }
         }
+      }
+
+      const estimatedTokensSaved = hasEvo
+        ? toolsCount * 1200 + totalMemories * 650 + totalTokensSaved
+        : 0;
+      const mcpRegistered = fs.existsSync(path.join(workspaceRoot, '.mcp.json'));
+      if (args.includes('--json')) {
+        console.log(
+          JSON.stringify(
+            {
+              ok: true,
+              workspaceRoot,
+              nodeVersion: process.version,
+              execPath: process.execPath,
+              sqliteFts5Enabled: ftsEnabled,
+              hasEvo,
+              evoDir: hasEvo ? storage.evoDir : null,
+              mcpRegistered,
+              capabilities: {
+                rules: rulesCount,
+                skills: skillsCount,
+                tools: toolsCount,
+                memories: totalMemories,
+                coreRuleTokens,
+                maxCoreRuleTokens,
+              },
+              memories: {
+                total: totalMemories,
+                verified: verifiedMems,
+                otherBranch: otherBranchMems,
+                stale: staleMems,
+              },
+              telemetry: {
+                totalHits,
+                recordedTokensSaved: totalTokensSaved,
+                estimatedTokensSaved,
+              },
+            },
+            null,
+            2
+          )
+        );
+        break;
       }
 
       console.log('🩺 EvoKernel Doctor — Diagnostics Check');
@@ -984,8 +1054,15 @@ export function runCli(argv: string[]): void {
             : 'Not initialized (run `evo init` to activate)'
         }`
       );
+      console.log(
+        `  ├─ [x] Telemetry & ROI       : ${
+          hasEvo
+            ? `${totalHits} capability hits · ~${estimatedTokensSaved.toLocaleString()} tokens saved (Core Budget: ${coreRuleTokens}/${maxCoreRuleTokens} tok)`
+            : 'No telemetry yet'
+        }`
+      );
       console.log(`  ├─ [x] .evo/ Storage Tree    : ${hasEvo ? storage.evoDir : 'Not present'}`);
-      console.log(`  └─ [x] Meta-MCP Config       : ${fs.existsSync(path.join(workspaceRoot, '.mcp.json')) ? 'Registered (.mcp.json)' : 'Run `evo init` to register'}`);
+      console.log(`  └─ [x] Meta-MCP Config       : ${mcpRegistered ? 'Registered (.mcp.json)' : 'Run `evo init` to register'}`);
       break;
     }
 

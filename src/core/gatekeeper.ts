@@ -1175,15 +1175,15 @@ export class EvoGatekeeper {
     options?: EvaluateOptions
   ): GatekeeperResult {
     const res = this.evaluateAndCommitInternal(rawProposal, options);
-    if (!res.passed && !options?.dryRun) {
+    if (!options?.dryRun) {
       try {
         this.telemetry.recordGatekeeperEvent(
           {
             kind: rawProposal.kind,
-            targetId: sanitizeId(rawProposal.id || ''),
+            targetId: (res as any).id || sanitizeId(rawProposal.id || ''),
             targetName: rawProposal.title || rawProposal.id,
-            passed: false,
-            stageFailed: res.gate_failed || res.error_code || 'GATEKEEPER',
+            passed: res.passed,
+            stageFailed: res.passed ? undefined : (res.gate_failed || res.error_code || 'GATEKEEPER'),
             diagnostics: res.message || JSON.stringify(res),
           },
           this.storage.workspaceRoot

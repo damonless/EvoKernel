@@ -99,19 +99,20 @@ node ./dist/cli/index.js doctor
 
 ---
 
-## 📈 可复现 50 轮工程基准实测 (`npm run benchmark`)
+## 📈 50 轮上下文税推演模型与本地引擎微基准实测 (`npm run benchmark`)
 
-模拟典型全栈工程挂载 **8 个主流 MCP 服务**（`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` —— 共计 **77 个工具**）+ 成熟仓库知识库（10 条规则、4 个技能、5 个微工具、15 条排障记忆），在 **50 轮连续对话 + 3 次中途规则/工具演进**下的实测对比（本地执行 `npm run benchmark` 即可复现）：
+基于典型全栈工程挂载 **8 个主流 MCP 服务**（`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` —— 共计 **77 个工具**）+ 成熟仓库知识库（10 条规则、4 个技能、5 个微工具、15 条排障记忆），在 **50 轮连续对话 + 3 次中途规则/工具演进**下的上下文税分析推演模型与本地引擎微基准实测（本地执行 `npm run benchmark` 即可复现）。
+*零前缀失效前提说明*：0 次中途缓存击穿建立在新演进资产以默认的 `core: false` 领域规则（Scoped Rules）、技能、微工具或排障记忆（`memory`）形态沉淀至 `.evo/` 的前提之上——此类演进不修改顶层 `tools/list` Schema 与宿主 `CLAUDE.md` 常驻 L0 前缀。
 
-| 核心指标 | 传统直连多 MCP + 巨石 `CLAUDE.md` | **🧬 EvoKernel 5-Tool 虚拟网关** | 实测收益 |
+| 核心指标 | 传统直连多 MCP + 巨石 `CLAUDE.md` | **🧬 EvoKernel 5-Tool 虚拟网关** | 推演/实测收益 |
 | :--- | :---: | :---: | :---: |
 | **暴露给模型的工具 Schema** | 77 个工具定义 | **5 个固定元工具原语** | **-93.5% Schema 体积** |
-| **每轮常驻静态前缀税** | 27,150 tokens | **1,530 tokens** | **-94.4% Prompt 税** |
+| **每轮常驻静态前缀税** | 27,150 tokens | **3,066 tokens** | **-88.7% Prompt 税** |
 | **中途演进引发的缓存击穿** | 3 次全量前缀重算 | **0 次（100% 命中缓存）** | **100% KV Cache 护盾** |
-| **50 轮累计输入 Tokens** | 1,931,250 tokens | **661,770 tokens** | **-65.7% 累计负载** |
-| **50 轮账单成本 (Claude Sonnet 4.5)** | \$1.15 | **\$0.31** | **节省 72.9% API 成本** |
-| **50 轮账单成本 (Claude Opus 4.5)** | \$5.76 | **\$1.56** | **节省 72.9% API 成本** |
-| **AST 防漂移记忆校验耗时** | 无校验（重构后静默腐败） | **0.048 ms / 条记忆** | **确定性 AST 符号锚定** |
+| **50 轮累计输入 Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% 累计负载** |
+| **50 轮账单成本 (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **节省 70.4% API 成本** |
+| **50 轮账单成本 (Claude Opus 4.5)** | \$5.76 | **\$1.70** | **节省 70.4% API 成本** |
+| **AST 防漂移记忆校验耗时** | 无校验（重构后静默腐败） | **~0.35 ms / 条记忆** | **确定性 AST 符号锚定** |
 
 ---
 
@@ -357,14 +358,12 @@ EvoKernel 在 `stdio` 上**仅暴露恒定的 5 个不可变元工具**，以此
 │   ├── [SCOPED] core-architecture-and-ast-invariants-guard (728 tok) — Dry-run compaction, comment-stripped AST matching & Git lookups.
 │   ├── [SCOPED] multi-harness-config-and-proxy-isolation (906 tok) — Lossless config merge/restore, fail-closed user configs & proxy roots.
 │   └── [SCOPED] workspace-isolation-and-fts5-guard (537 tok) — Isolate uninitialized fallback, parent Git detection & FTS5 search.
-├── ⚡ Skills (3 verified L0/L1/L2 playbooks)
+├── ⚡ Skills (2 verified L0/L1/L2 playbooks)
 │   ├── [SOP] bug-to-guardrail-sop (hits: 3 | tags: debugging,evolution) — Standard workflow to turn a resolved root cause into a Rule.
-│   ├── [SOP] evo-dev-verification-sop (hits: 22 | tags: dev,release) — 4-stage TDD, blast-radius check & preflight verification SOP.
 │   └── [SOP] evo-rule-architect (hits: 2 | tags: refactor,rules) — 4-stage rule decoupling and budget refactoring workflow.
-├── 🔧 Micro-Tools (5 sandboxed scripts | Fixed Meta-MCP Routed)
+├── 🔧 Micro-Tools (4 sandboxed scripts | Fixed Meta-MCP Routed)
 │   ├── [NODE] agy-config-auditor (runs: 55 | pass: 100%) — Audits host rule budgets and memory AST symbols.
 │   ├── [NODE] deliverable-canonical-inspector (runs: 18 | pass: 100%) — Zero-dep validator for .xlsx, .docx, .pptx, CSV, JSON, MD.
-│   ├── [NODE] evo-release-preflight (runs: 30 | pass: 100%) — Audits multi-manifest parity and build freshness.
 │   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
 │   └── [NODE] workspace-metrics-scanner (runs: 13 | pass: 100%) — Scans file counts, LOC, and extension distribution.
 └── 🧠 Episodic Memories (18 fault cases | 18 VERIFIED · 0 STALE)
