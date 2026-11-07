@@ -20,7 +20,7 @@ import {
   verifyMemoryFreshness,
 } from '../core/memory.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { executeSandboxedScript } from '../core/sandbox.js';
+import { executeSandboxedScriptAsync } from '../core/sandbox.js';
 import { mountIdeExtensions, syncManagedRuleBlocks } from './init.js';
 import { isSubpathOf } from '../mcp/handlers.js';
 
@@ -111,15 +111,17 @@ export function buildUiSnapshot(
 
     if (hasValidEvoStructure(storage.evoDir)) {
       try {
-        rules.push(...storage.listRules().map(attach));
-        skills.push(...storage.listSkills().map(attach));
-        tools.push(...storage.listTools().map(attach));
-        for (const m of storage.listMemories()) {
+        const localOnlyIds = new Set(['ceo-team-orchestrator','dual-agent-team','evo-dev-verification-sop','embedded-fsm-lookup-audit','evo-release-preflight','local-workflow-skill-isolation-guard','embedded-power-bms-guardrail']);
+        const filterAnon = <T extends { id: string }>(items: T[]): T[] => options?.anon ? items.filter((item) => !localOnlyIds.has(item.id)) : items;
+        rules.push(...filterAnon(storage.listRules()).map(attach));
+        skills.push(...filterAnon(storage.listSkills()).map(attach));
+        tools.push(...filterAnon(storage.listTools()).map((tool) => { const attached = attach(tool); if (options?.anon && typeof attached.script_path === 'string') { const rel = path.relative(ws, attached.script_path).replace(/\\/g, '/'); attached.script_path = rel.startsWith('..') ? path.basename(attached.script_path) : rel; } return attached; }));
+        for (const m of filterAnon(storage.listMemories())) {
           const v = verifyMemoryFreshness(ws, m, { includeCallers: true, cacheDb: db });
           const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
           memories.push(attach({ ...m, freshness: { ...v, callers } }));
         }
-        archived.push(...storage.listArchivedCapabilities());
+        archived.push(...filterAnon(storage.listArchivedCapabilities()));
       } catch {}
     }
 
@@ -693,7 +695,7 @@ export async function startUiServer(
               return;
             }
 
-            const execResult = executeSandboxedScript(
+            const execResult = await executeSandboxedScriptAsync(
               tool.runtime,
               tool.script_path,
               {},

@@ -8,6 +8,8 @@ dist/
 .agents/
 
 # Local-only personal & maintenance skills/rules/tools (never push to remote)
+docs/index.html
+public/
 .evo/skills/ceo-team-orchestrator/
 .evo/skills/dual-agent-team/
 .evo/skills/evo-dev-verification-sop/
