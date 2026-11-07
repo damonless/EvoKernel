@@ -17,6 +17,7 @@ import {
   EvoStorage,
   findNearestEvoWorkspace,
   hasValidEvoStructure,
+  isHostGlobalConfigDir,
   isPluginOrExtensionInstallDir,
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
@@ -419,7 +420,8 @@ Commands:
 function copyDirNonOverwriting(
   srcDir: string,
   destDir: string,
-  syncUpdatedSeeds: boolean = false
+  syncUpdatedSeeds: boolean = false,
+  allowScoped: boolean = false
 ): void {
   if (!fs.existsSync(srcDir)) return;
   fs.mkdirSync(destDir, { recursive: true });
@@ -427,7 +429,7 @@ function copyDirNonOverwriting(
     if (
       entry.name === '.cache' ||
       entry.name === 'archive' ||
-      entry.name === 'scoped' ||
+      (entry.name === 'scoped' && !allowScoped) ||
       entry.name === 'core-invariants.md'
     ) {
       continue;
@@ -435,7 +437,7 @@ function copyDirNonOverwriting(
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
     if (entry.isDirectory()) {
-      copyDirNonOverwriting(srcPath, destPath, syncUpdatedSeeds);
+      copyDirNonOverwriting(srcPath, destPath, syncUpdatedSeeds, allowScoped);
     } else if (entry.isFile()) {
       if (!fs.existsSync(destPath)) {
         fs.copyFileSync(srcPath, destPath);
@@ -476,6 +478,7 @@ export function ensureGlobalFallbackSeeded(
       copyDirNonOverwriting(
         path.join(seedEvoDir, sub),
         path.join(storage.evoDir, sub),
+        hasTemplateSeed,
         hasTemplateSeed
       );
     }
@@ -493,15 +496,24 @@ export function resolveWorkspaceRoot(
   const wsEq = args.find((a) => a.startsWith('--workspace='));
   if (wsEq) {
     const explicit = path.resolve(wsEq.slice('--workspace='.length));
+    if (allowGlobalFallback && isHostGlobalConfigDir(explicit)) {
+      return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
+    }
     return findNearestEvoWorkspace(explicit) || explicit;
   }
   const wsFlagIdx = args.indexOf('--workspace') !== -1 ? args.indexOf('--workspace') : args.indexOf('-w');
   if (wsFlagIdx !== -1 && args[wsFlagIdx + 1] && !args[wsFlagIdx + 1].startsWith('-')) {
     const explicit = path.resolve(args[wsFlagIdx + 1]);
+    if (allowGlobalFallback && isHostGlobalConfigDir(explicit)) {
+      return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
+    }
     return findNearestEvoWorkspace(explicit) || explicit;
   }
   if (process.env.EVO_WORKSPACE) {
     const envWs = path.resolve(process.env.EVO_WORKSPACE);
+    if (allowGlobalFallback && isHostGlobalConfigDir(envWs)) {
+      return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
+    }
     return findNearestEvoWorkspace(envWs) || envWs;
   }
   const cwd = path.resolve(cwdOverride || process.cwd());

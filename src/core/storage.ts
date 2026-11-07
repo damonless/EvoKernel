@@ -59,6 +59,33 @@ export function getScopeBucketKey(scopeGlob: string): string {
 const IDE_PLUGIN_DIR_REGEX =
   /\/(?:\.(?:gemini|claude|cursor|vscode|vscode-server|windsurf|antigravity|roo|cline|codex|opencode)\/(?:[^/]+\/)*(?:plugins|extensions|mcp)|\.claude-plugin|\.evo\/global|(?:appdata\/(?:roaming|local)|library\/application\s+support|\.config|\.local\/share)\/(?:[^/]+\/)*(?:plugins|extensions))(?:\/|$)/i;
 
+const HOST_GLOBAL_CONFIG_DIRS = new Set([
+  '.gemini',
+  '.claude',
+  '.cursor',
+  '.windsurf',
+  '.codex',
+  '.roo',
+  '.cline',
+  '.opencode',
+  '.antigravity',
+]);
+
+export function isHostGlobalConfigDir(dirPath: string, customHome?: string): boolean {
+  try {
+    const home = path.resolve(customHome || os.homedir()).replace(/\\/g, '/').toLowerCase();
+    const norm = path.resolve(dirPath).replace(/\\/g, '/').toLowerCase();
+    if (!norm.startsWith(home + '/')) {
+      return false;
+    }
+    const rel = norm.slice(home.length + 1);
+    const firstSeg = rel.split('/')[0] || '';
+    return HOST_GLOBAL_CONFIG_DIRS.has(firstSeg);
+  } catch {
+    return false;
+  }
+}
+
 export function isPluginOrExtensionInstallDir(dirPath: string): boolean {
   const norm = path.resolve(dirPath).replace(/\\/g, '/').toLowerCase();
   if (
@@ -67,6 +94,9 @@ export function isPluginOrExtensionInstallDir(dirPath: string): boolean {
       (norm === path.resolve(process.env.EVO_GLOBAL_DIR).replace(/\\/g, '/').toLowerCase() ||
         norm.startsWith(path.resolve(process.env.EVO_GLOBAL_DIR).replace(/\\/g, '/').toLowerCase() + '/')))
   ) {
+    return true;
+  }
+  if (isHostGlobalConfigDir(dirPath)) {
     return true;
   }
   return IDE_PLUGIN_DIR_REGEX.test(norm);

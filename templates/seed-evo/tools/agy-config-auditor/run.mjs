@@ -317,6 +317,14 @@ const ruleFiles = [
   '.cursor/rules/evo-kernel.mdc',
   '.evo/rules/core-invariants.md',
 ];
+const configRulesDir = path.join(root, 'config', 'rules');
+if (fs.existsSync(configRulesDir)) {
+  for (const ent of fs.readdirSync(configRulesDir, { withFileTypes: true })) {
+    if (ent.isFile() && ent.name.endsWith('.md')) {
+      ruleFiles.push(`config/rules/${ent.name}`);
+    }
+  }
+}
 let configuredBudgetLimit = 1500;
 const localConfigFile = path.join(root, '.evo', 'config.json');
 if (fs.existsSync(localConfigFile)) {
@@ -1061,6 +1069,7 @@ if (fs.existsSync(globalEvoDir)) {
   if (fs.existsSync(localRulesDir) && fs.existsSync(globalRulesDir)) {
     const checkDir = (locSub, globSub) => {
       if (!fs.existsSync(locSub) || !fs.existsSync(globSub)) return;
+      if (path.resolve(locSub).toLowerCase() === path.resolve(globSub).toLowerCase()) return;
       for (const ent of fs.readdirSync(locSub, { withFileTypes: true })) {
         if (ent.isFile() && ent.name.endsWith('.md') && ent.name !== 'core-invariants.md') {
           const locFile = path.join(locSub, ent.name);
@@ -1076,9 +1085,14 @@ if (fs.existsSync(globalEvoDir)) {
   }
 
   // Compare skills
-  const localSkillsDir = path.join(root, '.evo', 'skills');
   const globalSkillsDir = path.join(globalEvoDir, 'skills');
-  if (fs.existsSync(localSkillsDir) && fs.existsSync(globalSkillsDir)) {
+  for (const localSkillsDir of [
+    path.join(root, '.evo', 'skills'),
+    path.join(root, 'config', 'skills'),
+    path.join(root, 'skills'),
+  ]) {
+    if (!fs.existsSync(localSkillsDir) || !fs.existsSync(globalSkillsDir)) continue;
+    if (path.resolve(localSkillsDir).toLowerCase() === path.resolve(globalSkillsDir).toLowerCase()) continue;
     for (const ent of fs.readdirSync(localSkillsDir, { withFileTypes: true })) {
       if (ent.isDirectory()) {
         const locSkill = path.join(localSkillsDir, ent.name, 'SKILL.md');
@@ -1088,11 +1102,15 @@ if (fs.existsSync(globalEvoDir)) {
           const globParsed = parseFrontmatter(fs.readFileSync(globSkill, 'utf8'));
           const locBody = locParsed.body.replace(/\r?\n/g, '\n').trim();
           const globBody = globParsed.body.replace(/\r?\n/g, '\n').trim();
-          if (locBody !== globBody) {
+          const relLoc = path.relative(root, locSkill).replace(/\\/g, '/');
+          if (
+            locBody !== globBody &&
+            !splitBrainDivergences.some((d) => d.capability === 'skill' && d.local_path === relLoc)
+          ) {
             splitBrainDivergences.push({
               capability: 'skill',
               id: ent.name,
-              local_path: path.relative(root, locSkill).replace(/\\/g, '/'),
+              local_path: relLoc,
               global_path: globSkill,
               reason: 'Skill SOP body diverges between local and global trees.',
             });
@@ -1173,6 +1191,11 @@ const scannedSkillDirs = new Set();
 const skillDirsToScan = [
   path.join(root, '.evo', 'skills'),
   path.join(root, 'skills'),
+  path.join(root, 'config', 'skills'),
+  path.join(root, '.gemini', 'skills'),
+  path.join(root, '.agents', 'skills'),
+  path.join(root, '.claude', 'skills'),
+  path.join(root, '.cursor', 'skills'),
 ];
 for (const parentDir of skillDirsToScan) {
   if (!fs.existsSync(parentDir)) continue;

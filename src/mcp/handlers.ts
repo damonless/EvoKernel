@@ -8,6 +8,7 @@ import {
   findNearestEvoWorkspace,
   hasValidEvoStructure,
   isHollowEvoZombieDir,
+  isHostGlobalConfigDir,
   isPluginOrExtensionInstallDir,
   sanitizeId,
 } from '../core/storage.js';
@@ -652,13 +653,17 @@ export class EvoMcpDispatcher {
       }
 
       if (isPluginOrExtensionInstallDir(candidate)) {
-        // Explicit global fallback dir or plugin install dir binds to defaultRoot (or candidate if ~/.evo/global)
+        // Explicit global fallback dir, host global config dir (~/.gemini), or plugin install dir binds to defaultRoot (or ~/.evo/global)
         if (
           norm.endsWith('/.evo/global') ||
           (process.env.EVO_GLOBAL_DIR &&
             path.resolve(process.env.EVO_GLOBAL_DIR).toLowerCase() === candidate.toLowerCase())
         ) {
           targetRoot = candidate;
+        } else if (isHostGlobalConfigDir(candidate)) {
+          targetRoot = process.env.EVO_GLOBAL_DIR
+            ? path.resolve(process.env.EVO_GLOBAL_DIR)
+            : path.join(os.homedir(), '.evo', 'global');
         }
       } else {
         const nearestEvo = findNearestEvoWorkspace(candidate);

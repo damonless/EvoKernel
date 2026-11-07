@@ -2042,7 +2042,9 @@ export function detectCascadedTargets(
     }
   }
   if (stage1.length > 0) {
-    return Array.from(new Set(stage1));
+    const uniqueStage1 = Array.from(new Set(stage1));
+    const dedicated = uniqueStage1.filter((id) => id !== 'agents');
+    return dedicated.length > 0 ? dedicated : uniqueStage1;
   }
 
   // Stage 2: Host Environment Variables & Process Indicators

@@ -5,7 +5,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
-import { EvoStorage, parseFrontmatter } from '../core/storage.js';
+import {
+  EvoStorage,
+  isHostGlobalConfigDir,
+  isPluginOrExtensionInstallDir,
+  parseFrontmatter,
+} from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper, hasUnsafeHookRegex, isValidContrastiveEvidence } from '../core/gatekeeper.js';
 import { executeSandboxedScript, executeSandboxedScriptAsync, killProcessTreeAsync } from '../core/sandbox.js';
@@ -15,9 +20,16 @@ import {
   findBraceBlockEnd,
   findPythonBlockEnd,
 } from '../core/memory.js';
-import { runAudit } from '../cli/audit.js';
+import { auditHarnessSurfaces, runAudit, runRefactor } from '../cli/audit.js';
 import { isExcludedGitHotspotPath } from '../cli/score.js';
-import { syncDeclaredPreToolHooks, isEvoHookCommand, CodexAdapter, ClaudeAdapter, upsertClaudeSettings } from '../cli/harness.js';
+import {
+  syncDeclaredPreToolHooks,
+  isEvoHookCommand,
+  CodexAdapter,
+  ClaudeAdapter,
+  upsertClaudeSettings,
+  detectCascadedTargets,
+} from '../cli/harness.js';
 import { EvoMcpDispatcher } from '../mcp/handlers.js';
 import {
   handlePostTool,
@@ -2318,6 +2330,120 @@ process.exit(hasRule ? 0 : 1);
       assert.ok(duration < 4000, `Execution should abort near timeout (took ${duration}ms)`);
     } finally {
       safeCleanup(ws);
+    }
+  });
+
+  test('43. [Global Plugin & Host Config Isolation] Scoped esm-typescript-imports seed, Stage 1 dedicated harness deduplication, isHostGlobalConfigDir routing, and global skill frontmatter backfill', () => {
+    const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+    const ws = createTempWorkspace();
+    const fakeHome = createTempWorkspace();
+    const fakeGlobal = path.join(fakeHome, '.evo', 'global');
+    const prevGlobal = process.env.EVO_GLOBAL_DIR;
+    process.env.EVO_GLOBAL_DIR = fakeGlobal;
+
+    try {
+      // 1. esm-typescript-imports seed rule is core: false, scoped to **/*.{ts,tsx,mts,cts}, and passes Gate 1.5
+      const repoStorage = new EvoStorage(repoRoot);
+      const tsRule = repoStorage.getRule('esm-typescript-imports');
+      assert.ok(tsRule, 'esm-typescript-imports rule must exist in repo');
+      assert.strictEqual(tsRule.core, false, 'esm-typescript-imports must be scoped (core: false) so it does not pollute non-TS workspaces');
+      assert.strictEqual(tsRule.scope_glob, '**/*.{ts,tsx,mts,cts}');
+      const repoAudit = runAudit(repoRoot, { includeGlobal: false });
+      assert.strictEqual(repoAudit.gateViolations.length, 0, 'Repo rules must have 0 Gate 1.5 violations');
+
+      // 2. detectCascadedTargets Stage 1 omits generic fallback "agents" when a dedicated harness (e.g. gemini) is present
+      const wsWithBoth = path.join(ws, 'both-gemini-and-agents');
+      fs.mkdirSync(wsWithBoth, { recursive: true });
+      fs.writeFileSync(path.join(wsWithBoth, 'GEMINI.md'), '# Gemini\n', 'utf8');
+      fs.writeFileSync(path.join(wsWithBoth, 'AGENTS.md'), '# Agents\n', 'utf8');
+      const detectedBoth = detectCascadedTargets(wsWithBoth, {}, fakeHome);
+      assert.ok(detectedBoth.includes('gemini'), 'Must detect dedicated gemini harness');
+      assert.strictEqual(detectedBoth.includes('agents'), false, 'Must omit generic agents fallback when dedicated harness matches in Stage 1');
+
+      const wsAgentsOnly = path.join(ws, 'agents-only');
+      fs.mkdirSync(wsAgentsOnly, { recursive: true });
+      fs.writeFileSync(path.join(wsAgentsOnly, 'AGENTS.md'), '# Agents\n', 'utf8');
+      const detectedAgentsOnly = detectCascadedTargets(wsAgentsOnly, {}, fakeHome);
+      assert.deepStrictEqual(detectedAgentsOnly, ['agents'], 'Must retain agents when it is the only Stage 1 match');
+
+      // 3. isHostGlobalConfigDir matches ~/.gemini and ~/.claude under homeDir, but NOT <workspace>/.gemini
+      assert.strictEqual(isHostGlobalConfigDir(path.join(fakeHome, '.gemini'), fakeHome), true);
+      assert.strictEqual(isHostGlobalConfigDir(path.join(fakeHome, '.gemini', 'config', 'rules'), fakeHome), true);
+      assert.strictEqual(isHostGlobalConfigDir(path.join(fakeHome, '.claude'), fakeHome), true);
+      assert.strictEqual(isHostGlobalConfigDir(path.join(ws, '.gemini'), fakeHome), false);
+      assert.strictEqual(isPluginOrExtensionInstallDir(path.join(os.homedir(), '.gemini')), true);
+
+      // Routing workspace="~/.gemini" in EvoMcpDispatcher writes to EVO_GLOBAL_DIR and never creates ~/.gemini/.evo
+      const realHomeGeminiSub = path.join(os.homedir(), '.gemini', 'config');
+      const dispatcher = new EvoMcpDispatcher(ws);
+      try {
+        const propRes = dispatcher.handleToolCall('evo_propose', {
+          workspace: realHomeGeminiSub,
+          kind: 'rule',
+          id: 'global-host-config-routing-check',
+          title: 'Global Host Config Routing Check',
+          l0_summary: 'Verify host config dir workspace routes proposals to global fallback storage.',
+          scope_glob: '**/*.md',
+          core: false,
+          content: '1. Route host global config workspace proposals to global storage.\n2. Never create .evo inside host config directories.',
+          transfer_scenarios: [
+            'Auditing host global configuration directories',
+            'Cross-project global rule management workflows',
+          ],
+        });
+        assert.strictEqual(propRes.isError, undefined, propRes.content[0]?.text);
+        const globalStorage = new EvoStorage(fakeGlobal);
+        assert.ok(globalStorage.getRule('global-host-config-routing-check'), 'Rule must be stored in EVO_GLOBAL_DIR');
+        const wsStorage = new EvoStorage(ws);
+        assert.strictEqual(wsStorage.getRule('global-host-config-routing-check'), null, 'Rule must NOT leak into defaultRoot workspace');
+      } finally {
+        dispatcher.close();
+      }
+
+      // 4. auditHarnessSurfaces and runRefactor --apply with includeGlobal: true detect and backfill global skills
+      const globalLegacySkillDir = path.join(fakeHome, '.gemini', 'config', 'skills', 'legacy-global-skill');
+      fs.mkdirSync(globalLegacySkillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(globalLegacySkillDir, 'SKILL.md'),
+        '---\nid: legacy-global-skill\ntitle: "Legacy Global Skill"\n---\n1. Global skill body.\n',
+        'utf8'
+      );
+
+      const globalViolationsBefore = auditHarnessSurfaces(ws, {
+        includeGlobal: true,
+        globalHomeDir: fakeHome,
+      });
+      assert.ok(
+        globalViolationsBefore.some(
+          (v) => v.code === 'SKILL_FRONTMATTER_SILENT_DROP' && v.displayPath.includes('legacy-global-skill')
+        ),
+        'auditHarnessSurfaces with includeGlobal: true must flag missing name/description in global ~/.gemini/config/skills'
+      );
+
+      const refactorRes = runRefactor(ws, {
+        includeGlobal: true,
+        globalHomeDir: fakeHome,
+        apply: true,
+      });
+      assert.ok(
+        refactorRes.appliedChanges.some((c) => c.includes('legacy-global-skill')),
+        'runRefactor --apply must auto-backfill missing frontmatter on global skills'
+      );
+
+      const globalViolationsAfter = auditHarnessSurfaces(ws, {
+        includeGlobal: true,
+        globalHomeDir: fakeHome,
+      });
+      assert.strictEqual(
+        globalViolationsAfter.some((v) => v.displayPath.includes('legacy-global-skill')),
+        false,
+        'Global skill frontmatter violation must be resolved after runRefactor --apply'
+      );
+    } finally {
+      if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
+      else process.env.EVO_GLOBAL_DIR = prevGlobal;
+      safeCleanup(ws);
+      safeCleanup(fakeHome);
     }
   });
 

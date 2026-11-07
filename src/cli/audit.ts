@@ -349,7 +349,10 @@ function tokenizeContentForOverlap(text: string): Set<string> {
   return new Set(matches.filter((w) => !stopWords.has(w)));
 }
 
-export function auditHarnessSurfaces(workspaceRoot: string): SurfaceViolation[] {
+export function auditHarnessSurfaces(
+  workspaceRoot: string,
+  options: { includeGlobal?: boolean; globalHomeDir?: string } = {}
+): SurfaceViolation[] {
   const violations: SurfaceViolation[] = [];
   const root = path.resolve(workspaceRoot);
 
@@ -477,25 +480,58 @@ export function auditHarnessSurfaces(workspaceRoot: string): SurfaceViolation[] 
   }
 
   // 3. Host Skill Frontmatter Silent-Drop Checks
-  const skillDirs: Array<{ harness: string; dir: string; type: 'codex' | 'host' | 'evo' }> = [
-    { harness: 'codex', dir: path.join(root, '.agents', 'skills'), type: 'codex' },
-    { harness: 'codex', dir: path.join(root, '.codex', 'skills'), type: 'codex' },
-    { harness: 'gemini', dir: path.join(root, '.gemini', 'skills'), type: 'host' },
-    { harness: 'opencode', dir: path.join(root, '.opencode', 'skills'), type: 'host' },
-    { harness: 'claude', dir: path.join(root, '.claude', 'skills'), type: 'host' },
-    { harness: 'cursor', dir: path.join(root, '.cursor', 'skills'), type: 'host' },
-    { harness: 'windsurf', dir: path.join(root, '.windsurf', 'skills'), type: 'host' },
-    { harness: 'roo', dir: path.join(root, '.roo', 'skills'), type: 'host' },
-    { harness: 'root', dir: path.join(root, 'skills'), type: 'host' },
-    { harness: 'evo', dir: path.join(root, '.evo', 'skills'), type: 'evo' },
+  const skillDirs: Array<{
+    harness: string;
+    dir: string;
+    type: 'codex' | 'host' | 'evo';
+    baseDir: string;
+    prefix: string;
+  }> = [
+    { harness: 'codex', dir: path.join(root, '.agents', 'skills'), type: 'codex', baseDir: root, prefix: '' },
+    { harness: 'codex', dir: path.join(root, '.codex', 'skills'), type: 'codex', baseDir: root, prefix: '' },
+    { harness: 'gemini', dir: path.join(root, '.gemini', 'skills'), type: 'host', baseDir: root, prefix: '' },
+    { harness: 'gemini', dir: path.join(root, 'config', 'skills'), type: 'host', baseDir: root, prefix: '' },
+    { harness: 'opencode', dir: path.join(root, '.opencode', 'skills'), type: 'host', baseDir: root, prefix: '' },
+    { harness: 'claude', dir: path.join(root, '.claude', 'skills'), type: 'host', baseDir: root, prefix: '' },
+    { harness: 'cursor', dir: path.join(root, '.cursor', 'skills'), type: 'host', baseDir: root, prefix: '' },
+    { harness: 'windsurf', dir: path.join(root, '.windsurf', 'skills'), type: 'host', baseDir: root, prefix: '' },
+    { harness: 'roo', dir: path.join(root, '.roo', 'skills'), type: 'host', baseDir: root, prefix: '' },
+    { harness: 'root', dir: path.join(root, 'skills'), type: 'host', baseDir: root, prefix: '' },
+    { harness: 'evo', dir: path.join(root, '.evo', 'skills'), type: 'evo', baseDir: root, prefix: '' },
   ];
 
-  for (const { harness, dir, type } of skillDirs) {
+  if (options.includeGlobal) {
+    const globalHome = path.resolve(options.globalHomeDir || os.homedir());
+    const globalEvoRoot =
+      !options.globalHomeDir && process.env.EVO_GLOBAL_DIR
+        ? path.resolve(process.env.EVO_GLOBAL_DIR)
+        : path.join(globalHome, '.evo', 'global');
+    skillDirs.push(
+      { harness: 'gemini', dir: path.join(globalHome, '.gemini', 'config', 'skills'), type: 'host', baseDir: globalHome, prefix: '~/' },
+      { harness: 'claude', dir: path.join(globalHome, '.claude', 'skills'), type: 'host', baseDir: globalHome, prefix: '~/' },
+      { harness: 'cursor', dir: path.join(globalHome, '.cursor', 'skills'), type: 'host', baseDir: globalHome, prefix: '~/' },
+      { harness: 'windsurf', dir: path.join(globalHome, '.windsurf', 'skills'), type: 'host', baseDir: globalHome, prefix: '~/' },
+      { harness: 'codex', dir: path.join(globalHome, '.agents', 'skills'), type: 'codex', baseDir: globalHome, prefix: '~/' },
+      {
+        harness: 'evo',
+        dir: path.join(globalEvoRoot, '.evo', 'skills'),
+        type: 'evo',
+        baseDir: globalEvoRoot.toLowerCase().startsWith(globalHome.toLowerCase()) ? globalHome : globalEvoRoot,
+        prefix: '~/'.concat(globalEvoRoot.toLowerCase().startsWith(globalHome.toLowerCase()) ? '' : '.evo/global/'),
+      }
+    );
+  }
+
+  const seenSkillFiles = new Set<string>();
+  for (const { harness, dir, type, baseDir, prefix } of skillDirs) {
     if (!fs.existsSync(dir)) continue;
     for (const f of collectMarkdownFiles(dir, 2)) {
       if (path.basename(f) !== 'SKILL.md') continue;
+      const resolvedF = path.resolve(f);
+      if (seenSkillFiles.has(resolvedF)) continue;
+      seenSkillFiles.add(resolvedF);
       const dirName = path.basename(path.dirname(f));
-      const relPath = path.relative(root, f).replace(/\\/g, '/');
+      const relPath = `${prefix}${path.relative(baseDir, f).replace(/\\/g, '/')}`;
       try {
         const raw = fs.readFileSync(f, 'utf8');
         const { meta } = parseFrontmatter(raw);
@@ -905,7 +941,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     }
   }
 
-  const surfaceViolations = auditHarnessSurfaces(root);
+  const surfaceViolations = auditHarnessSurfaces(root, { includeGlobal, globalHomeDir });
 
   const contestedCapabilities: ContestedCapability[] = [];
   const dbPath = localStorage.telemetryDbPath;
@@ -1340,22 +1376,46 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     }
 
     // 3. Auto-backfill missing skill frontmatter
-    const skillDirs: string[] = [
-      path.join(root, '.agents', 'skills'),
-      path.join(root, '.codex', 'skills'),
-      path.join(root, '.gemini', 'skills'),
-      path.join(root, '.opencode', 'skills'),
-      path.join(root, '.claude', 'skills'),
-      path.join(root, '.cursor', 'skills'),
-      path.join(root, '.windsurf', 'skills'),
-      path.join(root, '.roo', 'skills'),
-      path.join(root, 'skills'),
-      path.join(root, '.evo', 'skills'),
+    const skillDirs: Array<{ dir: string; baseDir: string; prefix: string }> = [
+      { dir: path.join(root, '.agents', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, '.codex', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, '.gemini', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, 'config', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, '.opencode', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, '.claude', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, '.cursor', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, '.windsurf', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, '.roo', 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, 'skills'), baseDir: root, prefix: '' },
+      { dir: path.join(root, '.evo', 'skills'), baseDir: root, prefix: '' },
     ];
-    for (const sDir of skillDirs) {
+    if (options.includeGlobal ?? true) {
+      const globalHome = path.resolve(options.globalHomeDir ?? os.homedir());
+      const globalEvoRoot =
+        !options.globalHomeDir && process.env.EVO_GLOBAL_DIR
+          ? path.resolve(process.env.EVO_GLOBAL_DIR)
+          : path.join(globalHome, '.evo', 'global');
+      skillDirs.push(
+        { dir: path.join(globalHome, '.gemini', 'config', 'skills'), baseDir: globalHome, prefix: '~/' },
+        { dir: path.join(globalHome, '.claude', 'skills'), baseDir: globalHome, prefix: '~/' },
+        { dir: path.join(globalHome, '.cursor', 'skills'), baseDir: globalHome, prefix: '~/' },
+        { dir: path.join(globalHome, '.windsurf', 'skills'), baseDir: globalHome, prefix: '~/' },
+        { dir: path.join(globalHome, '.agents', 'skills'), baseDir: globalHome, prefix: '~/' },
+        {
+          dir: path.join(globalEvoRoot, '.evo', 'skills'),
+          baseDir: globalEvoRoot.toLowerCase().startsWith(globalHome.toLowerCase()) ? globalHome : globalEvoRoot,
+          prefix: '~/'.concat(globalEvoRoot.toLowerCase().startsWith(globalHome.toLowerCase()) ? '' : '.evo/global/'),
+        }
+      );
+    }
+    const seenBackfillSkills = new Set<string>();
+    for (const { dir: sDir, baseDir, prefix } of skillDirs) {
       if (!fs.existsSync(sDir)) continue;
       for (const f of collectMarkdownFiles(sDir, 2)) {
         if (path.basename(f) !== 'SKILL.md') continue;
+        const resolvedF = path.resolve(f);
+        if (seenBackfillSkills.has(resolvedF)) continue;
+        seenBackfillSkills.add(resolvedF);
         const dirName = path.basename(path.dirname(f));
         try {
           const raw = fs.readFileSync(f, 'utf8');
@@ -1385,7 +1445,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
             lines.push('---');
             lines.push(body.startsWith('\n') ? body.slice(1) : body);
             fs.writeFileSync(f, lines.join('\n'), 'utf8');
-            const rel = path.relative(root, f).replace(/\\/g, '/');
+            const rel = `${prefix}${path.relative(baseDir, f).replace(/\\/g, '/')}`;
             appliedChanges.push(`Auto-backfilled skill frontmatter on ${rel}`);
           }
         } catch {
