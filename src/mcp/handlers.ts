@@ -13,7 +13,7 @@ import {
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper } from '../core/gatekeeper.js';
-import { executeSandboxedScript } from '../core/sandbox.js';
+import { executeSandboxedScriptAsync } from '../core/sandbox.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
 import { ensureGitInfoExclude, findGitRoot, syncManagedRuleBlocks } from '../cli/init.js';
 import { McpProxyManager, parseExternalToolId } from './proxy.js';
@@ -268,6 +268,7 @@ export class EvoMcpDispatcher {
   private lastDirtyCheckAt = 0;
   private lastDirtySig = '';
   private watermarkDirtySig = '';
+  private lastWorktreeStateSig = '';
   private activeCallCount = 0;
 
   constructor(workspaceRoot: string, onCoreRulesChanged?: () => void) {
@@ -279,6 +280,59 @@ export class EvoMcpDispatcher {
     this.telemetry = initialCtx.telemetry;
     this.gatekeeper = initialCtx.gatekeeper;
     this.proxyManager = initialCtx.proxyManager;
+  }
+
+  private computeFastWorktreeStateSig(workspaceRoot: string, gitRoot: string): string {
+    try {
+      const parts: string[] = [path.resolve(workspaceRoot)];
+      for (const rel of ['.git/index', '.git/HEAD']) {
+        const p = path.join(gitRoot, rel);
+        try {
+          const st = fs.statSync(p);
+          parts.push(`${rel}:${st.mtimeMs}:${st.size}`);
+        } catch {
+          parts.push(`${rel}:none`);
+        }
+      }
+      let maxMtime = 0;
+      let entryCount = 0;
+      const scanDir = (dir: string, depth: number) => {
+        if (depth > 2 || entryCount > 80) return;
+        let entries: fs.Dirent[];
+        try {
+          entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const e of entries) {
+          if (entryCount > 80) break;
+          if (
+            e.name === '.git' ||
+            e.name === '.evo' ||
+            e.name === 'node_modules' ||
+            e.name === 'dist'
+          ) {
+            continue;
+          }
+          entryCount++;
+          const full = path.join(dir, e.name);
+          try {
+            const st = fs.statSync(full);
+            if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
+            if (e.isDirectory() && depth < 2) {
+              scanDir(full, depth + 1);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      };
+      scanDir(workspaceRoot, 0);
+      parts.push(`tree:${entryCount}:${maxMtime}`);
+      return parts.join('|');
+    } catch {
+      return '';
+    }
   }
 
   private checkDirtyTreeReminder(workspaceRoot: string, activeTelemetry?: EvoTelemetry | null): string {
@@ -296,23 +350,32 @@ export class EvoMcpDispatcher {
     const now = Date.now();
     if (now - this.lastDirtyCheckAt >= 15000) {
       this.lastDirtyCheckAt = now;
-      try {
-        const res = child_process.spawnSync('git', ['status', '--porcelain'], {
-          cwd: workspaceRoot,
-          encoding: 'utf8',
-          timeout: 1500,
-        });
-        if (res.status === 0 && res.stdout) {
-          const dirtyLines = res.stdout
-            .split(/\r?\n/)
-            .map((l) => l.trim())
-            .filter((l) => l && !l.includes('.evo/') && !l.includes('.git/'));
-          this.lastDirtySig = dirtyLines.join('\n');
-        } else {
+      const gitRoot = findGitRoot(workspaceRoot);
+      if (!gitRoot) {
+        this.lastDirtySig = '';
+        return '';
+      }
+      const stateSig = this.computeFastWorktreeStateSig(workspaceRoot, gitRoot);
+      if (!stateSig || stateSig !== this.lastWorktreeStateSig) {
+        this.lastWorktreeStateSig = stateSig;
+        try {
+          const res = child_process.spawnSync('git', ['status', '--porcelain'], {
+            cwd: workspaceRoot,
+            encoding: 'utf8',
+            timeout: 1500,
+          });
+          if (res.status === 0 && res.stdout) {
+            const dirtyLines = res.stdout
+              .split(/\r?\n/)
+              .map((l) => l.trim())
+              .filter((l) => l && !l.includes('.evo/') && !l.includes('.git/'));
+            this.lastDirtySig = dirtyLines.join('\n');
+          } else {
+            this.lastDirtySig = '';
+          }
+        } catch {
           this.lastDirtySig = '';
         }
-      } catch {
-        this.lastDirtySig = '';
       }
     }
 
@@ -1303,41 +1366,65 @@ export class EvoMcpDispatcher {
         ? this.activeWorkspaceDir
         : this.storage.rootDir;
 
-    const res = executeSandboxedScript(tool.runtime, tool.script_path, toolArgs, {
-      cwd: execCwd,
-      timeoutMs: tool.timeout_ms,
-      selfTest: false,
-    });
+    const boundStorage = activeCtx?.storage || this.storage;
+    const boundTelemetry = activeTelemetry;
+    const initialTelemetry = activeCtx?.telemetry || this.telemetry;
+    const isGlobalHit = boundTelemetry !== initialTelemetry;
+    const targetTool = tool;
 
-    const success = res.exitCode === 0;
-    activeTelemetry?.recordUsage(toolId, success, success ? 850 : 0);
-    const isGlobalHit = activeTelemetry !== this.telemetry;
-    if (hasValidEvoStructure(this.storage.evoDir)) {
-      if (!this.telemetry || this.telemetry.isClosed()) {
-        const refreshed = this.getOrCreateContext(this.storage.rootDir);
-        this.telemetry = refreshed.telemetry;
-        this.gatekeeper = refreshed.gatekeeper;
+    const executeLocalTool = async () => {
+      const res = await executeSandboxedScriptAsync(
+        targetTool.runtime,
+        targetTool.script_path,
+        toolArgs,
+        {
+          cwd: execCwd,
+          timeoutMs: targetTool.timeout_ms,
+          selfTest: false,
+        }
+      );
+
+      const success = res.exitCode === 0;
+      try {
+        boundTelemetry?.recordUsage(toolId, success, success ? 850 : 0);
+        if (hasValidEvoStructure(boundStorage.evoDir)) {
+          let localTel = activeCtx?.telemetry || this.telemetry;
+          if (!localTel || localTel.isClosed()) {
+            const refreshed = this.getOrCreateContext(boundStorage.rootDir);
+            this.telemetry = refreshed.telemetry;
+            this.gatekeeper = refreshed.gatekeeper;
+            if (activeCtx) {
+              activeCtx.telemetry = refreshed.telemetry;
+              activeCtx.gatekeeper = refreshed.gatekeeper;
+            }
+            localTel = refreshed.telemetry;
+          }
+          localTel?.recordRecalledCapability({
+            id: targetTool.id,
+            kind: 'tool',
+            tier: isGlobalHit ? 'GLOBAL' : 'LOCAL',
+          });
+        }
+      } catch {
+        // Ignore telemetry error if DB was closed concurrently
       }
-      this.telemetry?.recordRecalledCapability({
-        id: tool.id,
-        kind: 'tool',
-        tier: isGlobalHit ? 'GLOBAL' : 'LOCAL',
-      });
-    }
 
-    const reminder = this.checkDirtyTreeReminder(execCwd, activeTelemetry);
-    const output = [
-      `[evo_run: ${tool.id} (${tool.runtime}) | exit=${res.exitCode} | ${res.durationMs}ms]`,
-      res.stdout ? `STDOUT:\n${res.stdout}` : '',
-      res.stderr ? `STDERR:\n${res.stderr}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
+      const reminder = this.checkDirtyTreeReminder(execCwd, boundTelemetry);
+      const output = [
+        `[evo_run: ${targetTool.id} (${targetTool.runtime}) | exit=${res.exitCode} | ${res.durationMs}ms]`,
+        res.stdout ? `STDOUT:\n${res.stdout}` : '',
+        res.stderr ? `STDERR:\n${res.stderr}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
 
-    return {
-      isError: !success,
-      content: [{ type: 'text' as const, text: output + reminder }],
+      return {
+        isError: !success,
+        content: [{ type: 'text' as const, text: output + reminder }],
+      };
     };
+
+    return executeLocalTool();
   }
 
   private handlePropose(proposal: ProposalPayload, activeCtx?: WorkspaceContext) {

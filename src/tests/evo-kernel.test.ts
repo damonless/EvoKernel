@@ -103,7 +103,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('3. Gate 2 (Syntax & Sandbox Dry-Run) blocks broken scripts and commits verified Micro-Tools', () => {
+  test('3. Gate 2 (Syntax & Sandbox Dry-Run) blocks broken scripts and commits verified Micro-Tools', async () => {
     const ws = createTempWorkspace();
     const dispatcher = new EvoMcpDispatcher(ws);
     try {
@@ -153,7 +153,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(Boolean(goodToolRes.isError), false);
 
       // Run the newly evolved tool immediately via evo_run without restarting
-      const runRes = dispatcher.handleToolCall('evo_run', {
+      const runRes = await dispatcher.handleToolCall('evo_run', {
         workspace: ws,
         tool_id: 'math-adder-tool',
         args: { a: 19, b: 23 },
@@ -1243,7 +1243,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     }
   });
 
-  test('19. Issue #8 (Modules 1 & 2): Mandatory workspace schema, Anti-Write-Through Isolation, Two-Tier Lookup & scope_glob Language Filter', () => {
+  test('19. Issue #8 (Modules 1 & 2): Mandatory workspace schema, Anti-Write-Through Isolation, Two-Tier Lookup & scope_glob Language Filter', async () => {
     const globalWs = createTempWorkspace();
     const uninitClone = createTempWorkspace();
     const cFirmwareWs = createTempWorkspace();
@@ -1355,7 +1355,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       );
 
       // Two-tier evo_run executes global tool with cwd = cFirmwareWs
-      const runGlobalInLocal = dispatcher.handleToolCall('evo_run', {
+      const runGlobalInLocal = await dispatcher.handleToolCall('evo_run', {
         workspace: cFirmwareWs,
         tool_id: 'cwd-echo-tool',
       });

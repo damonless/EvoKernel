@@ -7,11 +7,19 @@ import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { EvoStorage, parseFrontmatter } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { EvoGatekeeper, hasUnsafeHookRegex } from '../core/gatekeeper.js';
+import { EvoGatekeeper, hasUnsafeHookRegex, isValidContrastiveEvidence } from '../core/gatekeeper.js';
+import { executeSandboxedScript, executeSandboxedScriptAsync } from '../core/sandbox.js';
+import {
+  maskSourceLexical,
+  stripCStyleComments,
+  findBraceBlockEnd,
+  findPythonBlockEnd,
+} from '../core/memory.js';
 import { runAudit } from '../cli/audit.js';
+import { isExcludedGitHotspotPath } from '../cli/score.js';
 import { syncDeclaredPreToolHooks, isEvoHookCommand, CodexAdapter, ClaudeAdapter, upsertClaudeSettings } from '../cli/harness.js';
 import { EvoMcpDispatcher } from '../mcp/handlers.js';
-import { handlePostTool, recordRecalledOutcomeWithTierRouting } from '../cli/hook.js';
+import { handlePostTool, handleStop, recordRecalledOutcomeWithTierRouting } from '../cli/hook.js';
 import {
   decodeXmlEntities,
   readZipEntries,
@@ -28,6 +36,7 @@ import {
   escapeUntrustedTrajectoryTags,
   sortProposalsTopologically,
   prepareOptimizationWorkspace,
+  probeCandidateInWorktree,
   runOptimizationCycle,
   extractWorkspaceEvoDiff,
 } from '../core/optimize.js';
@@ -1678,4 +1687,358 @@ process.exit(hasRule ? 0 : 1);
     }
   });
 
+  // =========================================================================
+  // ISSUE #25 REGRESSION SUITE (DEFECTS 1 - 6)
+  // =========================================================================
+
+  test('33. [Issue #25 Defect 1] Sandbox timeout kills grandchild process tree and Gatekeeper blocks recursive FS deletion & credential access', async () => {
+    const ws = createTempWorkspace();
+    try {
+      const pidFile = path.join(ws, 'grandchild.pid');
+      const scriptPath = path.join(ws, 'spawner.mjs');
+      fs.writeFileSync(
+        scriptPath,
+        [
+          "import { spawn } from 'node:child_process';",
+          "import * as fs from 'node:fs';",
+          "const args = JSON.parse(process.env.EVO_ARGS || '{}');",
+          "const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+          "fs.writeFileSync(args.pidFile, String(gc.pid), 'utf8');",
+          "setInterval(() => {}, 1000);",
+        ].join('\n'),
+        'utf8'
+      );
+
+      const asyncRes = await executeSandboxedScriptAsync('node', scriptPath, { pidFile }, {
+        cwd: ws,
+        timeoutMs: 600,
+      });
+      assert.strictEqual(asyncRes.timedOut, true);
+      assert.strictEqual(asyncRes.exitCode, 124);
+      assert.strictEqual(fs.existsSync(pidFile), true, 'Grandchild PID file should have been written before timeout');
+      const gcPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+      assert.ok(gcPid > 0);
+
+      let grandchildAlive = false;
+      try {
+        process.kill(gcPid, 0);
+        grandchildAlive = true;
+        process.kill(gcPid, 'SIGKILL');
+      } catch {
+        grandchildAlive = false;
+      }
+      assert.strictEqual(grandchildAlive, false, `Grandchild PID ${gcPid} must be terminated on sandbox timeout`);
+
+      // Verify Gatekeeper static patterns for recursive FS deletion and credential directory access
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        const gk = new EvoGatekeeper(storage, telemetry);
+        const badPayloads = [
+          "import * as fs from 'node:fs'; fs.rmSync('/', { recursive: true, force: true });",
+          "import * as fs from 'node:fs'; fs.promises.rm(os.homedir(), { recursive: true });",
+          "import shutil\nshutil.rmtree('/')",
+          "const key = fs.readFileSync(path.join(os.homedir(), '.ssh/id_rsa'), 'utf8');",
+          "const aws = fs.readFileSync('~/.aws/credentials', 'utf8');",
+        ];
+        for (const bad of badPayloads) {
+          const hit = gk.scanDangerousPatterns(bad);
+          assert.ok(hit, `Expected dangerous pattern to block: ${bad}`);
+        }
+        // Safe temp directory cleanup should remain allowed
+        const safeCleanupCode = "const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-')); fs.rmSync(tmp, { recursive: true, force: true });";
+        assert.strictEqual(gk.scanDangerousPatterns(safeCleanupCode), null);
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('34. [Issue #25 Defect 2] Lexical AST parser handles Rust/C++ raw strings, C++14 digit separators, and Python unmasked blocks', () => {
+    // 1. Rust raw string r#"..."# and br##"..."## with unbalanced { and quotes
+    const rustCode = [
+      'pub fn parse_raw_payload(input: &str) -> usize {',
+      '    let pat = r#"unbalanced { and "quotes" inside raw"#;',
+      '    let bytes = br##"another { raw "string"# here"##;',
+      '    input.len() + pat.len() + bytes.len()',
+      '}',
+      'pub fn next_fn() -> usize { 0 }',
+    ].join('\n');
+    const rustLines = rustCode.split('\n');
+    assert.strictEqual(
+      findBraceBlockEnd(rustLines, 0, '.rs'),
+      4,
+      'Rust raw strings must not corrupt brace depth or quote state'
+    );
+    const strippedRust = stripCStyleComments(rustCode + ' // trailing comment');
+    assert.ok(!strippedRust.includes('trailing comment'));
+
+    // 2. C++ raw string R"delim(...)delim" and C++14 numeric digit separators 1'000'000
+    const cppCode = [
+      'int computeTimeout(int scale) {',
+      '    const char* raw = R"sql(SELECT * FROM t WHERE a = "{" AND b = \'{\')sql";',
+      "    int timeout_us = 1'000'000; // } fake closing brace in comment after odd separator count",
+      "    int mask = 0xFF'FF'01;",
+      '    return timeout_us * scale + (raw ? mask : 0);',
+      '}',
+      'int afterTimeout() { return 1; }',
+    ].join('\n');
+    const cppLines = cppCode.split('\n');
+    assert.strictEqual(
+      findBraceBlockEnd(cppLines, 0, '.cpp'),
+      5,
+      'C++ raw string and C++14 digit separators must not corrupt lexical masking or comment stripping'
+    );
+    const strippedCpp = stripCStyleComments(cppCode);
+    assert.ok(!strippedCpp.includes('fake closing brace'));
+
+    // 3. Python default parameter string with ): and multiline triple-quoted string with col-0 lines
+    const pyCode = [
+      'def connect(url: str = "http://localhost:8080)", retries: int = 3):',
+      '    query = """SELECT *',
+      'FROM devices',
+      'WHERE status = 1',
+      '"""',
+      '    return f"{url}:{retries}:{len(query)}"',
+      '',
+      'def next_py_func():',
+      '    return 42',
+    ].join('\n');
+    const pyLines = pyCode.split('\n');
+    assert.strictEqual(
+      findPythonBlockEnd(pyLines, 0),
+      5,
+      'Python block scanner must use masked header lines and track multiline triple-quoted strings'
+    );
+  });
+
+  test('35. [Issue #25 Defect 3] EvoMcpDispatcher evo_run executes asynchronously without blocking the event loop', async () => {
+    const ws = createTempWorkspace();
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      const propRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'tool',
+        id: 'async-sleep-tool',
+        title: 'Async Sleep Tool',
+        l0_summary: 'Sleeps briefly to verify event loop responsiveness during evo_run.',
+        runtime: 'node',
+        script_code: [
+          "if (process.env.EVO_SELF_TEST === '1') process.exit(0);",
+          "setTimeout(() => { console.log(JSON.stringify({ ok: true })); }, 180);",
+        ].join('\n'),
+      });
+      assert.strictEqual(Boolean(propRes.isError), false);
+
+      let timerTicks = 0;
+      const interval = setInterval(() => {
+        timerTicks++;
+      }, 25);
+
+      let runRes: any;
+      try {
+        const runPromise = dispatcher.handleToolCall('evo_run', {
+          workspace: ws,
+          tool_id: 'async-sleep-tool',
+          args: {},
+        });
+        assert.strictEqual(typeof runPromise?.then, 'function', 'evo_run must return a Promise');
+        runRes = await runPromise;
+      } finally {
+        clearInterval(interval);
+      }
+
+      assert.strictEqual(Boolean(runRes.isError), false);
+      assert.ok(timerTicks >= 2, `Event loop must remain unblocked during evo_run (ticks=${timerTicks})`);
+    } finally {
+      dispatcher.close();
+      safeCleanup(ws);
+    }
+  });
+
+  test('36. [Issue #25 Defect 4] probeCandidateInWorktree Regime 1 blocks blind demotion/deletion of active uncontested core rules', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      storage.saveRule({
+        id: 'active-core-invariant',
+        title: 'Active Core Invariant',
+        l0_summary: 'High-hit core rule that must not be blindly demoted without a probe',
+        scope_glob: 'src/**/*.ts',
+        core: true,
+        priority: 95,
+        tokens: 120,
+        origin: 'test',
+        content: 'Always validate input bounds before indexing.',
+        transfer_scenarios: ['Parser token stream bounds check', 'Ring buffer read pointer wrap'],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const tel = new EvoTelemetry(storage);
+      try {
+        tel.syncFromDisk();
+        tel.recordUsage('active-core-invariant', true, 250);
+        tel.recordUsage('active-core-invariant', true, 250);
+        tel.recordUsage('active-core-invariant', true, 250);
+        tel.recordCapabilityOutcome('active-core-invariant', 'helped');
+      } finally {
+        tel.close();
+      }
+
+      // Demoting active uncontested core rule without probeCmd must NOT pass Regime 1
+      const demoteRes = probeCandidateInWorktree({
+        workspaceRoot: ws,
+        candidateId: 'blind-demote',
+        dim: 'inv',
+        proposals: [
+          {
+            kind: 'rule',
+            id: 'active-core-invariant',
+            title: 'Active Core Invariant',
+            l0_summary: 'High-hit core rule demoted to non-core',
+            scope_glob: 'src/**/*.ts',
+            core: false,
+            content: 'Always validate input bounds before indexing.',
+            transfer_scenarios: ['Parser token stream bounds check', 'Ring buffer read pointer wrap'],
+          },
+        ],
+        deletedIds: [],
+      });
+      assert.strictEqual(demoteRes.passed, false);
+      assert.strictEqual(demoteRes.attribution, 'unverified');
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('37. [Issue #25 Defect 5] Scope-filtered session attribution and semantic contrastive_evidence validation', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      fs.mkdirSync(path.join(ws, 'src', 'core'), { recursive: true });
+      fs.mkdirSync(path.join(ws, 'src', 'ui'), { recursive: true });
+      fs.writeFileSync(path.join(ws, 'src', 'core', 'engine.ts'), 'export const x = 1;\n', 'utf8');
+      fs.writeFileSync(path.join(ws, 'src', 'ui', 'view.tsx'), 'export const v = 2;\n', 'utf8');
+
+      storage.saveRule({
+        id: 'core-ts-rule',
+        title: 'Core TS Rule',
+        l0_summary: 'Applies to src/core/**/*.ts',
+        scope_glob: 'src/core/**/*.ts',
+        core: false,
+        priority: 50,
+        tokens: 20,
+        origin: 'test',
+        content: 'Core rule body.',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      storage.saveRule({
+        id: 'ui-tsx-rule',
+        title: 'UI TSX Rule',
+        l0_summary: 'Applies to src/ui/**/*.tsx',
+        scope_glob: 'src/ui/**/*.tsx',
+        core: false,
+        priority: 50,
+        tokens: 20,
+        origin: 'test',
+        content: 'UI rule body.',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const initTel = new EvoTelemetry(storage);
+      initTel.syncFromDisk();
+      initTel.close();
+
+      // Recall both rules during read steps, then edit ONLY src/core/engine.ts
+      handlePostTool(ws, { tool_name: 'view_file', path: 'src/core/engine.ts' }, {});
+      handlePostTool(ws, { tool_name: 'view_file', path: 'src/ui/view.tsx' }, {});
+      handlePostTool(ws, { tool_name: 'replace_file_content', TargetFile: path.join(ws, 'src/core/engine.ts') }, {});
+
+      // User correction occurs -> only core-ts-rule (matching modified file) should be marked contested
+      handlePostTool(ws, { user_message: '不对，这里逻辑错了' }, {});
+
+      const tel = new EvoTelemetry(storage);
+      try {
+        const map = tel.getTelemetryMap();
+        assert.strictEqual(map.get('core-ts-rule')?.contested_count, 1);
+        assert.strictEqual(
+          map.get('ui-tsx-rule')?.contested_count,
+          0,
+          'Unrelated scoped rule must not be penalized when only src/core/engine.ts was edited'
+        );
+
+        // Verify semantic contrastive_evidence check in Gate 1.5
+        assert.strictEqual(isValidContrastiveEvidence('aaaaaaaaaaaa', ws), false);
+        assert.strictEqual(isValidContrastiveEvidence('random filler text without markers', ws), false);
+        assert.strictEqual(
+          isValidContrastiveEvidence(
+            'Before: raw string broke brace depth -> After: maskRustRawString preserves balance',
+            ws
+          ),
+          true
+        );
+        assert.strictEqual(
+          isValidContrastiveEvidence('Verified isolated fix in engine.ts with view.tsx unchanged', ws),
+          true
+        );
+
+        tel.setSessionFlag('had_command_error', 'true');
+        tel.setSessionFlag('unproposed_edit_count', '3');
+        const gk = new EvoGatekeeper(storage, tel);
+        const rejectedFiller = gk.evaluateAndCommit({
+          kind: 'rule',
+          id: 'filler-contrastive-rule',
+          title: 'Filler Contrastive Rule',
+          l0_summary: 'Should be rejected when contrastive_evidence is superficial filler.',
+          scope_glob: 'src/**/*.ts',
+          core: false,
+          content: 'Always validate parser state transitions across token boundaries.',
+          transfer_scenarios: ['Lexer state machine reset', 'Stream framing boundary check'],
+          contrastive_evidence: 'aaaaaaaaaaaa',
+        });
+        assert.strictEqual(rejectedFiller.passed, false);
+        assert.strictEqual(rejectedFiller.error_code, 'ERR_CONFOUNDED_CAUSATION');
+      } finally {
+        tel.close();
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('38. [Issue #25 Defect 6] git-hotspot-analyzer and isExcludedGitHotspotPath share identical exclusion semantics', () => {
+    const excluded = [
+      '.evo/rules/scoped/r.md',
+      'templates/seed-evo/tools/git-hotspot-analyzer/run.mjs',
+      'dist/cli/index.js',
+      'README.md',
+      'src/tests/evo-kernel.test.ts',
+      'package-lock.json',
+    ];
+    const included = ['src/core/memory.ts', 'src/mcp/handlers.ts', 'src/cli/score.ts'];
+    for (const p of excluded) {
+      assert.strictEqual(isExcludedGitHotspotPath(p), true, `Expected ${p} to be excluded`);
+    }
+    for (const p of included) {
+      assert.strictEqual(isExcludedGitHotspotPath(p), false, `Expected ${p} to be included`);
+    }
+
+    const toolScript = path.resolve(process.cwd(), '.evo/tools/git-hotspot-analyzer/run.mjs');
+    const selfTestRes = executeSandboxedScript('node', toolScript, {}, {
+      cwd: process.cwd(),
+      selfTest: true,
+    });
+    assert.strictEqual(selfTestRes.exitCode, 0, selfTestRes.stderr);
+    assert.match(selfTestRes.stdout, /"self_test":\s*"passed"/);
+  });
+
 });
+

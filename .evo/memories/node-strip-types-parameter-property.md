@@ -2,14 +2,14 @@
 id: node-strip-types-parameter-property
 title: "TypeScript parameter property not supported in Node strip-only mode"
 l0_summary: "Avoid parameter properties in TypeScript constructors when compiling with node:module.stripTypeScriptTypes"
-created_commit: "1c798cc"
+created_commit: "8553669"
 created_branch: "main"
 target_symbols: ["scripts/build.mjs","src/tests/score-and-ui.test.ts"]
 ast_fingerprints: {"scripts/build.mjs":{"symbol":"scripts/build.mjs","file_path":"scripts/build.mjs","file":"scripts/build.mjs","kind":"file","start_line":1,"end_line":155,"signature":"file scripts/build.mjs (155 lines)","ast_hash":"2a7dba12e88c6eb0"},"src/tests/score-and-ui.test.ts":{"symbol":"src/tests/score-and-ui.test.ts","file_path":"src/tests/score-and-ui.test.ts","file":"src/tests/score-and-ui.test.ts","kind":"file","start_line":1,"end_line":1779,"signature":"file src/tests/score-and-ui.test.ts (1779 lines)","ast_hash":"5b2ddf4a1ee9e1dd"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-05T09:01:04.321Z"
-updated_at: "2026-11-06T17:04:58.507Z"
+updated_at: "2026-11-07T06:18:50.681Z"
 ---
 
 ## Symptom

@@ -303,12 +303,92 @@ export function trySkipGenericAngles(masked: string, pos: number): number {
   return pos;
 }
 
+function isNumericDigitSeparator(src: string, idx: number): boolean {
+  if (idx <= 0 || idx + 1 >= src.length) return false;
+  if (!/[0-9a-fA-F]/.test(src[idx - 1]) || !/[0-9a-fA-F]/.test(src[idx + 1])) {
+    return false;
+  }
+  let p = idx - 1;
+  while (p >= 0 && /[0-9a-fA-F'xXbB.]/.test(src[p])) {
+    p--;
+  }
+  const tokenStart = src[p + 1];
+  if (!/[0-9]/.test(tokenStart)) return false;
+  if (p >= 0 && /[A-Za-z_$]/.test(src[p])) return false;
+  return true;
+}
+
+function matchRustRawString(src: string, idx: number): { endIdx: number } | null {
+  if (src[idx] !== 'r') return null;
+  if (idx > 0 && /[A-Za-z0-9_]/.test(src[idx - 1])) {
+    const prev = src[idx - 1];
+    if ((prev !== 'b' && prev !== 'c') || (idx >= 2 && /[A-Za-z0-9_]/.test(src[idx - 2]))) {
+      return null;
+    }
+  }
+  let k = idx + 1;
+  while (k < src.length && src[k] === '#') {
+    k++;
+  }
+  if (k >= src.length || src[k] !== '"') return null;
+  const hashCount = k - (idx + 1);
+  const closeSeq = '"' + '#'.repeat(hashCount);
+  const closePos = src.indexOf(closeSeq, k + 1);
+  if (closePos === -1) {
+    return { endIdx: src.length };
+  }
+  return { endIdx: closePos + closeSeq.length };
+}
+
+function matchCppRawString(src: string, idx: number): { endIdx: number } | null {
+  if (src[idx] !== 'R' || idx + 1 >= src.length || src[idx + 1] !== '"') return null;
+  if (idx > 0 && /[A-Za-z0-9_]/.test(src[idx - 1])) {
+    const prefix1 = src[idx - 1];
+    const prefix2 = idx >= 2 ? src.slice(idx - 2, idx) : '';
+    if (prefix2 === 'u8') {
+      if (idx >= 3 && /[A-Za-z0-9_]/.test(src[idx - 3])) return null;
+    } else if (prefix1 === 'u' || prefix1 === 'U' || prefix1 === 'L') {
+      if (idx >= 2 && /[A-Za-z0-9_]/.test(src[idx - 2])) return null;
+    } else {
+      return null;
+    }
+  }
+  let openParen = idx + 2;
+  while (
+    openParen < src.length &&
+    openParen - (idx + 2) <= 16 &&
+    src[openParen] !== '(' &&
+    !/[)\\ \t\r\n"]/.test(src[openParen])
+  ) {
+    openParen++;
+  }
+  if (openParen >= src.length || src[openParen] !== '(') return null;
+  const delim = src.slice(idx + 2, openParen);
+  const closeSeq = ')' + delim + '"';
+  const closePos = src.indexOf(closeSeq, openParen + 1);
+  if (closePos === -1) {
+    return { endIdx: src.length };
+  }
+  return { endIdx: closePos + closeSeq.length };
+}
+
+function maskSpanPreserveNewlines(src: string, startIdx: number, endIdx: number): string {
+  let chunk = '';
+  for (let j = startIdx; j < endIdx; j++) {
+    const c = src[j];
+    chunk += c === '\r' || c === '\n' ? c : ' ';
+  }
+  return chunk;
+}
+
 export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
   if (!rawSrc) return '';
   const len = rawSrc.length;
   const isPy = ext === '.py';
   const isJsTs = /^\.(?:ts|tsx|js|jsx|mjs|cjs)$/i.test(ext);
   const isGo = ext === '.go';
+  const isRust = ext === '.rs';
+  const isCpp = /^\.(?:cpp|hpp|cc|cxx|c|h)$/i.test(ext);
 
   let out = '';
   let i = 0;
@@ -366,6 +446,11 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
     }
 
     if (inPyTripleDouble) {
+      if (ch === '\\' && i + 1 < len && next !== '\r' && next !== '\n') {
+        out += '  ';
+        i += 2;
+        continue;
+      }
       if (ch === '"' && next === '"' && next2 === '"') {
         out += '   ';
         i += 3;
@@ -377,6 +462,11 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
       continue;
     }
     if (inPyTripleSingle) {
+      if (ch === '\\' && i + 1 < len && next !== '\r' && next !== '\n') {
+        out += '  ';
+        i += 2;
+        continue;
+      }
       if (ch === "'" && next === "'" && next2 === "'") {
         out += '   ';
         i += 3;
@@ -581,6 +671,24 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
       continue;
     }
 
+    if (isRust && ch === 'r') {
+      const rustRaw = matchRustRawString(rawSrc, i);
+      if (rustRaw) {
+        out += maskSpanPreserveNewlines(rawSrc, i, rustRaw.endIdx);
+        i = rustRaw.endIdx;
+        continue;
+      }
+    }
+
+    if (isCpp && ch === 'R' && next === '"') {
+      const cppRaw = matchCppRawString(rawSrc, i);
+      if (cppRaw) {
+        out += maskSpanPreserveNewlines(rawSrc, i, cppRaw.endIdx);
+        i = cppRaw.endIdx;
+        continue;
+      }
+    }
+
     if (ch === '"') {
       inDoubleQuote = true;
       out += ' ';
@@ -588,7 +696,12 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
       continue;
     }
     if (ch === "'") {
-      if (ext === '.rs') {
+      if (isNumericDigitSeparator(rawSrc, i)) {
+        out += ' ';
+        i++;
+        continue;
+      }
+      if (isRust) {
         let isChar = false;
         if (rawSrc[i + 1] === '\\') {
           const end = rawSrc.indexOf("'", i + 2);
@@ -636,7 +749,7 @@ export function stripCStyleComments(input: string): string {
         i += 2;
         continue;
       }
-      if (ch === "'") inSingle = false;
+      if (ch === "'" || ch === '\r' || ch === '\n') inSingle = false;
       out += ch;
       i++;
       continue;
@@ -722,8 +835,32 @@ export function stripCStyleComments(input: string): string {
       continue;
     }
 
-    if (ch === "'") inSingle = true;
-    else if (ch === '"') inDouble = true;
+    if (ch === 'r') {
+      const rustRaw = matchRustRawString(input, i);
+      if (rustRaw) {
+        out += input.slice(i, rustRaw.endIdx);
+        i = rustRaw.endIdx;
+        continue;
+      }
+    }
+
+    if (ch === 'R' && next === '"') {
+      const cppRaw = matchCppRawString(input, i);
+      if (cppRaw) {
+        out += input.slice(i, cppRaw.endIdx);
+        i = cppRaw.endIdx;
+        continue;
+      }
+    }
+
+    if (ch === "'") {
+      if (isNumericDigitSeparator(input, i)) {
+        out += ch;
+        i++;
+        continue;
+      }
+      inSingle = true;
+    } else if (ch === '"') inDouble = true;
     else if (ch === '`') inTemplate = true;
 
     out += ch;
@@ -1456,18 +1593,26 @@ export function findBraceBlockEnd(
   return Math.min(lines.length - 1, startIndex + 120);
 }
 
-function findPythonBlockEnd(lines: string[], declLineIndex: number): number {
+export function findPythonBlockEnd(
+  lines: string[],
+  declLineIndex: number,
+  maskedLines?: string[]
+): number {
   if (declLineIndex < 0 || declLineIndex >= lines.length) return declLineIndex;
+
+  const mLines =
+    maskedLines && maskedLines.length === lines.length
+      ? maskedLines
+      : maskSourceLexical(lines.join('\n'), '.py').split(/\r?\n/);
 
   let parenDepth = 0;
   let colonLine = declLineIndex;
   let foundColon = false;
 
   for (let i = declLineIndex; i < lines.length; i++) {
-    const line = lines[i];
+    const line = mLines[i] ?? '';
     for (let c = 0; c < line.length; c++) {
       const ch = line[c];
-      if (ch === '#') break;
       if (ch === '(' || ch === '[' || ch === '{') parenDepth++;
       else if (ch === ')' || ch === ']' || ch === '}') parenDepth = Math.max(0, parenDepth - 1);
       else if (ch === ':' && parenDepth === 0) {
@@ -1481,16 +1626,75 @@ function findPythonBlockEnd(lines: string[], declLineIndex: number): number {
 
   const baseIndent = lines[declLineIndex].match(/^\s*/)?.[0].length ?? 0;
   let lastContentLine = colonLine;
+  let inTripleQuote: '"""' | "'''" | null = null;
+  let bodyParenDepth = 0;
+
+  const advancePythonLine = (rawLine: string) => {
+    let c = 0;
+    const len = rawLine.length;
+    while (c < len) {
+      if (inTripleQuote) {
+        if (rawLine[c] === '\\' && c + 1 < len) {
+          c += 2;
+          continue;
+        }
+        if (rawLine.startsWith(inTripleQuote, c)) {
+          inTripleQuote = null;
+          c += 3;
+          continue;
+        }
+        c++;
+        continue;
+      }
+      const ch = rawLine[c];
+      if (ch === '#') break;
+      if (rawLine.startsWith('"""', c) || rawLine.startsWith("'''", c)) {
+        const delim = rawLine.slice(c, c + 3) as '"""' | "'''";
+        inTripleQuote = delim;
+        c += 3;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        const quote = ch;
+        c++;
+        while (c < len) {
+          if (rawLine[c] === '\\' && c + 1 < len) {
+            c += 2;
+            continue;
+          }
+          if (rawLine[c] === quote) {
+            c++;
+            break;
+          }
+          c++;
+        }
+        continue;
+      }
+      if (ch === '(' || ch === '[' || ch === '{') bodyParenDepth++;
+      else if (ch === ')' || ch === ']' || ch === '}') {
+        bodyParenDepth = Math.max(0, bodyParenDepth - 1);
+      }
+      c++;
+    }
+  };
 
   for (let i = colonLine + 1; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
+    if (inTripleQuote || bodyParenDepth > 0) {
+      if (trimmed) {
+        lastContentLine = i;
+      }
+      advancePythonLine(line);
+      continue;
+    }
     if (!trimmed || trimmed.startsWith('#')) continue;
     const indent = line.match(/^\s*/)?.[0].length ?? 0;
     if (indent <= baseIndent) {
       break;
     }
     lastContentLine = i;
+    advancePythonLine(line);
   }
 
   return lastContentLine;

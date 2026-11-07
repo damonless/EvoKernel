@@ -379,6 +379,26 @@ export interface GitBugHotspot {
   unprotected: boolean;
 }
 
+export function isExcludedGitHotspotPath(filePath: string): boolean {
+  const normFile = filePath.replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
+  if (!normFile) return true;
+  return (
+    normFile.startsWith('.git/') ||
+    normFile.startsWith('.evo/') ||
+    normFile.startsWith('templates/seed-evo/') ||
+    normFile.startsWith('.github/') ||
+    normFile.startsWith('dist/') ||
+    normFile.startsWith('node_modules/') ||
+    normFile.startsWith('assets/') ||
+    normFile.startsWith('benchmarks/') ||
+    /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec)\.[a-z0-9]+$/i.test(normFile) ||
+    /\.(?:md|txt|svg|png|gif|webp|tape)$/i.test(normFile) ||
+    /(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|server\.json|plugin\.json|marketplace\.json|gemini-extension\.json|hooks\.json|mcp_config\.json|\.mcp\.json)$/i.test(
+      normFile
+    )
+  );
+}
+
 export function computeGitBugHotspots(workspaceRoot: string, limit = 10): GitBugHotspot[] {
   const ws = path.resolve(workspaceRoot);
   let gitOut = '';
@@ -414,19 +434,7 @@ export function computeGitBugHotspots(workspaceRoot: string, limit = 10): GitBug
       continue;
     }
     const normFile = line.replace(/\\/g, '/');
-    if (
-      normFile.startsWith('.git/') ||
-      normFile.startsWith('.evo/') ||
-      normFile.startsWith('templates/seed-evo/') ||
-      normFile.startsWith('.github/') ||
-      normFile.startsWith('dist/') ||
-      normFile.startsWith('node_modules/') ||
-      normFile.startsWith('assets/') ||
-      normFile.startsWith('benchmarks/') ||
-      /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec)\.[a-z0-9]+$/i.test(normFile) ||
-      /\.(?:md|txt|svg|png|gif|webp|tape)$/i.test(normFile) ||
-      /(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|server\.json|plugin\.json|marketplace\.json|gemini-extension\.json|hooks\.json|mcp_config\.json|\.mcp\.json)$/i.test(normFile)
-    ) {
+    if (isExcludedGitHotspotPath(normFile)) {
       continue;
     }
     const cur = fileCommitsMap.get(normFile) || { total: 0, fixes: 0 };

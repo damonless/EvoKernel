@@ -2,14 +2,14 @@
 id: codex-hooks-corrupt-file-unlink
 title: "Codex hooks.json corrupt file deleted by pre-tool sync"
 l0_summary: "syncDeclaredPreToolHooks treated unparseable .codex/hooks.json as {} and unlinked/overwrote it"
-created_commit: "1c798cc"
+created_commit: "8553669"
 created_branch: "main"
 target_symbols: ["syncDeclaredPreToolHooks","isEvoHookCommand"]
 ast_fingerprints: {"syncDeclaredPreToolHooks":{"symbol":"syncDeclaredPreToolHooks","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":755,"end_line":1035,"signature":"export function syncDeclaredPreToolHooks(workspaceRoot: string): void","ast_hash":"871ce010aec157b5"},"isEvoHookCommand":{"symbol":"isEvoHookCommand","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":576,"end_line":605,"signature":"export function isEvoHookCommand(cmd: string, needle?: string): boolean","ast_hash":"40d06c89798cdf3e"}}
 tags: []
 origin: "evolved"
 created_at: "2026-10-31T18:34:22.922Z"
-updated_at: "2026-11-06T17:04:58.198Z"
+updated_at: "2026-11-07T06:18:50.388Z"
 ---
 
 ## Symptom

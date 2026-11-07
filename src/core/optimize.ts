@@ -1670,10 +1670,56 @@ export function probeCandidateInWorktree(
         // Multi-regime offline non-synonymous evaluation
         if (coreTokenDelta < 0) {
           // Regime 1: Endogenous structural entropy reduction
-          score = Math.abs(coreTokenDelta);
-          probePassed = true;
-          passed = true;
-          attribution = 'helped';
+          // Guard against proposer self-cheating: do not blindly adopt deletion or demotion
+          // of an active, uncontested core rule (hit_count >= 3 or helped_count > 0, with
+          // zero hurt/contested outcomes) when no external probeCmd is verifying non-regression.
+          const baseStorage = new EvoStorage(wsRoot);
+          const baseCoreRules = baseStorage.listRules().filter((r) => r.core);
+          let dropsActiveUncontestedCoreRule = false;
+          if (
+            baseCoreRules.length > 0 &&
+            fs.existsSync(path.join(wsRoot, '.evo', '.cache', 'telemetry.db'))
+          ) {
+            const baseTel = new EvoTelemetry(baseStorage);
+            try {
+              const telMap = baseTel.getTelemetryMap();
+              for (const baseRule of baseCoreRules) {
+                const candRule = wtStorage.getRule(baseRule.id);
+                const supersededByCore = options.proposals.some(
+                  (p) =>
+                    p.kind === 'rule' &&
+                    p.core === true &&
+                    sanitizeId(p.supersedes_id || '') === baseRule.id
+                );
+                if ((!candRule || !candRule.core) && !supersededByCore) {
+                  const rec = telMap.get(baseRule.id);
+                  if (
+                    rec &&
+                    (rec.hit_count >= 3 || rec.helped_count > 0) &&
+                    rec.hurt_count === 0 &&
+                    rec.contested_count === 0
+                  ) {
+                    dropsActiveUncontestedCoreRule = true;
+                    break;
+                  }
+                }
+              }
+            } finally {
+              baseTel.close();
+            }
+          }
+
+          if (dropsActiveUncontestedCoreRule) {
+            score = 0;
+            probePassed = false;
+            passed = false;
+            attribution = 'unverified';
+          } else {
+            score = Math.abs(coreTokenDelta);
+            probePassed = true;
+            passed = true;
+            attribution = 'helped';
+          }
         } else if (options.trajectories && options.trajectories.length >= 2) {
           // Regime 2: Holdout trajectory evaluation across same subsystem
           const holdoutPath = options.trajectories[options.trajectories.length - 1];

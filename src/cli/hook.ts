@@ -8,11 +8,66 @@ import { executeSandboxedScript } from '../core/sandbox.js';
 import { renderAuditReport, runAudit } from './audit.js';
 import type { CapabilityOutcome, RecalledCapabilityEntry } from '../core/types.js';
 
+export function isCapabilityRelevantToModifiedFiles(
+  storage: EvoStorage,
+  entry: RecalledCapabilityEntry,
+  modifiedFiles?: string[]
+): boolean {
+  if (!modifiedFiles || modifiedFiles.length === 0) return true;
+
+  const rule = storage.getRule(entry.id);
+  if (rule) {
+    if (!rule.scope_glob || rule.scope_glob === '*' || rule.scope_glob === '**/*') {
+      return true;
+    }
+    return modifiedFiles.some((f) => matchesScopeGlob(f, rule.scope_glob));
+  }
+
+  const tool = storage.getTool(entry.id);
+  if (tool) {
+    const fileGlob = tool.hook_trigger?.file_glob;
+    if (!fileGlob || fileGlob === '*' || fileGlob === '**/*') {
+      return true;
+    }
+    return modifiedFiles.some((f) => matchesScopeGlob(f, fileGlob));
+  }
+
+  const memory = storage.getMemory(entry.id);
+  if (memory) {
+    const fileHints = new Set<string>();
+    for (const sym of memory.target_symbols || []) {
+      const rawFile = sym.includes('#') ? sym.split('#')[0].trim() : '';
+      if (rawFile) {
+        fileHints.add(rawFile.replace(/\\/g, '/').replace(/^\.\/+/, '').toLowerCase());
+      }
+    }
+    for (const fp of Object.values(memory.ast_fingerprints || {})) {
+      const fpFile = (fp?.file_path || (fp as any)?.file || '').trim();
+      if (fpFile && fpFile !== '(unrecorded)') {
+        fileHints.add(fpFile.replace(/\\/g, '/').replace(/^\.\/+/, '').toLowerCase());
+      }
+    }
+    if (fileHints.size === 0) return true;
+    return modifiedFiles.some((mf) => {
+      const normMf = mf.replace(/\\/g, '/').replace(/^\.\/+/, '').toLowerCase();
+      for (const hint of fileHints) {
+        if (normMf === hint || normMf.endsWith(`/${hint}`) || hint.endsWith(`/${normMf}`)) {
+          return true;
+        }
+      }
+      return false;
+    });
+  }
+
+  return true;
+}
+
 export function recordRecalledOutcomeWithTierRouting(
   localStorage: EvoStorage,
   localTelemetry: EvoTelemetry,
   entry: RecalledCapabilityEntry,
-  outcome: Exclude<CapabilityOutcome, 'neutral'>
+  outcome: Exclude<CapabilityOutcome, 'neutral'>,
+  modifiedFiles?: string[]
 ): void {
   const existsLocally =
     Boolean(localStorage.getRule(entry.id)) ||
@@ -21,6 +76,9 @@ export function recordRecalledOutcomeWithTierRouting(
     Boolean(localStorage.getMemory(entry.id));
 
   if (existsLocally && entry.tier !== 'GLOBAL') {
+    if (!isCapabilityRelevantToModifiedFiles(localStorage, entry, modifiedFiles)) {
+      return;
+    }
     localTelemetry.recordCapabilityOutcome(entry.id, outcome);
     return;
   }
@@ -38,6 +96,9 @@ export function recordRecalledOutcomeWithTierRouting(
       Boolean(globalStorage.getMemory(entry.id));
 
     if (existsGlobally) {
+      if (!isCapabilityRelevantToModifiedFiles(globalStorage, entry, modifiedFiles)) {
+        return;
+      }
       const globalTelemetry = new EvoTelemetry(globalStorage);
       try {
         globalTelemetry.recordCapabilityOutcome(entry.id, outcome);
@@ -49,6 +110,9 @@ export function recordRecalledOutcomeWithTierRouting(
   }
 
   if (existsLocally) {
+    if (!isCapabilityRelevantToModifiedFiles(localStorage, entry, modifiedFiles)) {
+      return;
+    }
     localTelemetry.recordCapabilityOutcome(entry.id, outcome);
   }
 }
@@ -351,6 +415,51 @@ function getGitFiles(workspaceRoot: string, stagedOnly: boolean): string[] {
   }
 }
 
+function recordSessionEditedFile(telemetry: EvoTelemetry, relPath: string): void {
+  const clean = relPath.replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
+  if (
+    !clean ||
+    clean.startsWith('..') ||
+    clean.startsWith('.evo/') ||
+    clean.startsWith('.agents/teamwork/') ||
+    clean.startsWith('.git/')
+  ) {
+    return;
+  }
+  const raw = telemetry.getSessionFlag('session_edited_files') || '';
+  const set = new Set(raw ? raw.split('\n').filter(Boolean) : []);
+  set.add(clean);
+  telemetry.setSessionFlag('session_edited_files', Array.from(set).slice(-100).join('\n'));
+}
+
+function getSessionModifiedFiles(workspaceRoot: string, telemetry: EvoTelemetry): string[] {
+  const combined = new Set<string>();
+  const rawEdited = telemetry.getSessionFlag('session_edited_files') || '';
+  for (const f of rawEdited.split('\n')) {
+    const clean = f.trim().replace(/\\/g, '/');
+    if (
+      clean &&
+      !clean.startsWith('.evo/') &&
+      !clean.startsWith('.agents/teamwork/') &&
+      !clean.startsWith('.git/')
+    ) {
+      combined.add(clean);
+    }
+  }
+  for (const f of getGitFiles(workspaceRoot, false)) {
+    const clean = f.trim().replace(/\\/g, '/');
+    if (
+      clean &&
+      !clean.startsWith('.evo/') &&
+      !clean.startsWith('.agents/teamwork/') &&
+      !clean.startsWith('.git/')
+    ) {
+      combined.add(clean);
+    }
+  }
+  return Array.from(combined);
+}
+
 function extractToolContext(payload: Record<string, unknown>, options: HookOptions) {
   const rawToolName = String(
     payload.tool_name ||
@@ -400,6 +509,8 @@ function extractToolContext(payload: Record<string, unknown>, options: HookOptio
     innerArgs.SearchDirectory ||
     payload.path ||
     payload.AbsolutePath ||
+    payload.TargetFile ||
+    payload.target_file ||
     payload.file ||
     payload.filePath ||
     payload.file_path ||
@@ -597,6 +708,7 @@ export function handlePostTool(
       telemetry.setSessionFlag('pending_evolution', 'false');
       telemetry.setSessionFlag('unproposed_edit_count', '0');
       telemetry.setSessionFlag('unproposed_read_count', '0');
+      telemetry.setSessionFlag('session_edited_files', '');
       telemetry.setSessionFlag('user_correction_detected', 'false');
       telemetry.setSessionFlag('contested_attributed', 'false');
       telemetry.setSessionFlag('had_command_error', 'false');
@@ -651,12 +763,19 @@ export function handlePostTool(
         }
       }
 
+      const relPath = ctx.rawPath
+        ? (path.isAbsolute(ctx.rawPath) ? path.relative(workspaceRoot, ctx.rawPath).replace(/\\/g, '/') : ctx.normPath)
+        : '';
+
       if (isMutation && !ctx.isInternalMeta) {
         telemetry.setSessionFlag('pending_evolution', 'true');
         telemetry.setSessionFlag('last_file_edit_at', String(Date.now()));
         telemetry.setSessionFlag('last_file_edit_step', String(currentStep));
         const currentCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
         telemetry.setSessionFlag('unproposed_edit_count', String(currentCount + 1));
+        if (relPath) {
+          recordSessionEditedFile(telemetry, relPath);
+        }
 
         const lastCrystallized = telemetry.getSessionFlag('last_crystallized_id');
         if (lastCrystallized) {
@@ -684,16 +803,19 @@ export function handlePostTool(
         telemetry.setSessionFlag('user_correction_detected', 'true');
         if (telemetry.getSessionFlag('contested_attributed') !== 'true') {
           const recalled = telemetry.getRecalledCapabilities();
+          const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
           for (const c of recalled) {
-            recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'contested');
+            recordRecalledOutcomeWithTierRouting(
+              storage,
+              telemetry,
+              c,
+              'contested',
+              sessionModifiedFiles
+            );
           }
           telemetry.setSessionFlag('contested_attributed', 'true');
         }
       }
-
-      const relPath = ctx.rawPath
-        ? (path.isAbsolute(ctx.rawPath) ? path.relative(workspaceRoot, ctx.rawPath).replace(/\\/g, '/') : ctx.normPath)
-        : '';
 
       if (ctx.rawPath && !ctx.isInternalMeta) {
         const rules = storage.listRules().filter((r) => r.enabled !== false);
@@ -879,15 +1001,17 @@ export function handleStop(
       isUserCorrectionSignal(inlineUserText) ||
       (Boolean(transcriptTail) && isUserCorrectionSignal(transcriptTail));
 
+    const modifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
+
     if (recalled.length > 0) {
       if (hasUserCorrection && !contestedAttributed) {
         for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'contested');
+          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'contested', modifiedFiles);
         }
         telemetry.setSessionFlag('contested_attributed', 'true');
       } else if (!hasUserCorrection && !hadCommandError) {
         for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped');
+          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped', modifiedFiles);
         }
         telemetry.clearRecalledCapabilities();
       }
@@ -896,15 +1020,6 @@ export function handleStop(
     if (hasUserCorrection) {
       telemetry.setSessionFlag('user_correction_detected', 'false');
     }
-
-    const modifiedFiles = getGitFiles(workspaceRoot, false).filter((f) => {
-      const norm = f.replace(/\\/g, '/');
-      return (
-        !norm.startsWith('.evo/') &&
-        !norm.startsWith('.agents/teamwork/') &&
-        !norm.startsWith('.git/')
-      );
-    });
 
     const hasUncrystallizedEdits = pending || editCount > 0 || modifiedFiles.length > 0;
     const hasHeavyDiagnosticReads = editCount < 4 && readCount >= 10;
@@ -1070,8 +1185,9 @@ export function handlePreCommit(
       const telemetry = new EvoTelemetry(storage);
       try {
         const recalled = telemetry.getRecalledCapabilities();
+        const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
         for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt');
+          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
         }
       } finally {
         telemetry.close();
@@ -1096,8 +1212,9 @@ export function handlePreCommit(
       const telemetry = new EvoTelemetry(storage);
       try {
         const recalled = telemetry.getRecalledCapabilities();
+        const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
         for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt');
+          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
         }
       } finally {
         telemetry.close();
@@ -1124,8 +1241,9 @@ export function handlePreCommit(
       const userCorrection = telemetry.getSessionFlag('user_correction_detected') === 'true';
       if (!hadCommandError && !userCorrection) {
         const recalled = telemetry.getRecalledCapabilities();
+        const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
         for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped');
+          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped', sessionModifiedFiles);
         }
         telemetry.clearRecalledCapabilities();
       }
@@ -1190,8 +1308,15 @@ export function runHook(
             telemetry.setSessionFlag('had_command_error', 'true');
             if (telemetry.getSessionFlag('contested_attributed') !== 'true') {
               const recalled = telemetry.getRecalledCapabilities();
+              const sessionModifiedFiles = getSessionModifiedFiles(ws, telemetry);
               for (const c of recalled) {
-                recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'contested');
+                recordRecalledOutcomeWithTierRouting(
+                  storage,
+                  telemetry,
+                  c,
+                  'contested',
+                  sessionModifiedFiles
+                );
               }
               telemetry.setSessionFlag('contested_attributed', 'true');
             }

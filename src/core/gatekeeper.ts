@@ -30,13 +30,80 @@ import {
 import { renderManagedBlock } from '../templates/meta-rule.js';
 
 const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\brm\s+-rf\s+(\/|~|\$HOME|c:\\)/i, reason: 'Destructive root/home directory deletion detected' },
+  {
+    pattern: /\brm\s+-rf\s+(\/|~|\$HOME|\$EVO_WORKSPACE|\.\.(?:\/|\\|\s|$)|[A-Za-z]:\\)/i,
+    reason: 'Destructive root/home/parent directory deletion detected',
+  },
+  {
+    pattern:
+      /\b(?:fs(?:\.promises)?\.(?:rmSync|rmdirSync|rm)|shutil\.rmtree)\s*\(\s*(?:['"`](?:\/|~|\$HOME|\.\.(?:[/\\][^'"`]*)?|[A-Za-z]:\\)['"`]|os\.homedir\s*\(\)|os\.path\.expanduser\s*\(\s*['"`]~['"`]\s*\)|process\.cwd\s*\(\)|process\.env\.(?:HOME|USERPROFILE|EVO_WORKSPACE)\b|workspace(?:Root)?\b)/i,
+    reason: 'Destructive programmatic root/home/parent/workspace directory deletion detected',
+  },
+  {
+    pattern:
+      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|process\.env\.(?:HOME|USERPROFILE))[^;\n]{0,40}[\/\\'"`]\.(?:ssh|aws|gnupg)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg)\b|[\/\\]\.(?:ssh[\/\\](?:id_rsa|id_ed25519|authorized_keys|config)|aws[\/\\](?:credentials|config)|gnupg[\/\\])/i,
+    reason: 'Sensitive home credential directory access (~/.ssh, ~/.aws, ~/.gnupg) detected',
+  },
   { pattern: /\b(Format-Volume|Clear-Disk|mkfs\.|dd\s+if=)/i, reason: 'Disk formatting command detected' },
   { pattern: /\b(curl|wget|Invoke-WebRequest|iwr)\b.*\|\s*(sh|bash|pwsh|powershell|iex|Invoke-Expression)/i, reason: 'Remote code pipe execution detected' },
   { pattern: /(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16})/, reason: 'Hardcoded plaintext API secret/token detected' },
   { pattern: /[A-Za-z]:\\Users\\[A-Za-z0-9_.-]+\\/i, reason: 'Hardcoded user-specific Windows absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
   { pattern: /\/Users\/[A-Za-z0-9_.-]+\/|\/home\/[A-Za-z0-9_.-]+\//, reason: 'Hardcoded user-specific Unix absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
 ];
+
+export function isValidContrastiveEvidence(
+  rawEvidence: string | undefined,
+  workspaceRoot?: string
+): boolean {
+  if (typeof rawEvidence !== 'string') return false;
+  const trimmed = rawEvidence.trim();
+  if (trimmed.length < 12) return false;
+
+  const rawTokens = trimmed.match(/[A-Za-z0-9_.\u4e00-\u9fa5/-]{2,}/g) || [];
+  const distinctTokens = new Set(rawTokens.map((t) => t.toLowerCase()));
+  if (distinctTokens.size < 3) return false;
+
+  const hasContrastiveMarkers =
+    /\b(?:before\b[\s\S]*\bafter|before\s*:|after\s*:|vs\.?|versus|prior\s+to|previously|instead\s+of|without\s+\S+[\s\S]*\b(?:with|fail|pass|error|crash|block)|when\s+.+\s+(?:failed|passed|skipped|blocked|crashed|succeeded)|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+|pass(?:ed|es)?|fail(?:ed|s|ure)?|regress(?:ion|ed|es)?|isolat(?:ed|ion)|reproduc(?:ed|ible)|verif(?:ied|y)\b|root\s+cause|baseline)\b|(?:->|=>|→)|(?:修复前|修复后|修改前|修改后|对比|之前|之后)/i.test(
+      trimmed
+    );
+
+  let groundingMatches = 0;
+  const seenGrounding = new Set<string>();
+  for (const tok of rawTokens) {
+    const cleanTok = tok.replace(/^[./\\]+|[.,:;()[\]{}]+$/g, '');
+    if (cleanTok.length < 3) continue;
+    const lower = cleanTok.toLowerCase();
+    if (seenGrounding.has(lower)) continue;
+
+    const looksLikeFileOrSymbol =
+      /[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,6}$/.test(cleanTok) ||
+      cleanTok.includes('/') ||
+      cleanTok.includes('#') ||
+      /[a-z][A-Z]/.test(cleanTok) ||
+      cleanTok.includes('_');
+
+    if (looksLikeFileOrSymbol) {
+      seenGrounding.add(lower);
+      groundingMatches++;
+      continue;
+    }
+
+    if (workspaceRoot) {
+      try {
+        const candidatePath = path.resolve(workspaceRoot, cleanTok);
+        if (fs.existsSync(candidatePath)) {
+          seenGrounding.add(lower);
+          groundingMatches++;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return (hasContrastiveMarkers && distinctTokens.size >= 4) || groundingMatches >= 2;
+}
 
 export function stripCaseAnchorLines(text: string): string {
   const lines = text.split(/\r?\n/);
@@ -1170,6 +1237,15 @@ export class EvoGatekeeper {
     this.telemetry = telemetry;
   }
 
+  public scanDangerousPatterns(text: string): string | null {
+    for (const rule of DANGEROUS_PATTERNS) {
+      if (rule.pattern.test(text)) {
+        return rule.reason;
+      }
+    }
+    return null;
+  }
+
   public evaluateAndCommit(
     rawProposal: ProposalPayload,
     options?: EvaluateOptions
@@ -1527,16 +1603,18 @@ export class EvoGatekeeper {
 
       if (
         !bypassImplicitConfounded &&
-        hadCommandError &&
-        unproposedEditCount >= 4 &&
-        !(rawProposal.contrastive_evidence && rawProposal.contrastive_evidence.trim().length >= 12)
+        ((hadCommandError &&
+          unproposedEditCount >= 4 &&
+          !isValidContrastiveEvidence(rawProposal.contrastive_evidence, this.storage.rootDir)) ||
+          (rawProposal.contrastive_evidence !== undefined &&
+            !isValidContrastiveEvidence(rawProposal.contrastive_evidence, this.storage.rootDir)))
       ) {
         return {
           passed: false,
           gate_failed: 'ABSTRACTION_GATE',
           error_code: 'ERR_CONFOUNDED_CAUSATION',
           message:
-            "Causal attribution gate blocked proposal: the session encountered command errors alongside multiple unproposed edits (>=4 edits), creating high confounding risk. Provide 'contrastive_evidence' (>= 12 characters explaining before-vs-after causal isolation) or downgrade this proposal to kind: 'memory'.",
+            "Causal attribution gate blocked proposal: the session encountered command errors alongside multiple unproposed edits (>=4 edits) or provided superficial 'contrastive_evidence' lacking causal structure. Provide grounded 'contrastive_evidence' (>= 12 characters with explicit before-vs-after causal markers or >= 2 workspace file/symbol tokens) or downgrade this proposal to kind: 'memory'.",
         };
       }
     }
