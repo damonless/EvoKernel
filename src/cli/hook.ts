@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
+import { parseSymbolTarget } from '../core/memory.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { renderAuditReport, runAudit } from './audit.js';
 import type { CapabilityOutcome, RecalledCapabilityEntry } from '../core/types.js';
@@ -15,28 +16,32 @@ export function isCapabilityRelevantToModifiedFiles(
 ): boolean {
   if (!modifiedFiles || modifiedFiles.length === 0) return true;
 
-  const rule = storage.getRule(entry.id);
-  if (rule) {
+  const checkRule = () => {
+    const rule = storage.getRule(entry.id);
+    if (!rule) return undefined;
     if (!rule.scope_glob || rule.scope_glob === '*' || rule.scope_glob === '**/*') {
       return true;
     }
     return modifiedFiles.some((f) => matchesScopeGlob(f, rule.scope_glob));
-  }
+  };
 
-  const tool = storage.getTool(entry.id);
-  if (tool) {
+  const checkTool = () => {
+    const tool = storage.getTool(entry.id);
+    if (!tool) return undefined;
     const fileGlob = tool.hook_trigger?.file_glob;
     if (!fileGlob || fileGlob === '*' || fileGlob === '**/*') {
       return true;
     }
     return modifiedFiles.some((f) => matchesScopeGlob(f, fileGlob));
-  }
+  };
 
-  const memory = storage.getMemory(entry.id);
-  if (memory) {
+  const checkMemory = () => {
+    const memory = storage.getMemory(entry.id);
+    if (!memory) return undefined;
     const fileHints = new Set<string>();
     for (const sym of memory.target_symbols || []) {
-      const rawFile = sym.includes('#') ? sym.split('#')[0].trim() : '';
+      const parsed = parseSymbolTarget(sym);
+      const rawFile = (parsed.fileHint || '').trim();
       if (rawFile) {
         fileHints.add(rawFile.replace(/\\/g, '/').replace(/^\.\/+/, '').toLowerCase());
       }
@@ -57,9 +62,14 @@ export function isCapabilityRelevantToModifiedFiles(
       }
       return false;
     });
-  }
+  };
 
-  return true;
+  if (entry.kind === 'rule') return checkRule() ?? true;
+  if (entry.kind === 'tool') return checkTool() ?? true;
+  if (entry.kind === 'memory') return checkMemory() ?? true;
+  if (entry.kind === 'skill') return true;
+
+  return checkRule() ?? checkTool() ?? checkMemory() ?? true;
 }
 
 export function recordRecalledOutcomeWithTierRouting(

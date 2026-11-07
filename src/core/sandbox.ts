@@ -323,6 +323,7 @@ export function executeSandboxedScript(
     encoding: 'utf8',
     timeout: timeoutMs,
     windowsHide: true,
+    detached: process.platform !== 'win32',
     env,
   });
 

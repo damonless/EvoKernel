@@ -2,14 +2,14 @@
 id: action-update-content-path-traversal-403
 title: "Eager sanitizeId masks update-content path traversal as 404 instead of 403"
 l0_summary: "Eager sanitizeId in update-content masks path traversal attempts as 404 instead of returning 403 Forbidden."
-created_commit: "8553669"
+created_commit: "02e7257"
 created_branch: "main"
 target_symbols: ["src/cli/ui.ts#startUiServer","src/core/storage.ts#sanitizeId"]
 ast_fingerprints: {"src/cli/ui.ts#startUiServer":{"symbol":"src/cli/ui.ts#startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":490,"end_line":1490,"signature":"export async function startUiServer(","ast_hash":"12a39639b32af9c9"},"src/core/storage.ts#sanitizeId":{"symbol":"src/core/storage.ts#sanitizeId","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":164,"end_line":170,"signature":"export function sanitizeId(rawId: string): string","ast_hash":"1c9ec53cbe02e6e4"}}
 tags: ["ui","api","security","path-traversal"]
 origin: "evolved"
 created_at: "2026-11-05T08:52:30.589Z"
-updated_at: "2026-11-07T06:18:50.315Z"
+updated_at: "2026-11-07T06:43:37.683Z"
 ---
 
 ## Symptom

@@ -285,8 +285,24 @@ export class EvoMcpDispatcher {
   private computeFastWorktreeStateSig(workspaceRoot: string, gitRoot: string): string {
     try {
       const parts: string[] = [path.resolve(workspaceRoot)];
-      for (const rel of ['.git/index', '.git/HEAD']) {
-        const p = path.join(gitRoot, rel);
+      let gitDir = path.join(gitRoot, '.git');
+      try {
+        const gitSt = fs.statSync(gitDir);
+        if (gitSt.isFile()) {
+          const ptr = fs.readFileSync(gitDir, 'utf8').trim();
+          const m = ptr.match(/^gitdir:\s*(.+)$/i);
+          if (m && m[1]) {
+            gitDir = path.resolve(gitRoot, m[1].trim());
+          } else {
+            return '';
+          }
+        }
+      } catch {
+        return '';
+      }
+
+      for (const rel of ['index', 'HEAD']) {
+        const p = path.join(gitDir, rel);
         try {
           const st = fs.statSync(p);
           parts.push(`${rel}:${st.mtimeMs}:${st.size}`);
@@ -296,8 +312,9 @@ export class EvoMcpDispatcher {
       }
       let maxMtime = 0;
       let entryCount = 0;
+      const maxEntries = 400;
       const scanDir = (dir: string, depth: number) => {
-        if (depth > 2 || entryCount > 80) return;
+        if (depth > 4 || entryCount > maxEntries) return;
         let entries: fs.Dirent[];
         try {
           entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -305,12 +322,16 @@ export class EvoMcpDispatcher {
           return;
         }
         for (const e of entries) {
-          if (entryCount > 80) break;
+          if (entryCount > maxEntries) break;
           if (
             e.name === '.git' ||
             e.name === '.evo' ||
+            e.name === '.codegraph' ||
             e.name === 'node_modules' ||
-            e.name === 'dist'
+            e.name === 'dist' ||
+            e.name === 'build' ||
+            e.name === 'target' ||
+            e.name === 'vendor'
           ) {
             continue;
           }
@@ -319,7 +340,7 @@ export class EvoMcpDispatcher {
           try {
             const st = fs.statSync(full);
             if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
-            if (e.isDirectory() && depth < 2) {
+            if (e.isDirectory() && depth < 4) {
               scanDir(full, depth + 1);
             }
           } catch {
@@ -328,6 +349,9 @@ export class EvoMcpDispatcher {
         }
       };
       scanDir(workspaceRoot, 0);
+      if (entryCount > maxEntries) {
+        return '';
+      }
       parts.push(`tree:${entryCount}:${maxMtime}`);
       return parts.join('|');
     } catch {

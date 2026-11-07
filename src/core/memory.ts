@@ -318,13 +318,15 @@ function isNumericDigitSeparator(src: string, idx: number): boolean {
   return true;
 }
 
-function matchRustRawString(src: string, idx: number): { endIdx: number } | null {
+function matchRustRawString(src: string, idx: number): { endIdx: number; prefixLen: number } | null {
   if (src[idx] !== 'r') return null;
+  let prefixLen = 0;
   if (idx > 0 && /[A-Za-z0-9_]/.test(src[idx - 1])) {
     const prev = src[idx - 1];
     if ((prev !== 'b' && prev !== 'c') || (idx >= 2 && /[A-Za-z0-9_]/.test(src[idx - 2]))) {
       return null;
     }
+    prefixLen = 1;
   }
   let k = idx + 1;
   while (k < src.length && src[k] === '#') {
@@ -335,20 +337,23 @@ function matchRustRawString(src: string, idx: number): { endIdx: number } | null
   const closeSeq = '"' + '#'.repeat(hashCount);
   const closePos = src.indexOf(closeSeq, k + 1);
   if (closePos === -1) {
-    return { endIdx: src.length };
+    return { endIdx: src.length, prefixLen };
   }
-  return { endIdx: closePos + closeSeq.length };
+  return { endIdx: closePos + closeSeq.length, prefixLen };
 }
 
-function matchCppRawString(src: string, idx: number): { endIdx: number } | null {
+function matchCppRawString(src: string, idx: number): { endIdx: number; prefixLen: number } | null {
   if (src[idx] !== 'R' || idx + 1 >= src.length || src[idx + 1] !== '"') return null;
+  let prefixLen = 0;
   if (idx > 0 && /[A-Za-z0-9_]/.test(src[idx - 1])) {
     const prefix1 = src[idx - 1];
     const prefix2 = idx >= 2 ? src.slice(idx - 2, idx) : '';
     if (prefix2 === 'u8') {
       if (idx >= 3 && /[A-Za-z0-9_]/.test(src[idx - 3])) return null;
+      prefixLen = 2;
     } else if (prefix1 === 'u' || prefix1 === 'U' || prefix1 === 'L') {
       if (idx >= 2 && /[A-Za-z0-9_]/.test(src[idx - 2])) return null;
+      prefixLen = 1;
     } else {
       return null;
     }
@@ -367,9 +372,9 @@ function matchCppRawString(src: string, idx: number): { endIdx: number } | null 
   const closeSeq = ')' + delim + '"';
   const closePos = src.indexOf(closeSeq, openParen + 1);
   if (closePos === -1) {
-    return { endIdx: src.length };
+    return { endIdx: src.length, prefixLen };
   }
-  return { endIdx: closePos + closeSeq.length };
+  return { endIdx: closePos + closeSeq.length, prefixLen };
 }
 
 function maskSpanPreserveNewlines(src: string, startIdx: number, endIdx: number): string {
@@ -422,6 +427,9 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
       }
       if (inSingleQuote) {
         inSingleQuote = false;
+      }
+      if (inDoubleQuote && !isRust) {
+        inDoubleQuote = false;
       }
       i++;
       continue;
@@ -480,6 +488,16 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
 
     if (inSingleQuote) {
       if (ch === '\\' && i + 1 < len) {
+        if (next === '\r' && next2 === '\n') {
+          out += ' \r\n';
+          i += 3;
+          continue;
+        }
+        if (next === '\n' || next === '\r') {
+          out += ' ' + next;
+          i += 2;
+          continue;
+        }
         out += '  ';
         i += 2;
         continue;
@@ -496,6 +514,16 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
 
     if (inDoubleQuote) {
       if (ch === '\\' && i + 1 < len) {
+        if (next === '\r' && next2 === '\n') {
+          out += ' \r\n';
+          i += 3;
+          continue;
+        }
+        if (next === '\n' || next === '\r') {
+          out += ' ' + next;
+          i += 2;
+          continue;
+        }
         out += '  ';
         i += 2;
         continue;
@@ -511,7 +539,7 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
     }
 
     if (inRegex) {
-      if (ch === '\\' && i + 1 < len) {
+      if (ch === '\\' && i + 1 < len && next !== '\r' && next !== '\n') {
         out += '  ';
         i += 2;
         continue;
@@ -547,6 +575,16 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
 
     if (inTemplateStatic) {
       if (ch === '\\' && i + 1 < len) {
+        if (next === '\r' && next2 === '\n') {
+          out += ' \r\n';
+          i += 3;
+          continue;
+        }
+        if (next === '\n' || next === '\r') {
+          out += ' ' + next;
+          i += 2;
+          continue;
+        }
         out += '  ';
         i += 2;
         continue;
@@ -674,6 +712,9 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
     if (isRust && ch === 'r') {
       const rustRaw = matchRustRawString(rawSrc, i);
       if (rustRaw) {
+        if (rustRaw.prefixLen > 0) {
+          out = out.slice(0, out.length - rustRaw.prefixLen) + ' '.repeat(rustRaw.prefixLen);
+        }
         out += maskSpanPreserveNewlines(rawSrc, i, rustRaw.endIdx);
         i = rustRaw.endIdx;
         continue;
@@ -683,6 +724,9 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
     if (isCpp && ch === 'R' && next === '"') {
       const cppRaw = matchCppRawString(rawSrc, i);
       if (cppRaw) {
+        if (cppRaw.prefixLen > 0) {
+          out = out.slice(0, out.length - cppRaw.prefixLen) + ' '.repeat(cppRaw.prefixLen);
+        }
         out += maskSpanPreserveNewlines(rawSrc, i, cppRaw.endIdx);
         i = cppRaw.endIdx;
         continue;
@@ -745,6 +789,11 @@ export function stripCStyleComments(input: string): string {
 
     if (inSingle) {
       if (ch === '\\' && i + 1 < len) {
+        if (next === '\r' && i + 2 < len && input[i + 2] === '\n') {
+          out += ch + '\r\n';
+          i += 3;
+          continue;
+        }
         out += ch + input[i + 1];
         i += 2;
         continue;
@@ -757,6 +806,11 @@ export function stripCStyleComments(input: string): string {
 
     if (inDouble) {
       if (ch === '\\' && i + 1 < len) {
+        if (next === '\r' && i + 2 < len && input[i + 2] === '\n') {
+          out += ch + '\r\n';
+          i += 3;
+          continue;
+        }
         out += ch + input[i + 1];
         i += 2;
         continue;
@@ -1607,6 +1661,7 @@ export function findPythonBlockEnd(
 
   let parenDepth = 0;
   let colonLine = declLineIndex;
+  let colonCol = -1;
   let foundColon = false;
 
   for (let i = declLineIndex; i < lines.length; i++) {
@@ -1617,6 +1672,7 @@ export function findPythonBlockEnd(
       else if (ch === ')' || ch === ']' || ch === '}') parenDepth = Math.max(0, parenDepth - 1);
       else if (ch === ':' && parenDepth === 0) {
         colonLine = i;
+        colonCol = c;
         foundColon = true;
         break;
       }
@@ -1627,9 +1683,12 @@ export function findPythonBlockEnd(
   const baseIndent = lines[declLineIndex].match(/^\s*/)?.[0].length ?? 0;
   let lastContentLine = colonLine;
   let inTripleQuote: '"""' | "'''" | null = null;
+  let inSingleLineQuote: '"' | "'" | null = null;
+  let lineContinued = false;
   let bodyParenDepth = 0;
 
   const advancePythonLine = (rawLine: string) => {
+    lineContinued = false;
     let c = 0;
     const len = rawLine.length;
     while (c < len) {
@@ -1646,8 +1705,27 @@ export function findPythonBlockEnd(
         c++;
         continue;
       }
+      if (inSingleLineQuote) {
+        if (rawLine[c] === '\\') {
+          if (c + 1 === len) {
+            lineContinued = true;
+            break;
+          }
+          c += 2;
+          continue;
+        }
+        if (rawLine[c] === inSingleLineQuote) {
+          inSingleLineQuote = null;
+        }
+        c++;
+        continue;
+      }
       const ch = rawLine[c];
       if (ch === '#') break;
+      if (ch === '\\' && rawLine.slice(c + 1).trim() === '') {
+        lineContinued = true;
+        break;
+      }
       if (rawLine.startsWith('"""', c) || rawLine.startsWith("'''", c)) {
         const delim = rawLine.slice(c, c + 3) as '"""' | "'''";
         inTripleQuote = delim;
@@ -1657,16 +1735,27 @@ export function findPythonBlockEnd(
       if (ch === '"' || ch === "'") {
         const quote = ch;
         c++;
+        let closed = false;
         while (c < len) {
-          if (rawLine[c] === '\\' && c + 1 < len) {
+          if (rawLine[c] === '\\') {
+            if (c + 1 === len) {
+              inSingleLineQuote = quote;
+              lineContinued = true;
+              c++;
+              break;
+            }
             c += 2;
             continue;
           }
           if (rawLine[c] === quote) {
             c++;
+            closed = true;
             break;
           }
           c++;
+        }
+        if (!closed && !lineContinued) {
+          inSingleLineQuote = null;
         }
         continue;
       }
@@ -1678,10 +1767,17 @@ export function findPythonBlockEnd(
     }
   };
 
+  if (foundColon && colonCol >= 0) {
+    const trailingOnColonLine = (lines[colonLine] ?? '').slice(colonCol + 1);
+    if (trailingOnColonLine.trim()) {
+      advancePythonLine(trailingOnColonLine);
+    }
+  }
+
   for (let i = colonLine + 1; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
-    if (inTripleQuote || bodyParenDepth > 0) {
+    if (inTripleQuote || inSingleLineQuote || lineContinued || bodyParenDepth > 0) {
       if (trimmed) {
         lastContentLine = i;
       }

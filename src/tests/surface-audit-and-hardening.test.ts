@@ -19,7 +19,12 @@ import { runAudit } from '../cli/audit.js';
 import { isExcludedGitHotspotPath } from '../cli/score.js';
 import { syncDeclaredPreToolHooks, isEvoHookCommand, CodexAdapter, ClaudeAdapter, upsertClaudeSettings } from '../cli/harness.js';
 import { EvoMcpDispatcher } from '../mcp/handlers.js';
-import { handlePostTool, handleStop, recordRecalledOutcomeWithTierRouting } from '../cli/hook.js';
+import {
+  handlePostTool,
+  handleStop,
+  isCapabilityRelevantToModifiedFiles,
+  recordRecalledOutcomeWithTierRouting,
+} from '../cli/hook.js';
 import {
   decodeXmlEntities,
   readZipEntries,
@@ -1695,6 +1700,7 @@ process.exit(hasRule ? 0 : 1);
     const ws = createTempWorkspace();
     try {
       const pidFile = path.join(ws, 'grandchild.pid');
+      const syncPidFile = path.join(ws, 'grandchild-sync.pid');
       const scriptPath = path.join(ws, 'spawner.mjs');
       fs.writeFileSync(
         scriptPath,
@@ -1727,7 +1733,25 @@ process.exit(hasRule ? 0 : 1);
       } catch {
         grandchildAlive = false;
       }
-      assert.strictEqual(grandchildAlive, false, `Grandchild PID ${gcPid} must be terminated on sandbox timeout`);
+      assert.strictEqual(grandchildAlive, false, `Grandchild PID ${gcPid} must be terminated on async sandbox timeout`);
+
+      const syncRes = executeSandboxedScript('node', scriptPath, { pidFile: syncPidFile }, {
+        cwd: ws,
+        timeoutMs: 600,
+      });
+      assert.strictEqual(syncRes.timedOut, true);
+      assert.strictEqual(syncRes.exitCode, 124);
+      const syncGcPid = Number(fs.readFileSync(syncPidFile, 'utf8').trim());
+      assert.ok(syncGcPid > 0);
+      let syncGrandchildAlive = false;
+      try {
+        process.kill(syncGcPid, 0);
+        syncGrandchildAlive = true;
+        process.kill(syncGcPid, 'SIGKILL');
+      } catch {
+        syncGrandchildAlive = false;
+      }
+      assert.strictEqual(syncGrandchildAlive, false, `Grandchild PID ${syncGcPid} must be terminated on sync sandbox timeout`);
 
       // Verify Gatekeeper static patterns for recursive FS deletion and credential directory access
       const storage = new EvoStorage(ws);
@@ -1737,10 +1761,15 @@ process.exit(hasRule ? 0 : 1);
         const gk = new EvoGatekeeper(storage, telemetry);
         const badPayloads = [
           "import * as fs from 'node:fs'; fs.rmSync('/', { recursive: true, force: true });",
+          "import { rmSync } from 'node:fs'; rmSync('/', { recursive: true, force: true });",
           "import * as fs from 'node:fs'; fs.promises.rm(os.homedir(), { recursive: true });",
           "import shutil\nshutil.rmtree('/')",
+          "import shutil, os\nshutil.rmtree(os.getcwd())",
+          "import shutil, os\nshutil.rmtree(os.environ['EVO_WORKSPACE'])",
+          "from pathlib import Path\nimport shutil\nshutil.rmtree(Path.home())",
           "const key = fs.readFileSync(path.join(os.homedir(), '.ssh/id_rsa'), 'utf8');",
           "const aws = fs.readFileSync('~/.aws/credentials', 'utf8');",
+          "from pathlib import Path\nkey = (Path.home() / '.ssh/id_rsa').read_text()",
         ];
         for (const bad of badPayloads) {
           const hit = gk.scanDangerousPatterns(bad);
@@ -1757,12 +1786,15 @@ process.exit(hasRule ? 0 : 1);
     }
   });
 
-  test('34. [Issue #25 Defect 2] Lexical AST parser handles Rust/C++ raw strings, C++14 digit separators, and Python unmasked blocks', () => {
+  test('34. [Issue #25 Defect 2] Lexical AST parser handles Rust/C++ raw strings, C++14 digit separators, backslash line continuations, and Python blocks', () => {
     // 1. Rust raw string r#"..."# and br##"..."## with unbalanced { and quotes
     const rustCode = [
       'pub fn parse_raw_payload(input: &str) -> usize {',
       '    let pat = r#"unbalanced { and "quotes" inside raw"#;',
       '    let bytes = br##"another { raw "string"# here"##;',
+      '    if input.as_bytes() == br#"{"# {',
+      '        return 1;',
+      '    }',
       '    input.len() + pat.len() + bytes.len()',
       '}',
       'pub fn next_fn() -> usize { 0 }',
@@ -1770,48 +1802,67 @@ process.exit(hasRule ? 0 : 1);
     const rustLines = rustCode.split('\n');
     assert.strictEqual(
       findBraceBlockEnd(rustLines, 0, '.rs'),
-      4,
-      'Rust raw strings must not corrupt brace depth or quote state'
+      7,
+      'Rust raw strings and br# prefixes must not corrupt brace depth or quote state'
     );
     const strippedRust = stripCStyleComments(rustCode + ' // trailing comment');
     assert.ok(!strippedRust.includes('trailing comment'));
 
-    // 2. C++ raw string R"delim(...)delim" and C++14 numeric digit separators 1'000'000
+    // 2. C++ raw string R"delim(...)delim", C++14 numeric digit separators, and backslash-continued string literals
     const cppCode = [
       'int computeTimeout(int scale) {',
       '    const char* raw = R"sql(SELECT * FROM t WHERE a = "{" AND b = \'{\')sql";',
+      '    const char* cont = "line1 \\',
+      'line2 still in string { fake opening brace";',
       "    int timeout_us = 1'000'000; // } fake closing brace in comment after odd separator count",
       "    int mask = 0xFF'FF'01;",
-      '    return timeout_us * scale + (raw ? mask : 0);',
+      '    return timeout_us * scale + (raw && cont ? mask : 0);',
       '}',
       'int afterTimeout() { return 1; }',
     ].join('\n');
     const cppLines = cppCode.split('\n');
     assert.strictEqual(
+      maskSourceLexical(cppCode, '.cpp').split('\n').length,
+      cppLines.length,
+      'maskSourceLexical must preserve exact newline count across backslash line continuations'
+    );
+    assert.strictEqual(
       findBraceBlockEnd(cppLines, 0, '.cpp'),
-      5,
-      'C++ raw string and C++14 digit separators must not corrupt lexical masking or comment stripping'
+      7,
+      'C++ raw string, digit separators, and backslash line continuations must not corrupt lexical masking'
     );
     const strippedCpp = stripCStyleComments(cppCode);
     assert.ok(!strippedCpp.includes('fake closing brace'));
 
-    // 3. Python default parameter string with ): and multiline triple-quoted string with col-0 lines
+    // 3. Python default parameter string with ):, multiline triple-quoted string with col-0 lines, and colonLine docstring
     const pyCode = [
       'def connect(url: str = "http://localhost:8080)", retries: int = 3):',
       '    query = """SELECT *',
       'FROM devices',
       'WHERE status = 1',
       '"""',
-      '    return f"{url}:{retries}:{len(query)}"',
+      '    cont_str = "part1 \\',
+      'part2 at col 0"',
+      '    return f"{url}:{retries}:{len(query)}:{cont_str}"',
+      '',
+      'def inline_doc(): """Summary on colonLine',
+      'unindented docstring continuation',
+      '"""',
+      '    return 42',
       '',
       'def next_py_func():',
-      '    return 42',
+      '    return 99',
     ].join('\n');
     const pyLines = pyCode.split('\n');
     assert.strictEqual(
       findPythonBlockEnd(pyLines, 0),
-      5,
-      'Python block scanner must use masked header lines and track multiline triple-quoted strings'
+      7,
+      'Python block scanner must use masked header lines and track multiline triple-quoted and backslash-continued strings'
+    );
+    assert.strictEqual(
+      findPythonBlockEnd(pyLines, 9),
+      12,
+      'Python block scanner must track triple-quoted docstrings starting on colonLine'
     );
   });
 
@@ -1952,6 +2003,38 @@ process.exit(hasRule ? 0 : 1);
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
+      storage.saveMemory({
+        id: 'ui-colon-memory',
+        title: 'UI Colon Target Memory',
+        l0_summary: 'Memory targeting src/ui/view.tsx:v via colon syntax',
+        symptom: 'UI glitch',
+        root_cause: 'Wrong constant',
+        solution: 'Update v',
+        target_symbols: ['src/ui/view.tsx:v'],
+        tags: ['ui'],
+        confidence: 'high',
+        tokens: 30,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      assert.strictEqual(
+        isCapabilityRelevantToModifiedFiles(
+          storage,
+          { id: 'ui-colon-memory', kind: 'memory', tier: 'LOCAL' },
+          ['src/core/engine.ts']
+        ),
+        false,
+        'Memory with file:symbol target_symbols must not match unrelated modified files'
+      );
+      assert.strictEqual(
+        isCapabilityRelevantToModifiedFiles(
+          storage,
+          { id: 'ui-colon-memory', kind: 'memory', tier: 'LOCAL' },
+          ['src/ui/view.tsx']
+        ),
+        true
+      );
 
       const initTel = new EvoTelemetry(storage);
       initTel.syncFromDisk();
@@ -1979,6 +2062,16 @@ process.exit(hasRule ? 0 : 1);
         assert.strictEqual(isValidContrastiveEvidence('aaaaaaaaaaaa', ws), false);
         assert.strictEqual(isValidContrastiveEvidence('random filler text without markers', ws), false);
         assert.strictEqual(
+          isValidContrastiveEvidence('nonexistent_foo and imaginary_bar filler', ws),
+          false,
+          'Ungrounded snake_case tokens not present in workspace must not bypass contrastive check'
+        );
+        assert.strictEqual(
+          isValidContrastiveEvidence('this command failed yesterday', ws),
+          false,
+          'Single non-contrastive failed keyword without contrast or grounding must not pass'
+        );
+        assert.strictEqual(
           isValidContrastiveEvidence(
             'Before: raw string broke brace depth -> After: maskRustRawString preserves balance',
             ws
@@ -1991,7 +2084,7 @@ process.exit(hasRule ? 0 : 1);
         );
 
         tel.setSessionFlag('had_command_error', 'true');
-        tel.setSessionFlag('unproposed_edit_count', '3');
+        tel.setSessionFlag('unproposed_edit_count', '4');
         const gk = new EvoGatekeeper(storage, tel);
         const rejectedFiller = gk.evaluateAndCommit({
           kind: 'rule',

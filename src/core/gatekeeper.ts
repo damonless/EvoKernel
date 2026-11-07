@@ -24,6 +24,7 @@ import { EvoTelemetry } from './telemetry.js';
 import { checkScriptSyntax, executeSandboxedScript } from './sandbox.js';
 import {
   buildFingerprintsForTargets,
+  collectWorkspaceSourceFiles,
   resolveCurrentGitBranch,
   resolveCurrentGitCommit,
 } from './memory.js';
@@ -36,13 +37,13 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   },
   {
     pattern:
-      /\b(?:fs(?:\.promises)?\.(?:rmSync|rmdirSync|rm)|shutil\.rmtree)\s*\(\s*(?:['"`](?:\/|~|\$HOME|\.\.(?:[/\\][^'"`]*)?|[A-Za-z]:\\)['"`]|os\.homedir\s*\(\)|os\.path\.expanduser\s*\(\s*['"`]~['"`]\s*\)|process\.cwd\s*\(\)|process\.env\.(?:HOME|USERPROFILE|EVO_WORKSPACE)\b|workspace(?:Root)?\b)/i,
+      /\b(?:(?:fs(?:\.promises)?\.)?(?:rmSync|rmdirSync)|fs\.promises\.rm|shutil\.rmtree)\s*\(\s*(?:['"`](?:\/|~|\$HOME|\.\.(?:[/\\][^'"`]*)?|[A-Za-z]:\\)['"`]|os\.homedir\s*\(\)|os\.getcwd\s*\(\)|os\.path\.expanduser\s*\(\s*['"`]~[^'"`]*['"`]\s*\)|Path\.(?:home|cwd)\s*\(\)|process\.cwd\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE|EVO_WORKSPACE)\b|\[\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]|workspace(?:Root)?\b)/i,
     reason: 'Destructive programmatic root/home/parent/workspace directory deletion detected',
   },
   {
     pattern:
-      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|process\.env\.(?:HOME|USERPROFILE))[^;\n]{0,40}[\/\\'"`]\.(?:ssh|aws|gnupg)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg)\b|[\/\\]\.(?:ssh[\/\\](?:id_rsa|id_ed25519|authorized_keys|config)|aws[\/\\](?:credentials|config)|gnupg[\/\\])/i,
-    reason: 'Sensitive home credential directory access (~/.ssh, ~/.aws, ~/.gnupg) detected',
+      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env\.(?:HOME|USERPROFILE)|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[^;\n]{0,40}[\/\\'"`]\.(?:ssh|aws|gnupg|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|env)\b|[\/\\]\.(?:ssh[\/\\](?:id_rsa|id_ed25519|authorized_keys|config)|aws[\/\\](?:credentials|config)|gnupg[\/\\])/i,
+    reason: 'Sensitive home credential directory access (~/.ssh, ~/.aws, ~/.gnupg, ~/.env) detected',
   },
   { pattern: /\b(Format-Volume|Clear-Disk|mkfs\.|dd\s+if=)/i, reason: 'Disk formatting command detected' },
   { pattern: /\b(curl|wget|Invoke-WebRequest|iwr)\b.*\|\s*(sh|bash|pwsh|powershell|iex|Invoke-Expression)/i, reason: 'Remote code pipe execution detected' },
@@ -59,15 +60,43 @@ export function isValidContrastiveEvidence(
   const trimmed = rawEvidence.trim();
   if (trimmed.length < 12) return false;
 
-  const rawTokens = trimmed.match(/[A-Za-z0-9_.\u4e00-\u9fa5/-]{2,}/g) || [];
+  const rawTokens = trimmed.match(/[A-Za-z0-9_.\u4e00-\u9fa5/#:-]{2,}/g) || [];
   const distinctTokens = new Set(rawTokens.map((t) => t.toLowerCase()));
   if (distinctTokens.size < 3) return false;
 
   const hasContrastiveMarkers =
-    /\b(?:before\b[\s\S]*\bafter|before\s*:|after\s*:|vs\.?|versus|prior\s+to|previously|instead\s+of|without\s+\S+[\s\S]*\b(?:with|fail|pass|error|crash|block)|when\s+.+\s+(?:failed|passed|skipped|blocked|crashed|succeeded)|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+|pass(?:ed|es)?|fail(?:ed|s|ure)?|regress(?:ion|ed|es)?|isolat(?:ed|ion)|reproduc(?:ed|ible)|verif(?:ied|y)\b|root\s+cause|baseline)\b|(?:->|=>|→)|(?:修复前|修复后|修改前|修改后|对比|之前|之后)/i.test(
+    /\b(?:before\b[\s\S]*\bafter|before\s*:|after\s*:|vs\.?|versus|prior\s+to|previously|instead\s+of|without\s+\S+[\s\S]*\b(?:with|fail|pass|error|crash|block)|with\s+\S+[\s\S]*\bwithout\b|when\s+.+\s+(?:failed|passed|skipped|blocked|crashed|succeeded)|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+|pass(?:ed|es)?\b[\s\S]*\bfail(?:ed|s|ure)?|fail(?:ed|s|ure)?\b[\s\S]*\bpass(?:ed|es)?|regress(?:ion|ed|es)?|isolat(?:ed|ion)|reproduc(?:ed|ible)|root\s+cause|baseline)\b|(?:->|=>|→)|(?:修复前|修复后|修改前|修改后|对比|之前|之后)/i.test(
       trimmed
     );
 
+  let wsFiles: string[] = [];
+  let wsRelFilesLower: string[] = [];
+  let wsBasenamesLower = new Set<string>();
+  let wsContentJoined = '';
+  if (workspaceRoot && fs.existsSync(workspaceRoot)) {
+    try {
+      wsFiles = collectWorkspaceSourceFiles(workspaceRoot, 200);
+      wsRelFilesLower = wsFiles.map((f) =>
+        path.relative(workspaceRoot, f).replace(/\\/g, '/').toLowerCase()
+      );
+      wsBasenamesLower = new Set(wsRelFilesLower.map((r) => path.basename(r)));
+      if (wsFiles.length > 0 && wsFiles.length <= 80) {
+        const chunks: string[] = [];
+        for (const f of wsFiles) {
+          try {
+            chunks.push(fs.readFileSync(f, 'utf8'));
+          } catch {
+            // ignore
+          }
+        }
+        wsContentJoined = chunks.join('\n');
+      }
+    } catch {
+      wsFiles = [];
+    }
+  }
+
+  const hasWorkspaceSources = wsFiles.length > 0;
   let groundingMatches = 0;
   const seenGrounding = new Set<string>();
   for (const tok of rawTokens) {
@@ -82,6 +111,46 @@ export function isValidContrastiveEvidence(
       cleanTok.includes('#') ||
       /[a-z][A-Z]/.test(cleanTok) ||
       cleanTok.includes('_');
+
+    if (workspaceRoot && hasWorkspaceSources) {
+      let matchedInWorkspace = false;
+      try {
+        const filePart = cleanTok.includes('#')
+          ? cleanTok.split('#')[0]
+          : cleanTok.includes(':')
+            ? cleanTok.split(':')[0]
+            : cleanTok;
+        const symPart = cleanTok.includes('#')
+          ? cleanTok.split('#')[1]
+          : cleanTok.includes(':')
+            ? cleanTok.split(':')[1]
+            : cleanTok;
+        const filePartLower = filePart.replace(/\\/g, '/').toLowerCase();
+        if (
+          filePartLower &&
+          (fs.existsSync(path.resolve(workspaceRoot, filePart)) ||
+            wsBasenamesLower.has(filePartLower) ||
+            wsRelFilesLower.some((r) => r === filePartLower || r.endsWith(`/${filePartLower}`)))
+        ) {
+          matchedInWorkspace = true;
+        } else if (
+          looksLikeFileOrSymbol &&
+          symPart &&
+          symPart.length >= 3 &&
+          wsContentJoined &&
+          wsContentJoined.includes(symPart)
+        ) {
+          matchedInWorkspace = true;
+        }
+      } catch {
+        // ignore
+      }
+      if (matchedInWorkspace) {
+        seenGrounding.add(lower);
+        groundingMatches++;
+      }
+      continue;
+    }
 
     if (looksLikeFileOrSymbol) {
       seenGrounding.add(lower);
