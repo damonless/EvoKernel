@@ -85,7 +85,8 @@ export function checkScriptSyntax(
 
 export function sanitizeSandboxEnv(rawEnv: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const sanitized: Record<string, string> = {};
-  const sensitivePattern = /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i;
+  const sensitivePattern =
+    /((?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|PRIVATE|COOKIE|SESSION|JWT|BEARER)|^(?:AWS_|GITHUB_|GH_|ANTHROPIC_|OPENAI_|GEMINI_|AZURE_|SLACK_|STRIPE_|NPM_TOKEN))/i;
   const allowedExact = new Set([
     'PATH',
     'TMP',
@@ -266,6 +267,7 @@ function resolveSandboxInvocation(
     env: {
       ...sanitizedEnv,
       EVO_ARGS: serializedArgs,
+      EVO_SANDBOX: '1',
       EVO_SELF_TEST: options.selfTest ? '1' : '0',
       EVO_WORKSPACE: cwd,
     },

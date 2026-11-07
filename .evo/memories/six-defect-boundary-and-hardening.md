@@ -1,0 +1,23 @@
+---
+id: six-defect-boundary-and-hardening
+title: "Six-Defect Boundary Remediation (UI Telemetry SQL, Sandbox Mutation Guard, Body Dedup, Structural Skeleton Hash, Byte-Idempotent Sync & Worktree Reuse)"
+l0_summary: "UI SQL mismatch, self-test mutation, header dedup, log AST drift, mtime churn -> harden SQL, sandbox, body-BM25, and sync"
+created_commit: "0d6f4e2"
+created_branch: "main"
+target_symbols: ["src/cli/ui.ts#buildUiSnapshot","src/core/gatekeeper.ts#captureWorkspaceMutationSignature","src/core/telemetry.ts#findSimilarCapabilities","src/core/memory.ts#computeStructuralSkeletonHash","src/cli/init.ts#syncManagedRuleBlocks","src/core/optimize.ts#probeCandidateInWorktree"]
+ast_fingerprints: {"src/cli/ui.ts#buildUiSnapshot":{"symbol":"src/cli/ui.ts#buildUiSnapshot","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":37,"end_line":132,"signature":"export function buildUiSnapshot(","ast_hash":"5420fa2467a2c52e"},"src/core/gatekeeper.ts#captureWorkspaceMutationSignature":{"symbol":"src/core/gatekeeper.ts#captureWorkspaceMutationSignature","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"function","start_line":1316,"end_line":1367,"signature":"export function captureWorkspaceMutationSignature(rootDir: string): Map<string, string>","ast_hash":"f0033841d975afc6"},"src/core/telemetry.ts#findSimilarCapabilities":{"symbol":"src/core/telemetry.ts#findSimilarCapabilities","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"method","start_line":1504,"end_line":1602,"signature":"public findSimilarCapabilities(","ast_hash":"5be44277d66763dd"},"src/core/memory.ts#computeStructuralSkeletonHash":{"symbol":"src/core/memory.ts#computeStructuralSkeletonHash","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":984,"end_line":1095,"signature":"export function computeStructuralSkeletonHash(code: string, ext = '.ts'): string","ast_hash":"b0503047e0bb6f1c"},"src/cli/init.ts#syncManagedRuleBlocks":{"symbol":"src/cli/init.ts#syncManagedRuleBlocks","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":256,"end_line":385,"signature":"export function syncManagedRuleBlocks(workspaceRoot: string): string[]","ast_hash":"3072878886eb8208"},"src/core/optimize.ts#probeCandidateInWorktree":{"symbol":"src/core/optimize.ts#probeCandidateInWorktree","file_path":"src/core/optimize.ts","file":"src/core/optimize.ts","kind":"function","start_line":1398,"end_line":1823,"signature":"export function probeCandidateInWorktree(","ast_hash":"9d7307e1b9f0d157"}}
+tags: ["ui-telemetry","sandbox-security","bm25-dedup","ast-skeleton-hash","kv-cache-idempotency","worktree-optimize"]
+origin: "evolved"
+review_status: "pending"
+created_at: "2026-11-07T19:10:03.084Z"
+updated_at: "2026-11-07T19:10:03.084Z"
+---
+
+## Symptom
+1) buildUiSnapshot queries non-existent contested column, silently resetting UI hit_count/attribution to 0/unverified; 2) Gate 2 --self-test allows workspace file creation/mutation; 3) Gate 3 deduplication misses identical rule/tool bodies when title/l0_summary are rewritten; 4) verifyMemoryFreshness marks memories STALE on log/string literal edits; 5) syncManagedRuleBlocks bumps mtimeMs on unchanged files; 6) probeCandidateInWorktree recreates worktrees per iteration.
+
+## Root Cause
+1) Schema column contested_count was queried as contested in buildUiSnapshot; 2) Gate 2 lacked pre/post workspace mutation signature checks around --self-test; 3) findSimilarCapabilities only compared header tokens without body/script_code similarity; 4) verifyMemoryFreshness lacked a control-flow structural skeleton hash fallback for log/string edits; 5) syncManagedRuleBlocks wrote files unconditionally without byte-equality checks; 6) probeCandidateInWorktree recreated git worktrees every iteration and runOptimizationCycle lacked endogenous orphaned STALE memory GC.
+
+## Solution
+1) Query contested_count with legacy fallback in src/cli/ui.ts#buildUiSnapshot; 2) Add captureWorkspaceMutationSignature in src/core/gatekeeper.ts and expand sanitizeSandboxEnv; 3) Index tool script_code and compute hybrid header+body similarity in src/core/telemetry.ts#findSimilarCapabilities; 4) Implement computeStructuralSkeletonHash in src/core/memory.ts and expand SOURCE_EXTENSIONS/lookahead caps; 5) Add byte-idempotent write guards in src/cli/init.ts#syncManagedRuleBlocks and core-only sync guard in handlePropose; 6) Add reusableWorktreeDir in probeCandidateInWorktree and endogenous STALE memory archiving in runOptimizationCycle.

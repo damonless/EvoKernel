@@ -965,7 +965,8 @@ export class EvoTelemetry {
           `${toolTitle} ${toolSummary} ${tagsText} ${schemaPropsText}`
         ).join(' ');
         const kw = `${idTokens} ${t.runtime} ${tagsText} ${schemaPropsText} ${cjkKw}`.trim();
-        upsertFtsRow(t.id, 'tool', toolTitle, toolSummary, kw, schemaText);
+        const toolBody = `${schemaText}\n${t.script_code || ''}`.trim();
+        upsertFtsRow(t.id, 'tool', toolTitle, toolSummary, kw, toolBody);
         upsertTelemetry.run(t.id, 'tool', toolTitle, toolSummary, '**/*', now, t.created_at || now);
       }
 
@@ -1505,22 +1506,47 @@ export class EvoTelemetry {
     l0Summary: string,
     kind: EvoKind,
     excludeId?: string,
-    extraText = ''
+    extraText = '',
+    candidateBody = ''
   ): Array<{ id: string; similarity: number; l0_summary: string }> {
     this.syncFromDisk();
     const existing = this.db
       .prepare(
-        `SELECT t.id, t.title, t.l0_summary, f.keywords
+        `SELECT t.id, t.title, t.l0_summary, f.keywords, f.body
          FROM telemetry t
          LEFT JOIN capability_fts_fallback f ON t.id = f.id
          WHERE t.kind = ?`
       )
-      .all(kind) as Array<{ id: string; title: string; l0_summary: string; keywords?: string }>;
+      .all(kind) as Array<{
+        id: string;
+        title: string;
+        l0_summary: string;
+        keywords?: string;
+        body?: string;
+      }>;
 
     const targetTokens = tokenizeForSimilarity(`${title} ${l0Summary} ${extraText}`);
-    if (targetTokens.size === 0) return [];
+    const hasCandidateBody = Boolean(candidateBody && candidateBody.trim().length >= 20);
+    const targetBodyTokens = hasCandidateBody
+      ? tokenizeForSimilarity(cleanBodyForSimilarity(candidateBody))
+      : new Set<string>();
+
+    if (targetTokens.size === 0 && targetBodyTokens.size === 0) return [];
+
+    const bodyDf = new Map<string, number>();
+    if (hasCandidateBody && targetBodyTokens.size >= 6) {
+      for (const item of existing) {
+        if (!item.body || item.body.trim().length < 20) continue;
+        const itemTokens = tokenizeForSimilarity(cleanBodyForSimilarity(item.body));
+        for (const tok of itemTokens) {
+          bodyDf.set(tok, (bodyDf.get(tok) || 0) + 1);
+        }
+      }
+    }
 
     const matches: Array<{ id: string; similarity: number; l0_summary: string }> = [];
+    const N = existing.length;
+
     for (const item of existing) {
       if (excludeId && item.id === excludeId) continue;
       const candText =
@@ -1528,7 +1554,45 @@ export class EvoTelemetry {
           ? `${item.title} ${item.l0_summary} ${item.keywords || ''}`
           : `${item.title} ${item.l0_summary}`;
       const candTokens = tokenizeForSimilarity(candText);
-      const sim = jaccardSimilarity(targetTokens, candTokens);
+      const headerSim = targetTokens.size > 0 ? jaccardSimilarity(targetTokens, candTokens) : 0;
+
+      let effectiveBodySim = 0;
+      if (hasCandidateBody && item.body && item.body.trim().length >= 20) {
+        const candBodyTokens = tokenizeForSimilarity(cleanBodyForSimilarity(item.body));
+        const bodyJaccard = jaccardSimilarity(targetBodyTokens, candBodyTokens);
+        effectiveBodySim = bodyJaccard;
+
+        if (targetBodyTokens.size >= 6 && candBodyTokens.size >= 6) {
+          let intersectionWeight = 0;
+          let unionWeight = 0;
+          let targetWeight = 0;
+          let candWeight = 0;
+          const unionTokens = new Set([...targetBodyTokens, ...candBodyTokens]);
+          for (const tok of unionTokens) {
+            const df = bodyDf.get(tok) || 1;
+            const idf = Math.log(1 + (N + 1) / (df + 0.5)) + 1;
+            const inTarget = targetBodyTokens.has(tok);
+            const inCand = candBodyTokens.has(tok);
+            if (inTarget) targetWeight += idf;
+            if (inCand) candWeight += idf;
+            if (inTarget && inCand) intersectionWeight += idf;
+            unionWeight += idf;
+          }
+          const idfJaccard = unionWeight > 0 ? intersectionWeight / unionWeight : 0;
+          const minWeight = Math.min(targetWeight, candWeight);
+          const idfContainment = minWeight > 0 ? intersectionWeight / minWeight : 0;
+          const containmentBoost =
+            idfContainment >= 0.85 && bodyJaccard >= 0.5 ? idfContainment * 0.85 : 0;
+
+          effectiveBodySim = Math.max(bodyJaccard, idfJaccard, containmentBoost);
+        }
+      }
+
+      const sim =
+        hasCandidateBody && effectiveBodySim > 0
+          ? Math.max(headerSim, effectiveBodySim * 0.95, headerSim * 0.5 + effectiveBodySim * 0.5)
+          : headerSim;
+
       if (sim > 0) {
         matches.push({ id: item.id, similarity: sim, l0_summary: item.l0_summary });
       }
@@ -1705,4 +1769,42 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   }
   const union = a.size + b.size - intersection;
   return union === 0 ? 0 : intersection / union;
+}
+
+
+export function cleanBodyForSimilarity(text: string): string {
+  if (!text) return '';
+  const lines = text.split(/\r?\n/);
+  const kept: string[] = [];
+  let inAnchorSection = false;
+  let anchorLevel = 0;
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^(\#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const title = headingMatch[2];
+      if (/(?:Case Anchors?|反例锚点|典型反例|反例案例|Case Examples?)/i.test(title)) {
+        inAnchorSection = true;
+        anchorLevel = level;
+        continue;
+      } else if (inAnchorSection && level <= anchorLevel) {
+        inAnchorSection = false;
+      }
+    }
+    if (inAnchorSection) continue;
+
+    const trimmed = line.trim();
+    if (trimmed.startsWith('//') || (trimmed.startsWith('#') && !headingMatch)) {
+      continue;
+    }
+    kept.push(line);
+  }
+
+  return kept
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }

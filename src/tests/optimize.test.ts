@@ -1301,5 +1301,113 @@ if (hasClaude && hasAgents && hasGemini && hasNodePath && hasViteCache) {
       cleanTempWorkspace(ws);
     }
   });
+
+  test('21. [Defect #6 Regression] Endogenous Orphaned STALE Memory Archival in runOptimizationCycle', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // Create an active source file with a living function
+      const srcDir = path.join(ws, 'src');
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(srcDir, 'active.ts'),
+        'export function livingFunction(x: number): number { return x * 2; }\n',
+        'utf8'
+      );
+
+      // 1. Healthy memory with existing target symbol
+      storage.saveMemory({
+        id: 'healthy-active-mem',
+        title: 'Healthy Active Memory',
+        l0_summary: 'Target symbol exists and is healthy',
+        symptom: 'Initial computation defect',
+        root_cause: 'Missing scale factor',
+        solution: 'Apply scale factor multiplier',
+        target_symbols: ['livingFunction'],
+        ast_fingerprints: {
+          livingFunction: {
+            file_path: 'src/active.ts',
+            kind: 'function',
+            start_line: 1,
+            end_line: 1,
+            ast_hash: 'initial-healthy-hash',
+          },
+        },
+        tags: ['healthy'],
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // 2. Orphaned STALE memory whose target symbol was deleted from source code
+      storage.saveMemory({
+        id: 'orphaned-stale-mem',
+        title: 'Orphaned Stale Memory',
+        l0_summary: 'Target symbol was completely removed from source code',
+        symptom: 'Crash on invoking deleted handler',
+        root_cause: 'Handler removed during refactor',
+        solution: 'Clean up stale references',
+        target_symbols: ['deletedObsoleteFunction'],
+        ast_fingerprints: {
+          deletedObsoleteFunction: {
+            file_path: 'src/obsolete.ts',
+            kind: 'function',
+            start_line: 1,
+            end_line: 5,
+            ast_hash: 'dead-function-ast-hash',
+          },
+        },
+        tags: ['orphaned'],
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // 3. Dry-run first: apply is false -> should not archive
+      const dryRunRes = runOptimizationCycle({
+        workspaceRoot: ws,
+        apply: false,
+      });
+      assert.equal(dryRunRes.applied, false);
+      assert.ok(storage.getMemory('orphaned-stale-mem') !== null, 'Dry run must not archive memory');
+
+      // 4. Run optimization cycle with apply: true (no proposerCmd) -> endogenous pass archives orphaned memory
+      const applyRes = runOptimizationCycle({
+        workspaceRoot: ws,
+        apply: true,
+      });
+      assert.equal(applyRes.applied, true, 'runOptimizationCycle must report applied: true after endogenous archival');
+      assert.match(
+        applyRes.notes,
+        /Endogenous optimization: archived 1 orphaned STALE memory\(ies\) with missing symbols\./
+      );
+
+      // Verify orphaned memory was removed from active memories and moved to archive
+      assert.equal(storage.getMemory('orphaned-stale-mem'), null, 'Orphaned memory must no longer be active');
+      assert.ok(storage.getMemory('healthy-active-mem') !== null, 'Healthy memory must remain active');
+
+      const archived = storage.listArchivedCapabilities();
+      assert.ok(
+        archived.some((a) => a.id === 'orphaned-stale-mem'),
+        'Orphaned memory must exist in archived capabilities'
+      );
+      const archiveDirFiles = fs.readdirSync(path.join(ws, '.evo', 'archive'));
+      assert.ok(
+        archiveDirFiles.some((f) => f.includes('memory_orphaned-stale-mem.json')),
+        'Archived JSON record must be written in .evo/archive'
+      );
+
+      // 5. Subsequent run with apply: true -> no more orphaned memories -> applied: false
+      const secondRes = runOptimizationCycle({
+        workspaceRoot: ws,
+        apply: true,
+      });
+      assert.equal(secondRes.applied, false, 'Subsequent run with no orphaned memories should report applied: false');
+    } finally {
+      cleanTempWorkspace(ws);
+    }
+  });
 });
 

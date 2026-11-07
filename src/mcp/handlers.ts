@@ -1482,7 +1482,7 @@ export class EvoMcpDispatcher {
 
     if (payload.kind === 'rule' || payload.kind === 'tool' || payload.kind === 'skill') {
       syncManagedRuleBlocks(storage.rootDir);
-      if (payload.kind === 'rule' && this.onCoreRulesChanged) {
+      if (payload.kind === 'rule' && Boolean(payload.core) && this.onCoreRulesChanged) {
         this.onCoreRulesChanged();
       }
     }

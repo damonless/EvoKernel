@@ -50,6 +50,21 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16})/, reason: 'Hardcoded plaintext API secret/token detected' },
   { pattern: /[A-Za-z]:\\Users\\[A-Za-z0-9_.-]+\\/i, reason: 'Hardcoded user-specific Windows absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
   { pattern: /\/Users\/[A-Za-z0-9_.-]+\/|\/home\/[A-Za-z0-9_.-]+\//, reason: 'Hardcoded user-specific Unix absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
+  {
+    pattern:
+      /\b(?:eval|new\s+Function|vm\.(?:runInNewContext|runInThisContext))\s*\([\s\S]{0,120}\b(?:Buffer\.from|atob|base64|process|fs|child_process)\b/i,
+    reason: 'Dynamic eval/Function execution with privileged or decoded payload detected',
+  },
+  {
+    pattern:
+      /\b(?:fs|child_process|process|globalThis|global)\s*\[\s*['"`][a-zA-Z0-9_]+['"`]\s*\+\s*['"`][a-zA-Z0-9_]+['"`]\s*\]/,
+    reason: 'Obfuscated bracket-concatenation property access on privileged module detected',
+  },
+  {
+    pattern:
+      /Buffer\.from\s*\([^)]*,\s*['"`]base64['"`]\s*\)[\s\S]{0,120}\b(?:exec|execSync|spawn|spawnSync|eval|Function|rmSync)\b/,
+    reason: 'Obfuscated base64 payload execution detected',
+  },
 ];
 
 export function isValidContrastiveEvidence(
@@ -1297,6 +1312,60 @@ export interface EvaluateOptions {
 
 export type GatekeeperEvaluateOptions = EvaluateOptions;
 
+
+export function captureWorkspaceMutationSignature(rootDir: string): Map<string, string> {
+  const sigMap = new Map<string, string>();
+  if (!rootDir || !fs.existsSync(rootDir)) {
+    return sigMap;
+  }
+
+  const ignoredDirNames = new Set(['.git', 'node_modules', '.codegraph', 'dist', 'build']);
+  let fileCount = 0;
+  const maxFiles = 600;
+
+  function walk(currentDir: string, depth: number) {
+    if (depth > 5 || fileCount >= maxFiles) return;
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (fileCount >= maxFiles) break;
+
+      const fullPath = path.join(currentDir, entry.name);
+      const relPath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+
+      if (entry.isDirectory()) {
+        if (ignoredDirNames.has(entry.name)) {
+          continue;
+        }
+        if (relPath === '.evo/.cache' || relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        walk(fullPath, depth + 1);
+      } else if (entry.isFile()) {
+        if (relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        try {
+          const stat = fs.statSync(fullPath);
+          sigMap.set(relPath, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+          fileCount++;
+        } catch {
+          // ignore inaccessible files
+        }
+      }
+    }
+  }
+
+  walk(path.resolve(rootDir), 0);
+  return sigMap;
+}
+
 export class EvoGatekeeper {
   private readonly storage: EvoStorage;
   private readonly telemetry: EvoTelemetry;
@@ -1891,6 +1960,7 @@ export class EvoGatekeeper {
       const tmpScript = path.join(tmpDir, `run${getExtensionForRuntime(runtime)}`);
       try {
         fs.writeFileSync(tmpScript, scriptCode, 'utf8');
+        const beforeSnap = captureWorkspaceMutationSignature(this.storage.rootDir);
         const dryRun = executeSandboxedScript(
           runtime,
           tmpScript,
@@ -1901,6 +1971,36 @@ export class EvoGatekeeper {
             selfTest: true,
           }
         );
+        const afterSnap = captureWorkspaceMutationSignature(this.storage.rootDir);
+
+        const mutatedFiles: string[] = [];
+        for (const [filePath, sig] of afterSnap.entries()) {
+          const beforeSig = beforeSnap.get(filePath);
+          if (beforeSig === undefined) {
+            mutatedFiles.push(filePath);
+            try {
+              fs.unlinkSync(path.join(this.storage.rootDir, filePath));
+            } catch {
+              // best-effort cleanup
+            }
+          } else if (beforeSig !== sig) {
+            mutatedFiles.push(filePath);
+          }
+        }
+        for (const filePath of beforeSnap.keys()) {
+          if (!afterSnap.has(filePath)) {
+            mutatedFiles.push(filePath);
+          }
+        }
+
+        if (mutatedFiles.length > 0) {
+          return {
+            passed: false,
+            gate_failed: 'SYNTAX_SANDBOX',
+            error_code: 'ERR_SANDBOX_SELF_TEST',
+            message: `Sandbox dry-run (--self-test) violated the side-effect-free invariant by mutating workspace file(s): [${mutatedFiles.slice(0, 5).join(', ')}]. Micro-Tool --self-test must not create, modify, or delete workspace files.`,
+          };
+        }
 
         if (dryRun.exitCode !== 0) {
           return {
@@ -1929,6 +2029,17 @@ export class EvoGatekeeper {
         ? `${resolvedSymptom} ${(rawProposal.target_symbols || []).join(' ')}`
         : '';
 
+    let candidateBodyForSim = '';
+    if (rawProposal.kind === 'rule') {
+      candidateBodyForSim = stripCaseAnchorLines(resolvedRuleContent);
+    } else if (rawProposal.kind === 'skill') {
+      candidateBodyForSim = `${resolvedSkillL1}\n${resolvedSkillL2}`;
+    } else if (rawProposal.kind === 'tool') {
+      candidateBodyForSim = rawProposal.script_code || '';
+    } else if (rawProposal.kind === 'memory') {
+      candidateBodyForSim = `${resolvedSymptom}\n${resolvedRootCause}\n${resolvedSolution}`;
+    }
+
     const excludeSet = new Set<string>([cleanId]);
     if (rawProposal.supersedes_id) {
       excludeSet.add(sanitizeId(rawProposal.supersedes_id));
@@ -1945,7 +2056,8 @@ export class EvoGatekeeper {
         rawProposal.l0_summary,
         rawProposal.kind,
         undefined,
-        extraSimText
+        extraSimText,
+        candidateBodyForSim
       )
       .filter((s) => !excludeSet.has(s.id) && s.similarity >= config.duplicateBm25Threshold);
 

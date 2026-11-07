@@ -20,7 +20,7 @@ import {
   isTestEnvironment,
 } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { runInit, runUninstall, mountIdeExtensions } from '../cli/init.js';
+import { runInit, runUninstall, mountIdeExtensions, syncManagedRuleBlocks } from '../cli/init.js';
 import { redactSensitiveDiagnostics, EvoTelemetry } from '../core/telemetry.js';
 import { EvoStorage } from '../core/storage.js';
 
@@ -1773,6 +1773,163 @@ Widget issue
       } catch {
         // Ignore transient Windows fs.watch handle release delay
       }
+    }
+  });
+
+  test('26. [Defect #1 Regression] buildUiSnapshot extracts contested_count and telemetry attribution for rules, tools, and memories', () => {
+    const ws = createTempDir('ui-attribution-test');
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // 1. Create rule, tool, memory
+      storage.saveRule({
+        id: 'helped-rule',
+        title: 'Helped Invariant Rule',
+        l0_summary: 'Ensure invariant stability',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        priority: 10,
+        tags: ['test'],
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        content: 'Helped rule content body.',
+      });
+
+      storage.saveTool(
+        {
+          id: 'hurt-tool',
+          title: 'Hurt Diagnostic Tool',
+          l0_summary: 'Diagnose workspace metrics',
+          runtime: 'node',
+          description: 'Hurt tool desc',
+          parameters: { type: 'object', properties: {} },
+        },
+        'process.exit(0);\n'
+      );
+
+      storage.saveMemory({
+        id: 'contested-mem',
+        title: 'Contested Bug Resolution',
+        l0_summary: 'Resolve race condition',
+        symptom: 'Deadlock on worker thread',
+        root_cause: 'Missing mutex release',
+        solution: 'Use scoped lock guard',
+        target_symbols: [],
+        ast_fingerprints: {},
+        tags: ['test'],
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // 2. Initialize real telemetry instance to create actual schema & record usage/outcomes
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        telemetry.syncFromDisk(true);
+
+        // Record usage and outcomes
+        telemetry.recordUsage('helped-rule', true);
+        telemetry.recordUsage('helped-rule', true);
+        telemetry.recordCapabilityOutcome('helped-rule', 'helped');
+
+        telemetry.recordUsage('hurt-tool', false);
+        telemetry.recordCapabilityOutcome('hurt-tool', 'hurt');
+
+        telemetry.recordUsage('contested-mem', true);
+        telemetry.recordCapabilityOutcome('contested-mem', 'contested');
+      } finally {
+        telemetry.close();
+      }
+
+      // 3. buildUiSnapshot must extract exact hit_count and attribution without falling back to 0 or unverified
+      const snapshot = buildUiSnapshot(ws);
+
+      const ruleItem = snapshot.rules.find((r: any) => r.id === 'helped-rule');
+      assert.ok(ruleItem, 'helped-rule must exist in snapshot');
+      assert.equal(ruleItem.hit_count, 2, 'helped-rule must have hit_count === 2');
+      assert.equal(ruleItem.attribution, 'helped', 'helped-rule attribution must be helped');
+
+      const toolItem = snapshot.tools.find((t: any) => t.id === 'hurt-tool');
+      assert.ok(toolItem, 'hurt-tool must exist in snapshot');
+      assert.equal(toolItem.hit_count, 1, 'hurt-tool must have hit_count === 1');
+      assert.equal(toolItem.attribution, 'hurt', 'hurt-tool attribution must be hurt');
+
+      const memItem = snapshot.memories.find((m: any) => m.id === 'contested-mem');
+      assert.ok(memItem, 'contested-mem must exist in snapshot');
+      assert.equal(memItem.hit_count, 1, 'contested-mem must have hit_count === 1');
+      assert.equal(memItem.attribution, 'contested', 'contested-mem attribution must be contested');
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('27. [Defect #5 Regression] syncManagedRuleBlocks byte-idempotent write guard avoids updating mtimeMs on unchanged files', () => {
+    const ws = createTempDir('sync-idempotent-test');
+    try {
+      const claudeMdPath = path.join(ws, 'CLAUDE.md');
+      const agentsMdPath = path.join(ws, 'AGENTS.md');
+      const opencodeJsonPath = path.join(ws, 'opencode.json');
+
+      fs.writeFileSync(
+        claudeMdPath,
+        '# Claude Rules\n<!-- EVO:START -->\n<!-- EVO:END -->\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        agentsMdPath,
+        '# Agents Rules\n<!-- EVO:START -->\n<!-- EVO:END -->\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        opencodeJsonPath,
+        JSON.stringify(
+          { instructions: '# OpenCode\n<!-- EVO:START -->\n<!-- EVO:END -->\n' },
+          null,
+          2
+        ) + '\n',
+        'utf8'
+      );
+
+      // First sync to establish steady state
+      syncManagedRuleBlocks(ws);
+
+      // Set mtimeMs to 60 seconds in the past
+      const pastDate = new Date(Date.now() - 60000);
+      fs.utimesSync(claudeMdPath, pastDate, pastDate);
+      fs.utimesSync(agentsMdPath, pastDate, pastDate);
+      fs.utimesSync(opencodeJsonPath, pastDate, pastDate);
+
+      const claudeStatBefore = fs.statSync(claudeMdPath);
+      const agentsStatBefore = fs.statSync(agentsMdPath);
+      const opencodeStatBefore = fs.statSync(opencodeJsonPath);
+
+      // Second sync with no rule/tool/skill changes
+      const syncedAgain = syncManagedRuleBlocks(ws);
+      assert.ok(Array.isArray(syncedAgain));
+
+      const claudeStatAfter = fs.statSync(claudeMdPath);
+      const agentsStatAfter = fs.statSync(agentsMdPath);
+      const opencodeStatAfter = fs.statSync(opencodeJsonPath);
+
+      assert.equal(
+        claudeStatAfter.mtimeMs,
+        claudeStatBefore.mtimeMs,
+        'CLAUDE.md mtimeMs must not change on idempotent sync'
+      );
+      assert.equal(
+        agentsStatAfter.mtimeMs,
+        agentsStatBefore.mtimeMs,
+        'AGENTS.md mtimeMs must not change on idempotent sync'
+      );
+      assert.equal(
+        opencodeStatAfter.mtimeMs,
+        opencodeStatBefore.mtimeMs,
+        'opencode.json mtimeMs must not change on idempotent sync'
+      );
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
     }
   });
 });

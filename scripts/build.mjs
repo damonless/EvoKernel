@@ -57,18 +57,57 @@ function syncCanonicalSeeds() {
     fs.copyFileSync(compiledDeliverable, localDeliverableToolRun);
   }
 
-  // Also sync ~/.evo/global/.evo/tools/deliverable-canonical-inspector/run.mjs if present
+  // Also sync canonical seeds to ~/.evo/global/.evo if present
   try {
-    const globalDeliverableDir = path.join(
-      os.homedir(),
-      '.evo',
-      'global',
-      '.evo',
-      'tools',
-      'deliverable-canonical-inspector'
-    );
-    if (fs.existsSync(compiledDeliverable) && fs.existsSync(globalDeliverableDir)) {
-      fs.copyFileSync(compiledDeliverable, path.join(globalDeliverableDir, 'run.mjs'));
+    const globalEvoDir = path.join(os.homedir(), '.evo', 'global', '.evo');
+    if (fs.existsSync(globalEvoDir)) {
+      // 1. Tools
+      for (const toolId of SEED_TOOLS) {
+        const globalToolDir = path.join(globalEvoDir, 'tools', toolId);
+        if (fs.existsSync(globalToolDir)) {
+          const localToolDir = path.join(evoDir, 'tools', toolId);
+          for (const f of ['run.mjs', 'manifest.json']) {
+            const srcFile = path.join(localToolDir, f);
+            if (fs.existsSync(srcFile)) {
+              fs.copyFileSync(srcFile, path.join(globalToolDir, f));
+            }
+          }
+        }
+      }
+
+      // 2. Rules (top-level SEED_RULES + matching scoped rules)
+      for (const ruleFile of SEED_RULES) {
+        const destRule = path.join(globalEvoDir, 'rules', ruleFile);
+        if (fs.existsSync(destRule)) {
+          const srcRule = path.join(evoDir, 'rules', ruleFile);
+          if (fs.existsSync(srcRule)) {
+            fs.copyFileSync(srcRule, destRule);
+          }
+        }
+      }
+      const localScopedDir = path.join(evoDir, 'rules', 'scoped');
+      const globalScopedDir = path.join(globalEvoDir, 'rules', 'scoped');
+      if (fs.existsSync(localScopedDir) && fs.existsSync(globalScopedDir)) {
+        for (const f of fs.readdirSync(localScopedDir)) {
+          if (f.endsWith('.md')) {
+            const destScoped = path.join(globalScopedDir, f);
+            if (fs.existsSync(destScoped)) {
+              fs.copyFileSync(path.join(localScopedDir, f), destScoped);
+            }
+          }
+        }
+      }
+
+      // 3. Skills
+      for (const skillId of SEED_SKILLS) {
+        const destSkillDir = path.join(globalEvoDir, 'skills', skillId);
+        if (fs.existsSync(destSkillDir)) {
+          const srcSkillFile = path.join(evoDir, 'skills', skillId, 'SKILL.md');
+          if (fs.existsSync(srcSkillFile)) {
+            fs.copyFileSync(srcSkillFile, path.join(destSkillDir, 'SKILL.md'));
+          }
+        }
+      }
     }
   } catch {
     // ignore read-only / home permission issues in restricted CI

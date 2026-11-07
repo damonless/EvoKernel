@@ -16,7 +16,7 @@ import { EvoTelemetry } from './telemetry.js';
 
 export const PARSER_VERSION = 2;
 
-const SOURCE_EXTENSIONS = new Set([
+export const SOURCE_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
   '.js',
@@ -32,6 +32,19 @@ const SOURCE_EXTENSIONS = new Set([
   '.go',
   '.rs',
   '.java',
+  '.cs',
+  '.kt',
+  '.kts',
+  '.swift',
+  '.rb',
+  '.php',
+  '.scala',
+  '.lua',
+  '.zig',
+  '.dart',
+  '.sh',
+  '.ps1',
+  '.sql',
 ]);
 
 const IGNORED_DIRS = new Set([
@@ -266,7 +279,7 @@ export function trySkipGenericAngles(masked: string, pos: number): number {
   let parenDepth = 0;
   let bracketDepth = 0;
   let braceDepth = 0;
-  const maxScan = Math.min(masked.length, pos + 500);
+  const maxScan = Math.min(masked.length, pos + 2000);
 
   for (let i = pos; i < maxScan; i++) {
     const ch = masked[i];
@@ -968,6 +981,119 @@ export function computeAstHash(code: string, ext = '.ts'): string {
   return crypto.createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
 }
 
+export function computeStructuralSkeletonHash(code: string, ext = '.ts'): string {
+  if (!code || !code.trim()) return '';
+
+  // 1. Strip comments (stripCStyleComments or Python/shell/script comments/docstrings)
+  let stripped = code;
+  if (ext === '.py') {
+    stripped = stripped
+      .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, ' ')
+      .replace(/(?:^|[ \t])#[^\r\n]*/g, ' ');
+  } else if (ext === '.sh' || ext === '.ps1' || ext === '.rb') {
+    stripped = stripped.replace(/(?:^|[ \t])#[^\r\n]*/g, ' ');
+  } else if (ext === '.sql' || ext === '.lua') {
+    stripped = stripped.replace(/--[^\r\n]*/g, ' ');
+  } else {
+    stripped = stripCStyleComments(stripped);
+  }
+
+  // 2. Replace string literals ('... ', "... ", `...`) with canonical placeholder ""
+  stripped = stripped.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/gs, '""');
+
+  // 3. Strip common diagnostic/logging lines (console.(log|debug|info|warn|error)(...), printf(...), printk(...), logging.(debug|info|warning)(...))
+  const logStartPattern = /\b(?:console\.(?:log|debug|info|warn|error)|printf|printk|logging\.(?:debug|info|warning|error))\s*\(/g;
+  let noLog = '';
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  while ((match = logStartPattern.exec(stripped)) !== null) {
+    noLog += stripped.slice(lastIdx, match.index);
+    let depth = 1;
+    let i = match.index + match[0].length;
+    while (i < stripped.length && depth > 0) {
+      const ch = stripped[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      i++;
+    }
+    while (i < stripped.length && (stripped[i] === ' ' || stripped[i] === '\t')) {
+      i++;
+    }
+    if (i < stripped.length && stripped[i] === ';') {
+      i++;
+    }
+    lastIdx = i;
+    logStartPattern.lastIndex = i;
+  }
+  noLog += stripped.slice(lastIdx);
+
+  // 4. Extract declaration signature header and structural token sequence
+  let header = '';
+  let body = '';
+  if (ext === '.py') {
+    let parenDepth = 0;
+    let colonIdx = -1;
+    for (let i = 0; i < noLog.length; i++) {
+      const ch = noLog[i];
+      if (ch === '(' || ch === '[' || ch === '{') parenDepth++;
+      else if (ch === ')' || ch === ']' || ch === '}') parenDepth = Math.max(0, parenDepth - 1);
+      else if (ch === ':' && parenDepth === 0) {
+        colonIdx = i;
+        break;
+      }
+    }
+    if (colonIdx !== -1) {
+      header = noLog.slice(0, colonIdx).trim();
+      body = noLog.slice(colonIdx + 1);
+    } else {
+      const lines = noLog.split(/\r?\n/);
+      header = lines[0]?.trim() || '';
+      body = lines.slice(1).join('\n');
+    }
+  } else {
+    let parenDepth = 0;
+    let bracketDepth = 0;
+    let braceIdx = -1;
+    for (let i = 0; i < noLog.length; i++) {
+      const ch = noLog[i];
+      if (ch === '(') parenDepth++;
+      else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
+      else if (ch === '[') bracketDepth++;
+      else if (ch === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+      else if (parenDepth === 0 && bracketDepth === 0 && ch === '{') {
+        braceIdx = i;
+        break;
+      }
+    }
+    if (braceIdx !== -1) {
+      header = noLog.slice(0, braceIdx).trim();
+      body = noLog.slice(braceIdx);
+    } else {
+      const lines = noLog.split(/\r?\n/);
+      header = lines[0]?.trim() || '';
+      body = lines.slice(1).join('\n');
+    }
+  }
+
+  const normHeader = header
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([()[],:;{}])\s*/g, '$1')
+    .trim();
+
+  // Extract structural tokens:
+  // Control-flow keywords, operators, brackets, call/member structure (.methodName( or funcName(), literals and identifiers
+  const tokenRegex = /""|(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*|[a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(|===|!==|==|!=|<=|>=|=>|->|&&|\|\||\?\?|\+\+|--|\+=|-=|\*=|\/=|%=|&=|\|=|\^=|<<=|>>=|<<|>>|\b(?:if|else|for|while|do|switch|case|default|break|continue|return|throw|try|catch|finally|await|async|yield|new|typeof|delete|void|instanceof|in|true|false|null|undefined)\b|\b\d+(?:\.\d+)?\b|\b[a-zA-Z_$][a-zA-Z0-9_$]*\b|[{}[\]();,?:+\-*\/%&|^~<>=!]/g;
+
+  const tokens: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = tokenRegex.exec(body)) !== null) {
+    tokens.push(m[0].replace(/\s+/g, ''));
+  }
+
+  const skeleton = normHeader + ' ' + tokens.join(' ');
+  return crypto.createHash('sha256').update(skeleton, 'utf8').digest('hex').slice(0, 16);
+}
+
 export interface ParsedSymbolTarget {
   raw: string;
   fileHint?: string;
@@ -1501,7 +1627,7 @@ export function findBraceBlockEnd(
             continue;
           }
           // Multiline generic support (up to 30 lines forward)
-          const lookaheadMax = Math.min(mLines.length, i + 30);
+          const lookaheadMax = Math.min(mLines.length, i + 80);
           if (lookaheadMax > i + 1) {
             const joined = mLines.slice(i, lookaheadMax).join('\n');
             const multiNextPos = trySkipGenericAngles(joined, c);
@@ -1639,12 +1765,12 @@ export function findBraceBlockEnd(
       }
     }
 
-    if (!foundBodyOpen && i - startIndex >= 60) {
+    if (!foundBodyOpen && i - startIndex >= 120) {
       return i;
     }
   }
 
-  return Math.min(lines.length - 1, startIndex + 120);
+  return Math.min(lines.length - 1, startIndex + 500);
 }
 
 export function findPythonBlockEnd(
@@ -2871,7 +2997,46 @@ export function verifyMemoryFreshness(
         }
       }
 
-      if (dualVerified) {
+      let skeletonVerified = false;
+      if (
+        !dualVerified &&
+        createdCommit &&
+        createdCommit !== 'uncommitted' &&
+        isGitCommitPresent(root, createdCommit)
+      ) {
+        try {
+          const histFp = extractSymbolFingerprintAtCommit(root, createdCommit, symKey, recorded);
+          if (histFp && (histFp.kind === live.kind || !live.kind)) {
+            const histCleanRel = histFp.file_path.replace(/\\/g, '/').replace(/^\.\/+/,'');
+            const histShowRes = spawnSync('git', ['show', `${createdCommit}:./${histCleanRel}`], {
+              cwd: root,
+              encoding: 'utf8',
+              timeout: 2000,
+              maxBuffer: 4 * 1024 * 1024,
+            });
+            if (histShowRes.status === 0 && typeof histShowRes.stdout === 'string') {
+              const histLines = histShowRes.stdout.split(/\r?\n/);
+              const histBlockCode = histLines.slice(histFp.start_line - 1, histFp.end_line).join('\n');
+              const liveFullPath = path.resolve(root, live.file_path);
+              if (fs.existsSync(liveFullPath)) {
+                const liveFullText = fs.readFileSync(liveFullPath, 'utf8');
+                const liveLines = liveFullText.split(/\r?\n/);
+                const liveBlockCode = liveLines.slice(live.start_line - 1, live.end_line).join('\n');
+                const ext = path.extname(live.file_path).toLowerCase();
+                const histSkel = computeStructuralSkeletonHash(histBlockCode, ext);
+                const liveSkel = computeStructuralSkeletonHash(liveBlockCode, ext);
+                if (histSkel && liveSkel && histSkel === liveSkel) {
+                  skeletonVerified = true;
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore git / fs error
+        }
+      }
+
+      if (dualVerified || skeletonVerified) {
         verifiedCount++;
         const lineShiftNote =
           recorded.start_line > 0 &&
@@ -2879,12 +3044,16 @@ export function verifyMemoryFreshness(
             ? ` (relocated from ${recorded.file_path}:L${recorded.start_line}-L${recorded.end_line} -> ${live.file_path}:L${live.start_line}-L${live.end_line}, AST hash intact)`
             : '';
 
+        const detailNote = skeletonVerified
+          ? `AST fingerprint verified via structural skeleton (${live.ast_hash}, control-flow skeleton intact after non-structural edit) at ${live.file_path}:L${live.start_line}-L${live.end_line}.`
+          : `AST fingerprint verified (${live.ast_hash}) at ${live.file_path}:L${live.start_line}-L${live.end_line}${lineShiftNote} (upgraded from truncated v1 hash ${recorded.ast_hash}).`;
+
         checks.push({
           symbol: symKey,
           status: 'VERIFIED',
           recorded,
           current: live,
-          detail: `AST fingerprint verified (${live.ast_hash}) at ${live.file_path}:L${live.start_line}-L${live.end_line}${lineShiftNote} (upgraded from truncated v1 hash ${recorded.ast_hash}).`,
+          detail: detailNote,
         });
 
         const callers = includeCallers

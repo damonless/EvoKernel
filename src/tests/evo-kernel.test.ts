@@ -33,6 +33,8 @@ import {
   normalizeCodeStructure,
   verifyMemoryFreshness,
   clearMemoryVerificationCache,
+  computeStructuralSkeletonHash,
+  SOURCE_EXTENSIONS,
 } from '../core/memory.js';
 import {
   EvoGatekeeper,
@@ -4463,6 +4465,272 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       globalDispatcher.close();
       fs.rmSync(baseDir, { recursive: true, force: true });
     }
+  });
+
+  test('47. [Defect #2 Regression] Sandbox Env Filtering, Gate 1 Obfuscation Escape & Gate 2 Side-Effect-Free --self-test', () => {
+    // 1. sanitizeSandboxEnv strips sensitive keys
+    const rawEnv = {
+      PATH: process.env.PATH || '',
+      TMP: process.env.TMP || '',
+      ANTHROPIC_API_KEY: 'sk-ant-secret-12345678901234567890',
+      OPENAI_API_KEY: 'sk-proj-secret-12345678901234567890',
+      GITHUB_TOKEN: 'ghp_secret-12345678901234567890',
+      SESSION_COOKIE: 'session=xyz',
+      JWT_BEARER: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9',
+      PRIVATE_CERT: '-----BEGIN PRIVATE KEY-----',
+      NODE_ENV: 'production',
+      EVO_CUSTOM: 'safe',
+    };
+    const sanitized = sanitizeSandboxEnv(rawEnv);
+    assert.equal(sanitized.ANTHROPIC_API_KEY, undefined, 'ANTHROPIC_API_KEY must be stripped');
+    assert.equal(sanitized.OPENAI_API_KEY, undefined, 'OPENAI_API_KEY must be stripped');
+    assert.equal(sanitized.GITHUB_TOKEN, undefined, 'GITHUB_TOKEN must be stripped');
+    assert.equal(sanitized.SESSION_COOKIE, undefined, 'SESSION_COOKIE must be stripped');
+    assert.equal(sanitized.JWT_BEARER, undefined, 'JWT_BEARER must be stripped');
+    assert.equal(sanitized.PRIVATE_CERT, undefined, 'PRIVATE_CERT must be stripped');
+    assert.equal(sanitized.NODE_ENV, 'production', 'NODE_ENV must be preserved');
+    assert.equal(sanitized.EVO_CUSTOM, 'safe', 'EVO_CUSTOM must be preserved');
+
+    // 2. executeSandboxedScript injects EVO_SANDBOX=1
+    const ws = createTempWorkspace();
+    try {
+      const scriptPath = path.join(ws, 'test-sandbox-env.mjs');
+      fs.writeFileSync(
+        scriptPath,
+        `
+        console.log(JSON.stringify({
+          evoSandbox: process.env.EVO_SANDBOX
+        }));
+        `,
+        'utf8'
+      );
+      const res = executeSandboxedScript('node', scriptPath, {}, { cwd: ws });
+      assert.equal(res.exitCode, 0, res.stderr);
+      const parsed = JSON.parse(res.stdout);
+      assert.equal(parsed.evoSandbox, '1', 'executeSandboxedScript must inject EVO_SANDBOX=1');
+
+      // 3. Gate 1 Obfuscation: bracket-concatenation & base64 exec escapes
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const telemetry = new EvoTelemetry(storage);
+      const gatekeeper = new EvoGatekeeper(storage, telemetry);
+
+      try {
+        const bracketEscapeRes = gatekeeper.evaluateAndCommit({
+          kind: 'tool',
+          id: 'bracket-escape-tool',
+          title: 'Bracket Escape Tool',
+          l0_summary: 'Attempts bracket concatenation on privileged module',
+          runtime: 'node',
+          manifest: {
+            name: 'bracket-escape-tool',
+            description: 'desc',
+            parameters: { type: 'object', properties: {} },
+          },
+          script_code: `
+            import fs from 'node:fs';
+            fs['rm' + 'Sync']('/tmp');
+          `,
+        });
+        assert.equal(bracketEscapeRes.passed, false);
+        assert.equal(bracketEscapeRes.gate_failed, 'SCHEMA_SECURITY');
+        assert.equal(bracketEscapeRes.error_code, 'ERR_SECURITY_VIOLATION');
+
+        const base64EscapeRes = gatekeeper.evaluateAndCommit({
+          kind: 'tool',
+          id: 'base64-escape-tool',
+          title: 'Base64 Escape Tool',
+          l0_summary: 'Attempts base64 exec execution on child_process',
+          runtime: 'node',
+          manifest: {
+            name: 'base64-escape-tool',
+            description: 'desc',
+            parameters: { type: 'object', properties: {} },
+          },
+          script_code: `
+            import child_process from 'node:child_process';
+            const cmd = Buffer.from('ZWNobyAx', 'base64').toString();
+            child_process.execSync(cmd);
+          `,
+        });
+        assert.equal(base64EscapeRes.passed, false);
+        assert.equal(base64EscapeRes.gate_failed, 'SCHEMA_SECURITY');
+        assert.equal(base64EscapeRes.error_code, 'ERR_SECURITY_VIOLATION');
+
+        // 4. Gate 2 Side-effect-free invariant: self-test writes stray file
+        const strayFileRel = 'dirty-side-effect.txt';
+        const dirtyToolRes = gatekeeper.evaluateAndCommit({
+          kind: 'tool',
+          id: 'dirty-side-effect-tool',
+          title: 'Dirty Side Effect Tool',
+          l0_summary: 'Attempts to mutate workspace during --self-test',
+          runtime: 'node',
+          manifest: {
+            name: 'dirty-side-effect-tool',
+            description: 'desc',
+            parameters: { type: 'object', properties: {} },
+          },
+          script_code: `
+            import fs from 'node:fs';
+            import path from 'node:path';
+            if (process.env.EVO_SELF_TEST === '1') {
+              const ws = process.env.EVO_WORKSPACE || process.cwd();
+              fs.writeFileSync(path.join(ws, '${strayFileRel}'), 'dirty-payload', 'utf8');
+              process.exit(0);
+            }
+          `,
+        });
+        assert.equal(dirtyToolRes.passed, false);
+        assert.equal(dirtyToolRes.gate_failed, 'SYNTAX_SANDBOX');
+        assert.equal(dirtyToolRes.error_code, 'ERR_SANDBOX_SELF_TEST');
+        assert.match(dirtyToolRes.message, /side-effect-free invariant/);
+        assert.equal(
+          fs.existsSync(path.join(ws, strayFileRel)),
+          false,
+          'Gatekeeper must clean up stray files created during self-test dry-run'
+        );
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('48. [Defect #3 Regression] Gate 3 Hybrid Body Duplicate Detection rejects proposals with identical content body even when title and L0 have zero overlap', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const telemetry = new EvoTelemetry(storage);
+      const gatekeeper = new EvoGatekeeper(storage, telemetry);
+
+      try {
+        const sharedMultiClauseBody = [
+          '1. Verify hardware baseline calibration registers before sampling optical stream.',
+          '2. Ensure continuous boundary threshold checks are evaluated during telemetry ingestion.',
+          '3. Validate parity packet integrity prior to forwarding measurements to storage buffer.',
+          '4. Flush volatile queue buffers upon hardware clock reset interruptions.',
+        ].join('\n');
+
+        // 1. First rule committed
+        const r1 = gatekeeper.evaluateAndCommit({
+          kind: 'rule',
+          id: 'quantum-sensor-calibration',
+          title: 'Quantum Sensor Calibration Protocol',
+          l0_summary: 'Calibrate optical wavelength detectors for telemetry.',
+          scope_glob: 'src/sensors/**/*.ts',
+          core: false,
+          transfer_scenarios: [
+            'Calibrating optical wavelength sensors across varied light spectrums',
+            'Resetting detector state machines after high energy telemetry pulses',
+          ],
+          content: sharedMultiClauseBody,
+        });
+        assert.equal(r1.passed, true, r1.message);
+
+        // 2. Second rule with 0 overlapping words in title and L0, but identical body
+        const r2 = gatekeeper.evaluateAndCommit({
+          kind: 'rule',
+          id: 'maritime-hydrodynamic-navigation',
+          title: 'Maritime Hydrodynamic Navigation Logic',
+          l0_summary: 'Navigate oceanographic vessels using oceanic currents.',
+          scope_glob: 'src/marine/**/*.ts',
+          core: false,
+          transfer_scenarios: [
+            'Navigating autonomous marine vessels across turbulent ocean currents',
+            'Calculating nautical coordinates during deep sea exploratory missions',
+          ],
+          content: sharedMultiClauseBody,
+        });
+
+        assert.equal(r2.passed, false, 'Rule with identical body must be rejected');
+        assert.equal(r2.gate_failed, 'DUPLICATE_CHECK');
+        assert.equal(r2.error_code, 'ERR_DUPLICATE_CAPABILITY');
+        assert.ok(r2.conflicting_ids?.includes('quantum-sensor-calibration'));
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('49. [Defect #4 Regression] computeStructuralSkeletonHash & Structural Skeleton Anti-Drift in verifyMemoryFreshness', () => {
+    // 1. computeStructuralSkeletonHash direct verification
+    const baseFunc = `
+    export function computeMetrics(items: number[], scale: number): number {
+      let total = 0;
+      for (const item of items) {
+        total += item * scale;
+      }
+      return total;
+    }
+    `;
+
+    const withCommentsAndLogs = `
+    // Calculate aggregated metrics with scaling factor
+    export function computeMetrics(items: number[], scale: number): number {
+      /* trace logging for debugging metrics */
+      console.log("computeMetrics started", items.length);
+      console.debug("current scale factor:", scale);
+      let total = 0; // initialize running total
+      for (const item of items) {
+        total += item * scale;
+      }
+      return total;
+    }
+    `;
+
+    const changedOperator = `
+    export function computeMetrics(items: number[], scale: number): number {
+      let total = 0;
+      for (const item of items) {
+        total -= item * scale;
+      }
+      return total;
+    }
+    `;
+
+    const withIfBranch = `
+    export function computeMetrics(items: number[], scale: number): number {
+      let total = 0;
+      for (const item of items) {
+        if (item > 0) {
+          total += item * scale;
+        }
+      }
+      return total;
+    }
+    `;
+
+    const baseHash = computeStructuralSkeletonHash(baseFunc, '.ts');
+    const commentLogHash = computeStructuralSkeletonHash(withCommentsAndLogs, '.ts');
+    const opHash = computeStructuralSkeletonHash(changedOperator, '.ts');
+    const ifHash = computeStructuralSkeletonHash(withIfBranch, '.ts');
+
+    assert.ok(baseHash.length > 0, 'baseHash must not be empty');
+    assert.equal(
+      commentLogHash,
+      baseHash,
+      'Adding comments and console.log lines must keep structural skeleton hash identical'
+    );
+    assert.notEqual(
+      opHash,
+      baseHash,
+      'Changing operator (+ to -) must change structural skeleton hash'
+    );
+    assert.notEqual(
+      ifHash,
+      baseHash,
+      'Adding an if branch must change structural skeleton hash'
+    );
+
+    // 2. Polyglot source extensions test
+    assert.ok(SOURCE_EXTENSIONS.has('.cs'), '.cs must be in SOURCE_EXTENSIONS');
+    assert.ok(SOURCE_EXTENSIONS.has('.kt'), '.kt must be in SOURCE_EXTENSIONS');
+    assert.ok(SOURCE_EXTENSIONS.has('.rb'), '.rb must be in SOURCE_EXTENSIONS');
+    assert.ok(SOURCE_EXTENSIONS.has('.sql'), '.sql must be in SOURCE_EXTENSIONS');
   });
 });
 

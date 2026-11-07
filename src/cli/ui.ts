@@ -63,12 +63,31 @@ export function buildUiSnapshot(
 
     if (db) {
       try {
-        const rows = db.prepare(
-          'SELECT id, hit_count, helped_count, hurt_count, contested FROM telemetry'
-        ).all() as any[];
+        let rows: any[] = [];
+        try {
+          rows = db.prepare(
+            'SELECT id, hit_count, helped_count, hurt_count, contested_count FROM telemetry'
+          ).all() as any[];
+        } catch {
+          rows = db.prepare(
+            'SELECT id, hit_count, helped_count, hurt_count FROM telemetry'
+          ).all() as any[];
+        }
         for (const r of rows) {
-          const h = r.hit_count || 0;
-          const attr = r.contested ? 'contested' : (r.hurt_count > r.helped_count ? 'hurt' : (r.helped_count > 0 ? 'helped' : 'unverified'));
+          const h = Number(r.hit_count || 0);
+          const helped = Number(r.helped_count || 0);
+          const hurt = Number(r.hurt_count || 0);
+          const contested = Number(r.contested_count ?? r.contested ?? 0);
+          const attr =
+            contested > 0 && contested >= helped
+              ? 'contested'
+              : hurt > helped
+                ? 'hurt'
+                : helped > 0
+                  ? 'helped'
+                  : contested > 0
+                    ? 'contested'
+                    : 'unverified';
           telemMap.set(r.id, { hit_count: h, attribution: attr });
         }
       } catch {}

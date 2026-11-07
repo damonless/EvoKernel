@@ -5,10 +5,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
   EvoKind,
+  EvoMemory,
   ProposalPayload,
 } from './types.js';
 import { EvoStorage, sanitizeId } from './storage.js';
 import { EvoTelemetry } from './telemetry.js';
+import { verifyMemoryFreshness } from './memory.js';
 import { EvoGatekeeper } from './gatekeeper.js';
 import { inspectDeliverable } from './deliverable.js';
 import { matchesScopeGlob } from '../cli/hook.js';
@@ -1347,6 +1349,8 @@ export interface ProbeWorktreeOptions {
   basePassed?: boolean;
   worktreeSetupCmd?: string;
   trajectories?: string[];
+  reusableWorktreeDir?: string;
+  keepWorktreeForReuse?: boolean;
 }
 
 export interface CandidateProbeResult {
@@ -1395,10 +1399,12 @@ export function probeCandidateInWorktree(
   options: ProbeWorktreeOptions
 ): CandidateProbeResult {
   const wsRoot = path.resolve(options.workspaceRoot);
-  const wtContainer = path.join(
-    os.tmpdir(),
-    `evo-wt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  );
+  const wtContainer = options.reusableWorktreeDir
+    ? path.resolve(options.reusableWorktreeDir)
+    : path.join(
+        os.tmpdir(),
+        `evo-wt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      );
   const wtDir = path.join(wtContainer, 'repo');
   fs.mkdirSync(wtContainer, { recursive: true });
 
@@ -1788,23 +1794,30 @@ export function probeCandidateInWorktree(
         // ignore junction unmount failure
       }
     }
-    if (usedGitWorktree) {
-      child_process.spawnSync('git', ['worktree', 'remove', '--force', wtDir], {
-        cwd: wsRoot,
-        encoding: 'utf8',
-      });
-      child_process.spawnSync('git', ['worktree', 'prune'], {
-        cwd: wsRoot,
-        encoding: 'utf8',
-      });
-    }
-
-    if (fs.existsSync(wtContainer)) {
-      try {
-        fs.rmSync(wtContainer, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      } catch {
-        // ignore residual cleanup errors
+    if (!options.keepWorktreeForReuse) {
+      if (usedGitWorktree) {
+        child_process.spawnSync('git', ['worktree', 'remove', '--force', wtDir], {
+          cwd: wsRoot,
+          encoding: 'utf8',
+        });
+        child_process.spawnSync('git', ['worktree', 'prune'], {
+          cwd: wsRoot,
+          encoding: 'utf8',
+        });
       }
+
+      if (fs.existsSync(wtContainer)) {
+        try {
+          fs.rmSync(wtContainer, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        } catch {
+          // ignore residual cleanup errors
+        }
+      }
+    } else if (usedGitWorktree) {
+      try {
+        child_process.spawnSync('git', ['reset', '--hard', 'HEAD'], { cwd: wtDir, encoding: 'utf8' });
+        child_process.spawnSync('git', ['clean', '-fdx'], { cwd: wtDir, encoding: 'utf8' });
+      } catch {}
     }
   }
 }
@@ -1884,6 +1897,50 @@ export function runOptimizationCycle(
       };
     }
 
+    // Deterministic Endogenous Maintenance Pass
+    let archivedMemoriesCount = 0;
+    try {
+      const storage = new EvoStorage(wsRoot);
+      const activeMemories = storage.listMemories();
+      const orphanedMemoriesToArchive: EvoMemory[] = [];
+
+      for (const mem of activeMemories) {
+        const report = verifyMemoryFreshness(wsRoot, mem, { includeCallers: false });
+        if (report.overall_status === 'STALE') {
+          const allMissing =
+            report.checks.length > 0 &&
+            report.checks.every((c) => c.status === 'MISSING');
+          if (allMissing) {
+            orphanedMemoriesToArchive.push(mem);
+          }
+        }
+      }
+
+      if (orphanedMemoriesToArchive.length > 0 && !options.dryRun && options.apply) {
+        for (const mem of orphanedMemoriesToArchive) {
+          storage.archiveCapability(
+            mem.id,
+            'memory',
+            'Endogenous optimization: archived orphaned STALE memory with missing symbols'
+          );
+          archivedMemoriesCount++;
+        }
+        try {
+          const telemetry = new EvoTelemetry(storage);
+          try {
+            telemetry.syncFromDisk(true);
+          } finally {
+            telemetry.close();
+          }
+        } catch {}
+      }
+    } catch {}
+
+    const applied = archivedMemoriesCount > 0;
+    const notes = applied
+      ? `Endogenous optimization: archived ${archivedMemoriesCount} orphaned STALE memory(ies) with missing symbols.`
+      : 'External --proposer-cmd is required for automated candidate execution; prepared OPTIMIZE_SPEC.md context.';
+
     return {
       runId: prep.runId,
       workspaceRoot: wsRoot,
@@ -1896,10 +1953,17 @@ export function runOptimizationCycle(
       trajectoriesAnalyzed: (options.trajectories || []).length,
       deliverablesInspected: (options.deliverables || []).length,
       candidates: [],
-      applied: false,
-      notes: 'External --proposer-cmd is required for automated candidate execution; prepared OPTIMIZE_SPEC.md context.',
+      applied,
+      notes,
     };
   }
+
+  try {
+    child_process.spawnSync('git', ['worktree', 'prune'], {
+      cwd: wsRoot,
+      encoding: 'utf8',
+    });
+  } catch {}
 
   // 1. Establish baseline probe score if probeCmd is provided
   let baseScore: number | undefined;

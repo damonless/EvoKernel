@@ -285,7 +285,9 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
       const current = fs.readFileSync(fullPath, 'utf8');
       if (current.includes(META_RULE_MARKER_START)) {
         const next = upsertMarkerBlock(current, block);
-        fs.writeFileSync(fullPath, next, 'utf8');
+        if (next !== current) {
+          fs.writeFileSync(fullPath, next, 'utf8');
+        }
         updated.push(relPath);
       }
     }
@@ -295,10 +297,17 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   if (fs.existsSync(opencodePath)) {
     try {
       if (fs.statSync(opencodePath).isFile()) {
-        const parsed = JSON.parse(fs.readFileSync(opencodePath, 'utf8'));
+        const rawJson = fs.readFileSync(opencodePath, 'utf8');
+        const parsed = JSON.parse(rawJson);
         if (typeof parsed.instructions === 'string' && parsed.instructions.includes(META_RULE_MARKER_START)) {
-          parsed.instructions = upsertMarkerBlock(parsed.instructions, block);
-          fs.writeFileSync(opencodePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+          const next = upsertMarkerBlock(parsed.instructions, block);
+          if (next !== parsed.instructions) {
+            parsed.instructions = next;
+            const serialized = JSON.stringify(parsed, null, 2) + '\n';
+            if (serialized !== rawJson) {
+              fs.writeFileSync(opencodePath, serialized, 'utf8');
+            }
+          }
           updated.push('opencode.json');
         }
         if (Array.isArray(parsed.instructions)) {
@@ -311,7 +320,9 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
                   const current = fs.readFileSync(customFullPath, 'utf8');
                   if (current.includes(META_RULE_MARKER_START)) {
                     const next = upsertMarkerBlock(current, block);
-                    fs.writeFileSync(customFullPath, next, 'utf8');
+                    if (next !== current) {
+                      fs.writeFileSync(customFullPath, next, 'utf8');
+                    }
                     updated.push(relCustom);
                   }
                 }
@@ -327,7 +338,9 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
               const current = fs.readFileSync(customFullPath, 'utf8');
               if (current.includes(META_RULE_MARKER_START)) {
                 const next = upsertMarkerBlock(current, block);
-                fs.writeFileSync(customFullPath, next, 'utf8');
+                if (next !== current) {
+                  fs.writeFileSync(customFullPath, next, 'utf8');
+                }
                 updated.push(relCustom);
               }
             }
@@ -742,7 +755,10 @@ export function runInit(
       if (fs.statSync(pluginRulesAgents).isFile()) {
         const current = fs.readFileSync(pluginRulesAgents, 'utf8');
         if (current.includes(META_RULE_MARKER_START)) {
-          fs.writeFileSync(pluginRulesAgents, upsertMarkerBlock(current, managedBlock), 'utf8');
+          const next = upsertMarkerBlock(current, managedBlock);
+          if (next !== current) {
+            fs.writeFileSync(pluginRulesAgents, next, 'utf8');
+          }
           updatedFilesList.push('rules/AGENTS.md');
         }
       }
