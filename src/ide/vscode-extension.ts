@@ -19,7 +19,7 @@ import {
   resolveCurrentGitCommit,
   verifyMemoryFreshness,
 } from '../core/memory.js';
-import { executeSandboxedScript } from '../core/sandbox.js';
+import { executeSandboxedScriptAsync } from '../core/sandbox.js';
 import { syncManagedRuleBlocks } from '../cli/init.js';
 import { isSubpathOf } from '../mcp/handlers.js';
 
@@ -333,7 +333,7 @@ export async function handleWebviewAction(
           return { ok: false, error: `Not Found: Tool script "${tool.script_path}" not found` };
         }
 
-        const execResult = executeSandboxedScript(
+        const execResult = await executeSandboxedScriptAsync(
           tool.runtime,
           tool.script_path,
           {},
@@ -718,6 +718,9 @@ export async function handleWebviewAction(
             : { meta: {} as Record<string, unknown>, body: rawContent.trim() };
 
         let payload: ProposalPayload;
+        let preservedEnabled = true;
+        let preservedReviewStatus: 'pending' | 'approved' = 'pending';
+
         if (rawKind === 'rule') {
           const existingRule = storage.getRule(cleanId);
           const corePath = path.join(storage.rulesDir, `${cleanId}.md`);
@@ -728,15 +731,34 @@ export async function handleWebviewAction(
           }
           const isCore =
             meta.core !== undefined ? Boolean(meta.core === true || meta.core === 'true') : existingRule.core;
+          const scopeGlob = meta.scope_glob ? String(meta.scope_glob).trim() : existingRule.scope_glob;
           const rawScenarios = Array.isArray(meta.transfer_scenarios)
             ? meta.transfer_scenarios.map(String).filter(Boolean)
             : (existingRule.transfer_scenarios || []);
+          const transferScenarios =
+            rawScenarios.length >= 2
+              ? rawScenarios
+              : !isCore
+                ? ['Module boundary enforcement', 'Cross-component invariant check']
+                : undefined;
+
+          preservedEnabled =
+            meta.enabled !== undefined
+              ? meta.enabled === false || meta.enabled === 'false'
+                ? false
+                : true
+              : existingRule.enabled;
+          preservedReviewStatus =
+            meta.review_status === 'pending' || meta.review_status === 'approved'
+              ? meta.review_status
+              : existingRule.review_status;
+
           payload = {
             kind: 'rule',
             id: cleanId,
             title: meta.title ? String(meta.title).trim() : existingRule.title,
             l0_summary: meta.l0_summary ? String(meta.l0_summary).trim() : existingRule.l0_summary,
-            scope_glob: meta.scope_glob ? String(meta.scope_glob).trim() : existingRule.scope_glob,
+            scope_glob: scopeGlob,
             core: isCore,
             priority:
               meta.priority !== undefined && Number.isFinite(Number(meta.priority))
@@ -746,17 +768,15 @@ export async function handleWebviewAction(
               meta.confidence && ['high', 'medium', 'low', 'confounded'].includes(String(meta.confidence))
                 ? (String(meta.confidence) as ConfidenceLevel)
                 : existingRule.confidence,
-            transfer_scenarios:
-              rawScenarios.length >= 2
-                ? rawScenarios
-                : !isCore
-                  ? ['Module boundary enforcement', 'Cross-component invariant check']
-                  : undefined,
+            contrastive_evidence: meta.contrastive_evidence
+              ? String(meta.contrastive_evidence)
+              : existingRule.contrastive_evidence,
+            transfer_scenarios: transferScenarios,
             content: body.trim(),
             origin: meta.origin ? String(meta.origin) : (existingRule.origin || 'session'),
             supersedes_id: cleanId,
-            enabled: existingRule.enabled,
-            review_status: existingRule.review_status,
+            enabled: preservedEnabled,
+            review_status: preservedReviewStatus,
           };
         } else if (rawKind === 'skill') {
           const existingSkill = storage.getSkill(cleanId);
@@ -767,12 +787,32 @@ export async function handleWebviewAction(
           const trimmedBody = body.trim();
           const l1Match = trimmedBody.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
           const l2Match = trimmedBody.match(/## L2 SOP\s+([\s\S]*)$/i);
-          const skillTitle = String(meta.title || meta.name || existingSkill.title || existingSkill.name || cleanId).trim();
+          const l1_contract =
+            l1Match && l1Match[1].trim()
+              ? l1Match[1].trim()
+              : (existingSkill.l1_contract || 'Standard skill contract');
+          const l2_sop = l2Match && l2Match[1].trim() ? l2Match[1].trim() : trimmedBody;
+
+          preservedEnabled =
+            meta.enabled !== undefined
+              ? meta.enabled === false || meta.enabled === 'false'
+                ? false
+                : true
+              : existingSkill.enabled;
+          preservedReviewStatus =
+            meta.review_status === 'pending' || meta.review_status === 'approved'
+              ? meta.review_status
+              : existingSkill.review_status;
+
+          const skillTitle = String(
+            meta.title || meta.name || existingSkill.title || existingSkill.name || cleanId
+          ).trim();
           const skillL0 = meta.l0_summary
             ? String(meta.l0_summary).trim()
             : meta.description
               ? String(meta.description).trim()
               : (existingSkill.l0_summary || existingSkill.description || cleanId).trim().slice(0, 140);
+
           payload = {
             kind: 'skill',
             id: cleanId,
@@ -780,14 +820,24 @@ export async function handleWebviewAction(
             title: skillTitle,
             description: String(meta.description || skillL0).trim(),
             l0_summary: skillL0,
-            l1_contract: l1Match && l1Match[1].trim() ? l1Match[1].trim() : (existingSkill.l1_contract || 'Standard skill contract'),
-            l2_sop: l2Match && l2Match[1].trim() ? l2Match[1].trim() : trimmedBody,
+            l1_contract,
+            l2_sop,
             tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingSkill.tags,
-            trigger_cue: existingSkill.trigger_cue,
+            trigger_cue:
+              meta.trigger_cue !== undefined && String(meta.trigger_cue).trim()
+                ? String(meta.trigger_cue).trim()
+                : existingSkill.trigger_cue,
+            confidence:
+              meta.confidence && ['high', 'medium', 'low', 'confounded'].includes(String(meta.confidence))
+                ? (String(meta.confidence) as ConfidenceLevel)
+                : existingSkill.confidence,
+            contrastive_evidence: meta.contrastive_evidence
+              ? String(meta.contrastive_evidence)
+              : existingSkill.contrastive_evidence,
             origin: meta.origin ? String(meta.origin) : (existingSkill.origin || 'session'),
             supersedes_id: cleanId,
-            enabled: existingSkill.enabled,
-            review_status: existingSkill.review_status,
+            enabled: preservedEnabled,
+            review_status: preservedReviewStatus,
           };
         } else if (rawKind === 'memory') {
           const existingMem = storage.getMemory(cleanId);
@@ -799,31 +849,61 @@ export async function handleWebviewAction(
           const symptomMatch = trimmedBody.match(/## Symptom\s+([\s\S]*?)(?=## Root Cause|$)/i);
           const rootCauseMatch = trimmedBody.match(/## Root Cause\s+([\s\S]*?)(?=## Solution|$)/i);
           const solutionMatch = trimmedBody.match(/## Solution\s+([\s\S]*)$/i);
+          const symptom =
+            symptomMatch && symptomMatch[1].trim()
+              ? symptomMatch[1].trim()
+              : !rootCauseMatch && !solutionMatch && trimmedBody
+                ? trimmedBody
+                : (existingMem.symptom || 'Observed symptom');
+          const root_cause =
+            rootCauseMatch && rootCauseMatch[1].trim()
+              ? rootCauseMatch[1].trim()
+              : (existingMem.root_cause || 'Diagnosed root cause');
+          const solution =
+            solutionMatch && solutionMatch[1].trim()
+              ? solutionMatch[1].trim()
+              : (existingMem.solution || 'Verified solution');
+
+          preservedEnabled =
+            meta.enabled !== undefined
+              ? meta.enabled === false || meta.enabled === 'false'
+                ? false
+                : true
+              : existingMem.enabled;
+          preservedReviewStatus =
+            meta.review_status === 'pending' || meta.review_status === 'approved'
+              ? meta.review_status
+              : existingMem.review_status;
+
           payload = {
             kind: 'memory',
             id: cleanId,
             title: meta.title ? String(meta.title).trim() : (existingMem.title || cleanId),
-            l0_summary: meta.l0_summary ? String(meta.l0_summary).trim() : (existingMem.l0_summary || cleanId),
-            symptom:
-              symptomMatch && symptomMatch[1].trim()
-                ? symptomMatch[1].trim()
-                : !rootCauseMatch && !solutionMatch && trimmedBody
-                  ? trimmedBody
-                  : (existingMem.symptom || 'Observed symptom'),
-            root_cause: rootCauseMatch && rootCauseMatch[1].trim() ? rootCauseMatch[1].trim() : (existingMem.root_cause || 'Diagnosed root cause'),
-            solution: solutionMatch && solutionMatch[1].trim() ? solutionMatch[1].trim() : (existingMem.solution || 'Verified solution'),
-            target_symbols: existingMem.target_symbols,
-            tags: existingMem.tags,
-            origin: existingMem.origin || 'session',
+            l0_summary: meta.l0_summary
+              ? String(meta.l0_summary).trim()
+              : (existingMem.l0_summary || cleanId),
+            symptom,
+            root_cause,
+            solution,
+            target_symbols:
+              Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
+                ? meta.target_symbols.map(String)
+                : existingMem.target_symbols,
+            tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
+            origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
             supersedes_id: cleanId,
-            enabled: existingMem.enabled,
-            review_status: existingMem.review_status,
+            enabled: preservedEnabled,
+            review_status: preservedReviewStatus,
           };
         } else {
           const tool = storage.getTool(cleanId);
           if (!tool || !fs.existsSync(tool.script_path) || !isSubpathOf(ws, tool.script_path)) {
             return { ok: false, error: `Not Found: Tool "${cleanId}" not found` };
           }
+
+          preservedEnabled = tool.enabled;
+          preservedReviewStatus = tool.review_status;
+
           payload = {
             kind: 'tool',
             id: cleanId,
@@ -838,8 +918,8 @@ export async function handleWebviewAction(
             tags: tool.tags,
             origin: tool.origin || 'session',
             supersedes_id: cleanId,
-            enabled: tool.enabled,
-            review_status: tool.review_status,
+            enabled: preservedEnabled,
+            review_status: preservedReviewStatus,
           };
         }
 

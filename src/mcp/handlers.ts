@@ -312,9 +312,10 @@ export class EvoMcpDispatcher {
       }
       let maxMtime = 0;
       let entryCount = 0;
+      let hasUnscannedDeepDir = false;
       const maxEntries = 400;
       const scanDir = (dir: string, depth: number) => {
-        if (depth > 4 || entryCount > maxEntries) return;
+        if (depth > 8 || entryCount > maxEntries) return;
         let entries: fs.Dirent[];
         try {
           entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -340,8 +341,12 @@ export class EvoMcpDispatcher {
           try {
             const st = fs.statSync(full);
             if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
-            if (e.isDirectory() && depth < 4) {
-              scanDir(full, depth + 1);
+            if (e.isDirectory()) {
+              if (depth < 8) {
+                scanDir(full, depth + 1);
+              } else {
+                hasUnscannedDeepDir = true;
+              }
             }
           } catch {
             // ignore
@@ -349,7 +354,7 @@ export class EvoMcpDispatcher {
         }
       };
       scanDir(workspaceRoot, 0);
-      if (entryCount > maxEntries) {
+      if (entryCount > maxEntries || hasUnscannedDeepDir) {
         return '';
       }
       parts.push(`tree:${entryCount}:${maxMtime}`);

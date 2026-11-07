@@ -2,15 +2,15 @@
 id: ux-audit-fabricated-fallbacks-and-pages-leak
 title: "UX audit: fabricated fallback metrics, Pages snapshot leak, dead narrow-screen inspector"
 l0_summary: "UX audit: invented fallback KPIs, --anon export leaking script paths/local skills, inspector drawer never opened by JS."
-created_commit: "0d6f4e2"
+created_commit: "3d3bf4e"
 created_branch: "main"
 target_symbols: ["src/templates/ui-client.ts#renderUiClientHtml","src/cli/visualizer.ts#renderEvoStats","src/cli/ui.ts#buildUiSnapshot","src/cli/index.ts#runCli"]
-ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":4157,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"8bef09b8c1e03562"},"src/cli/visualizer.ts#renderEvoStats":{"symbol":"src/cli/visualizer.ts#renderEvoStats","file_path":"src/cli/visualizer.ts","file":"src/cli/visualizer.ts","kind":"function","start_line":119,"end_line":192,"signature":"export function renderEvoStats(workspaceRoot: string): string","ast_hash":"15641d8bc139972f"},"src/cli/ui.ts#buildUiSnapshot":{"symbol":"src/cli/ui.ts#buildUiSnapshot","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":37,"end_line":132,"signature":"export function buildUiSnapshot(","ast_hash":"5420fa2467a2c52e"},"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":586,"end_line":1158,"signature":"export function runCli(argv: string[]): void","ast_hash":"131ce4fb5aa632e4"}}
+ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":4157,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"8bef09b8c1e03562"},"src/cli/visualizer.ts#renderEvoStats":{"symbol":"src/cli/visualizer.ts#renderEvoStats","file_path":"src/cli/visualizer.ts","file":"src/cli/visualizer.ts","kind":"function","start_line":119,"end_line":192,"signature":"export function renderEvoStats(workspaceRoot: string): string","ast_hash":"15641d8bc139972f"},"src/cli/ui.ts#buildUiSnapshot":{"symbol":"src/cli/ui.ts#buildUiSnapshot","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":37,"end_line":134,"signature":"export function buildUiSnapshot(","ast_hash":"2a6437d7829ab28c"},"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":586,"end_line":1158,"signature":"export function runCli(argv: string[]): void","ast_hash":"131ce4fb5aa632e4"}}
 tags: ["ux","workbench","trust","pages","cli","audit"]
 origin: "evolved"
 review_status: "pending"
 created_at: "2026-11-07T18:55:36.052Z"
-updated_at: "2026-11-07T18:55:36.052Z"
+updated_at: "2026-11-07T19:43:07.562Z"
 ---
 
 ## Symptom

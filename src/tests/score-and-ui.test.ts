@@ -21,6 +21,8 @@ import {
 } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import { runInit, runUninstall, mountIdeExtensions, syncManagedRuleBlocks } from '../cli/init.js';
+import { handleWebviewAction } from '../ide/vscode-extension.js';
+import { resolveCurrentGitCommit, resolveCurrentGitBranch } from '../core/memory.js';
 import { redactSensitiveDiagnostics, EvoTelemetry } from '../core/telemetry.js';
 import { EvoStorage } from '../core/storage.js';
 
@@ -1927,6 +1929,181 @@ Widget issue
         opencodeStatAfter.mtimeMs,
         opencodeStatBefore.mtimeMs,
         'opencode.json mtimeMs must not change on idempotent sync'
+      );
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('28. [Issue #27 Item 2] handleWebviewAction update-content frontmatter parity and memory created_commit/created_branch preservation', async () => {
+    const ws = createTempDir('vscode-update-parity');
+    try {
+      // 1. Initialize git repo and create a source file
+      spawnSync('git', ['init'], { cwd: ws });
+      spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws });
+      spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: ws });
+
+      const srcDir = path.join(ws, 'src');
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(srcDir, 'calc.ts'),
+        'export function calc(x: number) { return x * 2; }\n',
+        'utf8'
+      );
+      spawnSync('git', ['add', '.'], { cwd: ws });
+      spawnSync('git', ['commit', '-m', 'Initial commit'], { cwd: ws });
+
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // 2. Create memory with explicit created_commit & created_branch
+      const oldCommit = 'abc1234567890abcdef1234567890abcdef1234';
+      const oldBranch = 'feature/legacy-anchor';
+      storage.saveMemory({
+        id: 'parity-mem',
+        title: 'Initial Memory Title',
+        l0_summary: 'Initial L0 summary for memory',
+        symptom: 'Calculation overflow on large input',
+        root_cause: 'Missing boundary check in calc',
+        solution: 'Clamp input values before multiplying',
+        target_symbols: ['calc'],
+        ast_fingerprints: {},
+        tags: ['math', 'overflow'],
+        created_commit: oldCommit,
+        created_branch: oldBranch,
+        enabled: true,
+        review_status: 'pending',
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // 3. Create skill with initial metadata
+      storage.saveSkill({
+        id: 'parity-skill',
+        name: 'Parity Skill',
+        title: 'Parity Skill',
+        description: 'Initial skill description',
+        l0_summary: 'Initial skill L0',
+        trigger_phrases: ['run parity'],
+        trigger_cue: 'Initial trigger cue',
+        confidence: 'low',
+        contrastive_evidence: 'src/calc.ts:calc evidence',
+        l1_contract: 'Initial L1 contract details',
+        l2_sop: 'Initial L2 SOP details',
+        enabled: true,
+        review_status: 'pending',
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // 4. Create second git commit so HEAD advances
+      fs.writeFileSync(path.join(ws, 'second.txt'), 'advance commit\n', 'utf8');
+      spawnSync('git', ['add', '.'], { cwd: ws });
+      spawnSync('git', ['commit', '-m', 'Second commit'], { cwd: ws });
+      const secondCommit = resolveCurrentGitCommit(ws);
+      assert.notEqual(secondCommit, oldCommit);
+
+      // 5. Update Memory via handleWebviewAction with frontmatter edits and solution update
+      const memUpdateContent = [
+        '---',
+        'enabled: false',
+        'review_status: approved',
+        'tags: ["math", "clamping", "hardened"]',
+        'target_symbols: ["calc"]',
+        '---',
+        '## Symptom',
+        'Calculation overflow on large input',
+        '## Root Cause',
+        'Missing boundary check in calc',
+        '## Solution',
+        'Use Math.min and Math.max to clamp input values securely.',
+      ].join('\n');
+
+      const memUpdateRes = await handleWebviewAction(
+        'update-content',
+        {
+          kind: 'memory',
+          id: 'parity-mem',
+          content: memUpdateContent,
+        },
+        ws
+      );
+      assert.equal(memUpdateRes.ok, true, memUpdateRes.error);
+
+      const updatedMem = storage.getMemory('parity-mem');
+      assert.ok(updatedMem, 'Memory must exist after update');
+      assert.equal(updatedMem.enabled, false, 'Frontmatter enabled: false must be preserved');
+      assert.equal(updatedMem.review_status, 'approved', 'Frontmatter review_status: approved must be preserved');
+      assert.deepEqual(updatedMem.tags, ['math', 'clamping', 'hardened'], 'Frontmatter tags array must be preserved');
+      assert.deepEqual(updatedMem.target_symbols, ['calc'], 'Target symbols must be preserved');
+      assert.equal(
+        updatedMem.solution,
+        'Use Math.min and Math.max to clamp input values securely.',
+        'Solution text must be updated'
+      );
+      assert.equal(
+        updatedMem.created_commit,
+        oldCommit,
+        'created_commit must be preserved when target_symbols are unchanged'
+      );
+      assert.equal(
+        updatedMem.created_branch,
+        oldBranch,
+        'created_branch must be preserved when target_symbols are unchanged'
+      );
+
+      // 6. Update Skill via handleWebviewAction with frontmatter edits
+      const skillUpdateContent = [
+        '---',
+        'enabled: false',
+        'review_status: approved',
+        'trigger_cue: Execute hardened arithmetic verification workflow',
+        'confidence: high',
+        'contrastive_evidence: src/calc.ts:calc hardened boundary pattern',
+        '---',
+        '## L1 Contract',
+        'Hardened contract for numeric calculation.',
+        '## L2 SOP',
+        '1. Verify inputs.\n2. Execute bounded calculation.',
+      ].join('\n');
+
+      const skillUpdateRes = await handleWebviewAction(
+        'update-content',
+        {
+          kind: 'skill',
+          id: 'parity-skill',
+          content: skillUpdateContent,
+        },
+        ws
+      );
+      assert.equal(skillUpdateRes.ok, true, skillUpdateRes.error);
+
+      const updatedSkill = storage.getSkill('parity-skill');
+      assert.ok(updatedSkill, 'Skill must exist after update');
+      assert.equal(updatedSkill.enabled, false, 'Skill enabled: false must be preserved');
+      assert.equal(updatedSkill.review_status, 'approved', 'Skill review_status: approved must be preserved');
+      assert.equal(
+        updatedSkill.trigger_cue,
+        'Execute hardened arithmetic verification workflow',
+        'Skill trigger_cue must be preserved'
+      );
+      assert.equal(updatedSkill.confidence, 'high', 'Skill confidence must be preserved');
+      assert.equal(
+        updatedSkill.contrastive_evidence,
+        'src/calc.ts:calc hardened boundary pattern',
+        'Skill contrastive_evidence must be preserved'
+      );
+      assert.equal(
+        updatedSkill.l1_contract,
+        'Hardened contract for numeric calculation.',
+        'Skill L1 contract must be updated'
+      );
+      assert.equal(
+        updatedSkill.l2_sop,
+        '1. Verify inputs.\n2. Execute bounded calculation.',
+        'Skill L2 SOP must be updated'
       );
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });

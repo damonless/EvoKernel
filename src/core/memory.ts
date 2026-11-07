@@ -432,7 +432,17 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
     if (ch === '\r' || ch === '\n') {
       out += ch;
       if (inLineComment) {
-        inLineComment = false;
+        if (isCpp) {
+          const charBeforeBreak =
+            ch === '\n' && i > 0 && rawSrc[i - 1] === '\r'
+              ? (i > 1 ? rawSrc[i - 2] : '')
+              : (i > 0 ? rawSrc[i - 1] : '');
+          if (charBeforeBreak !== '\\') {
+            inLineComment = false;
+          }
+        } else {
+          inLineComment = false;
+        }
       }
       if (inRegex) {
         inRegex = false;
@@ -765,8 +775,12 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
           if (end !== -1 && end - i <= 10 && !rawSrc.slice(i, end).includes('\n')) {
             isChar = true;
           }
-        } else if (i + 2 < len && rawSrc[i + 2] === "'") {
-          isChar = true;
+        } else if (i + 1 < len && rawSrc[i + 1] !== "'" && rawSrc[i + 1] !== '\r' && rawSrc[i + 1] !== '\n') {
+          const cp = rawSrc.codePointAt(i + 1);
+          const charLen = cp !== undefined && cp > 0xffff ? 2 : 1;
+          if (i + 1 + charLen < len && rawSrc[i + 1 + charLen] === "'") {
+            isChar = true;
+          }
         }
         if (!isChar) {
           out += ch;
@@ -848,7 +862,20 @@ export function stripCStyleComments(input: string): string {
 
     if (ch === '/' && next === '/') {
       i += 2;
-      while (i < len && input[i] !== '\n') i++;
+      while (i < len) {
+        if (input[i] === '\n') {
+          const charBeforeBreak =
+            i > 0 && input[i - 1] === '\r'
+              ? (i > 1 ? input[i - 2] : '')
+              : (i > 0 ? input[i - 1] : '');
+          if (charBeforeBreak === '\\') {
+            i++;
+            continue;
+          }
+          break;
+        }
+        i++;
+      }
       out += ' ';
       continue;
     }
@@ -925,6 +952,13 @@ export function stripCStyleComments(input: string): string {
         out += ch;
         i++;
         continue;
+      }
+      if (i + 1 < len && /[a-zA-Z_]/.test(input[i + 1])) {
+        if (!(i + 2 < len && input[i + 2] === "'")) {
+          out += ch;
+          i++;
+          continue;
+        }
       }
       inSingle = true;
     } else if (ch === '"') inDouble = true;

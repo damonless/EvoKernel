@@ -8,7 +8,7 @@ import * as zlib from 'node:zlib';
 import { EvoStorage, parseFrontmatter } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper, hasUnsafeHookRegex, isValidContrastiveEvidence } from '../core/gatekeeper.js';
-import { executeSandboxedScript, executeSandboxedScriptAsync } from '../core/sandbox.js';
+import { executeSandboxedScript, executeSandboxedScriptAsync, killProcessTreeAsync } from '../core/sandbox.js';
 import {
   maskSourceLexical,
   stripCStyleComments,
@@ -2131,6 +2131,194 @@ process.exit(hasRule ? 0 : 1);
     });
     assert.strictEqual(selfTestRes.exitCode, 0, selfTestRes.stderr);
     assert.match(selfTestRes.stdout, /"self_test":\s*"passed"/);
+  });
+
+  test('39. [Issue #27 Item 1] computeFastWorktreeStateSig deep directory blindspot fallback and 5..8 depth tracking', () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-sig-depth-'));
+    const prevAntigravity = process.env.ANTIGRAVITY_AGENT;
+    delete process.env.ANTIGRAVITY_AGENT;
+    try {
+      child_process.spawnSync('git', ['init'], { cwd: ws });
+      child_process.spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws });
+      child_process.spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: ws });
+
+      fs.writeFileSync(path.join(ws, 'initial.txt'), 'init\n', 'utf8');
+      child_process.spawnSync('git', ['add', '.'], { cwd: ws });
+      child_process.spawnSync('git', ['commit', '-m', 'Initial commit'], { cwd: ws });
+
+      const dispatcher = new EvoMcpDispatcher(ws);
+      try {
+        // 1. Level 5..8 tracking: depth 6 file (a/b/c/d/e/f/mid.ts)
+        const midDir = path.join(ws, 'a', 'b', 'c', 'd', 'e', 'f');
+        fs.mkdirSync(midDir, { recursive: true });
+        const midFile = path.join(midDir, 'mid.ts');
+        fs.writeFileSync(midFile, 'export const mid = 1;\n', 'utf8');
+
+        const sig1 = (dispatcher as any).computeFastWorktreeStateSig(ws, ws);
+        assert.ok(sig1.length > 0, 'Signature should be computed for tree within 8 levels');
+        assert.match(sig1, /tree:/);
+
+        // Edit midFile at depth 6
+        const future = new Date(Date.now() + 2000);
+        fs.writeFileSync(midFile, 'export const mid = 2;\n', 'utf8');
+        fs.utimesSync(midFile, future, future);
+
+        const sig2 = (dispatcher as any).computeFastWorktreeStateSig(ws, ws);
+        assert.ok(sig2.length > 0);
+        assert.notStrictEqual(sig2, sig1, 'Signature must change when depth 6 file is modified');
+
+        // 2. Deep directory tree > 8 levels (a/b/c/d/e/f/g/h/i/j/deep.ts)
+        const deepDir = path.join(ws, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j');
+        fs.mkdirSync(deepDir, { recursive: true });
+        const deepFile = path.join(deepDir, 'deep.ts');
+        fs.writeFileSync(deepFile, 'export const deep = 1;\n', 'utf8');
+
+        const deepSig = (dispatcher as any).computeFastWorktreeStateSig(ws, ws);
+        assert.strictEqual(
+          deepSig,
+          '',
+          'computeFastWorktreeStateSig must return empty string when hasUnscannedDeepDir is true'
+        );
+
+        // Verify checkDirtyTreeReminder falls back to git status --porcelain
+        (dispatcher as any).lastDirtyCheckAt = 0;
+        (dispatcher as any).callsSinceLastPropose = 3;
+        const reminder = (dispatcher as any).checkDirtyTreeReminder(ws);
+        assert.match(
+          reminder,
+          /💡 Uncommitted edits detected/,
+          'checkDirtyTreeReminder must fall back to git status --porcelain and detect uncommitted edits'
+        );
+      } finally {
+        dispatcher.close();
+      }
+    } finally {
+      if (prevAntigravity !== undefined) {
+        process.env.ANTIGRAVITY_AGENT = prevAntigravity;
+      }
+      safeCleanup(ws);
+    }
+  });
+
+  test('40. [Issue #27 Item 3] Lexical AST scanner edge cases: line comment backslash continuations, Rust lifetimes, and surrogate pair char literals', () => {
+    // 1. C/C++ // comment ending with backslash line continuation
+    const cppCode = [
+      'int processItem() {',
+      '    // line comment with continuation \\',
+      '    if (broken) {',
+      '    cleanup();',
+      '}',
+      'void anotherFunction() {',
+      '    return;',
+      '}',
+    ].join('\n');
+
+    // stripCStyleComments skips the continuation line
+    const strippedCpp = stripCStyleComments(cppCode);
+    assert.doesNotMatch(strippedCpp, /line comment with continuation/);
+    assert.doesNotMatch(strippedCpp, /if \(broken\)/, 'Continuation line inside comment must be stripped');
+
+    // findBraceBlockEnd on processItem correctly identifies line 4 as closing brace of processItem
+    const lines = cppCode.split('\n');
+    const blockEnd = findBraceBlockEnd(lines, 0, '.cpp');
+    assert.strictEqual(blockEnd, 4, 'processItem block must end at line 4 (without treating comment as block opener)');
+
+    // 2. Rust lifetime syntax with odd number of lifetimes in function signature
+    const rustCode = "pub fn parse<'a>(input: &'a str) -> &'a str { // comment with /* or \"\n    input\n}";
+    const strippedRust = stripCStyleComments(rustCode);
+    assert.doesNotMatch(
+      strippedRust,
+      /\/\/ comment with \/\* or "/,
+      'Rust comment following odd lifetimes must be stripped cleanly'
+    );
+    assert.match(strippedRust, /pub fn parse<'a>/);
+
+    // 3. Rust UTF-16 surrogate pair char literal followed by brace char literal
+    const rustSurrogate = "fn test_surrogate() {\n    let arr = ['🦀', '{'];\n    println!(\"done\");\n}";
+    maskSourceLexical(rustSurrogate, '.rs');
+    // Ensure the '{' in the array char literal is masked and does not open an unclosed block
+    const rustLines = rustSurrogate.split('\n');
+    const rustEnd = findBraceBlockEnd(rustLines, 0, '.rs');
+    assert.strictEqual(rustEnd, 3, 'test_surrogate block must close at line 3 without brace count corruption');
+  });
+
+  test('41. [Issue #27 Item 4 & 6] Gate 1 DANGEROUS_PATTERNS rm/rmSync/credential expansions and isValidContrastiveEvidence nonexistent file rejection', () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-gatekeeper-pat-'));
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const tel = new EvoTelemetry(storage);
+      const gatekeeper = new EvoGatekeeper(storage, tel);
+
+      try {
+        const dangerousScripts = [
+          'import fsPromises from "node:fs/promises";\nawait fsPromises.rm(process.env.EVO_WORKSPACE, { recursive: true });',
+          'import fs from "node:fs";\nfs.rm("/", { recursive: true }, (err) => {});',
+          'import { rmSync } from "node:fs";\nrmSync(process.env.EVO_WORKSPACE, { recursive: true });',
+          'import os from "node:os";\nimport fs from "node:fs";\nconst p = os.homedir();\nfs.readFileSync(p + "/.ssh/id_ecdsa");',
+        ];
+
+        for (const code of dangerousScripts) {
+          const res = gatekeeper.evaluateAndCommit({
+            kind: 'tool',
+            id: 'dangerous-test-tool',
+            title: 'Dangerous Test Tool',
+            l0_summary: 'Tool attempting dangerous file deletion or credential read',
+            runtime: 'node',
+            script_code: code,
+          });
+          assert.strictEqual(res.passed, false, `Code should have been blocked: ${code}`);
+          assert.strictEqual(res.gate_failed, 'SCHEMA_SECURITY');
+          assert.strictEqual(res.error_code, 'ERR_SECURITY_VIOLATION');
+        }
+
+        // isValidContrastiveEvidence with non-existent files
+        // Even if the workspace contains 'for' or 'var' in real files, fake1.ts:for should fail
+        const srcDir = path.join(ws, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        fs.writeFileSync(path.join(srcDir, 'real.ts'), 'for (let i = 0; i < 10; i++) { var x = 1; }\n', 'utf8');
+
+        const evidence = 'fake1.ts:for and fake2.ts:var filler text';
+        const valid = isValidContrastiveEvidence(evidence, ws);
+        assert.strictEqual(valid, false, 'isValidContrastiveEvidence must return false when referenced files do not exist in workspace');
+      } finally {
+        tel.close();
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('42. [Issue #27 Item 5] killProcessTreeAsync export and executeSandboxedScriptAsync clean timeout', async () => {
+    assert.strictEqual(typeof killProcessTreeAsync, 'function', 'killProcessTreeAsync must be an exported function');
+
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-sandbox-timeout-'));
+    try {
+      const hangScript = path.join(ws, 'hang.mjs');
+      // Script that sleeps for 10 seconds unless killed
+      fs.writeFileSync(
+        hangScript,
+        `
+        setTimeout(() => {
+          console.log("Finished late");
+        }, 10000);
+        `,
+        'utf8'
+      );
+
+      const startTime = Date.now();
+      const res = await executeSandboxedScriptAsync('node', hangScript, {}, {
+        cwd: ws,
+        timeoutMs: 500,
+      });
+      const duration = Date.now() - startTime;
+
+      assert.strictEqual(res.timedOut, true, 'executeSandboxedScriptAsync must set timedOut to true');
+      assert.strictEqual(res.exitCode, 124, 'executeSandboxedScriptAsync must return exitCode 124 on timeout');
+      assert.ok(duration < 4000, `Execution should abort near timeout (took ${duration}ms)`);
+    } finally {
+      safeCleanup(ws);
+    }
   });
 
 });

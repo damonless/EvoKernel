@@ -37,12 +37,12 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   },
   {
     pattern:
-      /\b(?:(?:fs(?:\.promises)?\.)?(?:rmSync|rmdirSync)|fs\.promises\.rm|shutil\.rmtree)\s*\(\s*(?:['"`](?:\/|~|\$HOME|\.\.(?:[/\\][^'"`]*)?|[A-Za-z]:\\)['"`]|os\.homedir\s*\(\)|os\.getcwd\s*\(\)|os\.path\.expanduser\s*\(\s*['"`]~[^'"`]*['"`]\s*\)|Path\.(?:home|cwd)\s*\(\)|process\.cwd\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE|EVO_WORKSPACE)\b|\[\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]|workspace(?:Root)?\b)/i,
+      /\b(?:(?:fs(?:\.promises)?|fsPromises)\.(?:rmSync|rmdirSync|rm|rmdir)|rmSync|rmdirSync|shutil\.rmtree)\s*\(\s*(?:['"`](?:\/|~|\$HOME|\.\.(?:[/\\][^'"`]*)?|[A-Za-z]:\\)['"`]|os\.homedir\s*\(\)|os\.getcwd\s*\(\)|os\.path\.expanduser\s*\(\s*['"`]~[^'"`]*['"`]\s*\)|Path\.(?:home|cwd)\s*\(\)|process\.cwd\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE|EVO_WORKSPACE)\b|\[\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]|workspace(?:Root)?\b)/i,
     reason: 'Destructive programmatic root/home/parent/workspace directory deletion detected',
   },
   {
     pattern:
-      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env\.(?:HOME|USERPROFILE)|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[^;\n]{0,40}[\/\\'"`]\.(?:ssh|aws|gnupg|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|env)\b|[\/\\]\.(?:ssh[\/\\](?:id_rsa|id_ed25519|authorized_keys|config)|aws[\/\\](?:credentials|config)|gnupg[\/\\])/i,
+      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env\.(?:HOME|USERPROFILE)|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[\s\S]{0,80}[\/\\'"`]\.(?:ssh|aws|gnupg|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|env)\b|[\/\\]\.(?:ssh|aws|gnupg)(?:[\/\\][A-Za-z0-9_.-]+|[\/\\]?['"`])/i,
     reason: 'Sensitive home credential directory access (~/.ssh, ~/.aws, ~/.gnupg, ~/.env) detected',
   },
   { pattern: /\b(Format-Volume|Clear-Disk|mkfs\.|dd\s+if=)/i, reason: 'Disk formatting command detected' },
@@ -130,6 +130,7 @@ export function isValidContrastiveEvidence(
     if (workspaceRoot && hasWorkspaceSources) {
       let matchedInWorkspace = false;
       try {
+        const hasExplicitFileSep = cleanTok.includes('#') || cleanTok.includes(':');
         const filePart = cleanTok.includes('#')
           ? cleanTok.split('#')[0]
           : cleanTok.includes(':')
@@ -141,21 +142,23 @@ export function isValidContrastiveEvidence(
             ? cleanTok.split(':')[1]
             : cleanTok;
         const filePartLower = filePart.replace(/\\/g, '/').toLowerCase();
-        if (
-          filePartLower &&
+        const fileExistsInWs =
+          Boolean(filePartLower) &&
           (fs.existsSync(path.resolve(workspaceRoot, filePart)) ||
             wsBasenamesLower.has(filePartLower) ||
-            wsRelFilesLower.some((r) => r === filePartLower || r.endsWith(`/${filePartLower}`)))
-        ) {
-          matchedInWorkspace = true;
-        } else if (
-          looksLikeFileOrSymbol &&
-          symPart &&
-          symPart.length >= 3 &&
-          wsContentJoined &&
-          wsContentJoined.includes(symPart)
-        ) {
-          matchedInWorkspace = true;
+            wsRelFilesLower.some((r) => r === filePartLower || r.endsWith(`/${filePartLower}`)));
+
+        if (fileExistsInWs) {
+          if (!hasExplicitFileSep || !symPart) {
+            matchedInWorkspace = true;
+          } else if (!wsContentJoined || wsContentJoined.includes(symPart)) {
+            matchedInWorkspace = true;
+          }
+        } else if (!hasExplicitFileSep && looksLikeFileOrSymbol && symPart && symPart.length >= 4 && wsContentJoined) {
+          const escapedSym = symPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          if (new RegExp(`\\b${escapedSym}\\b`).test(wsContentJoined)) {
+            matchedInWorkspace = true;
+          }
         }
       } catch {
         // ignore
@@ -2494,10 +2497,23 @@ export class EvoGatekeeper {
           return String(s ?? '').trim();
         })
         .filter(Boolean);
-      const currentCommit = resolveCurrentGitCommit(this.storage.rootDir);
+      const existing = this.storage.getMemory(cleanId);
+      const supersededMem = rawProposal.supersedes_id
+        ? this.storage.getMemory(sanitizeId(rawProposal.supersedes_id))
+        : undefined;
+      const baseMem = existing ?? supersededMem;
+      const baseSymbols = (baseMem?.target_symbols || []).map((s) => s.trim()).filter(Boolean);
+      const sameTargetSymbols =
+        Boolean(baseMem) &&
+        baseSymbols.length === targetSymbols.length &&
+        baseSymbols.every((s, idx) => s === targetSymbols[idx]);
+
+      const currentCommit =
+        (typeof (rawProposal as any).created_commit === 'string' && (rawProposal as any).created_commit.trim()) ||
+        (sameTargetSymbols && baseMem?.created_commit ? baseMem.created_commit : resolveCurrentGitCommit(this.storage.rootDir));
       const currentBranch =
         (typeof rawProposal.created_branch === 'string' && rawProposal.created_branch.trim()) ||
-        resolveCurrentGitBranch(this.storage.rootDir);
+        (sameTargetSymbols && baseMem?.created_branch ? baseMem.created_branch : resolveCurrentGitBranch(this.storage.rootDir));
 
       if (options?.dryRun) {
         return {
@@ -2514,8 +2530,7 @@ export class EvoGatekeeper {
         };
       }
 
-      const existing = this.storage.getMemory(cleanId);
-      const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
+      const preservedCreatedAt = baseMem?.created_at || options?.preservedCreatedAt || now;
       const correctionMetadata =
         this.telemetry.getSessionFlag('user_correction_detected') === 'true' ||
         this.telemetry.getSessionFlag('had_command_error') === 'true'

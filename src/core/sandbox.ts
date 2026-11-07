@@ -182,6 +182,78 @@ export function killProcessTree(pid: number | undefined): void {
   }
 }
 
+function runKillCmdAsync(cmd: string, args: string[], timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let proc: ReturnType<typeof spawn> | null = null;
+    let timer: NodeJS.Timeout | null = null;
+
+    const cleanup = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
+
+    try {
+      proc = spawn(cmd, args, {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+
+      timer = setTimeout(() => {
+        try {
+          proc?.kill('SIGKILL');
+        } catch {
+          // ignore
+        }
+        cleanup(false);
+      }, timeoutMs);
+
+      proc.on('error', () => cleanup(false));
+      proc.on('close', (code) => cleanup(code === 0));
+    } catch {
+      cleanup(false);
+    }
+  });
+}
+
+export async function killProcessTreeAsync(pid: number | undefined): Promise<void> {
+  if (!pid || pid <= 0) return;
+  if (process.platform === 'win32') {
+    const killed = await runKillCmdAsync('taskkill', ['/pid', String(pid), '/T', '/F'], 3000);
+    if (!killed) {
+      await runKillCmdAsync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${pid}" | ForEach-Object { taskkill /pid $_.ProcessId /T /F }`,
+        ],
+        4000
+      );
+    }
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+  } else {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+    await runKillCmdAsync('pkill', ['-KILL', '-P', String(pid)], 2000);
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+  }
+}
+
 function resolveSandboxInvocation(
   runtimeOrScriptPath: ScriptRuntime | string,
   scriptPathOrArgs?: string | Record<string, unknown> | unknown[],
@@ -406,14 +478,15 @@ export function executeSandboxedScriptAsync(
     const timer = setTimeout(() => {
       if (settled) return;
       timedOut = true;
-      killProcessTree(child.pid);
-      try {
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      } catch {
-        // ignore
-      }
-      finalize(124);
+      void killProcessTreeAsync(child.pid).finally(() => {
+        try {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        } catch {
+          // ignore
+        }
+        finalize(124);
+      });
     }, timeoutMs);
 
     child.on('error', (err) => {
