@@ -209,7 +209,8 @@ function collectMarkdownFiles(dir: string, maxDepth = 3, currentDepth = 0): stri
 function discoverAuditableFiles(
   workspaceRoot: string,
   includeGlobal: boolean,
-  globalHomeDir: string
+  globalHomeDir: string,
+  globalEvoRootOverride?: string
 ): Array<{ scope: 'workspace' | 'global'; kind: 'rule' | 'skill'; displayPath: string; fullPath: string }> {
   const discovered: Array<{
     scope: 'workspace' | 'global';
@@ -252,6 +253,7 @@ function discoverAuditableFiles(
     addFile('workspace', 'rule', path.join(workspaceRoot, rootRule), workspaceRoot);
   }
   for (const ruleDir of [
+    path.join(workspaceRoot, 'config', 'rules'),
     path.join(workspaceRoot, '.cursor', 'rules'),
     path.join(workspaceRoot, '.windsurf', 'rules'),
     path.join(workspaceRoot, '.roo', 'rules'),
@@ -269,6 +271,7 @@ function discoverAuditableFiles(
     path.join(workspaceRoot, '.agents', 'skills'),
     path.join(workspaceRoot, '.codex', 'skills'),
     path.join(workspaceRoot, '.gemini', 'skills'),
+    path.join(workspaceRoot, 'config', 'skills'),
     path.join(workspaceRoot, '.claude', 'skills'),
     path.join(workspaceRoot, '.cursor', 'skills'),
     path.join(workspaceRoot, '.windsurf', 'skills'),
@@ -284,6 +287,12 @@ function discoverAuditableFiles(
 
   // 3. Global rule & skill files
   if (includeGlobal && fs.existsSync(globalHomeDir)) {
+    const globalEvoRoot =
+      globalEvoRootOverride || path.join(globalHomeDir, '.evo', 'global');
+    const globalEvoBase = globalEvoRoot.toLowerCase().startsWith(globalHomeDir.toLowerCase())
+      ? globalHomeDir
+      : globalEvoRoot;
+
     const globalRuleCandidates = [
       path.join(globalHomeDir, '.gemini', 'GEMINI.md'),
       path.join(globalHomeDir, '.claude', 'CLAUDE.md'),
@@ -308,6 +317,11 @@ function discoverAuditableFiles(
       }
     }
 
+    for (const f of collectMarkdownFiles(path.join(globalEvoRoot, '.evo', 'rules'), 2)) {
+      if (path.basename(f) === 'core-invariants.md') continue;
+      addFile('global', 'rule', f, globalEvoBase);
+    }
+
     for (const globalSkillDir of [
       path.join(globalHomeDir, '.gemini', 'config', 'skills'),
       path.join(globalHomeDir, '.claude', 'skills'),
@@ -318,6 +332,10 @@ function discoverAuditableFiles(
       for (const f of collectMarkdownFiles(globalSkillDir, 2)) {
         addFile('global', 'skill', f, globalHomeDir);
       }
+    }
+
+    for (const f of collectMarkdownFiles(path.join(globalEvoRoot, '.evo', 'skills'), 2)) {
+      addFile('global', 'skill', f, globalEvoBase);
     }
   }
 
@@ -658,14 +676,131 @@ export function auditHarnessSurfaces(
     }
   }
 
+  // 6. Single-file duplicate EVO:START block & Host Global duplicate EVO:START injection checks
+  const evoStartCandidates: Array<{ harness: string; fullPath: string; displayPath: string }> = [
+    { harness: 'claude', fullPath: path.join(root, 'CLAUDE.md'), displayPath: 'CLAUDE.md' },
+    { harness: 'codex', fullPath: path.join(root, 'AGENTS.md'), displayPath: 'AGENTS.md' },
+    { harness: 'gemini', fullPath: path.join(root, 'GEMINI.md'), displayPath: 'GEMINI.md' },
+    { harness: 'gemini', fullPath: path.join(root, 'rules', 'AGENTS.md'), displayPath: 'rules/AGENTS.md' },
+    { harness: 'cursor', fullPath: path.join(root, '.cursor', 'rules', 'evo-kernel.mdc'), displayPath: '.cursor/rules/evo-kernel.mdc' },
+  ];
+  for (const f of collectMarkdownFiles(path.join(root, 'config', 'rules'), 2)) {
+    evoStartCandidates.push({
+      harness: 'gemini',
+      fullPath: f,
+      displayPath: path.relative(root, f).replace(/\\/g, '/'),
+    });
+  }
+  if (options.includeGlobal) {
+    const globalHome = path.resolve(options.globalHomeDir || os.homedir());
+    evoStartCandidates.push(
+      { harness: 'gemini', fullPath: path.join(globalHome, '.gemini', 'GEMINI.md'), displayPath: '~/.gemini/GEMINI.md' },
+      { harness: 'claude', fullPath: path.join(globalHome, '.claude', 'CLAUDE.md'), displayPath: '~/.claude/CLAUDE.md' }
+    );
+    for (const f of collectMarkdownFiles(path.join(globalHome, '.gemini', 'config', 'rules'), 2)) {
+      evoStartCandidates.push({
+        harness: 'gemini',
+        fullPath: f,
+        displayPath: `~/${path.relative(globalHome, f).replace(/\\/g, '/')}`,
+      });
+    }
+  }
+  const seenEvoStartFiles = new Set<string>();
+  for (const cand of evoStartCandidates) {
+    const resolved = path.resolve(cand.fullPath);
+    if (seenEvoStartFiles.has(resolved) || !fs.existsSync(resolved)) continue;
+    seenEvoStartFiles.add(resolved);
+    try {
+      if (!fs.statSync(resolved).isFile()) continue;
+      const raw = fs.readFileSync(resolved, 'utf8');
+      const count = (raw.match(/<!-- EVO:START -->/g) || []).length;
+      if (count > 1) {
+        violations.push({
+          harness: cand.harness,
+          displayPath: cand.displayPath,
+          severity: 'error',
+          code: 'DUPLICATE_EVO_START_BLOCK_IN_FILE',
+          message: `Rule file ${cand.displayPath} contains ${count} <!-- EVO:START --> blocks; only 1 managed block is allowed per file.`,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Check if host global ~/.gemini has duplicate EVO:START across GEMINI.md, config/rules/*.md, and installed plugin rules/AGENTS.md
+  const geminiGlobalDirs: Array<{ dir: string; prefix: string }> = [];
+  if (path.basename(root).toLowerCase() === '.gemini' || fs.existsSync(path.join(root, 'config', 'plugins'))) {
+    geminiGlobalDirs.push({ dir: root, prefix: '' });
+  }
+  if (options.includeGlobal) {
+    const globalHome = path.resolve(options.globalHomeDir || os.homedir());
+    const globalGemini = path.join(globalHome, '.gemini');
+    if (
+      fs.existsSync(globalGemini) &&
+      !geminiGlobalDirs.some((d) => path.resolve(d.dir).toLowerCase() === path.resolve(globalGemini).toLowerCase())
+    ) {
+      geminiGlobalDirs.push({ dir: globalGemini, prefix: '~/.gemini/' });
+    }
+  }
+  for (const { dir: gemDir, prefix } of geminiGlobalDirs) {
+    const pluginRulePath = path.join(gemDir, 'config', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md');
+    const hasPluginEvoStart =
+      fs.existsSync(pluginRulePath) &&
+      fs.readFileSync(pluginRulePath, 'utf8').includes('<!-- EVO:START -->');
+    const rootGeminiPath = path.join(gemDir, 'GEMINI.md');
+    const hasRootEvoStart =
+      fs.existsSync(rootGeminiPath) &&
+      fs.readFileSync(rootGeminiPath, 'utf8').includes('<!-- EVO:START -->');
+
+    if (hasPluginEvoStart && hasRootEvoStart) {
+      violations.push({
+        harness: 'gemini',
+        displayPath: `${prefix}GEMINI.md`,
+        severity: 'warning',
+        code: 'DUPLICATE_GLOBAL_EVO_START_BLOCK',
+        message: `${prefix}GEMINI.md contains <!-- EVO:START --> which duplicates the enabled plugin rule (${prefix}config/plugins/evo-kernel/rules/AGENTS.md).`,
+      });
+    }
+    for (const f of collectMarkdownFiles(path.join(gemDir, 'config', 'rules'), 2)) {
+      try {
+        const raw = fs.readFileSync(f, 'utf8');
+        if (raw.includes('<!-- EVO:START -->') && (hasPluginEvoStart || hasRootEvoStart)) {
+          const rel = `${prefix}${path.relative(gemDir, f).replace(/\\/g, '/')}`;
+          violations.push({
+            harness: 'gemini',
+            displayPath: rel,
+            severity: 'warning',
+            code: 'DUPLICATE_GLOBAL_EVO_START_BLOCK',
+            message: `${rel} contains a redundant <!-- EVO:START --> block alongside ${hasPluginEvoStart ? `${prefix}config/plugins/evo-kernel/rules/AGENTS.md` : `${prefix}GEMINI.md`}.`,
+          });
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   return violations;
 }
+
+const REPO_ANCHORED_GLOBAL_GLOB_REGEX =
+  /^(?:\.\/)?(?:src|lib|app|packages|components|core|server|client|internal|cmd|pkg)\//i;
 
 export function runAudit(workspaceRoot: string, options: AuditOptions = {}): AuditReport {
   const root = path.resolve(workspaceRoot);
   const includeGlobal = Boolean(options.includeGlobal);
   const globalHomeDir = path.resolve(options.globalHomeDir || os.homedir());
+  const globalRoot =
+    !options.globalHomeDir && process.env.EVO_GLOBAL_DIR
+      ? path.resolve(process.env.EVO_GLOBAL_DIR)
+      : path.join(globalHomeDir, '.evo', 'global');
   const localStorage = new EvoStorage(root);
+  const globalStorage = new EvoStorage(globalRoot);
+  const isWorkspaceSameAsGlobal =
+    path.resolve(localStorage.evoDir).toLowerCase() ===
+    path.resolve(globalStorage.evoDir).toLowerCase();
+
   const tokenBudgetLimit =
     options.tokenBudgetLimit ?? (localStorage.getConfig().maxCoreRuleTokens || 1500);
   const baseSeedTokens = estimateTokens(renderManagedBlock('', ''));
@@ -677,7 +812,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     options.skillBudgetLimit ?? Math.max(tokenBudgetLimit * 2, 3000);
   const overlapThreshold = options.overlapThreshold ?? 0.25;
 
-  const entries = discoverAuditableFiles(root, includeGlobal, globalHomeDir);
+  const entries = discoverAuditableFiles(root, includeGlobal, globalHomeDir, globalRoot);
   const files: AuditedFileMetric[] = [];
   const budgetViolations: AuditedFileMetric[] = [];
   const domainLeaks: DomainLeakWarning[] = [];
@@ -806,6 +941,12 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     const localRules = localStorage.listRules();
     for (const rule of localRules) {
       const violations = auditRuleGate1_5(rule);
+      if (isWorkspaceSameAsGlobal && REPO_ANCHORED_GLOBAL_GLOB_REGEX.test(rule.scope_glob.trim())) {
+        violations.push({
+          code: 'ERR_GLOBAL_RULE_REPO_LEAK',
+          detail: `Global rule '${rule.id}' has repo-anchored scope_glob '${rule.scope_glob}'; global rules must use repo-agnostic globs (e.g., '**/*.ts' or '**/*').`,
+        });
+      }
       if (violations.length > 0) {
         const coreCandidate = path.join(localStorage.rulesDir, `${rule.id}.md`);
         const scopedCandidate = path.join(localStorage.rulesDir, 'scoped', `${rule.id}.md`);
@@ -816,7 +957,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
             : (rule.core ? coreCandidate : scopedCandidate);
         const rel = path.relative(root, actualPath).replace(/\\/g, '/');
         gateViolations.push({
-          scope: 'workspace',
+          scope: isWorkspaceSameAsGlobal ? 'global' : 'workspace',
           ruleId: rule.id,
           displayPath: rel,
           violations,
@@ -825,15 +966,17 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     }
   }
 
-  if (includeGlobal) {
-    const globalRoot = process.env.EVO_GLOBAL_DIR
-      ? path.resolve(process.env.EVO_GLOBAL_DIR)
-      : path.join(globalHomeDir, '.evo', 'global');
-    const globalStorage = new EvoStorage(globalRoot);
+  if (includeGlobal && !isWorkspaceSameAsGlobal) {
     if (fs.existsSync(globalStorage.rulesDir)) {
       const globalRules = globalStorage.listRules();
       for (const rule of globalRules) {
         const violations = auditRuleGate1_5(rule);
+        if (REPO_ANCHORED_GLOBAL_GLOB_REGEX.test(rule.scope_glob.trim())) {
+          violations.push({
+            code: 'ERR_GLOBAL_RULE_REPO_LEAK',
+            detail: `Global rule '${rule.id}' has repo-anchored scope_glob '${rule.scope_glob}'; global rules must use repo-agnostic globs (e.g., '**/*.ts' or '**/*').`,
+          });
+        }
         if (violations.length > 0) {
           const coreCandidate = path.join(globalStorage.rulesDir, `${rule.id}.md`);
           const scopedCandidate = path.join(globalStorage.rulesDir, 'scoped', `${rule.id}.md`);
@@ -870,7 +1013,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
             : (rule.core ? coreCandidate : scopedCandidate);
         const rel = path.relative(root, actualPath).replace(/\\/g, '/');
         brokenCapabilityRefs.push({
-          scope: 'workspace',
+          scope: isWorkspaceSameAsGlobal ? 'global' : 'workspace',
           displayPath: rel,
           missingIds: missing,
         });
@@ -887,7 +1030,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
         const skillPath = path.join(localStorage.skillsDir, skill.id, 'SKILL.md');
         const rel = path.relative(root, skillPath).replace(/\\/g, '/');
         brokenCapabilityRefs.push({
-          scope: 'workspace',
+          scope: isWorkspaceSameAsGlobal ? 'global' : 'workspace',
           displayPath: rel,
           missingIds: missing,
         });
@@ -895,11 +1038,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     }
   }
 
-  if (includeGlobal) {
-    const globalRoot = process.env.EVO_GLOBAL_DIR
-      ? path.resolve(process.env.EVO_GLOBAL_DIR)
-      : path.join(globalHomeDir, '.evo', 'global');
-    const globalStorage = new EvoStorage(globalRoot);
+  if (includeGlobal && !isWorkspaceSameAsGlobal) {
     if (fs.existsSync(globalStorage.rulesDir)) {
       const globalRules = globalStorage.listRules();
       for (const rule of globalRules) {
@@ -1335,6 +1474,12 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
           const dir = path.posix.dirname(updatedRule.scope_glob.replace(/\\/g, '/'));
           updatedRule.scope_glob =
             dir && dir !== '.' ? `${dir}/**/*${ext || ''}` : `**/*${ext || ''}`;
+          modified = true;
+        }
+
+        if (gv.violations.some((v) => v.code === 'ERR_GLOBAL_RULE_REPO_LEAK')) {
+          const tail = path.posix.basename(updatedRule.scope_glob.trim().replace(/\\/g, '/'));
+          updatedRule.scope_glob = tail && tail !== '**' ? `**/${tail}` : '**/*';
           modified = true;
         }
 

@@ -366,10 +366,20 @@ function resolveBaseSeedTokens(markerBlock = '') {
 
 const tokenAudit = [];
 const budgetViolations = [];
+const pluginAgentsRulePath = path.join(root, 'config', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md');
+const hasInstalledPluginEvoStart =
+  fs.existsSync(pluginAgentsRulePath) &&
+  fs.readFileSync(pluginAgentsRulePath, 'utf8').includes('<!-- EVO:START -->');
+const rootGeminiRulePath = path.join(root, 'GEMINI.md');
+const hasRootGeminiEvoStart =
+  fs.existsSync(rootGeminiRulePath) &&
+  fs.readFileSync(rootGeminiRulePath, 'utf8').includes('<!-- EVO:START -->');
+
 for (const rel of ruleFiles) {
   const full = path.join(root, rel);
   if (fs.existsSync(full)) {
     const text = fs.readFileSync(full, 'utf8');
+    const evoStartMatches = text.match(/<!-- EVO:START -->/g) || [];
     const markerMatch = text.match(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/);
     const measuredText = markerMatch ? markerMatch[0] : text;
     const tokens = estimateTokens(measuredText);
@@ -377,13 +387,24 @@ for (const rel of ruleFiles) {
     const managedBlockBudgetLimit =
       configuredBudgetLimit + baseSeedTokens + MAX_TOOLS_CATALOG_TOKENS;
     const effectiveLimit = markerMatch ? managedBlockBudgetLimit : configuredBudgetLimit;
-    const healthy = tokens <= effectiveLimit;
+    const withinBudget = tokens <= effectiveLimit;
+    const isDuplicateInFile = evoStartMatches.length > 1;
+    const isDuplicateGlobalBlock =
+      evoStartMatches.length > 0 &&
+      ((rel === 'GEMINI.md' && hasInstalledPluginEvoStart) ||
+        (rel.startsWith('config/rules/') && (hasInstalledPluginEvoStart || hasRootGeminiEvoStart)));
+    const healthy = withinBudget && !isDuplicateInFile && !isDuplicateGlobalBlock;
+    const status = !withinBudget
+      ? 'OVER_BUDGET'
+      : isDuplicateInFile || isDuplicateGlobalBlock
+        ? 'DUPLICATE_EVO_START'
+        : 'HEALTHY';
     const entry = {
       file: rel,
       bytes: Buffer.byteLength(measuredText, 'utf8'),
       estimated_tokens: tokens,
       budget_limit: effectiveLimit,
-      status: healthy ? 'HEALTHY' : 'OVER_BUDGET',
+      status,
     };
     tokenAudit.push(entry);
     if (!healthy) {
@@ -397,6 +418,14 @@ for (const rel of ruleFiles) {
 // -------------------------------------------------------------------------
 const gateViolations = [];
 const rulesDir = path.join(root, '.evo', 'rules');
+const auditorGlobalHome = process.env.EVO_GLOBAL_DIR
+  ? path.resolve(process.env.EVO_GLOBAL_DIR)
+  : path.join(os.homedir(), '.evo', 'global');
+const auditorGlobalEvoDir = fs.existsSync(path.join(auditorGlobalHome, '.evo'))
+  ? path.join(auditorGlobalHome, '.evo')
+  : auditorGlobalHome;
+const isAuditingGlobalRules =
+  path.resolve(rulesDir).toLowerCase() === path.resolve(auditorGlobalEvoDir, 'rules').toLowerCase();
 
 function auditRuleFile(filePath) {
   const raw = fs.readFileSync(filePath, 'utf8');
@@ -413,6 +442,17 @@ function auditRuleFile(filePath) {
     violations.push({
       code: 'ERR_SCOPE_TOO_NARROW',
       detail: `Scope '${scopeGlob}' targets a single literal file without wildcards.`,
+    });
+  }
+
+  // Global repo-anchored directory leak check
+  if (
+    isAuditingGlobalRules &&
+    /^(?:\.\/)?(?:src|lib|app|packages|components|core|server|client|internal|cmd|pkg)\//i.test(scopeGlob)
+  ) {
+    violations.push({
+      code: 'ERR_GLOBAL_RULE_REPO_LEAK',
+      detail: `Global rule '${id}' has repo-anchored scope_glob '${scopeGlob}'; use repo-agnostic globs such as '**/*.ts' or '**/*'.`,
     });
   }
 

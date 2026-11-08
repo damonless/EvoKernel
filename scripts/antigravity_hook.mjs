@@ -194,19 +194,38 @@ function readTranscriptTailSteps(transcriptPath) {
 }
 
 function loadHookState(statePath) {
-  try {
-    if (fs.existsSync(statePath)) {
-      return JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (!fs.existsSync(statePath)) return {};
+      const raw = fs.readFileSync(statePath, 'utf8');
+      if (!raw.trim()) continue;
+      return JSON.parse(raw);
+    } catch {
+      // Retry briefly if another process is mid-write
     }
-  } catch {
-    // Ignore corrupted state
   }
   return {};
 }
 
-function saveHookState(statePath, state) {
+function saveHookState(statePath, state, conversationId, convState) {
   try {
-    fs.writeFileSync(statePath, JSON.stringify(state), 'utf8');
+    const merged = { ...loadHookState(statePath), ...state };
+    if (conversationId && convState) {
+      merged[conversationId] = convState;
+    }
+    const serialized = JSON.stringify(merged);
+    const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, serialized, 'utf8');
+    try {
+      fs.renameSync(tmpPath, statePath);
+    } catch {
+      fs.writeFileSync(statePath, serialized, 'utf8');
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // Ignore cleanup error
+      }
+    }
   } catch {
     // Ignore write errors
   }
@@ -242,7 +261,7 @@ Options:
       cs.clearedDirtyEditStep = cs.lastDirtyEditStep ?? -1;
       cs.clearedErrorRecoveryStep = cs.lastErrorRecoveryStep ?? -1;
       cs.clearedAuditStep = cs.lastAuditStep ?? -1;
-      saveHookState(statePath, allState);
+      saveHookState(statePath, allState, conversationId, allState[conversationId]);
     }
     process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
     return;
@@ -507,7 +526,7 @@ Options:
     }
     if (watermarkUpdated) {
       allState[conversationId] = convState;
-      saveHookState(statePath, allState);
+      saveHookState(statePath, allState, conversationId, allState[conversationId]);
     }
   }
 
@@ -637,7 +656,7 @@ Options:
         ? Math.max(convState.clearedAuditStep ?? -1, lastProposeStepIndex)
         : (convState.clearedAuditStep ?? -1),
   };
-  saveHookState(statePath, allState);
+  saveHookState(statePath, allState, conversationId, allState[conversationId]);
 
   const reasons = [];
   if (isPendingDirtyEdit) {

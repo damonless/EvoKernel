@@ -2439,6 +2439,88 @@ process.exit(hasRule ? 0 : 1);
         false,
         'Global skill frontmatter violation must be resolved after runRefactor --apply'
       );
+
+      // 5. runAudit on global storage with includeGlobal: true is idempotent (no duplicate reports)
+      //    and flags ERR_GLOBAL_RULE_REPO_LEAK on repo-anchored global rules (e.g. src/core/**/*.ts)
+      const globalStore = new EvoStorage(fakeGlobal);
+      globalStore.ensureInitialized();
+      globalStore.saveRule({
+        id: 'leaked-repo-scoped-rule',
+        title: 'Leaked Repo Scoped Rule',
+        l0_summary: 'Rule with repo-anchored src/core scope leaked into global store.',
+        scope_glob: 'src/core/**/*.ts',
+        core: false,
+        priority: 50,
+        tokens: 50,
+        origin: 'evolved',
+        content: '1. Never leak repo-anchored scope_glob into global storage.',
+        transfer_scenarios: [
+          'Global rule hygiene verification across workspaces',
+          'Preventing cross-project rule scope pollution',
+        ],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const globalSelfAudit = runAudit(fakeGlobal, {
+        includeGlobal: true,
+        globalHomeDir: fakeHome,
+      });
+      const leakedMatches = globalSelfAudit.gateViolations.filter(
+        (gv) => gv.ruleId === 'leaked-repo-scoped-rule'
+      );
+      assert.strictEqual(
+        leakedMatches.length,
+        1,
+        'runAudit on global storage with includeGlobal: true must not duplicate gateViolations'
+      );
+      assert.ok(
+        leakedMatches[0].violations.some((v) => v.code === 'ERR_GLOBAL_RULE_REPO_LEAK'),
+        'Must flag ERR_GLOBAL_RULE_REPO_LEAK when global rule uses src/core/**/*.ts'
+      );
+
+      runRefactor(fakeGlobal, {
+        includeGlobal: true,
+        globalHomeDir: fakeHome,
+        apply: true,
+      });
+      const remediatedGlobalRule = globalStore.getRule('leaked-repo-scoped-rule');
+      assert.strictEqual(
+        remediatedGlobalRule?.scope_glob,
+        '**/*.ts',
+        'runRefactor --apply must remediate ERR_GLOBAL_RULE_REPO_LEAK to repo-agnostic glob'
+      );
+
+      // 6. auditHarnessSurfaces detects DUPLICATE_EVO_START_BLOCK_IN_FILE and DUPLICATE_GLOBAL_EVO_START_BLOCK
+      const pluginRuleFile = path.join(
+        fakeHome,
+        '.gemini',
+        'config',
+        'plugins',
+        'evo-kernel',
+        'rules',
+        'AGENTS.md'
+      );
+      fs.mkdirSync(path.dirname(pluginRuleFile), { recursive: true });
+      fs.writeFileSync(pluginRuleFile, '<!-- EVO:START -->\nseed\n<!-- EVO:END -->\n', 'utf8');
+      fs.writeFileSync(
+        path.join(fakeHome, '.gemini', 'GEMINI.md'),
+        '# User Global\n<!-- EVO:START -->\nseed1\n<!-- EVO:END -->\n<!-- EVO:START -->\nseed2\n<!-- EVO:END -->\n',
+        'utf8'
+      );
+
+      const dupSurfaceViolations = auditHarnessSurfaces(ws, {
+        includeGlobal: true,
+        globalHomeDir: fakeHome,
+      });
+      assert.ok(
+        dupSurfaceViolations.some((v) => v.code === 'DUPLICATE_EVO_START_BLOCK_IN_FILE'),
+        'Must detect multiple EVO:START blocks inside a single file'
+      );
+      assert.ok(
+        dupSurfaceViolations.some((v) => v.code === 'DUPLICATE_GLOBAL_EVO_START_BLOCK'),
+        'Must detect duplicate EVO:START block between ~/.gemini/GEMINI.md and installed plugin rules/AGENTS.md'
+      );
     } finally {
       if (prevGlobal === undefined) delete process.env.EVO_GLOBAL_DIR;
       else process.env.EVO_GLOBAL_DIR = prevGlobal;
