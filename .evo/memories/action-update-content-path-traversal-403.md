@@ -5,7 +5,7 @@ l0_summary: "Eager sanitizeId in update-content masks path traversal attempts as
 created_commit: "3d3bf4e"
 created_branch: "main"
 target_symbols: ["src/cli/ui.ts#startUiServer","src/core/storage.ts#sanitizeId"]
-ast_fingerprints: {"src/cli/ui.ts#startUiServer":{"symbol":"src/cli/ui.ts#startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":511,"end_line":1511,"signature":"export async function startUiServer(","ast_hash":"9c6ca97650322cd9"},"src/core/storage.ts#sanitizeId":{"symbol":"src/core/storage.ts#sanitizeId","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":164,"end_line":170,"signature":"export function sanitizeId(rawId: string): string","ast_hash":"1c9ec53cbe02e6e4"}}
+ast_fingerprints: {"src/cli/ui.ts#startUiServer":{"symbol":"src/cli/ui.ts#startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":516,"end_line":1523,"signature":"export async function startUiServer(","ast_hash":"fe97ba624ca7bb29"},"src/core/storage.ts#sanitizeId":{"symbol":"src/core/storage.ts#sanitizeId","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":194,"end_line":200,"signature":"export function sanitizeId(rawId: string): string","ast_hash":"1c9ec53cbe02e6e4"}}
 tags: ["ui","api","security","path-traversal"]
 origin: "evolved"
 created_at: "2026-11-05T08:52:30.589Z"

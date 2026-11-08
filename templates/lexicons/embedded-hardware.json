@@ -1,0 +1,76 @@
+{
+  "name": "embedded-hardware",
+  "description": "Optional domain lexicon for embedded systems, PCB schematics, BOMs, and electrical units.",
+  "synonyms": {
+    "硬件": ["hardware", "hw", "pcb", "schematic", "component", "bom"],
+    "原理": ["schematic", "net", "pin", "component", "pcb", "hw"],
+    "理图": ["schematic", "net", "pin", "component", "pcb"],
+    "器件": ["component", "bom", "part", "pcb", "hw"],
+    "元件": ["component", "bom", "part", "pcb"],
+    "物料": ["bom", "component", "part", "spec"],
+    "端口": ["port", "connector", "pin", "header", "net", "hw"],
+    "接口": ["port", "connector", "pin", "interface", "net", "hw"],
+    "接插": ["connector", "header", "pin", "port", "pcb", "hw"],
+    "插件": ["connector", "header", "pin", "pcb"],
+    "试口": ["connector", "pin", "header", "net", "port", "hw"],
+    "插座": ["connector", "socket", "header", "pin", "net"],
+    "端子": ["terminal", "connector", "pin", "net", "hw"],
+    "电压": ["voltage", "analog", "adc", "net", "power", "scaling"],
+    "电流": ["current", "analog", "adc", "shunt", "scaling"],
+    "电源": ["power", "supply", "rail", "voltage", "net", "hw"],
+    "供电": ["power", "supply", "rail", "voltage", "net"],
+    "调试": ["debug", "test", "hw", "port", "pin"],
+    "引脚": ["pin", "mcu", "gpio", "net", "mapping", "hw"],
+    "管脚": ["pin", "mcu", "gpio", "net", "mapping", "hw"],
+    "网络": ["net", "pcb", "schematic", "pin"],
+    "走线": ["pcb", "trace", "net", "layout"],
+    "采样": ["analog", "adc", "sampling", "scaling", "channel", "calc"],
+    "分压": ["divider", "analog", "adc", "scaling", "voltage", "calc"],
+    "运放": ["opamp", "analog", "adc", "scaling", "calc"],
+    "换算": ["scaling", "calc", "ratio", "analog", "adc", "unit"],
+    "比例": ["ratio", "scaling", "calc", "analog"],
+    "寄存": ["register", "firmware", "mcu"],
+    "固件": ["firmware", "mcu", "register"],
+    "hardware": ["hw", "pcb", "schematic", "component", "硬件", "原理", "器件", "引脚"],
+    "hw": ["hardware", "pcb", "schematic", "component", "pin", "net", "硬件", "器件"],
+    "schematic": ["pcb", "net", "pin", "component", "hardware", "原理", "理图", "网络"],
+    "pcb": ["hardware", "schematic", "component", "net", "pin", "硬件", "走线"],
+    "component": ["bom", "part", "pcb", "schematic", "器件", "元件", "物料"],
+    "bom": ["component", "part", "spec", "物料", "器件"],
+    "pin": ["mcu", "gpio", "net", "connector", "引脚", "管脚", "端口"],
+    "connector": ["pin", "header", "port", "net", "接插", "端口", "试口", "插座"],
+    "voltage": ["analog", "adc", "power", "net", "电压", "电源", "采样", "分压"],
+    "current": ["analog", "adc", "shunt", "电流", "采样"],
+    "analog": ["adc", "scaling", "calc", "voltage", "current", "采样", "分压", "运放", "换算"],
+    "adc": ["analog", "scaling", "calc", "mcu", "采样", "换算", "电压"],
+    "power": ["voltage", "supply", "rail", "net", "电源", "供电", "电压"]
+  },
+  "pattern_expansions": [
+    {
+      "pattern": "\\b(?:(?:CN|JP|TP|RY|RLY|ZD|LED|SW|CT|XTAL|IC|UA)[1-9]\\d*[A-Z0-9]*|[RCLUQDJPFKT]\\d{2,}[A-Z0-9]*|[UQDJ][1-9]\\b)",
+      "tokens": ["hardware", "component", "designator", "schematic", "pcb", "pin", "net", "bom", "hw", "硬件", "原理", "理图", "器件", "引脚"]
+    },
+    {
+      "pattern": "(?:^|[\\s([:=-])[+-]?\\d+(?:\\.\\d+)?(?:V|mV)\\b",
+      "tokens": ["voltage", "power", "net", "analog", "rail", "hw", "电压", "电源", "网络", "采样"]
+    },
+    {
+      "pattern": "(?:^|[\\s([:=-])[+-]?\\d+(?:\\.\\d+)?(?:A|mA)\\b",
+      "tokens": ["current", "power", "analog", "shunt", "hw", "电流", "采样", "电源"]
+    },
+    {
+      "pattern": "(?:^|[\\s([:=-])[+-]?\\d+(?:\\.\\d+)?\\s*(?:kohm|mohm|ohm)\\b",
+      "flags": "i",
+      "tokens": ["resistor", "analog", "divider", "component", "hw", "电阻", "分压", "采样", "器件"]
+    },
+    {
+      "pattern": "(?:^|[\\s([:=-])[+-]?\\d+(?:\\.\\d+)?\\s*(?:uF|nF|pF)\\b",
+      "tokens": ["capacitor", "filter", "component", "hw", "电容", "滤波", "器件"]
+    },
+    {
+      "pattern": "(?:^|[\\s([:=-])[+-]?\\d+(?:\\.\\d+)?\\s*(?:kHz|MHz|GHz|Hz)\\b",
+      "flags": "i",
+      "tokens": ["frequency", "clock", "pwm", "signal", "频率", "时钟", "信号"]
+    }
+  ]
+}

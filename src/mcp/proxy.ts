@@ -265,6 +265,9 @@ export class McpClientConnection {
 
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        if (method === 'initialize' || method === 'tools/list') {
+          this.close();
+        }
         reject(
           new Error(
             `Timeout (${timeoutMs}ms) waiting for response from external MCP server '${this.serverName}' (method: ${method})`
@@ -347,13 +350,23 @@ export class McpClientConnection {
   }
 }
 
+export type ExternalToolRecord = ExternalToolDefinition;
+
 export class McpProxyManager {
   private readonly connections = new Map<string, McpClientConnection>();
   private readonly connectionConfigKeys = new Map<string, string>();
   private readonly workspaceRoot: string;
+  private serversConfig: Record<string, ExternalMcpServerConfig> = {};
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, serversConfig?: Record<string, ExternalMcpServerConfig>) {
     this.workspaceRoot = workspaceRoot;
+    if (serversConfig) {
+      this.serversConfig = serversConfig;
+    }
+  }
+
+  public setServers(servers: Record<string, ExternalMcpServerConfig>): void {
+    this.serversConfig = servers;
   }
 
   private getConnection(serverName: string, config: ExternalMcpServerConfig): McpClientConnection {
@@ -371,39 +384,101 @@ export class McpProxyManager {
     return conn;
   }
 
-  public async syncExternalTools(
-    servers: Record<string, ExternalMcpServerConfig>
-  ): Promise<ExternalToolDefinition[]> {
-    const discovered: ExternalToolDefinition[] = [];
+  private async probeServerTools(
+    serverName: string,
+    config: ExternalMcpServerConfig
+  ): Promise<ExternalToolRecord[]> {
+    const conn = this.getConnection(serverName, config);
+    let tools;
+    try {
+      tools = await conn.listTools();
+    } catch (err) {
+      conn.close();
+      this.connections.delete(serverName);
+      this.connectionConfigKeys.delete(serverName);
+      throw err;
+    }
     const now = new Date().toISOString();
+    const records: ExternalToolRecord[] = [];
+    for (const t of tools) {
+      const id = formatExternalToolId(serverName, t.name);
+      records.push({
+        id,
+        serverName,
+        originalName: t.name,
+        title: `[External: ${serverName}] ${t.name}`,
+        description: t.description || `External MCP tool ${t.name} from server ${serverName}`,
+        inputSchema: t.inputSchema || { type: 'object' },
+        cachedAt: now,
+      });
+    }
+    return records;
+  }
 
-    for (const [serverName, config] of Object.entries(servers)) {
-      if (config.disabled) continue;
-      try {
-        const conn = this.getConnection(serverName, config);
-        const tools = await conn.listTools();
-        for (const t of tools) {
-          const id = formatExternalToolId(serverName, t.name);
-          discovered.push({
-            id,
-            serverName,
-            originalName: t.name,
-            title: `[External: ${serverName}] ${t.name}`,
-            description: t.description || `External MCP tool ${t.name} from server ${serverName}`,
-            inputSchema: t.inputSchema || { type: 'object' },
-            cachedAt: now,
-          });
-        }
-      } catch (err) {
+  public async discoverServerTools(
+    serverName: string,
+    config?: ExternalMcpServerConfig
+  ): Promise<ExternalToolRecord[]> {
+    const cfg = config || this.serversConfig[serverName];
+    if (!cfg || cfg.disabled) return [];
+    try {
+      return await this.probeServerTools(serverName, cfg);
+    } catch (err) {
+      console.error(
+        `[EvoKernel Warning] Failed to discover tools from external MCP server '${serverName}': ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      return [];
+    }
+  }
+
+  public async discoverAllDownstreamToolsWithStatus(
+    servers?: Record<string, ExternalMcpServerConfig>
+  ): Promise<{ tools: ExternalToolRecord[]; failedServers: string[] }> {
+    if (servers) {
+      this.serversConfig = servers;
+    }
+    const activeEntries = Object.entries(this.serversConfig).filter(([, cfg]) => cfg && !cfg.disabled);
+    const discovered: ExternalToolRecord[] = [];
+    const failedServers: string[] = [];
+
+    const results = await Promise.allSettled(
+      activeEntries.map(async ([serverName, config]) => {
+        const tools = await this.probeServerTools(serverName, config);
+        return { serverName, tools };
+      })
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const serverName = activeEntries[i][0];
+      const res = results[i];
+      if (res.status === 'fulfilled') {
+        discovered.push(...res.value.tools);
+      } else {
+        failedServers.push(serverName);
         console.error(
           `[EvoKernel Warning] Failed to discover tools from external MCP server '${serverName}': ${
-            err instanceof Error ? err.message : String(err)
+            res.reason instanceof Error ? res.reason.message : String(res.reason)
           }`
         );
       }
     }
 
-    return discovered;
+    return { tools: discovered, failedServers };
+  }
+
+  public async discoverAllDownstreamTools(
+    servers?: Record<string, ExternalMcpServerConfig>
+  ): Promise<ExternalToolRecord[]> {
+    const { tools } = await this.discoverAllDownstreamToolsWithStatus(servers);
+    return tools;
+  }
+
+  public async syncExternalTools(
+    servers: Record<string, ExternalMcpServerConfig>
+  ): Promise<ExternalToolDefinition[]> {
+    return this.discoverAllDownstreamTools(servers);
   }
 
   public async callTool(
@@ -421,6 +496,10 @@ export class McpProxyManager {
         durationMs: Date.now() - startTime,
       };
     } catch (err) {
+      const conn = this.connections.get(serverName);
+      conn?.close();
+      this.connections.delete(serverName);
+      this.connectionConfigKeys.delete(serverName);
       return {
         isError: true,
         durationMs: Date.now() - startTime,

@@ -17,7 +17,7 @@ import { EvoGatekeeper } from '../core/gatekeeper.js';
 import { executeSandboxedScriptAsync } from '../core/sandbox.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
 import { ensureGitInfoExclude, findGitRoot, syncManagedRuleBlocks } from '../cli/init.js';
-import { McpProxyManager, parseExternalToolId } from './proxy.js';
+import { McpProxyManager, parseExternalToolId, type ExternalToolRecord } from './proxy.js';
 
 const WORKSPACE_PARAM_SCHEMA = {
   type: 'string',
@@ -441,7 +441,13 @@ export class EvoMcpDispatcher {
     if (!ctx) {
       const storage = new EvoStorage(resolved);
       const proxyManager = new McpProxyManager(resolved);
-      ctx = { rootDir: resolved, storage, proxyManager };
+      const config = storage.getConfig();
+      ctx = {
+        rootDir: resolved,
+        storage,
+        proxyManager,
+        lastExternalServersSignature: !config.externalServers ? JSON.stringify({}) : undefined,
+      };
       this.contexts.set(resolved, ctx);
     }
     if (
@@ -508,10 +514,14 @@ export class EvoMcpDispatcher {
   private needsExternalToolsSync(ctx: WorkspaceContext): boolean {
     const config = ctx.storage.getConfig();
     const servers = config.externalServers;
-    if (!servers || typeof servers !== 'object') return false;
+    const sig = JSON.stringify(servers || {});
+    if (!servers || typeof servers !== 'object') {
+      return ctx.storage.listExternalTools().length > 0 && ctx.lastExternalServersSignature !== sig;
+    }
     const activeEntries = Object.entries(servers).filter(([, cfg]) => cfg && !cfg.disabled);
-    if (activeEntries.length === 0) return false;
-    const sig = JSON.stringify(servers);
+    if (activeEntries.length === 0) {
+      return ctx.storage.listExternalTools().length > 0 && ctx.lastExternalServersSignature !== sig;
+    }
     return ctx.lastExternalServersSignature !== sig;
   }
 
@@ -526,18 +536,29 @@ export class EvoMcpDispatcher {
     const activeEntries = Object.entries(servers).filter(([, cfg]) => cfg && !cfg.disabled);
     c.syncPromise = (async () => {
       try {
-        const discovered = await c.proxyManager.syncExternalTools(servers);
-        if (discovered.length > 0 || activeEntries.length === 0) {
+        const { tools: discovered, failedServers } =
+          await c.proxyManager.discoverAllDownstreamToolsWithStatus(servers);
+        let finalTools = discovered;
+        if (failedServers.length > 0) {
+          const cachedTools = c.storage.listExternalTools();
+          const preservedTools = cachedTools.filter(
+            (t) =>
+              failedServers.includes(t.serverName) &&
+              Boolean(servers[t.serverName] && !servers[t.serverName].disabled)
+          );
+          finalTools = [...discovered, ...preservedTools];
+        }
+        if (failedServers.length === 0 && (finalTools.length > 0 || activeEntries.length === 0)) {
           c.lastExternalServersSignature = sig;
-          if (hasValidEvoStructure(c.storage.evoDir)) {
-            c.storage.saveExternalTools(discovered);
-            if (!c.telemetry || c.telemetry.isClosed()) {
-              const refreshed = this.getOrCreateContext(c.storage.rootDir);
-              c.telemetry = refreshed.telemetry;
-              c.gatekeeper = refreshed.gatekeeper;
-            }
-            c.telemetry?.syncFromDisk();
+        }
+        if (hasValidEvoStructure(c.storage.evoDir)) {
+          c.storage.saveExternalTools(finalTools);
+          if (!c.telemetry || c.telemetry.isClosed()) {
+            const refreshed = this.getOrCreateContext(c.storage.rootDir);
+            c.telemetry = refreshed.telemetry;
+            c.gatekeeper = refreshed.gatekeeper;
           }
+          c.telemetry?.syncFromDisk();
         }
       } catch {
         // Ignore discovery failure and proceed with cached tools; leave signature unset for retry
@@ -1738,6 +1759,23 @@ export class EvoMcpDispatcher {
         },
       ],
     };
+  }
+
+  public async discoverAllDownstreamToolsWithStatus(): Promise<{
+    tools: ExternalToolRecord[];
+    failedServers: string[];
+  }> {
+    const servers = this.storage.getConfig().externalServers || {};
+    return this.proxyManager.discoverAllDownstreamToolsWithStatus(servers);
+  }
+
+  public get lastExternalServersSignature(): string | undefined {
+    return this.contexts.get(this.activeWorkspaceDir)?.lastExternalServersSignature;
+  }
+
+  public set lastExternalServersSignature(sig: string | undefined) {
+    const ctx = this.contexts.get(this.activeWorkspaceDir);
+    if (ctx) ctx.lastExternalServersSignature = sig;
   }
 
   public close(): void {

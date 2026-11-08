@@ -1298,14 +1298,126 @@ const CONTROL_KEYWORDS = new Set([
   'new',
 ]);
 
-function findSymbolDeclarationInLines(
+export function isBodylessForwardDeclaration(
+  lines: string[],
+  declLineIdx: number,
+  ext: string,
+  kind?: SymbolKind
+): boolean {
+  if (ext === '.py') return false;
+  if (kind && kind !== 'function' && kind !== 'method') return false;
+
+  const startLine = lines[declLineIdx] ?? '';
+  if (/^\s*(?:export\s+)?(?:type|interface|class|struct|enum|union)\b/.test(startLine)) {
+    return false;
+  }
+  if (/^\s*#\s*define\b/.test(startLine)) {
+    return false;
+  }
+  if (/^\s*(?:export\s+)?(?:const|let|var)\b/.test(startLine)) {
+    return false;
+  }
+
+  const maxLine = Math.min(lines.length, declLineIdx + 25);
+  let parenDepth = 0;
+  let angleDepth = 0;
+  let hasSeenParen = false;
+
+  for (let i = declLineIdx; i < maxLine; i++) {
+    const rawLine = lines[i] ?? '';
+    const cleanLine = stripCStyleComments(rawLine);
+
+    for (let c = 0; c < cleanLine.length; c++) {
+      const ch = cleanLine[c];
+      const next = c + 1 < cleanLine.length ? cleanLine[c + 1] : '';
+
+      if (ch === '(') {
+        parenDepth++;
+        hasSeenParen = true;
+        continue;
+      }
+      if (ch === ')') {
+        parenDepth = Math.max(0, parenDepth - 1);
+        continue;
+      }
+      if (ch === '<' && !hasSeenParen) {
+        angleDepth++;
+        continue;
+      }
+      if (ch === '>' && !hasSeenParen && angleDepth > 0) {
+        angleDepth--;
+        continue;
+      }
+
+      if (hasSeenParen && parenDepth === 0) {
+        if (ch === '=' && next === '>') {
+          return false;
+        }
+        if (ch === '{') {
+          return false;
+        }
+        if (ch === ';') {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+export function findAllSymbolDeclarationsInLines(
   lines: string[],
   symbolName: string,
-  classHint?: string
-): DeclarationMatch | null {
+  classHint?: string,
+  ext = '.ts'
+): DeclarationMatch[] {
   const esc = escapeRegExp(symbolName);
 
-  // Determine optional search window if classHint is provided
+  if (classHint) {
+    const classEsc = escapeRegExp(classHint);
+    // Go receiver method check: func (s *Server) Close()
+    const goReceiverRe = new RegExp(
+      `^\\s*func\\s*\\(\\s*(?:[A-Za-z_]\\w*\\s+)?\\*?${classEsc}\\b[^)]*\\)\\s*${esc}\\b`
+    );
+    const goMatches: DeclarationMatch[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (goReceiverRe.test(line)) {
+        const clean = line.replace(/\/\/.*$/, '').trim();
+        goMatches.push({
+          kind: 'method',
+          lineIndex: i,
+          signature: clean.replace(/\s*\{$/, '').trim(),
+        });
+        continue;
+      }
+      // Multiline Go receiver declaration check:
+      // func ( on line i, receiver on line i or i+1, and ) SymbolName( on line i+1 or i+2
+      if (/^\s*func\s*\(/.test(line)) {
+        for (let span = 2; span <= 3; span++) {
+          if (i + span <= lines.length) {
+            const slice = lines.slice(i, i + span).map((l) => l.replace(/\/\/.*$/, '').trim());
+            const joined = slice.join(' ');
+            if (goReceiverRe.test(joined)) {
+              goMatches.push({
+                kind: 'method',
+                lineIndex: i,
+                signature: joined.replace(/\s*\{$/, '').trim(),
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (goMatches.length > 0) {
+      const bodyful = goMatches.filter(
+        (m) => !isBodylessForwardDeclaration(lines, m.lineIndex, ext, m.kind)
+      );
+      return bodyful.length > 0 ? bodyful : goMatches;
+    }
+  }
+
   let searchStart = 0;
   let searchEnd = lines.length - 1;
 
@@ -1317,7 +1429,7 @@ function findSymbolDeclarationInLines(
     for (let i = 0; i < lines.length; i++) {
       if (classRe.test(lines[i])) {
         searchStart = i;
-        const endLine = findBraceBlockEnd(lines, i);
+        const endLine = findBraceBlockEnd(lines, i, ext);
         searchEnd = endLine;
         break;
       }
@@ -1384,7 +1496,8 @@ function findSymbolDeclarationInLines(
     },
   ];
 
-  const scanRange = (start: number, end: number): DeclarationMatch | null => {
+  const collectInRange = (start: number, end: number): DeclarationMatch[] => {
+    const matches: DeclarationMatch[] = [];
     for (let i = start; i <= end && i < lines.length; i++) {
       const line = lines[i];
       const cleanLine = line
@@ -1404,8 +1517,6 @@ function findSymbolDeclarationInLines(
           ) {
             continue;
           }
-          // Avoid matching plain function calls like `  foo(bar)` as method definitions
-          // unless preceded by modifiers, return type, or inside a class method header with `{`
           if (pat.kind === 'method' || pat.kind === 'function') {
             const hasModifierOrKeyword =
               /\b(?:public|private|protected|static|async|function|def|fn|func|void|int|char|bool|float|double|uint\d+_t|int\d+_t|size_t|long|short)\b/.test(
@@ -1466,23 +1577,132 @@ function findSymbolDeclarationInLines(
             }
           }
 
-          return {
+          matches.push({
             kind: pat.kind,
             lineIndex: i,
             signature: trimmed.replace(/\s*\{$/, '').trim(),
-          };
+          });
+          break;
         }
       }
     }
-    return null;
+    return matches;
   };
 
-  const inWindow = scanRange(searchStart, searchEnd);
-  if (inWindow) return inWindow;
-  if (searchStart > 0 || searchEnd < lines.length - 1) {
-    return scanRange(0, lines.length - 1);
+  let rawMatches = collectInRange(searchStart, searchEnd);
+  if (rawMatches.length === 0 && (searchStart > 0 || searchEnd < lines.length - 1)) {
+    rawMatches = collectInRange(0, lines.length - 1);
   }
-  return null;
+
+  const bodyful = rawMatches.filter(
+    (m) => !isBodylessForwardDeclaration(lines, m.lineIndex, ext, m.kind)
+  );
+  if (bodyful.length > 0) {
+    return bodyful;
+  }
+  return rawMatches;
+}
+
+export function findSymbolDeclarationInLines(
+  lines: string[],
+  symbolName: string,
+  classHint?: string,
+  ext = '.ts'
+): DeclarationMatch | null {
+  const matches = findAllSymbolDeclarationsInLines(lines, symbolName, classHint, ext);
+  return matches.length > 0 ? matches[0] : null;
+}
+
+export interface ExtractedSymbolBlock {
+  kind: SymbolKind;
+  start_line: number;
+  end_line: number;
+  signature: string;
+  blockCode: string;
+  skeleton_hash?: string;
+}
+
+export function extractSymbolBlockFromLines(
+  lines: string[],
+  symbolName: string,
+  classHint?: string,
+  ext = '.ts'
+): ExtractedSymbolBlock | null {
+  const decls = findAllSymbolDeclarationsInLines(lines, symbolName, classHint, ext);
+  if (!decls || decls.length === 0) return null;
+
+  const blocks: Array<{
+    decl: DeclarationMatch;
+    startIdx: number;
+    endIdx: number;
+    code: string;
+  }> = [];
+
+  for (const decl of decls) {
+    let startIdx = decl.lineIndex;
+    if (ext === '.py') {
+      let s = decl.lineIndex - 1;
+      while (s >= 0 && /^\s*@/.test(lines[s])) {
+        startIdx = s;
+        s--;
+      }
+    }
+    const endIdx =
+      ext === '.py'
+        ? findPythonBlockEnd(lines, decl.lineIndex)
+        : findBraceBlockEnd(lines, decl.lineIndex, ext);
+
+    const code = lines.slice(startIdx, endIdx + 1).join('\n');
+    blocks.push({
+      decl,
+      startIdx,
+      endIdx,
+      code,
+    });
+  }
+
+  blocks.sort((a, b) => a.startIdx - b.startIdx);
+
+  if (blocks.length === 1) {
+    return {
+      kind: blocks[0].decl.kind,
+      start_line: blocks[0].startIdx + 1,
+      end_line: blocks[0].endIdx + 1,
+      signature: blocks[0].decl.signature,
+      blockCode: blocks[0].code,
+      skeleton_hash: computeStructuralSkeletonHash(blocks[0].code, ext),
+    };
+  }
+
+  // Only perform Same-File Overload Aggregation when ext is an overload-capable language or classHint is provided
+  const isOverloadCapable =
+    Boolean(classHint) ||
+    /^\.(?:ts|tsx|js|jsx|mjs|cjs|cpp|hpp|cc|cxx|c|h|java|cs)$/i.test(ext);
+
+  if (!isOverloadCapable) {
+    return {
+      kind: blocks[0].decl.kind,
+      start_line: blocks[0].startIdx + 1,
+      end_line: blocks[0].endIdx + 1,
+      signature: blocks[0].decl.signature,
+      blockCode: blocks[0].code,
+      skeleton_hash: computeStructuralSkeletonHash(blocks[0].code, ext),
+    };
+  }
+
+  // Same-File Overload Aggregation
+  const combinedBlockCode = blocks.map((b) => b.code).join('\n');
+  const overloadSkeletonHash = blocks
+    .map((b) => computeStructuralSkeletonHash(b.code, ext))
+    .join('|');
+  return {
+    kind: blocks[0].decl.kind,
+    start_line: blocks[0].startIdx + 1,
+    end_line: blocks[blocks.length - 1].endIdx + 1,
+    signature: blocks[0].decl.signature,
+    blockCode: combinedBlockCode,
+    skeleton_hash: overloadSkeletonHash,
+  };
 }
 
 export function findBraceBlockEndV1(lines: string[], startIndex: number): number {
@@ -1619,7 +1839,95 @@ export function findBraceBlockEnd(
   let seenArrow = false;
   let inCppInitList = false;
 
+  const ppStack: Array<{
+    entryBraceDepth: number;
+    entryTypeBraceDepth: number;
+    entryFoundBodyOpen: boolean;
+    branchBraceDepths: number[];
+    branchTypeBraceDepths: number[];
+    anyFoundBodyOpen: boolean;
+    hasElse: boolean;
+    inDeadBranch: boolean;
+    parentDead: boolean;
+  }> = [];
+
   for (let i = startIndex; i < lines.length; i++) {
+    const rawLine = lines[i] || '';
+    const cleanLine = mLines[i] ?? rawLine;
+    const ppMatch =
+      rawLine.match(/^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b/) ||
+      cleanLine.match(/^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b/);
+
+    if (ppMatch) {
+      const dir = ppMatch[1];
+      if (dir === 'if' || dir === 'ifdef' || dir === 'ifndef') {
+        const isIfZero = dir === 'if' && /^#\s*if\s+0\b/.test(rawLine.trim());
+        const parentDead = ppStack.length > 0 && ppStack[ppStack.length - 1].inDeadBranch;
+        ppStack.push({
+          entryBraceDepth: braceDepth,
+          entryTypeBraceDepth: typeBraceDepth,
+          entryFoundBodyOpen: foundBodyOpen,
+          branchBraceDepths: [],
+          branchTypeBraceDepths: [],
+          anyFoundBodyOpen: foundBodyOpen,
+          hasElse: false,
+          inDeadBranch: parentDead || isIfZero,
+          parentDead,
+        });
+      } else if (dir === 'elif' || dir === 'else') {
+        if (ppStack.length > 0) {
+          const top = ppStack[ppStack.length - 1];
+          if (!top.inDeadBranch) {
+            top.branchBraceDepths.push(braceDepth);
+            top.branchTypeBraceDepths.push(typeBraceDepth);
+            top.anyFoundBodyOpen = top.anyFoundBodyOpen || foundBodyOpen;
+          }
+          if (dir === 'else') {
+            top.hasElse = true;
+            top.inDeadBranch = top.parentDead;
+          } else if (dir === 'elif') {
+            const isElifZero = /^#\s*elif\s+0\b/.test(rawLine.trim());
+            top.inDeadBranch = top.parentDead || isElifZero;
+          }
+          braceDepth = top.entryBraceDepth;
+          typeBraceDepth = top.entryTypeBraceDepth;
+          foundBodyOpen = top.entryFoundBodyOpen;
+        }
+      } else if (dir === 'endif') {
+        if (ppStack.length > 0) {
+          const top = ppStack.pop()!;
+          if (!top.inDeadBranch) {
+            top.branchBraceDepths.push(braceDepth);
+            top.branchTypeBraceDepths.push(typeBraceDepth);
+            top.anyFoundBodyOpen = top.anyFoundBodyOpen || foundBodyOpen;
+          }
+          if (top.branchBraceDepths.length > 0) {
+            if (top.hasElse) {
+              braceDepth = Math.max(...top.branchBraceDepths);
+              typeBraceDepth = Math.max(...top.branchTypeBraceDepths);
+              foundBodyOpen = top.anyFoundBodyOpen;
+            } else {
+              braceDepth = Math.max(top.entryBraceDepth, ...top.branchBraceDepths);
+              typeBraceDepth = Math.max(top.entryTypeBraceDepth, ...top.branchTypeBraceDepths);
+              foundBodyOpen = top.entryFoundBodyOpen || top.anyFoundBodyOpen;
+            }
+          } else {
+            braceDepth = top.entryBraceDepth;
+            typeBraceDepth = top.entryTypeBraceDepth;
+            foundBodyOpen = top.entryFoundBodyOpen;
+          }
+          if (ppStack.length === 0 && foundBodyOpen && braceDepth <= 0) {
+            return i;
+          }
+        }
+      }
+      continue;
+    }
+
+    if (ppStack.length > 0 && ppStack[ppStack.length - 1].inDeadBranch) {
+      continue;
+    }
+
     let line = mLines[i] ?? '';
 
     for (let c = 0; c < line.length; c++) {
@@ -1785,7 +2093,10 @@ export function findBraceBlockEnd(
         if (foundBodyOpen) {
           braceDepth--;
           if (braceDepth <= 0) {
-            return i;
+            if (ppStack.length === 0) {
+              return i;
+            }
+            braceDepth = Math.max(0, braceDepth);
           }
           continue;
         }
@@ -2010,32 +2321,6 @@ export function extractSymbolFingerprint(
     }
   }
 
-  // Short connection: if no direct file match and .codegraph/codegraph.db exists, query candidate files
-  if (candidateFiles.length === 0 && !parsed.isWholeFile) {
-    const cgDbPath = path.join(root, '.codegraph', 'codegraph.db');
-    if (fs.existsSync(cgDbPath)) {
-      try {
-        const db = new DatabaseSync(cgDbPath, { readOnly: true });
-        try {
-          const stmt = db.prepare(
-            `SELECT file_path FROM nodes WHERE name = ? OR qualified_name LIKE ? LIMIT 5`
-          );
-          const rows = stmt.all(parsed.symbolName, `%${parsed.symbolName}%`) as Array<{ file_path: string }>;
-          for (const row of rows) {
-            if (row.file_path) {
-              const full = path.resolve(root, row.file_path);
-              if (fs.existsSync(full) && !candidateFiles.includes(full)) {
-                candidateFiles.push(full);
-              }
-            }
-          }
-        } finally {
-          try { db.close(); } catch {}
-        }
-      } catch {}
-    }
-  }
-
   if (parsed.isWholeFile) {
     if (candidateFiles.length === 0) return null;
     const targetFile = candidateFiles[0];
@@ -2070,35 +2355,21 @@ export function extractSymbolFingerprint(
       if (!rawContent.includes(parsed.symbolName)) continue;
 
       const lines = rawContent.split(/\r?\n/);
-      const decl = findSymbolDeclarationInLines(lines, parsed.symbolName, parsed.classHint);
-      if (!decl) continue;
-
       const ext = path.extname(filePath).toLowerCase();
-      let startIdx = decl.lineIndex;
-      if (ext === '.py') {
-        let s = decl.lineIndex - 1;
-        while (s >= 0 && /^\s*@/.test(lines[s])) {
-          startIdx = s;
-          s--;
-        }
-      }
-      const endIdx =
-        ext === '.py'
-          ? findPythonBlockEnd(lines, decl.lineIndex)
-          : findBraceBlockEnd(lines, decl.lineIndex, ext);
+      const extracted = extractSymbolBlockFromLines(lines, parsed.symbolName, parsed.classHint, ext);
+      if (!extracted) continue;
 
-      const blockCode = lines.slice(startIdx, endIdx + 1).join('\n');
       const relPath = resolveCanonicalRelativePath(root, filePath);
 
       return {
         symbol: parsed.raw,
         file_path: relPath,
         file: relPath,
-        kind: decl.kind,
-        start_line: startIdx + 1,
-        end_line: endIdx + 1,
-        signature: decl.signature,
-        ast_hash: computeAstHash(blockCode, ext),
+        kind: extracted.kind,
+        start_line: extracted.start_line,
+        end_line: extracted.end_line,
+        signature: extracted.signature,
+        ast_hash: computeAstHash(extracted.blockCode, ext),
       } as unknown as SymbolFingerprint;
     }
     return null;
@@ -2160,46 +2431,6 @@ export function findSymbolCallers(
   const esc = escapeRegExp(parsed.symbolName);
   const refRegex = new RegExp(`\\b${esc}\\b`);
   const callers: string[] = [];
-
-  // Short connection: CodeGraph caller edges query if .codegraph/codegraph.db exists
-  const cgDbPath = path.join(root, '.codegraph', 'codegraph.db');
-  if (fs.existsSync(cgDbPath)) {
-    try {
-      const db = new DatabaseSync(cgDbPath, { readOnly: true });
-      try {
-        const stmt = db.prepare(`
-          SELECT DISTINCT n_src.file_path, e.line
-          FROM edges e
-          JOIN nodes n_tgt ON e.target = n_tgt.id
-          JOIN nodes n_src ON e.source = n_src.id
-          WHERE (n_tgt.name = ? OR n_tgt.qualified_name LIKE ?) AND e.kind = 'call' AND e.line IS NOT NULL
-          LIMIT ?
-        `);
-        const rows = stmt.all(parsed.symbolName, `%${parsed.symbolName}%`, maxCallers) as Array<{
-          file_path: string;
-          line: number;
-        }>;
-        for (const r of rows) {
-          if (r.file_path && r.line) {
-            const rel = r.file_path.replace(/\\/g, '/');
-            if (rel === defFilePath && r.line >= defStartLine && r.line <= defEndLine) {
-              continue;
-            }
-            const callerEntry = `${rel}:${r.line}`;
-            if (!callers.includes(callerEntry)) {
-              callers.push(callerEntry);
-            }
-          }
-        }
-      } finally {
-        try { db.close(); } catch {}
-      }
-    } catch {}
-  }
-
-  if (callers.length >= maxCallers) {
-    return callers;
-  }
 
   const files = collectWorkspaceSourceFiles(root, 300);
   for (const filePath of files) {
@@ -2439,31 +2670,17 @@ function extractSymbolFingerprintAtCommit(
 
       if (!rawContent.includes(parsed.symbolName)) continue;
       const lines = rawContent.split(/\r?\n/);
-      const decl = findSymbolDeclarationInLines(lines, parsed.symbolName, parsed.classHint);
-      if (!decl) continue;
-
-      let startIdx = decl.lineIndex;
-      if (ext === '.py') {
-        let s = decl.lineIndex - 1;
-        while (s >= 0 && /^\s*@/.test(lines[s])) {
-          startIdx = s;
-          s--;
-        }
-      }
-      const endIdx =
-        ext === '.py'
-          ? findPythonBlockEnd(lines, decl.lineIndex)
-          : findBraceBlockEnd(lines, decl.lineIndex, ext);
-      const blockCode = lines.slice(startIdx, endIdx + 1).join('\n');
+      const extracted = extractSymbolBlockFromLines(lines, parsed.symbolName, parsed.classHint, ext);
+      if (!extracted) continue;
 
       return {
         symbol: rawSpec,
         file_path: cleanRel,
-        kind: decl.kind,
-        start_line: startIdx + 1,
-        end_line: endIdx + 1,
-        signature: decl.signature,
-        ast_hash: computeAstHash(blockCode, ext),
+        kind: extracted.kind,
+        start_line: extracted.start_line,
+        end_line: extracted.end_line,
+        signature: extracted.signature,
+        ast_hash: computeAstHash(extracted.blockCode, ext),
       };
     }
     return null;
@@ -3050,15 +3267,23 @@ export function verifyMemoryFreshness(
             });
             if (histShowRes.status === 0 && typeof histShowRes.stdout === 'string') {
               const histLines = histShowRes.stdout.split(/\r?\n/);
-              const histBlockCode = histLines.slice(histFp.start_line - 1, histFp.end_line).join('\n');
+              const ext = path.extname(live.file_path).toLowerCase();
+              const histExtracted = extractSymbolBlockFromLines(histLines, parsed.symbolName, parsed.classHint, ext);
+              const histBlockCode = histExtracted
+                ? histExtracted.blockCode
+                : histLines.slice(histFp.start_line - 1, histFp.end_line).join('\n');
               const liveFullPath = path.resolve(root, live.file_path);
               if (fs.existsSync(liveFullPath)) {
                 const liveFullText = fs.readFileSync(liveFullPath, 'utf8');
                 const liveLines = liveFullText.split(/\r?\n/);
-                const liveBlockCode = liveLines.slice(live.start_line - 1, live.end_line).join('\n');
-                const ext = path.extname(live.file_path).toLowerCase();
-                const histSkel = computeStructuralSkeletonHash(histBlockCode, ext);
-                const liveSkel = computeStructuralSkeletonHash(liveBlockCode, ext);
+                const liveExtracted = extractSymbolBlockFromLines(liveLines, parsed.symbolName, parsed.classHint, ext);
+                const liveBlockCode = liveExtracted
+                  ? liveExtracted.blockCode
+                  : liveLines.slice(live.start_line - 1, live.end_line).join('\n');
+                const histSkel =
+                  histExtracted?.skeleton_hash ?? computeStructuralSkeletonHash(histBlockCode, ext);
+                const liveSkel =
+                  liveExtracted?.skeleton_hash ?? computeStructuralSkeletonHash(liveBlockCode, ext);
                 if (histSkel && liveSkel && histSkel === liveSkel) {
                   skeletonVerified = true;
                 }

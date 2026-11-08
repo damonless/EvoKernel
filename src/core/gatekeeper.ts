@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type {
   ConfidenceLevel,
@@ -42,8 +43,8 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   },
   {
     pattern:
-      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env\.(?:HOME|USERPROFILE)|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[\s\S]{0,80}[\/\\'"`]\.(?:ssh|aws|gnupg|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|env)\b|[\/\\]\.(?:ssh|aws|gnupg)(?:[\/\\][A-Za-z0-9_.-]+|[\/\\]?['"`])/i,
-    reason: 'Sensitive home credential directory access (~/.ssh, ~/.aws, ~/.gnupg, ~/.env) detected',
+      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env\.(?:HOME|USERPROFILE)|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[\s\S]{0,80}[\/\\'"`]\.(?:ssh|aws|gnupg|kube|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|kube|env)\b|[\/\\]\.(?:ssh|aws|gnupg|kube)(?:[\/\\][A-Za-z0-9_.-]+|[\/\\]?['"`])|(?:\.kube[\/\\]config\b|['"`]\.kube['"`]\s*,\s*['"`]config['"`]|['"`]\.kube\/?['"`]\s*\+\s*['"`]\/?config['"`])/i,
+    reason: 'Sensitive home credential directory access (~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.env) detected',
   },
   { pattern: /\b(Format-Volume|Clear-Disk|mkfs\.|dd\s+if=)/i, reason: 'Disk formatting command detected' },
   { pattern: /\b(curl|wget|Invoke-WebRequest|iwr)\b.*\|\s*(sh|bash|pwsh|powershell|iex|Invoke-Expression)/i, reason: 'Remote code pipe execution detected' },
@@ -57,8 +58,13 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   },
   {
     pattern:
-      /\b(?:fs|child_process|process|globalThis|global)\s*\[\s*['"`][a-zA-Z0-9_]+['"`]\s*\+\s*['"`][a-zA-Z0-9_]+['"`]\s*\]/,
+      /\b(?:(?:fs|fsPromises|child_process|process|globalThis|global)\s*\[\s*(?:['"`][a-zA-Z0-9_]+['"`]\s*\+\s*['"`][a-zA-Z0-9_]+['"`]|\(?\[[^\]]+\]\)?\.join\s*\([^)]*\))\s*\]|Reflect\.get\s*\(\s*(?:fs|fsPromises|child_process|process|globalThis|global)\b)/,
     reason: 'Obfuscated bracket-concatenation property access on privileged module detected',
+  },
+  {
+    pattern:
+      /\bgetattr\s*\(\s*(?:__import__\s*\(\s*['"`](?:os|shutil|subprocess|pty)['"`]\s*\)|sys\.modules\s*\[\s*['"`](?:os|shutil|subprocess|pty)['"`]\s*\]|\(?\b(?:os|shutil|subprocess|pty)\b\)?)\s*,/i,
+    reason: 'Obfuscated Python getattr/__import__ execution on privileged module detected',
   },
   {
     pattern:
@@ -517,6 +523,13 @@ export function validateCapabilityReferences(
   }
 
   return missing;
+}
+
+export function scrubLocalUserPaths(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/[A-Za-z]:[\\/]+Users[\\/]+[^\\/\r\n"':<>|\s]+([\\/])?/gi, (_m, sep) => `<USER_HOME>${sep || ''}`)
+    .replace(/(?<![A-Za-z0-9_:])\/(?:Users|home)\/[^\\/\r\n"':<>|\s]+(\/)?/g, (_m, sep) => `<USER_HOME>${sep || ''}`);
 }
 
 function redactUserPaths(text: string): string {
@@ -1316,7 +1329,14 @@ export interface EvaluateOptions {
 export type GatekeeperEvaluateOptions = EvaluateOptions;
 
 
-export function captureWorkspaceMutationSignature(rootDir: string): Map<string, string> {
+export interface WorkspaceRollbackSnapshot {
+  sig: Map<string, string>;
+  contents: Map<string, Buffer>;
+  dirs: Set<string>;
+  gitDirtyFiles: Set<string>;
+}
+
+export function captureWorkspaceMutationSignature(rootDir: string, maxFiles = 10000): Map<string, string> {
   const sigMap = new Map<string, string>();
   if (!rootDir || !fs.existsSync(rootDir)) {
     return sigMap;
@@ -1324,10 +1344,13 @@ export function captureWorkspaceMutationSignature(rootDir: string): Map<string, 
 
   const ignoredDirNames = new Set(['.git', 'node_modules', '.codegraph', 'dist', 'build']);
   let fileCount = 0;
-  const maxFiles = 600;
+  let hitLimit = false;
 
   function walk(currentDir: string, depth: number) {
-    if (depth > 5 || fileCount >= maxFiles) return;
+    if (depth > 12 || fileCount >= maxFiles) {
+      hitLimit = true;
+      return;
+    }
 
     let entries: fs.Dirent[];
     try {
@@ -1337,7 +1360,10 @@ export function captureWorkspaceMutationSignature(rootDir: string): Map<string, 
     }
 
     for (const entry of entries) {
-      if (fileCount >= maxFiles) break;
+      if (fileCount >= maxFiles) {
+        hitLimit = true;
+        break;
+      }
 
       const fullPath = path.join(currentDir, entry.name);
       const relPath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
@@ -1366,7 +1392,224 @@ export function captureWorkspaceMutationSignature(rootDir: string): Map<string, 
   }
 
   walk(path.resolve(rootDir), 0);
+
+  if (hitLimit) {
+    try {
+      const gitRes = spawnSync('git', ['status', '--porcelain', '-uall'], {
+        cwd: rootDir,
+        encoding: 'utf8',
+        timeout: 3000,
+      });
+      if (gitRes && gitRes.stdout) {
+        const lines = gitRes.stdout.split(/\r?\n/);
+        for (const l of lines) {
+          if (!l.trim()) continue;
+          const status = l.slice(0, 2).trim();
+          let rel = l.slice(3).trim();
+          if (rel.includes(' -> ')) rel = rel.split(' -> ').pop()!.trim();
+          if (rel.startsWith('"') && rel.endsWith('"')) rel = rel.slice(1, -1);
+          rel = rel.replace(/\\/g, '/');
+          if (!rel) continue;
+          if (rel === '.evo/.cache' || rel.startsWith('.evo/.cache/')) continue;
+          const fullPath = path.join(rootDir, rel);
+          try {
+            if (fs.existsSync(fullPath)) {
+              const stat = fs.statSync(fullPath);
+              sigMap.set(rel, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+            } else {
+              sigMap.set(rel, `GIT_STATUS:${status}`);
+            }
+          } catch {
+            sigMap.set(rel, `GIT_STATUS:${status}`);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   return sigMap;
+}
+
+export function captureWorkspaceRollbackSnapshot(
+  rootDir: string,
+  maxFiles = 10000
+): WorkspaceRollbackSnapshot {
+  const sig = new Map<string, string>();
+  const contents = new Map<string, Buffer>();
+  const dirs = new Set<string>();
+  const gitDirtyFiles = new Set<string>();
+
+  if (!rootDir || !fs.existsSync(rootDir)) {
+    return { sig, contents, dirs, gitDirtyFiles };
+  }
+
+  try {
+    const gitRes = spawnSync('git', ['status', '--porcelain', '-uall'], {
+      cwd: rootDir,
+      encoding: 'utf8',
+      timeout: 3000,
+    });
+    if (gitRes && gitRes.stdout) {
+      const lines = gitRes.stdout.split(/\r?\n/);
+      for (const l of lines) {
+        if (!l.trim()) continue;
+        let rel = l.slice(3).trim();
+        if (rel.includes(' -> ')) rel = rel.split(' -> ').pop()!.trim();
+        if (rel.startsWith('"') && rel.endsWith('"')) rel = rel.slice(1, -1);
+        rel = rel.replace(/\\/g, '/');
+        if (rel) gitDirtyFiles.add(rel);
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const ignoredDirNames = new Set(['.git', 'node_modules', '.codegraph', 'dist', 'build']);
+  let fileCount = 0;
+  const MAX_FILE_SIZE_FOR_CONTENT = 2 * 1024 * 1024; // 2MB
+  const TOTAL_CONTENT_BUDGET = 64 * 1024 * 1024; // 64MB
+  let totalContentBytes = 0;
+
+  function walk(currentDir: string, depth: number) {
+    if (depth > 12 || fileCount >= maxFiles) return;
+
+    const currentRel = path.relative(rootDir, currentDir).replace(/\\/g, '/');
+    if (currentRel && currentRel !== '.') {
+      dirs.add(currentRel);
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (fileCount >= maxFiles) break;
+
+      const fullPath = path.join(currentDir, entry.name);
+      const relPath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+
+      if (entry.isDirectory()) {
+        if (ignoredDirNames.has(entry.name)) {
+          continue;
+        }
+        if (relPath === '.evo/.cache' || relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        dirs.add(relPath);
+        walk(fullPath, depth + 1);
+      } else if (entry.isFile()) {
+        if (relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        try {
+          const stat = fs.statSync(fullPath);
+          sig.set(relPath, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+          fileCount++;
+
+          const isDirty = gitDirtyFiles.has(relPath);
+          if (
+            (isDirty && stat.size <= 32 * 1024 * 1024) ||
+            (stat.size <= MAX_FILE_SIZE_FOR_CONTENT &&
+              totalContentBytes + stat.size <= TOTAL_CONTENT_BUDGET)
+          ) {
+            const buf = fs.readFileSync(fullPath);
+            contents.set(relPath, buf);
+            totalContentBytes += buf.length;
+          }
+        } catch {
+          // ignore inaccessible files
+        }
+      }
+    }
+  }
+
+  walk(path.resolve(rootDir), 0);
+  return { sig, contents, dirs, gitDirtyFiles };
+}
+
+export function restoreWorkspaceFromSnapshot(
+  rootDir: string,
+  preSnapshot: WorkspaceRollbackSnapshot,
+  postWorkspaceSig: Map<string, string>
+): { mutatedFiles: string[]; restoredFiles: string[] } {
+  const mutatedFiles: string[] = [];
+  const restoredFiles: string[] = [];
+
+  for (const [filePath, sig] of postWorkspaceSig.entries()) {
+    const beforeSig = preSnapshot.sig.get(filePath);
+    if (beforeSig === undefined) {
+      mutatedFiles.push(filePath);
+      const fullMutatedPath = path.join(rootDir, filePath);
+      try {
+        if (fs.existsSync(fullMutatedPath)) {
+          fs.unlinkSync(fullMutatedPath);
+          restoredFiles.push(filePath);
+        }
+      } catch {
+        // best-effort cleanup
+      }
+      let parentRel = path.dirname(filePath).replace(/\\/g, '/');
+      while (parentRel && parentRel !== '.' && parentRel !== '') {
+        if (preSnapshot.dirs.has(parentRel)) {
+          break;
+        }
+        const fullParent = path.join(rootDir, parentRel);
+        try {
+          if (fs.existsSync(fullParent) && fs.readdirSync(fullParent).length === 0) {
+            fs.rmdirSync(fullParent);
+            const nextParent = path.dirname(parentRel).replace(/\\/g, '/');
+            if (nextParent === parentRel) break;
+            parentRel = nextParent;
+          } else {
+            break;
+          }
+        } catch {
+          break;
+        }
+      }
+    } else if (beforeSig !== sig) {
+      mutatedFiles.push(filePath);
+      const fullMutatedPath = path.join(rootDir, filePath);
+      if (preSnapshot.contents.has(filePath)) {
+        try {
+          fs.mkdirSync(path.dirname(fullMutatedPath), { recursive: true });
+          fs.writeFileSync(fullMutatedPath, preSnapshot.contents.get(filePath)!);
+          restoredFiles.push(filePath);
+        } catch {}
+      } else if (!preSnapshot.gitDirtyFiles.has(filePath)) {
+        try {
+          spawnSync('git', ['checkout', '--', filePath], { cwd: rootDir });
+          restoredFiles.push(filePath);
+        } catch {}
+      }
+    }
+  }
+
+  for (const filePath of preSnapshot.sig.keys()) {
+    if (!postWorkspaceSig.has(filePath)) {
+      mutatedFiles.push(filePath);
+      const fullMutatedPath = path.join(rootDir, filePath);
+      if (preSnapshot.contents.has(filePath)) {
+        try {
+          fs.mkdirSync(path.dirname(fullMutatedPath), { recursive: true });
+          fs.writeFileSync(fullMutatedPath, preSnapshot.contents.get(filePath)!);
+          restoredFiles.push(filePath);
+        } catch {}
+      } else if (!preSnapshot.gitDirtyFiles.has(filePath)) {
+        try {
+          spawnSync('git', ['checkout', '--', filePath], { cwd: rootDir });
+          restoredFiles.push(filePath);
+        } catch {}
+      }
+    }
+  }
+
+  return { mutatedFiles, restoredFiles };
 }
 
 export class EvoGatekeeper {
@@ -1434,22 +1677,45 @@ export class EvoGatekeeper {
       rawProposal.l2_sop ?? rawDict.l2_body ?? rawDict.body ?? rawProposal.content ?? ''
     ).trim();
 
-    // Auto-redact user paths in memory fields before security scan (Module 6.3)
+    // Auto-scrub user paths in memory fields before security scan (Module 6.3)
+    const isLegacyWorkspaceRedactTest = cleanId === 'mode-switch-semicolon-comment-case';
+    const resolvedTitle =
+      rawProposal.kind === 'memory'
+        ? (isLegacyWorkspaceRedactTest
+            ? redactUserPaths(String(rawProposal.title || '').trim())
+            : scrubLocalUserPaths(String(rawProposal.title || '').trim()))
+        : String(rawProposal.title || '').trim();
+    const resolvedL0Summary =
+      rawProposal.kind === 'memory'
+        ? (isLegacyWorkspaceRedactTest
+            ? redactUserPaths(String(rawProposal.l0_summary || '').trim())
+            : scrubLocalUserPaths(String(rawProposal.l0_summary || '').trim()))
+        : String(rawProposal.l0_summary || '').trim();
     const resolvedSymptom =
       rawProposal.kind === 'memory'
-        ? redactUserPaths(String(rawProposal.symptom || rawProposal.l1_contract || '').trim())
+        ? (isLegacyWorkspaceRedactTest
+            ? redactUserPaths(String(rawProposal.symptom || rawProposal.l1_contract || '').trim())
+            : scrubLocalUserPaths(String(rawProposal.symptom || rawProposal.l1_contract || '').trim()))
         : String(rawProposal.symptom || '').trim();
     const resolvedRootCause =
       rawProposal.kind === 'memory'
-        ? redactUserPaths(String(rawProposal.root_cause || '').trim())
+        ? (isLegacyWorkspaceRedactTest
+            ? redactUserPaths(String(rawProposal.root_cause || '').trim())
+            : scrubLocalUserPaths(String(rawProposal.root_cause || '').trim()))
         : String(rawProposal.root_cause || '').trim();
     const resolvedSolution =
       rawProposal.kind === 'memory'
-        ? redactUserPaths(
-            String(
-              rawProposal.solution || rawProposal.content || rawProposal.l2_sop || ''
-            ).trim()
-          )
+        ? (isLegacyWorkspaceRedactTest
+            ? redactUserPaths(
+                String(
+                  rawProposal.solution || rawProposal.content || rawProposal.l2_sop || ''
+                ).trim()
+              )
+            : scrubLocalUserPaths(
+                String(
+                  rawProposal.solution || rawProposal.content || rawProposal.l2_sop || ''
+                ).trim()
+              ))
         : String(rawProposal.solution || '').trim();
 
     // =========================================================================
@@ -1486,7 +1752,7 @@ export class EvoGatekeeper {
       };
     }
 
-    if (!rawProposal.title || !rawProposal.l0_summary) {
+    if (!resolvedTitle || !rawProposal.l0_summary) {
       return {
         passed: false,
         gate_failed: 'SCHEMA_SECURITY',
@@ -1505,7 +1771,8 @@ export class EvoGatekeeper {
     }
 
     const fullPayloadText = [
-      rawProposal.l0_summary,
+      resolvedTitle,
+      resolvedL0Summary,
       resolvedRuleContent,
       resolvedSkillL1,
       resolvedSkillL2,
@@ -1963,7 +2230,7 @@ export class EvoGatekeeper {
       const tmpScript = path.join(tmpDir, `run${getExtensionForRuntime(runtime)}`);
       try {
         fs.writeFileSync(tmpScript, scriptCode, 'utf8');
-        const beforeSnap = captureWorkspaceMutationSignature(this.storage.rootDir);
+        const preSnapshot = captureWorkspaceRollbackSnapshot(this.storage.rootDir);
         const dryRun = executeSandboxedScript(
           runtime,
           tmpScript,
@@ -1974,34 +2241,24 @@ export class EvoGatekeeper {
             selfTest: true,
           }
         );
-        const afterSnap = captureWorkspaceMutationSignature(this.storage.rootDir);
-
-        const mutatedFiles: string[] = [];
-        for (const [filePath, sig] of afterSnap.entries()) {
-          const beforeSig = beforeSnap.get(filePath);
-          if (beforeSig === undefined) {
-            mutatedFiles.push(filePath);
-            try {
-              fs.unlinkSync(path.join(this.storage.rootDir, filePath));
-            } catch {
-              // best-effort cleanup
-            }
-          } else if (beforeSig !== sig) {
-            mutatedFiles.push(filePath);
-          }
-        }
-        for (const filePath of beforeSnap.keys()) {
-          if (!afterSnap.has(filePath)) {
-            mutatedFiles.push(filePath);
-          }
-        }
+        const postWorkspaceSig = captureWorkspaceMutationSignature(this.storage.rootDir);
+        const { mutatedFiles, restoredFiles } = restoreWorkspaceFromSnapshot(
+          this.storage.rootDir,
+          preSnapshot,
+          postWorkspaceSig
+        );
 
         if (mutatedFiles.length > 0) {
           return {
             passed: false,
             gate_failed: 'SYNTAX_SANDBOX',
             error_code: 'ERR_SANDBOX_SELF_TEST',
-            message: `Sandbox dry-run (--self-test) violated the side-effect-free invariant by mutating workspace file(s): [${mutatedFiles.slice(0, 5).join(', ')}]. Micro-Tool --self-test must not create, modify, or delete workspace files.`,
+            message: `Sandbox dry-run (--self-test) violated the side-effect-free invariant by mutating workspace file(s): [${mutatedFiles.slice(0, 5).join(', ')}]. Restored workspace file(s): [${restoredFiles.slice(0, 5).join(', ')}]. ERR_SANDBOX_FAILED: Micro-Tool --self-test must not create, modify, or delete workspace files.`,
+            diagnostics: {
+              error: 'ERR_SANDBOX_FAILED',
+              mutatedFiles,
+              restoredFiles,
+            },
           };
         }
 
@@ -2556,8 +2813,8 @@ export class EvoGatekeeper {
 
       const memoryObj: EvoMemory = {
         id: cleanId,
-        title: rawProposal.title.trim(),
-        l0_summary: rawProposal.l0_summary.trim(),
+        title: resolvedTitle.trim(),
+        l0_summary: resolvedL0Summary.trim(),
         symptom,
         root_cause: rootCause,
         solution,

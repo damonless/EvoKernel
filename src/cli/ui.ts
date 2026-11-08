@@ -10,7 +10,12 @@ import type { ScoreReport } from './score.js';
 import { EvoStorage, estimateTokens, hasValidEvoStructure, parseFrontmatter, sanitizeId } from '../core/storage.js';
 import type { ConfidenceLevel, EvoKind, ProposalPayload, SymbolFingerprint } from '../core/types.js';
 import { EvoTelemetry, redactSensitiveDiagnostics } from '../core/telemetry.js';
-import { EvoGatekeeper } from '../core/gatekeeper.js';
+import {
+  EvoGatekeeper,
+  captureWorkspaceMutationSignature,
+  captureWorkspaceRollbackSnapshot,
+  restoreWorkspaceFromSnapshot,
+} from '../core/gatekeeper.js';
 import {
   clearMemoryVerificationCache,
   extractSymbolFingerprint,
@@ -695,12 +700,19 @@ export async function startUiServer(
               return;
             }
 
-            const execResult = await executeSandboxedScriptAsync(
-              tool.runtime,
-              tool.script_path,
-              {},
-              { selfTest: true, timeoutMs: 5000, workspaceRoot: ws }
-            );
+            const preSnapshot = captureWorkspaceRollbackSnapshot(ws);
+            let execResult: any;
+            try {
+              execResult = await executeSandboxedScriptAsync(
+                tool.runtime,
+                tool.script_path,
+                {},
+                { selfTest: true, timeoutMs: 5000, workspaceRoot: ws }
+              );
+            } finally {
+              const postSig = captureWorkspaceMutationSignature(ws);
+              restoreWorkspaceFromSnapshot(ws, preSnapshot, postSig);
+            }
 
             sendJsonResponse(res, 200, {
               ok: true,

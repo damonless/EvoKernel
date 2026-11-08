@@ -8,7 +8,7 @@ import type {
   EvoMemory,
   ProposalPayload,
 } from './types.js';
-import { EvoStorage, sanitizeId } from './storage.js';
+import { EvoStorage, sanitizeId, estimateTokens } from './storage.js';
 import { EvoTelemetry } from './telemetry.js';
 import { verifyMemoryFreshness } from './memory.js';
 import { EvoGatekeeper } from './gatekeeper.js';
@@ -286,6 +286,194 @@ export function detectTrajectoryFormat(raw: string): TrajectoryFormat {
   if (raw.includes('tool_use') || raw.includes('tool_result')) return 'claude';
 
   return 'antigravity';
+}
+
+export interface BaselineFitnessReport {
+  composite_score: number;
+  avgCapTokens: number;
+  keyword_stuffing_detected: boolean;
+  bloat_detected: boolean;
+  penalty: number;
+  attribution_reward: number;
+  attribution_precision: number;
+  active_rules: number;
+  active_skills: number;
+  helped_count: number;
+  hurt_count: number;
+  contested_count: number;
+}
+
+export interface EvaluateBaselineFitnessOptions {
+  workspaceRoot?: string;
+  storage?: EvoStorage;
+  telemetry?: EvoTelemetry;
+}
+
+export function evaluateBaselineFitness(
+  target: string | EvoStorage | EvaluateBaselineFitnessOptions,
+  telemetryArg?: EvoTelemetry
+): BaselineFitnessReport {
+  let storage: EvoStorage;
+  let telemetry: EvoTelemetry | undefined = telemetryArg;
+  let ownsTelemetry = false;
+
+  if (typeof target === 'string') {
+    storage = new EvoStorage(target);
+    if (!telemetry) {
+      try {
+        telemetry = new EvoTelemetry(storage);
+        ownsTelemetry = true;
+      } catch {}
+    }
+  } else if (target instanceof EvoStorage) {
+    storage = target;
+    if (!telemetry) {
+      try {
+        telemetry = new EvoTelemetry(storage);
+        ownsTelemetry = true;
+      } catch {}
+    }
+  } else if (target && typeof target === 'object') {
+    if (target.storage) {
+      storage = target.storage;
+    } else if (target.workspaceRoot) {
+      storage = new EvoStorage(target.workspaceRoot);
+    } else {
+      storage = new EvoStorage(process.cwd());
+    }
+    telemetry = target.telemetry ?? telemetry;
+    if (!telemetry) {
+      try {
+        telemetry = new EvoTelemetry(storage);
+        ownsTelemetry = true;
+      } catch {}
+    }
+  } else {
+    storage = new EvoStorage(process.cwd());
+  }
+
+  try {
+    const activeRules = storage.listRules().filter((r) => r.enabled !== false);
+    const activeSkills = storage.listSkills().filter((s) => s.enabled !== false);
+    const totalCaps = activeRules.length + activeSkills.length;
+
+    function hasExcessiveKeywordRepetition(text: string): boolean {
+      const words = text.toLowerCase().match(/\b[a-zA-Z0-9_-]{3,}\b/g) || [];
+      const stopWords = new Set(['the', 'and', 'for', 'with', 'when', 'use', 'from', 'that', 'this', 'not', 'are', 'must', 'all', 'any']);
+      const asciiCounts = new Map<string, number>();
+      for (const w of words) {
+        if (stopWords.has(w)) continue;
+        const c = (asciiCounts.get(w) || 0) + 1;
+        asciiCounts.set(w, c);
+        if (c > 8 && c / Math.max(1, words.length) > 0.12) {
+          return true;
+        }
+      }
+
+      const cjkMatches = text.match(/[\u4e00-\u9fff]+/g) || [];
+      const cjkBigrams: string[] = [];
+      for (const match of cjkMatches) {
+        for (let i = 0; i < match.length - 1; i++) {
+          cjkBigrams.push(match.slice(i, i + 2));
+        }
+      }
+      const totalCjkBigrams = cjkBigrams.length;
+      if (totalCjkBigrams >= 10) {
+        const cjkCounts = new Map<string, number>();
+        for (const bg of cjkBigrams) {
+          const c = (cjkCounts.get(bg) || 0) + 1;
+          cjkCounts.set(bg, c);
+          if (c > 8 && c / totalCjkBigrams > 0.12) {
+            return true;
+          }
+        }
+      }
+
+      return false;
+    }
+
+    let totalTokens = 0;
+    let keywordStuffingDetected = false;
+
+    for (const r of activeRules) {
+      const text = [r.title || '', r.l0_summary || '', r.content || ''].join(' ');
+      const tokCount = estimateTokens(text);
+      totalTokens += tokCount;
+
+      if (hasExcessiveKeywordRepetition(text)) {
+        keywordStuffingDetected = true;
+      }
+    }
+
+    for (const s of activeSkills) {
+      const text = [s.title || '', s.l0_summary || '', s.l1_contract || '', s.l2_sop || ''].join(' ');
+      const tokCount = estimateTokens(text);
+      totalTokens += tokCount;
+
+      if (hasExcessiveKeywordRepetition(text)) {
+        keywordStuffingDetected = true;
+      }
+    }
+
+    const avgCapTokens = totalCaps > 0 ? Math.round((totalTokens / totalCaps) * 10) / 10 : 0;
+    const bloatDetected = avgCapTokens > 350;
+
+    // Compute bounded penalty (up to -0.08)
+    let penalty = 0;
+    if (keywordStuffingDetected) {
+      penalty += 0.05;
+    }
+    if (bloatDetected) {
+      const excess = Math.min(1, (avgCapTokens - 350) / 350);
+      penalty += excess * 0.04;
+    }
+    penalty = Math.min(0.08, Math.round(penalty * 1000) / 1000);
+
+    // Attribution weighting
+    let helpedCount = 0;
+    let hurtCount = 0;
+    let contestedCount = 0;
+
+    if (telemetry) {
+      try {
+        const tMap = telemetry.getTelemetryMap();
+        for (const rec of tMap.values()) {
+          helpedCount += rec.helped_count || 0;
+          hurtCount += rec.hurt_count || 0;
+          contestedCount += rec.contested_count || 0;
+        }
+      } catch {}
+    }
+
+    const attributionDenominator = Math.max(1, helpedCount + hurtCount + contestedCount);
+    const attributionPrecision = helpedCount / attributionDenominator;
+    const attributionReward =
+      helpedCount > 0 ? Math.min(0.05, Math.round(attributionPrecision * 0.05 * 1000) / 1000) : 0;
+
+    let compositeScore = 1.0 - penalty + attributionReward;
+    compositeScore = Math.max(0, Math.min(1, Math.round(compositeScore * 1000) / 1000));
+
+    return {
+      composite_score: compositeScore,
+      avgCapTokens,
+      keyword_stuffing_detected: keywordStuffingDetected,
+      bloat_detected: bloatDetected,
+      penalty,
+      attribution_reward: attributionReward,
+      attribution_precision: Math.round(attributionPrecision * 1000) / 1000,
+      active_rules: activeRules.length,
+      active_skills: activeSkills.length,
+      helped_count: helpedCount,
+      hurt_count: hurtCount,
+      contested_count: contestedCount,
+    };
+  } finally {
+    if (ownsTelemetry && telemetry) {
+      try {
+        telemetry.close();
+      } catch {}
+    }
+  }
 }
 
 function renderAntigravityTrajectory(
@@ -1763,6 +1951,21 @@ export function probeCandidateInWorktree(
           probePassed = true;
           passed = true;
           attribution = 'unverified';
+        }
+
+      }
+
+      if (passed) {
+        const fitness = evaluateBaselineFitness({ storage: wtStorage, telemetry: wtTelemetry });
+        if (fitness.penalty > 0) {
+          if (score > 1) {
+            score = Math.max(0, Math.round(score * (1 - fitness.penalty * 4) * 1000) / 1000);
+            if (fitness.keyword_stuffing_detected) {
+              score = Math.min(score, 0.5);
+            }
+          } else {
+            score = Math.max(0, Math.round((score - fitness.penalty) * 1000) / 1000);
+          }
         }
       }
 

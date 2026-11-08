@@ -13,6 +13,12 @@ import type {
 } from './types.js';
 import { EvoStorage } from './storage.js';
 import { verifyMemoryFreshness } from './memory.js';
+import {
+  type DomainLexiconConfig,
+  compileLexiconConfig,
+  loadWorkspaceLexicon,
+  getCanonicalToken,
+} from './lexicon.js';
 
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -155,12 +161,20 @@ export function computeDiskSyncDigest(evoDir: string): string {
     };
     walk(dir);
   }
-  const extTools = path.join(evoDir, 'external-tools.json');
-  if (fs.existsSync(extTools)) {
-    try {
-      const st = fs.statSync(extTools);
-      parts.push(`external-tools.json:${st.mtimeMs}:${st.size}`);
-    } catch {}
+  const extraFiles = [
+    path.join(evoDir, '.cache', 'external_tools.json'),
+    path.join(evoDir, 'external-tools.json'),
+    path.join(evoDir, 'lexicon.json'),
+    path.join(path.dirname(evoDir), 'lexicon.json'),
+  ];
+  for (const f of extraFiles) {
+    if (fs.existsSync(f)) {
+      try {
+        const st = fs.statSync(f);
+        const label = path.relative(evoDir, f).replace(/\\/g, '/');
+        parts.push(`${label}:${st.mtimeMs}:${st.size}`);
+      } catch {}
+    }
   }
   parts.sort();
   return crypto.createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 24);
@@ -181,75 +195,21 @@ export function extractCjkBigrams(text: string): string[] {
   return Array.from(bigrams);
 }
 
-const BILINGUAL_TECH_SYNONYMS: Record<string, string[]> = {
-  硬件: ['hardware', 'hw', 'pcb', 'schematic', 'component', 'bom'],
-  原理: ['schematic', 'net', 'pin', 'component', 'pcb', 'hw'],
-  理图: ['schematic', 'net', 'pin', 'component', 'pcb'],
-  器件: ['component', 'bom', 'part', 'pcb', 'hw'],
-  元件: ['component', 'bom', 'part', 'pcb'],
-  物料: ['bom', 'component', 'part', 'spec'],
-  端口: ['port', 'connector', 'pin', 'header', 'net', 'hw'],
-  接口: ['port', 'connector', 'pin', 'interface', 'net', 'hw'],
-  接插: ['connector', 'header', 'pin', 'port', 'pcb', 'hw'],
-  插件: ['connector', 'header', 'pin', 'pcb'],
-  试口: ['connector', 'pin', 'header', 'net', 'port', 'hw'],
-  插座: ['connector', 'socket', 'header', 'pin', 'net'],
-  端子: ['terminal', 'connector', 'pin', 'net', 'hw'],
-  电压: ['voltage', 'analog', 'adc', 'net', 'power', 'scaling'],
-  电流: ['current', 'analog', 'adc', 'shunt', 'scaling'],
-  电源: ['power', 'supply', 'rail', 'voltage', 'net', 'hw'],
-  供电: ['power', 'supply', 'rail', 'voltage', 'net'],
-  调试: ['debug', 'test', 'hw', 'port', 'pin'],
-  引脚: ['pin', 'mcu', 'gpio', 'net', 'mapping', 'hw'],
-  管脚: ['pin', 'mcu', 'gpio', 'net', 'mapping', 'hw'],
-  网络: ['net', 'pcb', 'schematic', 'pin'],
-  走线: ['pcb', 'trace', 'net', 'layout'],
-  采样: ['analog', 'adc', 'sampling', 'scaling', 'channel', 'calc'],
-  分压: ['divider', 'analog', 'adc', 'scaling', 'voltage', 'calc'],
-  运放: ['opamp', 'analog', 'adc', 'scaling', 'calc'],
-  换算: ['scaling', 'calc', 'ratio', 'analog', 'adc', 'unit'],
-  比例: ['ratio', 'scaling', 'calc', 'analog'],
-  寄存: ['register', 'firmware', 'mcu'],
-  固件: ['firmware', 'mcu', 'register'],
-  表格: ['excel', 'xlsx', 'xls', 'spreadsheet', 'bom'],
-  工作: ['workbook', 'excel', 'xlsx'],
-  报告: ['report', 'docx', 'word', 'sop', 'qa'],
-  文档: ['document', 'docx', 'word', 'report', 'sop'],
-  提交: ['commit', 'git', 'message', 'format', 'log'],
-  版本: ['version', 'commit', 'release', 'git'],
-  日志: ['log', 'commit', 'git', 'trace', 'debug'],
-  规范: ['format', 'convention', 'sop', 'standard', 'commit'],
-  commit: ['git', 'message', 'format', '提交', '规范'],
-  git: ['commit', 'branch', 'merge', '提交', '版本'],
-  log: ['日志', 'commit', 'git'],
-  version: ['版本', 'release', 'commit'],
-  hardware: ['hw', 'pcb', 'schematic', 'component', '硬件', '原理', '器件', '引脚'],
-  hw: ['hardware', 'pcb', 'schematic', 'component', 'pin', 'net', '硬件', '器件'],
-  schematic: ['pcb', 'net', 'pin', 'component', 'hardware', '原理', '理图', '网络'],
-  pcb: ['hardware', 'schematic', 'component', 'net', 'pin', '硬件', '走线'],
-  component: ['bom', 'part', 'pcb', 'schematic', '器件', '元件', '物料'],
-  bom: ['component', 'part', 'spec', '物料', '器件'],
-  pin: ['mcu', 'gpio', 'net', 'connector', '引脚', '管脚', '端口'],
-  connector: ['pin', 'header', 'port', 'net', '接插', '端口', '试口', '插座'],
-  voltage: ['analog', 'adc', 'power', 'net', '电压', '电源', '采样', '分压'],
-  current: ['analog', 'adc', 'shunt', '电流', '采样'],
-  analog: ['adc', 'scaling', 'calc', 'voltage', 'current', '采样', '分压', '运放', '换算'],
-  adc: ['analog', 'scaling', 'calc', 'mcu', '采样', '换算', '电压'],
-  power: ['voltage', 'supply', 'rail', 'net', '电源', '供电', '电压'],
-};
+function resolveLexicon(workspaceRootOrLexicon?: string | DomainLexiconConfig) {
+  if (typeof workspaceRootOrLexicon === 'object' && workspaceRootOrLexicon !== null) {
+    return compileLexiconConfig(workspaceRootOrLexicon);
+  }
+  return loadWorkspaceLexicon(workspaceRootOrLexicon);
+}
 
-const HW_DESIGNATOR_REGEX =
-  /\b(?:(?:CN|JP|TP|RY|RLY|ZD|LED|SW|CT|XTAL|IC|UA)[1-9]\d*[A-Z0-9]*|[RCLUQDJPFKT]\d{2,}[A-Z0-9]*|[UQDJ][1-9]\b)/;
-
-const VOLTAGE_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?(?:V|mV)\b/;
-const CURRENT_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?(?:A|mA)\b/;
-const RESISTANCE_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?\s*(?:kohm|mohm|ohm)\b/i;
-const CAPACITANCE_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?\s*(?:uF|nF|pF)\b/;
-const FREQUENCY_UNIT_REGEX = /(?:^|[\s([:=-])[+-]?\d+(?:\.\d+)?\s*(?:kHz|MHz|GHz|Hz)\b/i;
-
-export function extractQueryTokens(query: string): string[] {
+export function extractQueryTokens(
+  query: string,
+  workspaceRootOrLexicon?: string | DomainLexiconConfig
+): string[] {
   const trimmed = query.trim();
   if (!trimmed) return [];
+
+  const lexicon = resolveLexicon(workspaceRootOrLexicon);
 
   const asciiMatches = trimmed.match(/[A-Za-z0-9_-]{2,}/g) || [];
   const allCjkBigrams = extractCjkBigrams(trimmed);
@@ -258,7 +218,7 @@ export function extractQueryTokens(query: string): string[] {
   const techCjkBigrams: string[] = [];
   const otherCjkBigrams: string[] = [];
   for (const bg of allCjkBigrams) {
-    if (BILINGUAL_TECH_SYNONYMS[bg]) {
+    if (lexicon.synonyms[bg]) {
       techCjkBigrams.push(bg);
     } else {
       otherCjkBigrams.push(bg);
@@ -267,105 +227,16 @@ export function extractQueryTokens(query: string): string[] {
 
   const expansionTokens = new Set<string>();
 
-  if (HW_DESIGNATOR_REGEX.test(trimmed)) {
-    for (const exp of [
-      'hardware',
-      'component',
-      'designator',
-      'schematic',
-      'pcb',
-      'pin',
-      'net',
-      'bom',
-      'hw',
-      '硬件',
-      '原理',
-      '理图',
-      '器件',
-      '引脚',
-    ]) {
-      expansionTokens.add(exp);
-    }
-  }
-
-  if (VOLTAGE_UNIT_REGEX.test(trimmed)) {
-    for (const exp of [
-      'voltage',
-      'power',
-      'net',
-      'analog',
-      'rail',
-      'hw',
-      '电压',
-      '电源',
-      '网络',
-      '采样',
-    ]) {
-      expansionTokens.add(exp);
-    }
-  }
-
-  if (CURRENT_UNIT_REGEX.test(trimmed)) {
-    for (const exp of [
-      'current',
-      'power',
-      'analog',
-      'shunt',
-      'hw',
-      '电流',
-      '采样',
-      '电源',
-    ]) {
-      expansionTokens.add(exp);
-    }
-  }
-
-  if (RESISTANCE_UNIT_REGEX.test(trimmed)) {
-    for (const exp of [
-      'resistor',
-      'analog',
-      'divider',
-      'component',
-      'hw',
-      '电阻',
-      '分压',
-      '采样',
-      '器件',
-    ]) {
-      expansionTokens.add(exp);
-    }
-  }
-
-  if (CAPACITANCE_UNIT_REGEX.test(trimmed)) {
-    for (const exp of [
-      'capacitor',
-      'filter',
-      'component',
-      'hw',
-      '电容',
-      '滤波',
-      '器件',
-    ]) {
-      expansionTokens.add(exp);
-    }
-  }
-
-  if (FREQUENCY_UNIT_REGEX.test(trimmed)) {
-    for (const exp of [
-      'frequency',
-      'clock',
-      'pwm',
-      'signal',
-      '频率',
-      '时钟',
-      '信号',
-    ]) {
-      expansionTokens.add(exp);
+  for (const exp of lexicon.patternExpansions) {
+    if (exp.regex.test(trimmed)) {
+      for (const tok of exp.tokens) {
+        expansionTokens.add(tok);
+      }
     }
   }
 
   for (const lit of allLiterals) {
-    const syns = BILINGUAL_TECH_SYNONYMS[lit] || BILINGUAL_TECH_SYNONYMS[lit.toLowerCase()];
+    const syns = lexicon.synonyms[lit] || lexicon.synonyms[lit.toLowerCase()];
     if (syns) {
       for (const s of syns) {
         expansionTokens.add(s);
@@ -427,12 +298,9 @@ const GENERIC_QUERY_CONCEPT_TOKENS = new Set([
   'init',
   'run',
   'build',
-  '电压',
-  '电源',
   '延时',
   '延迟',
   '关闭',
-  '关断',
   '状态',
   '模式',
   '检查',
@@ -448,9 +316,13 @@ interface QueryConceptGroup {
   terms: string[];
 }
 
-function buildQueryConceptGroups(query: string): QueryConceptGroup[] {
+export function buildQueryConceptGroups(
+  query: string,
+  workspaceRootOrLexicon?: string | DomainLexiconConfig
+): QueryConceptGroup[] {
   const trimmed = query.trim();
   if (!trimmed) return [];
+  const lexicon = resolveLexicon(workspaceRootOrLexicon);
   const asciiLiterals = (trimmed.match(/[A-Za-z0-9_-]{2,}/g) || []).map((t) => t.toLowerCase());
   const cjkBigrams = extractCjkBigrams(trimmed);
   const seen = new Set<string>();
@@ -459,7 +331,7 @@ function buildQueryConceptGroups(query: string): QueryConceptGroup[] {
   for (const lit of [...asciiLiterals, ...cjkBigrams]) {
     if (seen.has(lit)) continue;
     seen.add(lit);
-    const syns = BILINGUAL_TECH_SYNONYMS[lit] || BILINGUAL_TECH_SYNONYMS[lit.toLowerCase()] || [];
+    const syns = lexicon.synonyms[lit] || lexicon.synonyms[lit.toLowerCase()] || [];
     const terms = Array.from(new Set([lit, ...syns.map((s) => s.toLowerCase())]));
     groups.push({
       literal: lit,
@@ -827,27 +699,54 @@ export class EvoTelemetry {
     const skills = this.storage.listSkills();
     const tools = this.storage.listTools();
     const memories = this.storage.listMemories();
+    const externalTools = this.storage.listExternalTools();
 
     const activeIds = new Set<string>();
     for (const r of rules) activeIds.add(r.id);
     for (const s of skills) activeIds.add(s.id);
     for (const t of tools) activeIds.add(t.id);
     for (const m of memories) activeIds.add(m.id);
+    for (const et of externalTools) activeIds.add(et.id);
 
     const activeMemoryIds = new Set<string>(memories.map((m) => m.id));
 
     this.db.exec('BEGIN IMMEDIATE;');
     try {
-      this.db.exec('DELETE FROM capability_fts_fallback;');
-      const insertFallback = this.db.prepare(
-        'INSERT OR REPLACE INTO capability_fts_fallback (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
-      );
+      const existingFallbackMap = new Map<string, string>();
+      let fullRebuild = force;
+
+      if (!force) {
+        const existingFallbackRows = this.db
+          .prepare('SELECT id, kind, title, l0_summary, keywords, body FROM capability_fts_fallback')
+          .all() as Array<{
+            id: string;
+            kind: string;
+            title: string;
+            l0_summary: string;
+            keywords: string;
+            body: string;
+          }>;
+        for (const row of existingFallbackRows) {
+          existingFallbackMap.set(
+            row.id,
+            `${row.kind}\0${row.title}\0${row.l0_summary}\0${row.keywords}\0${row.body}`
+          );
+        }
+      }
 
       let insertFts: ReturnType<DatabaseSync['prepare']> | null = null;
       let deleteFtsById: ReturnType<DatabaseSync['prepare']> | null = null;
       if (this.fts5Enabled) {
         try {
-          this.db.exec('DELETE FROM capability_fts;');
+          if (!fullRebuild) {
+            const ftsCountRow = this.db
+              .prepare('SELECT count(*) as cnt FROM capability_fts')
+              .get() as { cnt?: number } | undefined;
+            const ftsCount = Number(ftsCountRow?.cnt ?? 0);
+            if (ftsCount !== existingFallbackMap.size) {
+              fullRebuild = true;
+            }
+          }
           insertFts = this.db.prepare(
             'INSERT INTO capability_fts (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
           );
@@ -858,6 +757,36 @@ export class EvoTelemetry {
           deleteFtsById = null;
         }
       }
+
+      if (fullRebuild) {
+        this.db.exec('DELETE FROM capability_fts_fallback;');
+        if (this.fts5Enabled) {
+          try {
+            this.db.exec('DELETE FROM capability_fts;');
+          } catch {}
+        }
+        existingFallbackMap.clear();
+      } else {
+        const deleteFallbackById = this.db.prepare(
+          'DELETE FROM capability_fts_fallback WHERE id = ?'
+        );
+        for (const oldId of existingFallbackMap.keys()) {
+          if (!activeIds.has(oldId)) {
+            deleteFallbackById.run(oldId);
+            if (deleteFtsById) {
+              try {
+                deleteFtsById.run(oldId);
+              } catch {}
+            }
+            existingFallbackMap.delete(oldId);
+          }
+        }
+      }
+
+      const insertFallback = this.db.prepare(
+        'INSERT OR REPLACE INTO capability_fts_fallback (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
+      );
+
       const seenFtsIds = new Set<string>();
       const upsertFtsRow = (
         id: string,
@@ -867,13 +796,23 @@ export class EvoTelemetry {
         kw: string,
         body: string
       ) => {
+        const nextSig = `${kind}\0${title}\0${l0Summary}\0${kw}\0${body}`;
+        const prevSig = existingFallbackMap.get(id);
+        if (!fullRebuild && prevSig === nextSig && !seenFtsIds.has(id)) {
+          seenFtsIds.add(id);
+          return;
+        }
+        const hadPreviousFtsRow = !fullRebuild && (prevSig !== undefined || seenFtsIds.has(id));
         insertFallback.run(id, kind, title, l0Summary, kw, body);
+        existingFallbackMap.set(id, nextSig);
         if (insertFts) {
-          if (seenFtsIds.has(id)) {
+          if (hadPreviousFtsRow || (fullRebuild && seenFtsIds.has(id))) {
             deleteFtsById?.run(id);
           }
           seenFtsIds.add(id);
           insertFts.run(id, kind, title, l0Summary, kw, body);
+        } else {
+          seenFtsIds.add(id);
         }
       };
 
@@ -971,9 +910,7 @@ export class EvoTelemetry {
       }
 
       // Index external tools into telemetry and FTS
-      const externalTools = this.storage.listExternalTools();
       for (const et of externalTools) {
-        activeIds.add(et.id);
         const idTokens = et.id.replace(/[-_]+/g, ' ');
         const schemaText = JSON.stringify(et.inputSchema);
         const cjkKw = extractCjkBigrams(`${et.title} ${et.description}`).join(' ');
@@ -1124,8 +1061,9 @@ export class EvoTelemetry {
     activeWorkspaceRoot?: string
   ): SearchHit[] {
     this.syncFromDisk();
-    const tokens = extractQueryTokens(query);
-    const conceptGroups = buildQueryConceptGroups(query);
+    const lexiconRoot = activeWorkspaceRoot || this.storage.rootDir;
+    const tokens = extractQueryTokens(query, lexiconRoot);
+    const conceptGroups = buildQueryConceptGroups(query, lexiconRoot);
 
     const fetchLimit = Math.max(limit * 3, 24);
     let rows: Array<Record<string, unknown>> = [];
@@ -1525,10 +1463,11 @@ export class EvoTelemetry {
         body?: string;
       }>;
 
-    const targetTokens = tokenizeForSimilarity(`${title} ${l0Summary} ${extraText}`);
+    const rootDir = this.storage.rootDir;
+    const targetTokens = tokenizeForSimilarity(`${title} ${l0Summary} ${extraText}`, rootDir);
     const hasCandidateBody = Boolean(candidateBody && candidateBody.trim().length >= 20);
     const targetBodyTokens = hasCandidateBody
-      ? tokenizeForSimilarity(cleanBodyForSimilarity(candidateBody))
+      ? tokenizeForSimilarity(cleanBodyForSimilarity(candidateBody), rootDir)
       : new Set<string>();
 
     if (targetTokens.size === 0 && targetBodyTokens.size === 0) return [];
@@ -1537,7 +1476,7 @@ export class EvoTelemetry {
     if (hasCandidateBody && targetBodyTokens.size >= 6) {
       for (const item of existing) {
         if (!item.body || item.body.trim().length < 20) continue;
-        const itemTokens = tokenizeForSimilarity(cleanBodyForSimilarity(item.body));
+        const itemTokens = tokenizeForSimilarity(cleanBodyForSimilarity(item.body), rootDir);
         for (const tok of itemTokens) {
           bodyDf.set(tok, (bodyDf.get(tok) || 0) + 1);
         }
@@ -1553,12 +1492,12 @@ export class EvoTelemetry {
         kind === 'memory' && extraText
           ? `${item.title} ${item.l0_summary} ${item.keywords || ''}`
           : `${item.title} ${item.l0_summary}`;
-      const candTokens = tokenizeForSimilarity(candText);
+      const candTokens = tokenizeForSimilarity(candText, rootDir);
       const headerSim = targetTokens.size > 0 ? jaccardSimilarity(targetTokens, candTokens) : 0;
 
       let effectiveBodySim = 0;
       if (hasCandidateBody && item.body && item.body.trim().length >= 20) {
-        const candBodyTokens = tokenizeForSimilarity(cleanBodyForSimilarity(item.body));
+        const candBodyTokens = tokenizeForSimilarity(cleanBodyForSimilarity(item.body), rootDir);
         const bodyJaccard = jaccardSimilarity(targetBodyTokens, candBodyTokens);
         effectiveBodySim = bodyJaccard;
 
@@ -1754,11 +1693,22 @@ export class EvoTelemetry {
   }
 }
 
-function tokenizeForSimilarity(text: string): Set<string> {
+function tokenizeForSimilarity(text: string, workspaceRoot?: string): Set<string> {
   const normalized = text.toLowerCase();
-  const words = normalized.match(/[a-z0-9_-]{2,}|[\u4e00-\u9fff]{1,2}/g) || [];
+  const lexicon = loadWorkspaceLexicon(workspaceRoot);
+  const asciiWords = normalized.match(/[a-z0-9_-]{2,}/g) || [];
+  const cjkBigrams = extractCjkBigrams(normalized);
   const stopWords = new Set(['the', 'and', 'for', 'with', 'when', 'use', 'rule', 'skill', 'tool', 'from', 'that', 'this']);
-  return new Set(words.filter((w) => !stopWords.has(w)));
+  const tokenSet = new Set<string>();
+  for (const w of [...asciiWords, ...cjkBigrams]) {
+    if (stopWords.has(w)) continue;
+    tokenSet.add(w);
+    const canonical = getCanonicalToken(w, lexicon);
+    if (canonical && !stopWords.has(canonical)) {
+      tokenSet.add(canonical);
+    }
+  }
+  return tokenSet;
 }
 
 function jaccardSimilarity(a: Set<string>, b: Set<string>): number {

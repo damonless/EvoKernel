@@ -2811,6 +2811,12 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     const dispatcher = new EvoMcpDispatcher(ws);
 
     try {
+      // Mount the embedded-hardware domain lexicon so hardware query expansions are activated
+      fs.copyFileSync(
+        path.join(process.cwd(), 'templates', 'lexicons', 'embedded-hardware.json'),
+        path.join(ws, '.evo', 'lexicon.json')
+      );
+
       // 1. Propose an English hardware micro-tool with tags and input_schema properties (TOOL-INDEX-2)
       // Note: Do NOT put literal 'CN3008' in the manifest so search recall relies purely on pattern & bilingual expansion!
       const toolRes = dispatcher.handleToolCall('evo_propose', {
@@ -2989,13 +2995,33 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       );
     }
 
-    const cnTokens = extractQueryTokens('CN3008 12V');
-    assert.ok(cnTokens.includes('hardware') && cnTokens.includes('voltage'), 'CN3008 12V must expand hardware & voltage tokens');
+    // By default (with NO .evo/lexicon.json), kernel is 100% purged of hardware hardcoding
+    for (const hwDefaultQuery of ['CN3008 12V', 'UA1 R7310 10kohm']) {
+      const defToks = extractQueryTokens(hwDefaultQuery);
+      assert.equal(
+        defToks.includes('hardware') ||
+          defToks.includes('schematic') ||
+          defToks.includes('voltage') ||
+          defToks.includes('resistor'),
+        false,
+        `Default kernel without lexicon must not inject hardware tokens for "${hwDefaultQuery}" (got: ${defToks.join(', ')})`
+      );
+    }
 
-    const uaTokens = extractQueryTokens('UA1 R7310 10kohm');
+    // When mounting embedded-hardware.json, verify domain expansions activate properly
+    const hwLexicon = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'templates', 'lexicons', 'embedded-hardware.json'), 'utf8')
+    );
+    const cnTokens = extractQueryTokens('CN3008 12V', hwLexicon);
+    assert.ok(
+      cnTokens.includes('hardware') && cnTokens.includes('voltage'),
+      'CN3008 12V must expand hardware & voltage tokens with hwLexicon'
+    );
+
+    const uaTokens = extractQueryTokens('UA1 R7310 10kohm', hwLexicon);
     assert.ok(
       uaTokens.includes('hardware') && uaTokens.includes('resistor') && !uaTokens.includes('voltage'),
-      'UA1 R7310 10kohm must expand hardware & resistor tokens without false voltage tokens'
+      'UA1 R7310 10kohm must expand hardware & resistor tokens without false voltage tokens with hwLexicon'
     );
 
     // 2. MEDIUM-1 & HIGH-2: evo_propose(supersedes_id) and evo_compact preserve core: true when core is omitted, and Gate 4 enforces host file budget ceiling

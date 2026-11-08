@@ -19,6 +19,9 @@ import {
   stripCStyleComments,
   findBraceBlockEnd,
   findPythonBlockEnd,
+  extractSymbolFingerprint,
+  extractSymbolBlockFromLines,
+  verifyMemoryFreshness,
 } from '../core/memory.js';
 import { auditHarnessSurfaces, runAudit, runRefactor } from '../cli/audit.js';
 import { isExcludedGitHotspotPath } from '../cli/score.js';
@@ -56,8 +59,10 @@ import {
   probeCandidateInWorktree,
   runOptimizationCycle,
   extractWorkspaceEvoDiff,
+  evaluateBaselineFitness,
 } from '../core/optimize.js';
-import type { ProposalPayload, TelemetryRecord, EvoSkill, EvoToolManifest } from '../core/types.js';
+import type { ProposalPayload, TelemetryRecord, EvoSkill, EvoToolManifest, EvoMemory } from '../core/types.js';
+import { McpProxyManager } from '../mcp/proxy.js';
 
 function createTempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-wave4-audit-'));
@@ -2526,6 +2531,765 @@ process.exit(hasRule ? 0 : 1);
       else process.env.EVO_GLOBAL_DIR = prevGlobal;
       safeCleanup(ws);
       safeCleanup(fakeHome);
+    }
+  });
+
+  test('44. [AST Engine Scheme B+] (Test 43) C/C++ #ifdef/#else unbalanced braces, bodyless signatures, same-file overloads, Go receiver methods', () => {
+    // 1. C/C++ #ifdef / #else unbalanced `{`
+    const cppCode = [
+      'int testFunc() {',
+      '#ifdef MODE_A',
+      '  if (a) {',
+      '#else',
+      '  if (b) {',
+      '#endif',
+      '    return 1;',
+      '  }',
+      '}',
+      'void nextFunc() {}',
+    ].join('\n');
+    const cppLines = cppCode.split('\n');
+    const blockEnd = findBraceBlockEnd(cppLines, 0, '.cpp');
+    assert.strictEqual(blockEnd, 8, 'findBraceBlockEnd must stop at line index 8 (true closing } of testFunc)');
+
+    const ws = createTempWorkspace();
+    try {
+      fs.writeFileSync(path.join(ws, 'main.cpp'), cppCode, 'utf8');
+      const fp = extractSymbolFingerprint(ws, 'main.cpp#testFunc');
+      assert.ok(fp, 'extractSymbolFingerprint must find testFunc');
+      assert.strictEqual(fp.start_line, 1);
+      assert.strictEqual(fp.end_line, 9, 'extractSymbolFingerprint end_line must stop at 9 and not swallow nextFunc');
+    } finally {
+      safeCleanup(ws);
+    }
+
+    // 2. Skip bodyless forward declarations / TS overload signatures
+    const tsCode = [
+      'export function transform(x: string): string;',
+      'export function transform(x: number): number;',
+      'export function transform(x: string | number): string | number {',
+      '  return x;',
+      '}',
+    ].join('\n');
+    const wsTs = createTempWorkspace();
+    try {
+      fs.writeFileSync(path.join(wsTs, 'transform.ts'), tsCode, 'utf8');
+      const fp = extractSymbolFingerprint(wsTs, 'transform.ts#transform');
+      assert.ok(fp, 'extractSymbolFingerprint must find transform');
+      assert.strictEqual(fp.start_line, 3, 'extractSymbolFingerprint must bind to implementation at line 3, skipping overloads');
+      assert.strictEqual(fp.end_line, 5);
+    } finally {
+      safeCleanup(wsTs);
+    }
+
+    // 3. Same-file overload aggregation
+    const wsOverload = createTempWorkspace();
+    try {
+      const cppOverloads = [
+        'int compute(int x) { return x + 1; }',
+        'int compute(int x, int y) { return x + y; }',
+      ].join('\n');
+      const srcFile = path.join(wsOverload, 'compute.cpp');
+      fs.writeFileSync(srcFile, cppOverloads, 'utf8');
+
+      const fpInitial = extractSymbolFingerprint(wsOverload, 'compute.cpp#compute');
+      assert.ok(fpInitial, 'extractSymbolFingerprint must find compute');
+      assert.strictEqual(fpInitial.start_line, 1);
+      assert.strictEqual(fpInitial.end_line, 2);
+
+      const mem: EvoMemory = {
+        id: 'mem-compute-overload',
+        title: 'Compute Overload Fix',
+        l0_summary: 'Handle overloaded compute functions',
+        symptom: 'Overflow in compute(x, y)',
+        root_cause: 'Missing range check',
+        solution: 'Guard y range',
+        target_symbols: ['compute.cpp#compute'],
+        ast_fingerprints: {
+          'compute.cpp#compute': fpInitial,
+        },
+        created_commit: 'HEAD',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const reportFresh = verifyMemoryFreshness(wsOverload, mem);
+      assert.strictEqual(reportFresh.overall_status, 'VERIFIED');
+
+      // Modify ONLY the second overload's control flow
+      const modifiedCpp = [
+        'int compute(int x) { return x + 1; }',
+        'int compute(int x, int y) { if (y < 0) return 0; return x * y; }',
+      ].join('\n');
+      fs.writeFileSync(srcFile, modifiedCpp, 'utf8');
+
+      const reportStale = verifyMemoryFreshness(wsOverload, mem);
+      assert.strictEqual(reportStale.overall_status, 'STALE', 'verifyMemoryFreshness must detect control flow mutation in second overload');
+    } finally {
+      safeCleanup(wsOverload);
+    }
+
+    // 4. Go receiver method binding
+    const wsGo = createTempWorkspace();
+    try {
+      const goCode = [
+        'package main',
+        '',
+        'type Client struct{}',
+        'type Server struct{}',
+        '',
+        'func (c *Client) Close() error { return nil }',
+        'func (s *Server) Close() error { return s.stop() }',
+      ].join('\n');
+      fs.writeFileSync(path.join(wsGo, 'server.go'), goCode, 'utf8');
+
+      const fp = extractSymbolFingerprint(wsGo, 'server.go#Server.Close');
+      assert.ok(fp, 'extractSymbolFingerprint must find Server.Close');
+      assert.strictEqual(fp.start_line, 7, 'Server.Close must bind to line 7, not line 6');
+      assert.strictEqual(fp.end_line, 7);
+      assert.match(fp.signature, /Server/);
+    } finally {
+      safeCleanup(wsGo);
+    }
+  });
+
+  test('45. [P0 Telemetry Fix: syncFromDisk Preserves ext__* External Tool Telemetry]', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      storage.saveExternalTools([
+        {
+          id: 'ext__demo__ping',
+          serverName: 'demo',
+          originalName: 'ping',
+          title: 'Demo Ping',
+          description: 'Pings demo server',
+          inputSchema: { type: 'object' },
+          cachedAt: new Date().toISOString(),
+        },
+      ]);
+
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        telemetry.syncFromDisk(true);
+        telemetry.recordUsage('ext__demo__ping', true, 500);
+        telemetry.recordUsage('ext__demo__ping', true, 500);
+        telemetry.recordCapabilityOutcome('ext__demo__ping', 'helped');
+
+        telemetry.syncFromDisk(true);
+
+        const rec = telemetry.getTelemetryMap().get('ext__demo__ping');
+        assert.ok(rec, 'ext__demo__ping record must exist in telemetry map');
+        assert.strictEqual(rec.hit_count, 2, 'hit_count must be 2');
+        assert.strictEqual(rec.success_count, 2, 'success_count must be 2');
+        assert.strictEqual(rec.helped_count, 1, 'helped_count must be 1');
+        assert.strictEqual(rec.tokens_saved, 1000, 'tokens_saved must be 1000');
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('46. [Gate 2 --self-test Byte-Level Rollback of Modified & Deleted Existing Files]', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        const gatekeeper = new EvoGatekeeper(storage, telemetry);
+
+        const modFile = path.join(ws, 'existing-modify.txt');
+        const delFile = path.join(ws, 'existing-delete.txt');
+        const rogueFile = path.join(ws, 'rogue-new.txt');
+
+        fs.writeFileSync(modFile, 'ORIGINAL_CONTENT_123', 'utf8');
+        fs.writeFileSync(delFile, 'DO_NOT_DELETE_ME', 'utf8');
+
+        const scriptCode = [
+          "import * as fs from 'node:fs';",
+          "import * as path from 'node:path';",
+          "const ws = process.env.EVO_WORKSPACE || process.cwd();",
+          "fs.writeFileSync(path.join(ws, 'existing-modify.txt'), 'CORRUPTED');",
+          "try { fs.unlinkSync(path.join(ws, 'existing-delete.txt')); } catch {}",
+          "fs.writeFileSync(path.join(ws, 'rogue-new.txt'), 'ROGUE_CONTENT');",
+          "process.exit(0);",
+        ].join('\n');
+
+        const res = gatekeeper.evaluateAndCommit({
+          kind: 'tool',
+          id: 'rogue-side-effect-tool',
+          title: 'Rogue Side Effect Tool',
+          l0_summary: 'Tool mutating workspace files during self-test',
+          runtime: 'node',
+          script_code: scriptCode,
+        });
+
+        assert.strictEqual(res.passed, false, 'evaluateAndCommit must fail on workspace file mutation');
+        assert.strictEqual(res.error_code, 'ERR_SANDBOX_SELF_TEST');
+        assert.strictEqual(fs.existsSync(rogueFile), false, 'rogue-new.txt must be removed');
+        assert.strictEqual(fs.existsSync(modFile), true, 'existing-modify.txt must exist');
+        assert.strictEqual(
+          fs.readFileSync(modFile, 'utf8'),
+          'ORIGINAL_CONTENT_123',
+          'existing-modify.txt content must be restored'
+        );
+        assert.strictEqual(fs.existsSync(delFile), true, 'existing-delete.txt must be restored');
+        assert.strictEqual(
+          fs.readFileSync(delFile, 'utf8'),
+          'DO_NOT_DELETE_ME',
+          'existing-delete.txt content must be restored'
+        );
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('47. [Gate 1 Obfuscation Hardening (.join, Python getattr, .kube/config) & Memory Local-Path Auto-Scrubbing]', () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        const gatekeeper = new EvoGatekeeper(storage, telemetry);
+
+        const obfuscatedCases = [
+          {
+            id: 'obf-join-rm',
+            runtime: 'node' as const,
+            code: "import fs from 'node:fs'; fs[['rm', 'Sync'].join('')](process.env.EVO_WORKSPACE);",
+          },
+          {
+            id: 'obf-py-getattr',
+            runtime: 'python' as const,
+            code: "getattr(__import__('shutil'), 'rmtree')('/')",
+          },
+          {
+            id: 'obf-kube-config',
+            runtime: 'node' as const,
+            code: "import fs from 'node:fs'; import os from 'node:os'; fs.readFileSync(os.homedir() + '/.kube/config');",
+          },
+        ];
+
+        for (const tc of obfuscatedCases) {
+          const res = gatekeeper.evaluateAndCommit({
+            kind: 'tool',
+            id: tc.id,
+            title: `Obfuscated Security Test ${tc.id}`,
+            l0_summary: 'Attempts obfuscated dangerous pattern execution',
+            runtime: tc.runtime,
+            script_code: tc.code,
+          });
+          assert.strictEqual(res.passed, false, `Must reject ${tc.id}`);
+          assert.strictEqual(res.error_code, 'ERR_SECURITY_VIOLATION', `Expected ERR_SECURITY_VIOLATION for ${tc.id}`);
+        }
+
+        // Memory Local-Path Auto-Scrubbing
+        // Create anchor file for AST symbol grounding
+        const srcDir = path.join(ws, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        fs.writeFileSync(path.join(srcDir, 'app.ts'), 'export function handleRequest() {}\n', 'utf8');
+
+        const memRes = gatekeeper.evaluateAndCommit({
+          kind: 'memory',
+          id: 'path-scrubbed-memory',
+          title: 'Crash Handling Memory',
+          l0_summary: 'Handle crash with scrubbed paths',
+          symptom: 'Crash at C:\\Users\\Alice\\project\\src\\app.ts:15 and /Users/bob/work/lib.ts:20',
+          root_cause: 'Null dereference at module entrypoint',
+          solution: 'Ensure target object is defined before property access',
+          target_symbols: ['src/app.ts#handleRequest'],
+        });
+
+        assert.strictEqual(memRes.passed, true, `Memory proposal must pass Gatekeeper: ${memRes.message}`);
+
+        const savedMem = storage.getMemory('path-scrubbed-memory');
+        assert.ok(savedMem, 'Saved memory must exist in storage');
+        assert.strictEqual(
+          savedMem.symptom,
+          'Crash at <USER_HOME>\\project\\src\\app.ts:15 and <USER_HOME>/work/lib.ts:20',
+          'Saved memory symptom must replace user home paths with <USER_HOME>'
+        );
+        assert.strictEqual(savedMem.symptom.includes('Alice'), false, 'Memory must not contain Alice');
+        assert.strictEqual(savedMem.symptom.includes('bob'), false, 'Memory must not contain bob');
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('48. [Concurrent Downstream MCP Discovery Resilience & Canonical Bilingual Similarity Folding]', async () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        storage.saveRule({
+          id: 'git-commit-convention',
+          title: 'Git 提交规范与日志格式',
+          l0_summary: '统一工作区提交日志规范',
+          scope_glob: '**/*',
+          core: true,
+          priority: 50,
+          tokens: 20,
+          origin: 'evolved',
+          content: '1. 统一工作区提交日志规范。',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        telemetry.syncFromDisk(true);
+
+        const similar = telemetry.findSimilarCapabilities(
+          'Git commit convention and log format',
+          'Standardize workspace commit log convention',
+          'rule'
+        );
+
+        assert.ok(similar.length > 0, 'Must find similar capabilities for bilingual query');
+        assert.strictEqual(similar[0].id, 'git-commit-convention');
+        assert.ok(
+          similar[0].similarity > 0.1,
+          `Bilingual canonical folding similarity must be > 0.1 (got ${similar[0].similarity})`
+        );
+
+        // Keyword stuffing: keyword repeated >8 times with density > 0.12
+        storage.saveRule({
+          id: 'keyword-stuffed-rule',
+          title: 'Optimization optimization optimization',
+          l0_summary: 'Optimization optimization optimization optimization',
+          scope_glob: '**/*.ts',
+          core: false,
+          priority: 50,
+          tokens: 50,
+          origin: 'evolved',
+          content: 'Optimization optimization optimization optimization ensures optimal performance across modules.',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+
+        const fitness = evaluateBaselineFitness(storage, telemetry);
+        assert.strictEqual(fitness.keyword_stuffing_detected, true, 'keyword_stuffing_detected must be true');
+        assert.ok(fitness.penalty > 0, `fitness penalty must be > 0 (got ${fitness.penalty})`);
+
+        // Concurrent downstream MCP discovery resilience: failing server does not crash discovery and preserves cached tools
+        const proxyManager = new McpProxyManager(ws);
+        try {
+          storage.saveExternalTools([
+            {
+              id: 'ext__server_failing__cached_tool',
+              serverName: 'server-failing',
+              originalName: 'cached_tool',
+              title: '[External: server-failing] cached_tool',
+              description: 'Cached tool from failing server',
+              inputSchema: { type: 'object' },
+              cachedAt: new Date().toISOString(),
+            },
+          ]);
+
+          const mockScript = path.join(ws, 'healthy_mcp.mjs');
+          fs.writeFileSync(
+            mockScript,
+            [
+              "import * as readline from 'node:readline';",
+              "const rl = readline.createInterface({ input: process.stdin, terminal: false });",
+              "rl.on('line', (line) => {",
+              "  const msg = JSON.parse(line.trim());",
+              "  if (msg.method === 'initialize') {",
+              "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'healthy', version: '1.0' } } }) + '\\n');",
+              "  } else if (msg.method === 'tools/list') {",
+              "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'healthy_ping', description: 'Ping tool', inputSchema: { type: 'object' } }] } }) + '\\n');",
+              "  }",
+              "});",
+            ].join('\n'),
+            'utf8'
+          );
+
+          const { tools, failedServers } = await proxyManager.discoverAllDownstreamToolsWithStatus({
+            'server-healthy': {
+              command: process.execPath,
+              args: [mockScript],
+            },
+            'server-failing': {
+              command: 'nonexistent_executable_binary_99999',
+              args: [],
+            },
+          });
+
+          assert.ok(tools.some((t) => t.id === 'ext__server-healthy__healthy_ping'), 'Must discover tool from healthy server');
+          assert.ok(failedServers.includes('server-failing'), 'server-failing must be in failedServers');
+        } finally {
+          proxyManager.close();
+        }
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('49. [Deep Audit Round 2: Preprocessor Dead-Branch & Closing Brace, Go Receiver Disambiguation, Dirty File & Empty Dir Rollback]', () => {
+    // 1. C/C++ #ifdef ... } #else ... } #endif & #if 0 Dead Code
+    const cCode = [
+      'int initHardware(int mode) {',
+      '#if 0',
+      '  // Dead code with unbalanced closing braces } } }',
+      '  if (legacy) { return -1; } } }',
+      '#endif',
+      '  if (mode < 0) return -1;',
+      '#ifdef PLATFORM_A',
+      '  return setupPlatformA(mode);',
+      '}',
+      '#else',
+      '  return setupPlatformB(mode);',
+      '}',
+      '#endif',
+      'int nextFunction() { return 0; }',
+    ].join('\n');
+    const cLines = cCode.split('\n');
+    const endIdx = findBraceBlockEnd(cLines, 0, '.c');
+    assert.strictEqual(
+      endIdx,
+      12,
+      'findBraceBlockEnd must ignore unbalanced } in #if 0 and close at #endif (line index 12) when both #ifdef and #else close the function body'
+    );
+    const extractedC = extractSymbolBlockFromLines(cLines, 'initHardware', undefined, '.c');
+    assert.ok(extractedC, 'extractSymbolBlockFromLines must extract initHardware');
+    assert.strictEqual(extractedC.start_line, 1);
+    assert.strictEqual(
+      extractedC.end_line,
+      13,
+      'extractSymbolBlockFromLines must extract the entire function through #endif (line 13)'
+    );
+    assert.ok(
+      extractedC.blockCode.includes('setupPlatformB') && extractedC.blockCode.endsWith('#endif'),
+      'Extracted blockCode must include the #else branch and end at #endif'
+    );
+
+    // 2. Go Distinct Receiver Methods Without classHint & Multiline Go Receiver With classHint
+    const goCode = [
+      'package transport',
+      '',
+      'type Server struct{}',
+      'type Client struct{}',
+      '',
+      'func (s *Server) Close() error {',
+      '  return nil',
+      '}',
+      '',
+      'func (',
+      '  c *Client,',
+      ') Close() error {',
+      '  return nil',
+      '}',
+    ].join('\n');
+    const goLines = goCode.split('\n');
+
+    const extractedWithoutHint = extractSymbolBlockFromLines(goLines, 'Close', undefined, '.go');
+    assert.ok(extractedWithoutHint, 'Must extract first Close method when classHint is omitted');
+    assert.strictEqual(extractedWithoutHint.start_line, 6);
+    assert.strictEqual(
+      extractedWithoutHint.end_line,
+      8,
+      'Must NOT merge unrelated Go receiver methods into a Franken-symbol when classHint is omitted'
+    );
+    assert.strictEqual(
+      extractedWithoutHint.blockCode.includes('c *Client'),
+      false,
+      'First method block must not include second receiver method'
+    );
+
+    const extractedMultilineClient = extractSymbolBlockFromLines(goLines, 'Close', 'Client', '.go');
+    assert.ok(
+      extractedMultilineClient,
+      'Must match multiline Go receiver func (\\n c *Client,\\n) Close() when classHint = Client'
+    );
+    assert.strictEqual(extractedMultilineClient.start_line, 10);
+    assert.strictEqual(extractedMultilineClient.end_line, 14);
+    assert.match(extractedMultilineClient.blockCode, /c \*Client/);
+
+    // 3. Gate 2 Rollback Empty Directory Cleanup & Dirty Large File (>512KB) Preservation
+    const ws = createTempWorkspace();
+    try {
+      child_process.spawnSync('git', ['init'], { cwd: ws });
+      child_process.spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws });
+      child_process.spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: ws });
+
+      const largeDirtyPath = path.join(ws, 'large-dirty.txt');
+      fs.writeFileSync(largeDirtyPath, 'COMMITTED_HEAD_CONTENT\n', 'utf8');
+      child_process.spawnSync('git', ['add', 'large-dirty.txt'], { cwd: ws });
+      child_process.spawnSync('git', ['commit', '-m', 'Initial commit'], { cwd: ws });
+
+      // Modify large-dirty.txt with ~600KB uncommitted content (> 512KB)
+      const dirtyContent = 'D'.repeat(600 * 1024);
+      fs.writeFileSync(largeDirtyPath, dirtyContent, 'utf8');
+
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        const gatekeeper = new EvoGatekeeper(storage, telemetry);
+        const rogueDir = path.join(ws, 'rogue_dir');
+        const rogueNestedDir = path.join(rogueDir, 'nested');
+        const rogueFile = path.join(rogueNestedDir, 'polluted.txt');
+
+        const res = gatekeeper.evaluateAndCommit({
+          kind: 'tool',
+          id: 'dirty-large-and-nested-dir-polluter',
+          title: 'Dirty Large And Nested Dir Polluter',
+          l0_summary: 'Tool whose self-test creates nested dirs and corrupts a 600KB dirty file.',
+          runtime: 'node',
+          script_code: [
+            "import * as fs from 'node:fs';",
+            "import * as path from 'node:path';",
+            "const ws = process.env.EVO_WORKSPACE || process.cwd();",
+            "const nested = path.join(ws, 'rogue_dir', 'nested');",
+            "fs.mkdirSync(nested, { recursive: true });",
+            "fs.writeFileSync(path.join(nested, 'polluted.txt'), 'polluted');",
+            "fs.writeFileSync(path.join(ws, 'large-dirty.txt'), 'corrupted');",
+            "process.exit(0);",
+          ].join('\n'),
+        });
+
+        assert.strictEqual(res.passed, false, 'Gatekeeper must reject workspace-mutating self-test');
+        assert.strictEqual(res.error_code, 'ERR_SANDBOX_SELF_TEST');
+        assert.strictEqual(
+          (res.diagnostics as any)?.error,
+          'ERR_SANDBOX_FAILED',
+          'Diagnostics must report ERR_SANDBOX_FAILED'
+        );
+        assert.strictEqual(fs.existsSync(rogueFile), false, 'Polluted file must be removed');
+        assert.strictEqual(fs.existsSync(rogueNestedDir), false, 'Empty nested directory rogue_dir/nested must be removed');
+        assert.strictEqual(fs.existsSync(rogueDir), false, 'Empty parent directory rogue_dir must be removed');
+        const restoredContent = fs.readFileSync(largeDirtyPath, 'utf8');
+        assert.strictEqual(
+          restoredContent.length,
+          dirtyContent.length,
+          'large-dirty.txt must be restored to its exact 600KB uncommitted size (not reverted to HEAD)'
+        );
+        assert.strictEqual(restoredContent, dirtyContent);
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('50. [Deep Audit Round 2: Forward-Slash Path Scrubbing, CJK Keyword Stuffing, External Tools Digest & Odd-Length CJK Similarity]', async () => {
+    const ws = createTempWorkspace();
+    try {
+      const lateScriptPath = path.join(ws, 'late_recovery_mcp.mjs');
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        const gatekeeper = new EvoGatekeeper(storage, telemetry);
+
+        // 4. Gate 1 Forward-Slash Windows Path Scrubbing in memory (including title) & Obfuscated DANGEROUS_PATTERNS
+        const srcDir = path.join(ws, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        fs.writeFileSync(path.join(srcDir, 'app.ts'), 'export function bootApp() { return true; }\n', 'utf8');
+
+        const memRes = gatekeeper.evaluateAndCommit({
+          kind: 'memory',
+          id: 'forward-slash-win-path-memory',
+          title: 'Crash in C:/Users/Alice/project/src/app.ts:10 during boot',
+          l0_summary: 'Forward-slash Windows user path in C:/Users/Alice/project/src/app.ts:10',
+          symptom: 'Error stack trace pointing to C:/Users/Alice/project/src/app.ts:10',
+          root_cause: 'Uninitialized state at C:/Users/Alice/project/src/app.ts:10',
+          solution: 'Initialize state before calling bootApp',
+          target_symbols: ['src/app.ts#bootApp'],
+        });
+        assert.strictEqual(memRes.passed, true, `Memory with forward-slash Windows path must pass Gate 1: ${memRes.message}`);
+        const savedMem = storage.getMemory('forward-slash-win-path-memory');
+        assert.ok(savedMem, 'Saved memory must exist');
+        assert.strictEqual(
+          savedMem.title,
+          'Crash in <USER_HOME>/project/src/app.ts:10 during boot',
+          'savedMem.title must scrub C:/Users/Alice/ to <USER_HOME>/'
+        );
+        assert.strictEqual(
+          savedMem.symptom,
+          'Error stack trace pointing to <USER_HOME>/project/src/app.ts:10',
+          'savedMem.symptom must scrub C:/Users/Alice/ to <USER_HOME>/'
+        );
+        assert.strictEqual(savedMem.title.includes('Alice'), false);
+        assert.strictEqual(savedMem.symptom.includes('Alice'), false);
+
+        const obfuscatedTools = [
+          {
+            id: 'obf-reflect-get-rm',
+            code: "import * as fs from 'node:fs'; Reflect.get(fs, 'rmSync')(process.env.EVO_WORKSPACE, { recursive: true });",
+          },
+          {
+            id: 'obf-paren-array-join-rm',
+            code: "import * as fs from 'node:fs'; fs[(['rm', 'Sync']).join('')](process.env.EVO_WORKSPACE, { recursive: true });",
+          },
+        ];
+        for (const obf of obfuscatedTools) {
+          const toolRes = gatekeeper.evaluateAndCommit({
+            kind: 'tool',
+            id: obf.id,
+            title: `Obfuscated Tool ${obf.id}`,
+            l0_summary: 'Attempts obfuscated rmSync via Reflect.get or parenthesized array join',
+            runtime: 'node',
+            script_code: obf.code,
+          });
+          assert.strictEqual(toolRes.passed, false, `Must reject ${obf.id}`);
+          assert.strictEqual(toolRes.error_code, 'ERR_SECURITY_VIOLATION');
+        }
+
+        // 5. Optimize CJK Keyword Stuffing Detection (evaluateBaselineFitness)
+        storage.saveRule({
+          id: 'cjk-keyword-stuffed-rule',
+          title: '性能优化指南',
+          l0_summary: '性能优化 '.repeat(6).trim(),
+          scope_glob: '**/*.ts',
+          core: false,
+          priority: 50,
+          tokens: 40,
+          origin: 'evolved',
+          content: '性能优化 '.repeat(12).trim(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        const fitness = evaluateBaselineFitness(storage, telemetry);
+        assert.strictEqual(
+          fitness.keyword_stuffing_detected,
+          true,
+          'evaluateBaselineFitness must detect CJK keyword stuffing'
+        );
+        assert.ok(fitness.penalty > 0, `Expected fitness.penalty > 0, got ${fitness.penalty}`);
+
+        // 6a. External Tools Cache Digest Sync (.evo/.cache/external_tools.json) without force=true
+        telemetry.syncFromDisk(false);
+        storage.saveExternalTools([
+          {
+            id: 'ext__digest_srv__quantum_profiler',
+            serverName: 'digest_srv',
+            originalName: 'quantum_profiler',
+            title: '[External: digest_srv] quantum_profiler',
+            description: 'Profiles quantum tensor pipelines',
+            inputSchema: { type: 'object' },
+            cachedAt: new Date().toISOString(),
+          },
+        ]);
+        // Calling syncFromDisk(false) must detect the updated external_tools.json digest
+        telemetry.syncFromDisk(false);
+        const extHits = telemetry.search('quantum_profiler', 'tool', 5, ws);
+        assert.ok(
+          extHits.some((h) => h.id === 'ext__digest_srv__quantum_profiler'),
+          'telemetry.syncFromDisk(false) must detect external_tools.json digest change and index new external tool'
+        );
+
+        // 6b. Gate 3 Odd-Length CJK Phrase Similarity ('写提交规范' vs 'Git 提交规范与日志格式')
+        storage.saveRule({
+          id: 'git-commit-spec-rule',
+          title: 'Git 提交规范与日志格式',
+          l0_summary: '统一工作区提交规范与日志格式要求',
+          scope_glob: '**/*',
+          core: true,
+          priority: 50,
+          tokens: 25,
+          origin: 'evolved',
+          content: '1. 必须遵循统一的 Git 提交规范与日志格式。',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        telemetry.syncFromDisk(false);
+
+        const cjkSim = telemetry.findSimilarCapabilities('写提交规范', '如何写提交规范', 'rule');
+        const matchedRule = cjkSim.find((m) => m.id === 'git-commit-spec-rule');
+        assert.ok(
+          matchedRule && matchedRule.similarity > 0,
+          'findSimilarCapabilities("写提交规范", "如何写提交规范", "rule") must match "Git 提交规范与日志格式" via overlapping CJK bigrams'
+        );
+
+        // 6c. McpProxyManager evicts failed connections so subsequent recovery succeeds,
+        //     and EvoMcpDispatcher purges cached external tools when all externalServers are disabled: true
+        const proxyManager = new McpProxyManager(ws);
+        try {
+          const srvCfg = {
+            command: process.execPath,
+            args: [lateScriptPath],
+          };
+          // First attempt: script does not exist on disk -> fails and evicts dead connection
+          const firstTry = await proxyManager.discoverServerTools('late-srv', srvCfg);
+          assert.strictEqual(firstTry.length, 0, 'First discovery before script exists must return empty array');
+
+          // Now write the valid MCP server script to disk
+          fs.writeFileSync(
+            lateScriptPath,
+            [
+              "import * as readline from 'node:readline';",
+              "const rl = readline.createInterface({ input: process.stdin, terminal: false });",
+              "rl.on('line', (line) => {",
+              "  const msg = JSON.parse(line.trim());",
+              "  if (msg.method === 'initialize') {",
+              "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'late', version: '1.0' } } }) + '\\n');",
+              "  } else if (msg.method === 'tools/list') {",
+              "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'recovered_tool', description: 'Recovered tool', inputSchema: { type: 'object' } }] } }) + '\\n');",
+              "  }",
+              "});",
+            ].join('\n'),
+            'utf8'
+          );
+
+          // Second attempt with identical config: must connect freshly and discover recovered_tool
+          const secondTry = await proxyManager.discoverServerTools('late-srv', srvCfg);
+          assert.strictEqual(secondTry.length, 1, 'Second discovery after script creation must succeed');
+          assert.strictEqual(secondTry[0].id, 'ext__late-srv__recovered_tool');
+        } finally {
+          proxyManager.close();
+        }
+      } finally {
+        telemetry.close();
+      }
+
+      // Verify EvoMcpDispatcher purges cached external tools when all externalServers are set to disabled: true
+      storage.saveConfig({
+        ...storage.getConfig(),
+        externalServers: {
+          digest_srv: {
+            command: process.execPath,
+            args: [lateScriptPath],
+            disabled: true,
+          },
+        },
+      });
+      assert.strictEqual(
+        storage.listExternalTools().length,
+        1,
+        'Cached external tool exists prior to dispatcher sync'
+      );
+      const dispatcher = new EvoMcpDispatcher(ws);
+      try {
+        await dispatcher.handleToolCall('evo_search', {
+          workspace: ws,
+          query: 'quantum_profiler',
+          kind: 'tool',
+        });
+        assert.strictEqual(
+          storage.listExternalTools().length,
+          0,
+          'EvoMcpDispatcher must purge cached external tools when all externalServers are disabled: true'
+        );
+      } finally {
+        dispatcher.close();
+      }
+    } finally {
+      safeCleanup(ws);
     }
   });
 

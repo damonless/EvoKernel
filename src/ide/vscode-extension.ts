@@ -10,7 +10,12 @@ import { renderUiClientHtml } from '../templates/ui-client.js';
 import { EvoStorage, estimateTokens, findNearestEvoWorkspace, parseFrontmatter, sanitizeId } from '../core/storage.js';
 import type { ConfidenceLevel, EvoKind, ProposalPayload, SymbolFingerprint } from '../core/types.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { EvoGatekeeper } from '../core/gatekeeper.js';
+import {
+  EvoGatekeeper,
+  captureWorkspaceMutationSignature,
+  captureWorkspaceRollbackSnapshot,
+  restoreWorkspaceFromSnapshot,
+} from '../core/gatekeeper.js';
 import {
   clearMemoryVerificationCache,
   extractSymbolFingerprint,
@@ -333,12 +338,19 @@ export async function handleWebviewAction(
           return { ok: false, error: `Not Found: Tool script "${tool.script_path}" not found` };
         }
 
-        const execResult = await executeSandboxedScriptAsync(
-          tool.runtime,
-          tool.script_path,
-          {},
-          { selfTest: true, timeoutMs: 5000, workspaceRoot: ws }
-        );
+        const preSnapshot = captureWorkspaceRollbackSnapshot(ws);
+        let execResult: any;
+        try {
+          execResult = await executeSandboxedScriptAsync(
+            tool.runtime,
+            tool.script_path,
+            {},
+            { selfTest: true, timeoutMs: 5000, workspaceRoot: ws }
+          );
+        } finally {
+          const postSig = captureWorkspaceMutationSignature(ws);
+          restoreWorkspaceFromSnapshot(ws, preSnapshot, postSig);
+        }
 
         return {
           ok: true,

@@ -5,7 +5,7 @@ l0_summary: "Wrap dynamic imports in pathToFileURL().href on Windows to avoid ER
 created_commit: "3d3bf4e"
 created_branch: "main"
 target_symbols: ["startUiServer","detectChromiumBrowser"]
-ast_fingerprints: {"startUiServer":{"symbol":"startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":511,"end_line":1511,"signature":"export async function startUiServer(","ast_hash":"9c6ca97650322cd9"},"detectChromiumBrowser":{"symbol":"detectChromiumBrowser","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":344,"end_line":416,"signature":"export function detectChromiumBrowser(): string | null","ast_hash":"e184ef6d136ad27a"}}
+ast_fingerprints: {"startUiServer":{"symbol":"startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":516,"end_line":1523,"signature":"export async function startUiServer(","ast_hash":"fe97ba624ca7bb29"},"detectChromiumBrowser":{"symbol":"detectChromiumBrowser","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":349,"end_line":421,"signature":"export function detectChromiumBrowser(): string | null","ast_hash":"e184ef6d136ad27a"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-05T06:02:25.999Z"
