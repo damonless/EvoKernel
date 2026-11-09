@@ -476,19 +476,31 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   function renderTelemetry() {
     var score = snapshot.score || {};
     var savings = score.contextSavings || { beforeTokens: 0, afterTokens: 0, savedTokens: 0, savingsPercent: 0, userStaticRuleTokens: 0, evoSeedTokens: 0 };
-    var overall = score.overallScore !== undefined ? score.overallScore : 98;
-    var grade = score.grade || (overall >= 95 ? 'A+' : (overall >= 85 ? 'A' : 'B'));
+    var hasScore = score && typeof score.overallScore === 'number';
+    var overall = hasScore ? score.overallScore : null;
+    var grade = hasScore ? (score.grade || (overall >= 95 ? 'A+' : (overall >= 85 ? 'A' : (overall >= 70 ? 'B' : (overall >= 55 ? 'C' : (overall >= 40 ? 'D' : 'F')))))) : null;
 
     // 1. Health Score
-    if (el('bento-health-val')) el('bento-health-val').textContent = String(overall);
-    if (el('bento-health-grade')) el('bento-health-grade').textContent = 'Grade ' + grade;
+    if (el('bento-health-val')) el('bento-health-val').textContent = hasScore ? String(overall) : '—';
+    if (el('bento-health-grade')) el('bento-health-grade').textContent = hasScore ? ('Grade ' + grade) : '—';
 
     // 2. Prompt Tax Saved
-    var pct = savings.savingsPercent !== undefined ? savings.savingsPercent : -89;
-    var pctText = pct > 0 ? ('-' + pct + '%') : (pct + '%');
-    if (el('bento-saved-pct')) el('bento-saved-pct').textContent = pctText;
+    var hasSavings = savings && typeof savings.savingsPercent === 'number' && (savings.beforeTokens > 0 || savings.afterTokens > 0 || savings.savingsPercent !== 0);
+    if (el('bento-saved-pct')) {
+      if (hasSavings) {
+        var pct = Math.abs(savings.savingsPercent);
+        var pctText = pct > 0 ? ('-' + pct + '%') : '0%';
+        el('bento-saved-pct').textContent = pctText;
+      } else {
+        el('bento-saved-pct').textContent = '—';
+      }
+    }
     if (el('bento-saved-detail')) {
-      el('bento-saved-detail').textContent = (savings.afterTokens || 0).toLocaleString() + ' tok vs ' + (savings.beforeTokens || 0).toLocaleString() + ' tok';
+      if (hasSavings) {
+        el('bento-saved-detail').textContent = (savings.afterTokens || 0).toLocaleString() + ' tok vs ' + (savings.beforeTokens || 0).toLocaleString() + ' tok';
+      } else {
+        el('bento-saved-detail').textContent = '—';
+      }
     }
 
     // 3. Core Rule Budget (1500 tokens limit — dynamically summed from active core rules)
@@ -1458,6 +1470,8 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   function selectCapability(kind, item) {
     selectedCapability = { kind: kind, item: item };
     inspectorMode = 'preview';
+    var inspEl = el('right-inspector');
+    if (inspEl) inspEl.classList.add('open');
     renderInspector();
     renderCapabilitiesTable();
   }
@@ -1509,20 +1523,19 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
 
     var topRow = document.createElement('div');
     topRow.className = 'inspector-top-row';
-    topRow.innerHTML = '<div class="inspector-badges"><span class="badge-kind">' + formatKind(kind) + '</span>' + statusBadge + pendingBadge + '</div>';
+    topRow.innerHTML = '<div class="inspector-badges"><span class="badge-kind">' + formatKind(kind) + '</span>' + statusBadge + pendingBadge + '</div>' +
+      '<button class="btn-action" id="btn-close-inspector" type="button" style="padding:2px 8px;" title="Close">✕</button>';
 
-    var btnClose = document.createElement('button');
-    btnClose.type = 'button';
-    btnClose.className = 'btn-action';
-    btnClose.style.padding = '2px 8px';
-    btnClose.textContent = '✕';
-    btnClose.title = 'Close Inspector';
-    btnClose.addEventListener('click', function() {
-      selectedCapability = null;
-      renderInspector();
-      renderCapabilitiesTable();
-    });
-    topRow.appendChild(btnClose);
+    var btnClose = topRow.querySelector('#btn-close-inspector');
+    if (btnClose) {
+      btnClose.addEventListener('click', function() {
+        var inspEl = el('right-inspector');
+        if (inspEl) inspEl.classList.remove('open');
+        selectedCapability = null;
+        renderInspector();
+        renderCapabilitiesTable();
+      });
+    }
 
     var titleEl = document.createElement('div');
     titleEl.className = 'inspector-title';
@@ -2440,12 +2453,19 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       else openCommandPalette();
       return;
     }
+    if (e.key === 'Escape') {
+      if (cmdPaletteOpen) {
+        e.preventDefault();
+        closeCommandPalette();
+        return;
+      }
+      var inspEl = el('right-inspector');
+      if (inspEl) inspEl.classList.remove('open');
+      return;
+    }
     if (!cmdPaletteOpen) return;
 
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeCommandPalette();
-    } else if (e.key === 'ArrowDown') {
+    if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (cmdItems.length > 0) {
         cmdActiveIndex = (cmdActiveIndex + 1) % cmdItems.length;
@@ -2487,6 +2507,12 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   }
 
   // Initial Render
+  var platformStr = (typeof navigator !== 'undefined' && ((navigator.platform || '') + (navigator.userAgent || ''))) || '';
+  if (/Win|Linux/i.test(platformStr)) {
+    var kbd = el('cmd-palette-kbd');
+    if (kbd) kbd.textContent = 'Ctrl K';
+  }
+
   applyI18n();
   switchView('capabilities');
   renderHotspotsTable();
@@ -2689,6 +2715,8 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       padding: 2px 6px;
       border-radius: var(--radius-sm);
       border: 1px solid var(--border-subtle);
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .workspace-pill {
       display: flex;
@@ -3127,6 +3155,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       padding: 3px;
       border-radius: 8px;
       border: 1px solid var(--border-subtle);
+      flex-wrap: wrap;
     }
     .filter-pill {
       background: transparent;
@@ -3137,6 +3166,8 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       padding: 4px 10px;
       border-radius: 6px;
       cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
       transition: all var(--duration-micro) var(--ease-spring);
     }
     .filter-pill:hover {
@@ -3183,6 +3214,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       width: 100%;
       border-collapse: collapse;
       font-size: 12.5px;
+      table-layout: fixed;
     }
     .data-table th {
       position: sticky;
@@ -3203,6 +3235,32 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       border-bottom: 1px solid var(--border-subtle);
       color: var(--text-secondary);
       vertical-align: middle;
+    }
+    #capabilities-table th:nth-child(1),
+    #capabilities-table td:nth-child(1) {
+      width: 78px;
+    }
+    #capabilities-table th:nth-child(2),
+    #capabilities-table td:nth-child(2) {
+      width: auto;
+      max-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #capabilities-table th:nth-child(3),
+    #capabilities-table td:nth-child(3) {
+      width: 155px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #capabilities-table th:nth-child(4),
+    #capabilities-table td:nth-child(4) {
+      width: 105px;
+    }
+    #capabilities-table th:nth-child(5),
+    #capabilities-table td:nth-child(5) {
+      width: 136px;
+      text-align: right;
     }
     .data-table tr.row-interactive {
       cursor: pointer;
@@ -3282,13 +3340,15 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       gap: 8px;
       min-width: 0;
     }
-    .item-main-title {
+    .item-main-title,
+    .item-sub-desc {
       color: var(--text-primary);
       font-weight: 500;
       min-width: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      display: block;
     }
     .item-sub-id {
       color: var(--text-muted);
@@ -3858,6 +3918,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     }
 
     /* Responsive Design */
+    @media (max-width: 1360px) {
+      :root {
+        --right-inspector-width: 320px;
+      }
+    }
     @media (max-width: 1024px) {
       .right-inspector {
         position: absolute;
@@ -3886,6 +3951,30 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         justify-content: center;
         padding: 0;
       }
+      #capabilities-table th:nth-child(3),
+      #capabilities-table td:nth-child(3),
+      #capabilities-table th:nth-child(4),
+      #capabilities-table td:nth-child(4) {
+        display: none;
+      }
+      #capabilities-table th:nth-child(1),
+      #capabilities-table td:nth-child(1) {
+        width: 58px;
+        padding: 8px 6px;
+      }
+      #capabilities-table th:nth-child(5),
+      #capabilities-table td:nth-child(5) {
+        width: 88px;
+        padding: 8px 6px;
+      }
+      .search-placeholder {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .workspace-pill {
+        display: none;
+      }
     }
   </style>
 </head>
@@ -3909,7 +3998,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       <button class="search-trigger" id="cmd-palette-trigger" type="button">
         <span class="search-icon">🔍</span>
         <span class="search-placeholder" id="search-placeholder-text">Search capabilities, files, actions...</span>
-        <kbd class="kbd-shortcut">⌘K</kbd>
+        <kbd class="kbd-shortcut" id="cmd-palette-kbd">⌘K</kbd>
       </button>
     </div>
 

@@ -2,8 +2,8 @@
 id: eight-defect-deep-audit-and-lexicon-decoupling
 title: "Deep Audit 8-Defect & Round-2 Hardening: Pure Zero-Dep AST Engine, Lexicon Decoupling, Telemetry Sync & Dirty-Safe Byte Rollback"
 l0_summary: "Purge hw lexicon from kernel, fix ext__* telemetry & digest sync, add AST #ifdef/#if 0/Go receiver engine & dirty-safe rollback"
-created_commit: "49a6307"
-created_branch: "fix/deep-audit-8-defects"
+created_commit: "3ad564d"
+created_branch: "main"
 target_symbols: ["src/core/memory.ts#findBraceBlockEnd","src/core/memory.ts#extractSymbolBlockFromLines","src/core/lexicon.ts#loadWorkspaceLexicon","src/core/telemetry.ts#EvoTelemetry.syncFromDisk","src/core/gatekeeper.ts#captureWorkspaceRollbackSnapshot","src/core/gatekeeper.ts#restoreWorkspaceFromSnapshot","src/core/optimize.ts#evaluateBaselineFitness","src/mcp/proxy.ts#McpProxyManager.discoverAllDownstreamToolsWithStatus"]
 ast_fingerprints: {"src/core/memory.ts#findBraceBlockEnd":{"symbol":"src/core/memory.ts#findBraceBlockEnd","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":1805,"end_line":2119,"signature":"export function findBraceBlockEnd(","ast_hash":"f1156e782c0acaff"},"src/core/memory.ts#extractSymbolBlockFromLines":{"symbol":"src/core/memory.ts#extractSymbolBlockFromLines","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":1625,"end_line":1706,"signature":"export function extractSymbolBlockFromLines(","ast_hash":"233ca2435640cf6e"},"src/core/lexicon.ts#loadWorkspaceLexicon":{"symbol":"src/core/lexicon.ts#loadWorkspaceLexicon","file_path":"src/core/lexicon.ts","file":"src/core/lexicon.ts","kind":"function","start_line":171,"end_line":228,"signature":"export function loadWorkspaceLexicon(workspaceOrEvoDir?: string): CompiledLexicon","ast_hash":"94ee09318ede1134"},"src/core/telemetry.ts#EvoTelemetry.syncFromDisk":{"symbol":"src/core/telemetry.ts#EvoTelemetry.syncFromDisk","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"method","start_line":682,"end_line":974,"signature":"public syncFromDisk(force = false): void","ast_hash":"13a91dd7450d4ee1"},"src/core/gatekeeper.ts#captureWorkspaceRollbackSnapshot":{"symbol":"src/core/gatekeeper.ts#captureWorkspaceRollbackSnapshot","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"function","start_line":1435,"end_line":1533,"signature":"export function captureWorkspaceRollbackSnapshot(","ast_hash":"e845f4ed21db2bab"},"src/core/gatekeeper.ts#restoreWorkspaceFromSnapshot":{"symbol":"src/core/gatekeeper.ts#restoreWorkspaceFromSnapshot","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"function","start_line":1535,"end_line":1613,"signature":"export function restoreWorkspaceFromSnapshot(","ast_hash":"3d8e442e7e8c422f"},"src/core/optimize.ts#evaluateBaselineFitness":{"symbol":"src/core/optimize.ts#evaluateBaselineFitness","file_path":"src/core/optimize.ts","file":"src/core/optimize.ts","kind":"function","start_line":312,"end_line":477,"signature":"export function evaluateBaselineFitness(","ast_hash":"fec9140284b165e4"},"src/mcp/proxy.ts#McpProxyManager.discoverAllDownstreamToolsWithStatus":{"symbol":"src/mcp/proxy.ts#McpProxyManager.discoverAllDownstreamToolsWithStatus","file_path":"src/mcp/proxy.ts","file":"src/mcp/proxy.ts","kind":"method","start_line":436,"end_line":469,"signature":"public async discoverAllDownstreamToolsWithStatus(","ast_hash":"0870f541210f1a52"}}
 tags: ["ast-engine","lexicon-decoupling","telemetry-sync","sandbox-rollback","mcp-proxy","gatekeeper-security"]
@@ -11,7 +11,7 @@ origin: "evolved"
 supersedes_id: "eight-defect-deep-audit-and-lexicon-decoupling"
 review_status: "pending"
 created_at: "2026-11-08T17:52:31.075Z"
-updated_at: "2026-11-08T23:48:51.777Z"
+updated_at: "2026-11-09T05:58:23.140Z"
 ---
 
 ## Symptom

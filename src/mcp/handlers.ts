@@ -962,7 +962,24 @@ export class EvoMcpDispatcher {
       };
     }
 
+    const teleMap = targetCtx.telemetry ? targetCtx.telemetry.getTelemetryMap() : new Map();
+
+    const getHitStat = (h: SearchHit) => {
+      if (h.tier === 'GLOBAL') {
+        for (const gCtx of this.getGlobalFallbackContexts()) {
+          const gStat = gCtx.telemetry?.getTelemetryMap().get(h.id);
+          if (gStat) return gStat;
+        }
+      }
+      return teleMap.get(h.id);
+    };
+
     const lines = hits.map((h) => {
+      const stat = getHitStat(h);
+      const helpedCount = stat ? (stat.helped_count || 0) : 0;
+      const tokensSaved = stat ? (stat.tokens_saved || 0) : 0;
+      const helpedMetric = helpedCount > 0 || tokensSaved > 0 ? ` | helped: ${helpedCount}` : '';
+
       if (h.kind === 'memory' && h.memory_badge) {
         const icon =
           h.memory_status === 'VERIFIED'
@@ -970,10 +987,10 @@ export class EvoMcpDispatcher {
             : h.memory_status === 'OTHER_BRANCH'
               ? '🌿'
               : '⚠️';
-        return `• [MEMORY] ${icon} ${h.memory_badge} ${h.id} — ${h.l0_summary} (anchors: ${h.scope_glob} | hits: ${h.hit_count})`;
+        return `• [MEMORY] ${icon} ${h.memory_badge} ${h.id} — ${h.l0_summary} (anchors: ${h.scope_glob} | hits: ${h.hit_count}${helpedMetric})`;
       }
       const tierBadge = h.tier === 'GLOBAL' ? ' [GLOBAL]' : '';
-      return `• [${h.kind.toUpperCase()}]${tierBadge} ${h.id} — ${h.l0_summary} (scope: ${h.scope_glob} | hits: ${h.hit_count} | pass: ${h.success_rate})`;
+      return `• [${h.kind.toUpperCase()}]${tierBadge} ${h.id} — ${h.l0_summary} (scope: ${h.scope_glob} | hits: ${h.hit_count} | pass: ${h.success_rate}${helpedMetric})`;
     });
 
     const topGuardrailIds = hits
@@ -992,6 +1009,9 @@ export class EvoMcpDispatcher {
         ? `Action Required: Call evo_inspect(id, "L2", workspace) on matched guardrails/SOPs [${topGuardrailIds.join(', ')}] to load full checklists (never rely on L0 summaries alone), or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}`
         : `Tip: Call evo_inspect(id, "L1"|"L2", workspace) for details/topology anchors or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}`;
 
+    const provenanceLine =
+      '🛡️ Recall Provenance: Local observable chain active (search -> inspect/run -> verified outcome tracked in .evo/.cache/telemetry.db; 0 outbound telemetry).';
+
     return {
       content: [
         {
@@ -1001,6 +1021,7 @@ export class EvoMcpDispatcher {
             ...lines,
             '',
             footerDirective,
+            provenanceLine,
           ].join('\n'),
         },
       ],
@@ -1013,6 +1034,23 @@ export class EvoMcpDispatcher {
     const tier = String(args.tier ?? args.level ?? args.depth ?? 'L2').toUpperCase();
     const storage = activeCtx?.storage || this.storage;
     const telemetry = activeCtx?.telemetry || this.telemetry;
+
+    const getTelemetryStat = (capId: string, customTele?: EvoTelemetry | null) => {
+      try {
+        const tele = customTele || telemetry || this.telemetry;
+        if (tele && !tele.isClosed()) {
+          const rec = tele.getTelemetryMap().get(capId);
+          if (rec) {
+            return {
+              hit_count: Math.max(1, Number(rec.hit_count || 0)),
+              helped_count: Number(rec.helped_count || 0),
+              tokens_saved: Number(rec.tokens_saved || 0),
+            };
+          }
+        }
+      } catch {}
+      return { hit_count: 1, helped_count: 0, tokens_saved: 0 };
+    };
 
     const formatInspectResult = (bodyText: string) => {
       const reminder = this.checkDirtyTreeReminder(storage.rootDir, telemetry || this.telemetry);
@@ -1047,10 +1085,11 @@ export class EvoMcpDispatcher {
             tier: extTelemetry !== this.telemetry ? 'GLOBAL' : 'LOCAL',
           });
         }
+        const stat = getTelemetryStat(extTool.id, extTelemetry);
         const body =
           tier === 'L1'
             ? `[EXTERNAL TOOL L1] ${extTool.id} (server: ${extTool.serverName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}`
-            : `[EXTERNAL TOOL L2] ${extTool.id} (server: ${extTool.serverName}, tool: ${extTool.originalName})\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}\n\nExecution:\nRouted via downstream MCP server '${extTool.serverName}' using stdio JSON-RPC.\nCall via: evo_run("${extTool.id}", args)`;
+            : `[EXTERNAL TOOL L2] ${extTool.id} (server: ${extTool.serverName}, tool: ${extTool.originalName})\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nL0: ${extTool.description}\nInput Schema:\n${JSON.stringify(extTool.inputSchema, null, 2)}\n\nExecution:\nRouted via downstream MCP server '${extTool.serverName}' using stdio JSON-RPC.\nCall via: evo_run("${extTool.id}", args)`;
         return formatInspectResult(body);
       }
     }
@@ -1086,10 +1125,11 @@ export class EvoMcpDispatcher {
           tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
         });
       }
+      const stat = getTelemetryStat(rule.id, activeTelemetry);
       const body =
         tier === 'L1'
           ? `[RULE L1] ${rule.id} (${rule.scope_glob})\nL0: ${rule.l0_summary}\nTokens: ${rule.tokens}`
-          : `[RULE L2] ${rule.id} — ${rule.title}\nScope: ${rule.scope_glob} | Core: ${rule.core}\nL0: ${rule.l0_summary}\n\n${rule.content}`;
+          : `[RULE L2] ${rule.id} — ${rule.title}\nScope: ${rule.scope_glob} | Core: ${rule.core}\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nL0: ${rule.l0_summary}\n\n${rule.content}`;
       return formatInspectResult(body);
     }
 
@@ -1124,10 +1164,11 @@ export class EvoMcpDispatcher {
           tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
         });
       }
+      const stat = getTelemetryStat(skill.id, activeTelemetry);
       const body =
         tier === 'L1'
           ? `[SKILL L1] ${skill.id} — ${skill.title}\nL0: ${skill.l0_summary}\nTags: ${skill.tags.join(', ')}\n\n## L1 Contract\n${skill.l1_contract}`
-          : `[SKILL L2] ${skill.id} — ${skill.title}\nL0: ${skill.l0_summary}\n\n## L1 Contract\n${skill.l1_contract}\n\n## L2 SOP\n${skill.l2_sop}`;
+          : `[SKILL L2] ${skill.id} — ${skill.title}\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nL0: ${skill.l0_summary}\n\n## L1 Contract\n${skill.l1_contract}\n\n## L2 SOP\n${skill.l2_sop}`;
       return formatInspectResult(body);
     }
 
@@ -1162,10 +1203,11 @@ export class EvoMcpDispatcher {
           tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
         });
       }
+      const stat = getTelemetryStat(tool.id, activeTelemetry);
       const body =
         tier === 'L1'
           ? `[TOOL L1] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}`
-          : `[TOOL L2] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}\n\nScript (${tool.entry_script}):\n\`\`\`${tool.runtime}\n${tool.script_code}\n\`\`\``;
+          : `[TOOL L2] ${tool.id} (${tool.runtime})\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}\n\nScript (${tool.entry_script}):\n\`\`\`${tool.runtime}\n${tool.script_code}\n\`\`\``;
       return formatInspectResult(body);
     }
 
@@ -1256,9 +1298,11 @@ export class EvoMcpDispatcher {
         return formatInspectResult(l1Body);
       }
 
+      const stat = getTelemetryStat(memory.id, telemetry);
       const l2Body = [
         `[MEMORY L2] ${memory.id} — ${memory.title}`,
         `Status: ${report.overall_status} ${report.confidence_tag} (${report.verified_count}/${report.total_symbols} AST symbols verified | commit ${report.recorded_commit} -> ${report.current_commit})`,
+        `Telemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved`,
         `Tags: ${memory.tags.join(', ') || 'troubleshooting'}`,
         `L0: ${memory.l0_summary}`,
         statusBanner,

@@ -2,7 +2,7 @@
 
 # 🧬 EvoKernel (evo-kernel)
 
-### 削减 94.4% 的 MCP 与规则 Prompt 税，保持 100% KV 缓存命中。在独立 Git Worktree 中自演进 AST 级防漂移记忆与受控沙盒微工具 —— 纯原生 0 外部依赖。
+### 削减 94.4% 的 MCP 工具 Schema 税（与 88.7% 常驻静态前缀税），保持 100% KV 缓存命中。在独立 Git Worktree 中自演进 AST 级防漂移记忆与受控沙盒微工具 —— 纯原生 0 外部依赖。
 
 **面向 AI 编程智能体的「确定性自演进元内核」与认知上下文操作系统**  
 *Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
@@ -15,7 +15,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#-零依赖原生架构)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#-核心架构5-个固定元工具原语)
-[![Tests](https://img.shields.io/badge/tests-277%2B%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
+[![Tests](https://img.shields.io/badge/tests-306%2B%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 
 **[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 在线交互式工作台 (Workbench 2.0)](https://damonless.github.io/EvoKernel/) · [📊 基准评测 (Benchmarks)](benchmarks/README.md)**
 
@@ -24,6 +24,8 @@
 <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-shotcraft.svg" alt="EvoKernel 三层渐进式上下文网关与基准遥测" width="100%" /></a>
 
 </div>
+
+> **EvoKernel 是什么？** EvoKernel 让你的 AI 编程助手不再跨会话重复踩同一个坑——将每次排障的根因与解法沉淀为绑定代码指纹的认知记忆与沙盒微工具，同时将臃肿的第三方 MCP 与规则折叠进 5 个固定元工具（**削减 88.7%–94.4% Prompt 税、100% KV 缓存命中、0 外部依赖**）。
 
 > [!NOTE]
 > **消歧说明：** EvoKernel (`evo-kernel`) 是面向 AI 编程智能体（Claude Code、Cursor、Windsurf、Codex、Gemini 等）的智能体架构与上下文工程框架，与同名的学术 ICML 论文/基准测试或 Linux 内核项目无关。
@@ -38,16 +40,18 @@
 # 1. 毫秒级零写入 X-Ray 诊断 (<25ms) — 扫描宿主规则、Git 热点与记忆覆盖率
 npx -y evo-kernel score
 
-# 2. 一键自动挂载与虚拟化 — 自动识别 10 款主流 IDE 并折叠第三方 MCP 进程
-npx -y evo-kernel init --stealth && npx -y evo-kernel virtualize
+# 2. 一键安全接入与环境体检 — 安全预览 MCP 虚拟化
+npx -y evo-kernel init --stealth && npx -y evo-kernel doctor
+# (如需预览 MCP 虚拟化节省的 Token，可执行：npx -y evo-kernel virtualize --dry-run)
 
-# 3. 启动 Workbench 2.0 工业级工作台（Zinc 极简暗色、正交拓扑星图与无边框微窗口）
+# 3. 启动 Workbench 2.0 工业级工作台与规范交付物核检（支持 .xlsx, .docx, .pptx, .csv, .json, .md）
 npx -y evo-kernel ui --app
-npx -y evo-kernel check ./report.xlsx
+npx -y evo-kernel check ./README.md
 ```
 
 > 💡 **Node.js 18 / 20 免全局升级一键极速体验：**  
 > `npx -y -p node@22 evo-kernel score`  
+> *（注：`npx -p node@22` 仅推荐用于单次 CLI 体检；若需长期挂载后台 MCP 服务，请将系统 Node 升级至 `>= 22.5.0`：`nvm install 22 && nvm use 22` 或 `fnm use 22`，并推荐全局安装：`npm install -g evo-kernel`）*  
 > *为什么需要 Node.js >= 22.5.0？* EvoKernel 基于 Node 22 原生内置的 `node:sqlite`、`node:module` 与 `node:test` 构建，实现 **0 外部第三方 npm 依赖与 0 供应链安全投毒风险**。
 
 <div align="center">
@@ -99,6 +103,31 @@ node ./dist/cli/index.js doctor
 
 ---
 
+## 🔒 可逆性与团队协作及隐私安全保障
+
+EvoKernel 从设计之初就坚持极低试错门槛、完全透明可审查与随时 100% 干净回退：
+
+### 1. `evo init` 动了哪些文件与一键无损卸载还原
+执行 `npx evo-kernel init` 时，仅精准修改以下三处隔离边界：
+- **宿主 Agent 规则文件**：在检测到的宿主规则文件（`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/evo-kernel.mdc`）中插入由 `<!-- EVO:START -->` 与 `<!-- EVO:END -->` 严格包裹的受控元规则块。标记块之外的原有规则内容绝不触碰。
+- **宿主 MCP 配置文件**：仅为宿主注册唯一的 `evo-kernel` stdio 元网关服务项（未执行虚拟化时绝不修改已有第三方 MCP 配置）。
+- **项目本地 `.evo/` 资产目录**：初始化局部能力树与情景记忆结构（`.evo/rules/`, `.evo/skills/`, `.evo/memories/`, `.evo/tools/`, `.evo/.cache/`）。
+
+若需将项目与宿主配置完全还原至接入前的初始状态，仅需一条命令：
+```bash
+npx -y evo-kernel virtualize --restore && npx -y evo-kernel uninstall
+```
+该命令会自动还原已虚拟化的第三方 MCP 配置、彻底剥离所有宿主规则中的 `<!-- EVO:START -->` 注入块、清理注册的生命周期 Hook，并安全删除 `.evo/` 目录，实现**零残留无损还原**。
+
+### 2. 多人团队协作共享 vs. `--stealth` 个人无痕试用模式
+- **多人团队协作共享（默认 `evo init`）**：将 `.evo/rules/`、`.evo/memories/` 与 `.evo/tools/` 提交至 Git 远端仓库。团队中所有成员及其编码智能体均可实时复用沉淀的根因排障记忆与受控沙盒微工具；内部临时缓存（`.evo/.cache/`）已自动加入忽略规则。
+- **个人独立试用他人/开源仓库（`evo init --stealth`）**：自动将 `.evo/` 及修改的宿主配置文件写入本地 `.git/info/exclude`，完全不修改项目 `.gitignore`，更不会产生任何未提交的 Git 工作区脏变更。实现**零 Git 污染、零提交干扰**。
+
+### 3. 100% 本地优先与零外发遥测
+EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数据，也无需联网调用任何外部云端 API。所有 SQLite FTS5 索引与可观测召回账本（`.evo/.cache/telemetry.db`）100% 保存在本地开发者机器中。
+
+---
+
 ## 📈 50 轮上下文税推演模型与本地引擎微基准实测 (`npm run benchmark`)
 
 基于典型全栈工程挂载 **8 个主流 MCP 服务**（`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` —— 共计 **77 个工具**）+ 成熟仓库知识库（10 条规则、4 个技能、5 个微工具、15 条排障记忆），在 **50 轮连续对话 + 3 次中途规则/工具演进**下的上下文税分析推演模型与本地引擎微基准实测（本地执行 `npm run benchmark` 即可复现）。
@@ -107,12 +136,15 @@ node ./dist/cli/index.js doctor
 | 核心指标 | 传统直连多 MCP + 巨石 `CLAUDE.md` | **🧬 EvoKernel 5-Tool 虚拟网关** | 推演/实测收益 |
 | :--- | :---: | :---: | :---: |
 | **暴露给模型的工具 Schema** | 77 个工具定义 | **5 个固定元工具原语** | **-93.5% Schema 体积** |
-| **每轮常驻静态前缀税** | 27,150 tokens | **3,066 tokens** | **-88.7% Prompt 税** |
+| **MCP 工具 Schema 税 / 轮** | 27,150 tokens | **1,530 tokens** | **-94.4% MCP Schema 税** |
+| **8-Server 完整静态前缀税 / 轮** | 27,150 tokens | **3,066 tokens** | **-88.7% 静态前缀税削减** |
 | **中途演进引发的缓存击穿** | 3 次全量前缀重算 | **0 次（100% 命中缓存）** | **100% KV Cache 护盾** |
 | **50 轮累计输入 Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% 累计负载** |
 | **50 轮账单成本 (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **节省 70.4% API 成本** |
 | **50 轮账单成本 (Claude Opus 4.5)** | \$5.76 | **\$1.70** | **节省 70.4% API 成本** |
-| **AST 防漂移记忆校验耗时** | 无校验（重构后静默腐败） | **~0.35 ms / 条记忆** | **确定性 AST 符号锚定** |
+| **本地引擎 AST 校验速率** | 无校验（重构后静默腐败） | **~0.32 ms / 条记忆** | **<11ms 批量校验 34 条记忆¹** |
+
+> ¹ *术语说明：* AST 防漂移/符号指纹采用**零依赖词法-结构骨架指纹（Zero-Dep Lexical-Structural Skeleton Fingerprinting）**，无需外部重型编译器即可对注释修改、代码格式化和行号漂移天然免疫。
 
 ---
 
@@ -400,7 +432,7 @@ EvoKernel 配备了基于 Node 原生测试运行器（`node:test`）的零外�
 node ./scripts/test.mjs
 ```
 
-**274+ 项单元与集成测试、11 个测试套件，在 ~17 秒内 100% 通过（0 失败）：**
+**306+ 项单元与集成测试、11 个测试套件，在 ~21 秒内 100% 通过（0 失败）：**
 
 <details>
 <summary><b>🔍 查看全部 11 个验证测试套件清单（点击展开）</b></summary>
@@ -415,9 +447,9 @@ node ./scripts/test.mjs
 | 6 | `dist/tests/lifecycle-guard-hooks.test.js` | 门禁触发词、前置阻断与引用完整性测试套件 | 27 tests |
 | 7 | `dist/tests/mcp-proxy.test.js` | 下游 MCP 代理与动态虚拟化测试套件 | 10 tests |
 | 8 | `dist/tests/multi-harness.test.js` | 10 款智能体宿主多环境级联探测与安装测试套件 | 14 tests |
-| 9 | `dist/tests/optimize.test.js` | 离线 Git Worktree 能力演进优化循环测试套件 | 19 tests |
-| 10 | `dist/tests/score-and-ui.test.js` | 体检评分、Workbench 2.0 工作台与交互 API、热身与快捷指令套件 | 22 tests |
-| 11 | `dist/tests/surface-audit-and-hardening.test.js` | 多宿主静默失败表面审计矩阵与全链路加固测试套件 | 32 tests |
+| 9 | `dist/tests/optimize.test.js` | 离线 Git Worktree 能力演进优化循环测试套件 | 21 tests |
+| 10 | `dist/tests/score-and-ui.test.js` | 体检评分、Workbench 2.0 工作台与交互 API、热身与快捷指令套件 | 28 tests |
+| 11 | `dist/tests/surface-audit-and-hardening.test.js` | 多宿主静默失败表面审计矩阵与全链路加固测试套件 | 50 tests |
 
 </details>
 

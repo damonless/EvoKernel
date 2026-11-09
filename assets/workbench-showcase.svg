@@ -253,7 +253,7 @@
         <g transform="translate(12, 44)" font-family="'Cascadia Code', 'SF Mono', monospace" font-size="10.5">
           <text y="0" fill="#10b981">▶ evo test:regression</text>
           <text y="20" fill="#a1a1aa">✔ 11/11 suites passed (19.6s)</text>
-          <text y="40" fill="#a1a1aa">✔ 277/277 tests passed</text>
+          <text y="40" fill="#a1a1aa">✔ 306/306 tests passed</text>
           <text y="60" fill="#a1a1aa">✔ 0 runtime dependencies</text>
           <text y="90" fill="#38bdf8">▶ evo release-preflight</text>
           <text y="110" fill="#a1a1aa">status: READY</text>

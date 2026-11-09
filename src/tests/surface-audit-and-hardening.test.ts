@@ -24,7 +24,26 @@ import {
   verifyMemoryFreshness,
 } from '../core/memory.js';
 import { auditHarnessSurfaces, runAudit, runRefactor } from '../cli/audit.js';
-import { isExcludedGitHotspotPath } from '../cli/score.js';
+import {
+  isExcludedGitHotspotPath,
+  buildScoreReport,
+  renderScoreSvg,
+  renderScoreAnsi,
+} from '../cli/score.js';
+import { runInit, BOOT_MCP_STUB } from '../cli/init.js';
+import { renderUiClientHtml } from '../templates/ui-client.js';
+import {
+  renderEvoStats,
+  renderEvoTree,
+  buildEvoStatsJson,
+  buildEvoTreeJson,
+} from '../cli/visualizer.js';
+import {
+  truncateTerminalLine,
+  visualWidth,
+  suggestClosestToken,
+  formatCliInvocationPrefix,
+} from '../cli/term.js';
 import {
   syncDeclaredPreToolHooks,
   isEvoHookCommand,
@@ -32,6 +51,8 @@ import {
   ClaudeAdapter,
   upsertClaudeSettings,
   detectCascadedTargets,
+  isEphemeralNpxCachePath,
+  hasStaleNpxMcpEntry,
 } from '../cli/harness.js';
 import { EvoMcpDispatcher } from '../mcp/handlers.js';
 import {
@@ -3293,5 +3314,309 @@ process.exit(hasRule ? 0 : 1);
     }
   });
 
-});
 
+  // =========================================================================
+  // 51. [S0-1 No Fabricated Display Fallbacks]
+  // =========================================================================
+  test('51. [S0-1 No Fabricated Display Fallbacks]', () => {
+    // 1. Missing overallScore & savingsPercent: must render em-dash '—' and not fabricate ': 98' or ': -89' constants
+    const html = renderUiClientHtml({ score: {} });
+    assert.ok(html.includes("'—'"), "renderUiClientHtml must render em-dash '—' fallback when score metrics are missing");
+    assert.ok(!/:\s*98(?!\d)/.test(html) && !html.includes('score.overallScore : 98'), "Must not fabricate ': 98' health score fallback");
+    assert.ok(!html.includes(': -89'), "Must not fabricate ': -89' prompt tax savings fallback");
+
+    // 2. Pure empty temporary directory: zero write guarantee and truthful empty-state metrics
+    const emptyWs = createTempWorkspace();
+    try {
+      const stats = renderEvoStats(emptyWs);
+      const tree = renderEvoTree(emptyWs);
+      assert.deepStrictEqual(fs.readdirSync(emptyWs), [], 'Empty workspace must remain 100% clean with zero files/.evo written');
+
+      assert.ok(stats.includes('— (0 runs)'), "renderEvoStats must display '— (0 runs)' pass rate on empty directory");
+      assert.ok(stats.includes('— (not initialized)'), "renderEvoStats must display '— (not initialized)' prompt cache stability on uninitialized directory");
+      assert.ok(stats.includes('none (run evo init)'), "renderEvoStats must display 'none (run evo init)' when no harnesses are configured");
+      assert.ok(!stats.includes('claude, agents, gemini, cursor'), "renderEvoStats must never show hard-coded fallback harness list");
+
+      // 3. Score SVG reflects real hotspots and memory count, without hard-coded '100% AST Guarded'
+      const rep = buildScoreReport(emptyWs);
+      const svg = renderScoreSvg(rep);
+      assert.ok(!svg.includes('100% AST Guarded'), "renderScoreSvg must not hardcode '100% AST Guarded'");
+      assert.ok(svg.includes('0 / 0') || svg.includes('No Fragile Hotspots Detected'), "renderScoreSvg must reflect 0 / 0 hotspots");
+      assert.ok(svg.includes('0 Episodic Memories Yet'), "renderScoreSvg must reflect 0 memories on empty workspace");
+    } finally {
+      safeCleanup(emptyWs);
+    }
+  });
+
+  // =========================================================================
+  // 52. [S0-4 Workbench Fixed Table Layout & Narrow-Screen Inspector Drawer]
+  // =========================================================================
+  test('52. [S0-4 Workbench Fixed Table Layout & Narrow-Screen Inspector Drawer]', () => {
+    const html = renderUiClientHtml({ score: {} });
+
+    assert.ok(html.includes('table-layout: fixed;'), 'Must contain table-layout: fixed; for robust column clipping');
+    assert.ok(html.includes('white-space: nowrap;'), 'Must contain white-space: nowrap;');
+    assert.ok(html.includes('id="btn-close-inspector"'), 'Must contain id="btn-close-inspector"');
+    assert.ok(html.includes("inspEl.classList.add('open')"), "Must contain inspEl.classList.add('open')");
+    assert.ok(html.includes("inspEl.classList.remove('open')"), "Must contain inspEl.classList.remove('open')");
+
+    // Ensure data table is not constrained by fixed 980px table width and inspector does not use obsolete max-width: 360px
+    assert.ok(!html.includes('.data-table {\n      min-width: 980px;') && !html.includes('.data-table { min-width: 980px;'), 'Capabilities data-table must not have fixed 980px min-width');
+    assert.ok(!html.includes('max-width: 360px;'), 'Must not contain obsolete max-width: 360px;');
+  });
+
+  // =========================================================================
+  // 53. [S0-5 & S1-3 Ephemeral _npx Cache Skipping, Stale _npx Detection & BOOT_MCP_STUB npx Fallback]
+  // =========================================================================
+  test('53. [S0-5 & S1-3 Ephemeral _npx Cache Skipping, Stale _npx Detection & BOOT_MCP_STUB npx Fallback]', () => {
+    // 1. Ephemeral npx cache detection
+    assert.strictEqual(
+      isEphemeralNpxCachePath('/Users/dev/.npm/_npx/a1b2c3d4/node_modules/evo-kernel'),
+      true,
+      'isEphemeralNpxCachePath must return true for ephemeral _npx path'
+    );
+    assert.strictEqual(
+      isEphemeralNpxCachePath('/usr/local/lib/node_modules/evo-kernel'),
+      false,
+      'isEphemeralNpxCachePath must return false for permanent install path'
+    );
+
+    // 2. Stale npx MCP entry detection
+    assert.strictEqual(
+      hasStaleNpxMcpEntry({ command: 'node', args: ['C:/nonexistent/_npx/dead999/dist/cli/index.js', 'mcp'] }),
+      true,
+      'hasStaleNpxMcpEntry must detect nonexistent _npx entrypoint'
+    );
+
+    // 3. Non-stealth runInit creates boot-mcp.mjs with npx fallback and EVO_DISABLE_NPX_FALLBACK guard
+    const ws = createTempWorkspace();
+    try {
+      runInit(ws, ['claude'], { stealth: false, ascii: true });
+      const bootMcpPath = path.join(ws, '.evo', 'boot-mcp.mjs');
+      assert.ok(fs.existsSync(bootMcpPath), '.evo/boot-mcp.mjs must be generated');
+      const bootContent = fs.readFileSync(bootMcpPath, 'utf8');
+      assert.ok(bootContent.includes('npx'), "boot-mcp.mjs must contain 'npx' fallback execution");
+      assert.ok(bootContent.includes('EVO_DISABLE_NPX_FALLBACK'), "boot-mcp.mjs must contain EVO_DISABLE_NPX_FALLBACK guard");
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  // =========================================================================
+  // 54. [S0-6, S0-7 & S1-2 Doctor Glyphs & Multi-Host Detection, Check Unsupported Format Rejection, and Init Next Steps]
+  // =========================================================================
+  test('54. [S0-6, S0-7 & S1-2 Doctor Glyphs & Multi-Host Detection, Check Unsupported Format Rejection, and Init Next Steps]', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const ws = createTempWorkspace();
+    try {
+      // 1. Doctor command with .cursor/mcp.json registered
+      const cursorDir = path.join(ws, '.cursor');
+      fs.mkdirSync(cursorDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(cursorDir, 'mcp.json'),
+        JSON.stringify({ mcpServers: { 'evo-kernel': { command: 'node', args: ['dist/cli/index.js', 'mcp'] } } }),
+        'utf8'
+      );
+      const doctorProc = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--workspace', ws],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(doctorProc.status, 0, 'evo doctor should succeed on configured workspace');
+      const docOut = (doctorProc.stdout || '') + (doctorProc.stderr || '');
+      assert.ok(docOut.includes('[✓]') || docOut.includes('[!]'), "doctor output must include status glyphs [✓] or [!]");
+      assert.ok(docOut.includes('.cursor/mcp.json'), "doctor output must recognize .cursor/mcp.json");
+      assert.ok(docOut.includes('Verdict:'), "doctor output must conclude with 'Verdict:' line");
+
+      // 2. evo check with unsupported format dummy.bin
+      const dummyBin = path.join(ws, 'dummy.bin');
+      fs.writeFileSync(dummyBin, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+
+      const checkHuman = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'check', dummyBin],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(checkHuman.status, 1, 'evo check dummy.bin must exit with code 1');
+      assert.ok(
+        (checkHuman.stdout + checkHuman.stderr).includes('ERR_UNSUPPORTED_FORMAT'),
+        'Human output must include ERR_UNSUPPORTED_FORMAT'
+      );
+
+      const checkJson = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'check', dummyBin, '--json'],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(checkJson.status, 1, 'evo check dummy.bin --json must exit with code 1');
+      assert.ok(checkJson.stdout.includes('ERR_UNSUPPORTED_FORMAT'), 'JSON output must include ERR_UNSUPPORTED_FORMAT');
+      const parsedCheck = JSON.parse(checkJson.stdout);
+      assert.strictEqual(parsedCheck.ok, false);
+
+      // 3. evo init CLI guidance
+      const initWs = createTempWorkspace();
+      try {
+        const initProc = child_process.spawnSync(
+          process.execPath,
+          [cliEntry, 'init', '--workspace', initWs],
+          { encoding: 'utf8' }
+        );
+        assert.strictEqual(initProc.status, 0, 'evo init must exit with code 0');
+        const initOut = initProc.stdout || '';
+        assert.ok(initOut.includes('Next Steps:'), "evo init output must contain 'Next Steps:'");
+        assert.ok(initOut.includes('doctor'), "evo init output must mention 'doctor'");
+        assert.ok(initOut.includes('bootstrap'), "evo init output must mention 'bootstrap'");
+      } finally {
+        safeCleanup(initWs);
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  // =========================================================================
+  // 55. [S1-1 & S1-5 Observable Recall Provenance & State-Aware Score Action/Deductions]
+  // =========================================================================
+  test('55. [S1-1 & S1-5 Observable Recall Provenance & State-Aware Score Action/Deductions]', async () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      storage.saveRule({
+        id: 'provenance-test-rule',
+        title: 'Provenance Test Rule',
+        l0_summary: 'Verifies provenance and telemetry display in MCP handlers',
+        scope_glob: '**/*.ts',
+        core: false,
+        priority: 50,
+        tokens: 25,
+        origin: 'evolved',
+        content: 'Check that recall provenance is observable.',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const dispatcher = new EvoMcpDispatcher(ws);
+      try {
+        // 1. evo_search includes Recall Provenance:
+        const searchRes = await dispatcher.handleToolCall('evo_search', {
+          query: 'provenance',
+          workspace: ws,
+        });
+        const searchText = searchRes.content?.[0]?.text || '';
+        assert.ok(
+          searchText.includes('Recall Provenance:'),
+          "evo_search output must contain 'Recall Provenance:'"
+        );
+
+        // 2. evo_inspect includes Telemetry: (with hits and verified helped)
+        const inspectRes = await dispatcher.handleToolCall('evo_inspect', {
+          id: 'provenance-test-rule',
+          tier: 'L2',
+          workspace: ws,
+        });
+        const inspectText = inspectRes.content?.[0]?.text || '';
+        assert.ok(inspectText.includes('Telemetry:'), "evo_inspect output must contain 'Telemetry:'");
+        assert.ok(inspectText.includes('hits'), "evo_inspect output must contain 'hits'");
+        assert.ok(inspectText.includes('verified helped'), "evo_inspect output must contain 'verified helped'");
+      } finally {
+        dispatcher.close();
+      }
+
+      // 3. State-aware Score Action in initialized workspace
+      const report = buildScoreReport(ws);
+      assert.strictEqual(report.hasEvo, true, 'buildScoreReport must detect initialized .evo/ tree');
+      const ansi = renderScoreAnsi(report);
+      assert.ok(!ansi.includes('init --stealth'), "renderScoreAnsi must not recommend 'init --stealth' on an already initialized workspace");
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  // =========================================================================
+  // 56. [S1-6 & S1-7 CLI Strict Validation, stats/tree --json, and Terminal Line Truncation]
+  // =========================================================================
+  test('56. [S1-6 & S1-7 CLI Strict Validation, stats/tree --json, and Terminal Line Truncation]', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+
+    // 1. Unknown sub-command with typo suggestion
+    const unknownCmd = child_process.spawnSync(
+      process.execPath,
+      [cliEntry, 'scroe'],
+      { encoding: 'utf8' }
+    );
+    assert.strictEqual(unknownCmd.status, 1, 'Unknown command must exit with code 1');
+    const unknownCmdErr = unknownCmd.stderr || '';
+    assert.ok(unknownCmdErr.includes("Unknown command 'scroe'"), "Must complain about unknown command 'scroe'");
+    assert.ok(unknownCmdErr.includes("Did you mean 'score'?"), "Must suggest 'Did you mean 'score'?'");
+
+    // 2. Unknown memory action
+    const unknownMem = child_process.spawnSync(
+      process.execPath,
+      [cliEntry, 'memory', 'invalid_action'],
+      { encoding: 'utf8' }
+    );
+    assert.strictEqual(unknownMem.status, 1, 'Unknown memory action must exit with code 1');
+    assert.ok(unknownMem.stderr.includes('Unknown memory action'), "Must complain about 'Unknown memory action'");
+
+    // 3. Nonexistent --workspace validation
+    const nonExistentWs = path.resolve(process.cwd(), 'nonexistent-workspace-xyz-98765');
+    const scoreInvalidWs = child_process.spawnSync(
+      process.execPath,
+      [cliEntry, 'score', '--workspace', nonExistentWs],
+      { encoding: 'utf8' }
+    );
+    assert.strictEqual(scoreInvalidWs.status, 1, 'evo score on nonexistent workspace must exit 1');
+    assert.ok(scoreInvalidWs.stderr.includes('Workspace directory does not exist'), "Must report 'Workspace directory does not exist'");
+
+    // evo hook stop should be exempted and exit 0 safely
+    const hookStopWs = child_process.spawnSync(
+      process.execPath,
+      [cliEntry, 'hook', 'stop', '--workspace', nonExistentWs],
+      { encoding: 'utf8' }
+    );
+    assert.strictEqual(hookStopWs.status, 0, 'evo hook stop on nonexistent workspace must exit 0 gracefully');
+
+    // 4. evo stats --json and evo tree --json emit valid parseable JSON objects
+    const statsJsonProc = child_process.spawnSync(
+      process.execPath,
+      [cliEntry, 'stats', '--json'],
+      { encoding: 'utf8' }
+    );
+    assert.strictEqual(statsJsonProc.status, 0, 'evo stats --json must exit 0');
+    const statsParsed = JSON.parse(statsJsonProc.stdout);
+    assert.ok(statsParsed && typeof statsParsed === 'object' && statsParsed.budget, 'stats --json must be a structured object');
+
+    const treeJsonProc = child_process.spawnSync(
+      process.execPath,
+      [cliEntry, 'tree', '--json'],
+      { encoding: 'utf8' }
+    );
+    assert.strictEqual(treeJsonProc.status, 0, 'evo tree --json must exit 0');
+    const treeParsed = JSON.parse(treeJsonProc.stdout);
+    assert.ok(treeParsed && typeof treeParsed === 'object' && treeParsed.summary, 'tree --json must be a structured object');
+
+    // Programmatic exports buildEvoStatsJson and buildEvoTreeJson
+    const directStatsJson = buildEvoStatsJson(process.cwd()) as any;
+    assert.ok(directStatsJson && directStatsJson.capabilities);
+    const directTreeJson = buildEvoTreeJson(process.cwd()) as any;
+    assert.ok(directTreeJson && directTreeJson.summary);
+
+    // Closest token & invocation prefix helper exports
+    assert.strictEqual(suggestClosestToken('scroe', ['score', 'stats', 'tree']), 'score');
+    assert.strictEqual(formatCliInvocationPrefix(['node', 'dist/cli/index.js']), 'evo');
+    assert.strictEqual(formatCliInvocationPrefix(['node', '/npm/_npx/xyz/dist/cli/index.js']), 'npx evo-kernel');
+
+    // 5. truncateTerminalLine tests
+    const mixedLine = '这是一段非常长的中文测试内容，用来验证终端超长行截断功能是否完全正常工作。' + 'English text padding for line length test. '.repeat(5);
+    assert.ok(mixedLine.length >= 200, 'Test line should exceed 200 characters');
+
+    const truncated = truncateTerminalLine(mixedLine, 100, false);
+    assert.ok(visualWidth(truncated) <= 100, `visualWidth must be <= 100, got ${visualWidth(truncated)}`);
+    assert.ok(truncated.endsWith('...'), "Truncated line must end with '...'");
+
+    const fullLine = truncateTerminalLine(mixedLine, 100, true);
+    assert.strictEqual(fullLine, mixedLine, 'truncateTerminalLine with full: true must preserve entire string');
+  });
+
+});

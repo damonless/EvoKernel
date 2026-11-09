@@ -660,17 +660,30 @@ if (!entry) {
     if (fs.existsSync(candidates[0])) entry = candidates[0];
   }
 }
-if (!entry) {
-  console.error('[EvoKernel] Error: evo-kernel not found in workspace node_modules or dist.');
-  console.error('Please run: npm install --save-dev evo-kernel (or npm install -g evo-kernel)');
-  process.exit(1);
-}
 const rawArgs = process.argv.slice(2);
 const firstArg = (rawArgs[0] || '').toLowerCase();
 const forwardedArgs =
   firstArg && firstArg !== 'mcp' && !firstArg.startsWith('-')
     ? rawArgs
     : ['mcp', ...rawArgs.filter((arg) => arg !== 'mcp')];
+
+if (!entry) {
+  if (process.env.EVO_DISABLE_NPX_FALLBACK !== '1') {
+    try {
+      const res = spawnSync(
+        process.platform === 'win32' ? 'npx.cmd' : 'npx',
+        ['-y', 'evo-kernel', ...forwardedArgs],
+        { cwd: wsRoot, stdio: 'inherit', shell: process.platform === 'win32' }
+      );
+      if (!res.error) {
+        process.exit(res.status ?? 1);
+      }
+    } catch {}
+  }
+  console.error('[EvoKernel] Error: evo-kernel not found in workspace node_modules or dist.');
+  console.error('Please run: npm install --save-dev evo-kernel (or npm install -g evo-kernel)');
+  process.exit(1);
+}
 process.argv = [process.argv[0], entry, ...forwardedArgs];
 await import(url.pathToFileURL(entry).href);
 `;

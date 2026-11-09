@@ -2,7 +2,7 @@ import * as child_process from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from 'node:sqlite';
 import { parseJsonc } from './harness.js';
 import { EvoStorage, estimateTokens, hasValidEvoStructure } from '../core/storage.js';
 import { redactSensitiveDiagnostics } from '../core/telemetry.js';
@@ -606,6 +606,9 @@ export interface ScoreReport {
     verifiedMemoriesCount: number;
     totalRuleTokens: number;
   };
+  hasEvo?: boolean;
+  deductions?: string[];
+  recallTelemetry?: { totalHits: number; helpedCount: number; measuredTokensSaved: number };
 }
 
 export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions): ScoreReport {
@@ -630,7 +633,8 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
   let totalRuleTokens = 0;
 
   const evoDir = path.join(ws, '.evo');
-  if (mode === 'project' && hasValidEvoStructure(evoDir)) {
+  const hasEvo = mode === 'project' && hasValidEvoStructure(evoDir);
+  if (hasEvo) {
     try {
       const storage = new EvoStorage(ws);
       const activeRules = storage.listRules().filter((r) => r.enabled !== false);
@@ -651,6 +655,37 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
           const v = verifyMemoryFreshness(ws, m, { includeCallers: false, cacheDb: options?.cacheDb });
           if (v.overall_status === 'VERIFIED') verifiedMemoriesCount++;
         } catch {}
+      }
+    } catch {}
+  }
+
+  let recallTelemetry: { totalHits: number; helpedCount: number; measuredTokensSaved: number } | undefined;
+  const telemetryDbPath = path.join(evoDir, '.cache', 'telemetry.db');
+  if (hasEvo && fs.existsSync(telemetryDbPath)) {
+    try {
+      const db = new DatabaseSync(telemetryDbPath, { readOnly: true });
+      try {
+        const row = db.prepare('SELECT SUM(hit_count) AS hits, SUM(helped_count) AS helped, SUM(tokens_saved) AS saved FROM telemetry').get() as any;
+        if (row && (row.hits !== null || row.helped !== null || row.saved !== null)) {
+          recallTelemetry = {
+            totalHits: Number(row.hits || 0),
+            helpedCount: Number(row.helped || 0),
+            measuredTokensSaved: Number(row.saved || 0),
+          };
+        }
+      } catch {
+        try {
+          const rowFallback = db.prepare('SELECT SUM(hit_count) AS hits, SUM(helped_count) AS helped FROM telemetry').get() as any;
+          if (rowFallback && (rowFallback.hits !== null || rowFallback.helped !== null)) {
+            recallTelemetry = {
+              totalHits: Number(rowFallback.hits || 0),
+              helpedCount: Number(rowFallback.helped || 0),
+              measuredTokensSaved: 0,
+            };
+          }
+        } catch {}
+      } finally {
+        db.close();
       }
     } catch {}
   }
@@ -759,6 +794,28 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
     opusUsd: Number(((wastedTokens100 / 1_000_000) * 15).toFixed(2)),
   };
 
+  const deductions: string[] = [];
+  if (overallScore < 100) {
+    if (mcpTax.activeServers > 0) {
+      deductions.push(
+        `Unvirtualized MCP schemas (${mcpTax.activeServers} active server(s), ~${mcpTax.activeTaxTokens} tok/turn)`
+      );
+    }
+    if (unprotectedHotspots > 0) {
+      deductions.push(
+        `Unshielded fragile git hotspots (${unprotectedHotspots}/${gitHotspots.length} unprotected)`
+      );
+    }
+    if (!hasEvo) {
+      deductions.push('EvoKernel not initialized in workspace (0 AST memories / rules)');
+    }
+    if (memoriesCount > verifiedMemoriesCount) {
+      deductions.push(
+        `${memoriesCount - verifiedMemoriesCount} stale/unverified episodic memory(s)`
+      );
+    }
+  }
+
   return {
     mode,
     workspaceRoot: options?.anon ? '<WORKSPACE>' : ws,
@@ -789,6 +846,9 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
       verifiedMemoriesCount,
       totalRuleTokens,
     },
+    hasEvo,
+    deductions: deductions.length > 0 ? deductions : undefined,
+    recallTelemetry,
   };
 }
 
@@ -810,6 +870,19 @@ export function renderScoreSvg(report: ScoreReport): string {
   const circumference = 226.19;
   const dashOffset = (circumference - (Math.min(100, Math.max(0, report.overallScore)) / 100) * circumference).toFixed(1);
   const barWidth = Math.max(14, Math.round(364 * (report.contextSavings.savingsPercent / 100)));
+  const hotspotPctLabel =
+    report.totalHotspots > 0
+      ? `Hotspots Protected (${report.fragileCodeScore}% Shielded)`
+      : 'No Fragile Hotspots Detected';
+  const staleMemoriesCount = Math.max(
+    0,
+    report.capabilities.memoriesCount - report.capabilities.verifiedMemoriesCount
+  );
+  const memSubLabel =
+    report.capabilities.memoriesCount > 0
+      ? `16-Hex AST Fingerprints (${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} Verified · ${staleMemoriesCount === 0 ? 'Zero Stale Drift' : staleMemoriesCount + ' Stale'})`
+      : '0 Episodic Memories Yet · Run evo bootstrap to initialize';
+
   const hotspotRows = report.gitHotspots
     .slice(0, 5)
     .map((h, i) => {
@@ -906,8 +979,8 @@ export function renderScoreSvg(report: ScoreReport): string {
   <!-- Right Card: Fragile Hotspots & AST Memory Coverage -->
   <rect x="446" y="72" width="470" height="334" rx="12" fill="url(#cardSurface)" stroke="rgba(255,255,255,0.08)"/>
   <text x="464" y="102" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="600" letter-spacing="0.05em">GIT FRAGILITY HOTSPOTS &amp; AST SYMBOL ANCHORS</text>
-  <text x="464" y="136" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="28" font-weight="800" letter-spacing="-0.03em">${report.totalHotspots - report.unprotectedHotspots} / ${report.totalHotspots} <tspan font-size="14" font-weight="600" fill="#34d399">Hotspots Protected (100% AST Guarded)</tspan></text>
-  <text x="464" y="160" fill="#8b9bb4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11">16-Hex AST Fingerprints Verified · Zero Stale Memory Drift</text>
+  <text x="464" y="136" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="28" font-weight="800" letter-spacing="-0.03em">${report.totalHotspots - report.unprotectedHotspots} / ${report.totalHotspots} <tspan font-size="14" font-weight="600" fill="#34d399">${escSvg(hotspotPctLabel)}</tspan></text>
+  <text x="464" y="160" fill="#8b9bb4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11">${escSvg(memSubLabel)}</text>
   <line x1="464" y1="178" x2="900" y2="178" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
   <text x="474" y="202" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10.5" font-weight="600" letter-spacing="0.04em">PRODUCTION HOTSPOT FILE</text>
   <text x="825" y="202" text-anchor="middle" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10.5" font-weight="600" letter-spacing="0.04em">AST SHIELD STATUS</text>
@@ -916,17 +989,23 @@ export function renderScoreSvg(report: ScoreReport): string {
 }
 
 export function renderScoreAnsi(report: ScoreReport): string {
+  const noColor = Boolean(process.env.NO_COLOR) || process.env.EVO_ASCII === '1';
   const c = {
-    reset: '\x1b[0m',
-    bold: '\x1b[1m',
-    dim: '\x1b[2m',
-    green: '\x1b[32m',
-    yellow: '\x1b[33m',
-    blue: '\x1b[34m',
-    magenta: '\x1b[35m',
-    cyan: '\x1b[36m',
-    red: '\x1b[31m',
+    reset: noColor ? '' : '\x1b[0m',
+    bold: noColor ? '' : '\x1b[1m',
+    dim: noColor ? '' : '\x1b[2m',
+    green: noColor ? '' : '\x1b[32m',
+    yellow: noColor ? '' : '\x1b[33m',
+    blue: noColor ? '' : '\x1b[34m',
+    magenta: noColor ? '' : '\x1b[35m',
+    cyan: noColor ? '' : '\x1b[36m',
+    red: noColor ? '' : '\x1b[31m',
   };
+
+  const isAscii = process.env.EVO_ASCII === '1';
+  const titleLine = isAscii
+    ? '║   EvoKernel Context Health & Fragility Score Report                ║'
+    : '║   🧬  EvoKernel Context Health & Fragility Score Report            ║';
 
   const lines: string[] = [];
   lines.push('');
@@ -934,7 +1013,7 @@ export function renderScoreAnsi(report: ScoreReport): string {
     `${c.bold}${c.cyan}╔════════════════════════════════════════════════════════════════════╗${c.reset}`
   );
   lines.push(
-    `${c.bold}${c.cyan}║   🧬  EvoKernel Context Health & Fragility Score Report             ║${c.reset}`
+    `${c.bold}${c.cyan}${titleLine}${c.reset}`
   );
   lines.push(
     `${c.bold}${c.cyan}╚════════════════════════════════════════════════════════════════════╝${c.reset}`
@@ -946,6 +1025,11 @@ export function renderScoreAnsi(report: ScoreReport): string {
   lines.push(
     `  Overall Score      : ${c.bold}${report.overallScore >= 80 ? c.green : report.overallScore >= 60 ? c.yellow : c.red}${report.overallScore} / 100${c.reset}  ${c.dim}[Grade: ${c.bold}${report.grade}${c.dim}]${c.reset}`
   );
+  if (report.deductions && report.deductions.length > 0) {
+    lines.push(
+      `  Score Deductions   : ${c.yellow}${report.deductions.join(' · ')}${c.reset}`
+    );
+  }
   lines.push('');
   lines.push(`${c.bold}📊 Context & MCP Tax Virtualization${c.reset}`);
   lines.push(
@@ -958,7 +1042,7 @@ export function renderScoreAnsi(report: ScoreReport): string {
     `  ├─ Virtualized Gain: ${c.bold}${c.green}${report.contextSavings.savedTokens.toLocaleString()} tokens saved (-${report.contextSavings.savingsPercent}% prompt tax)${c.reset}`
   );
   lines.push(
-    `  ├─ 100-Turn Waste  : ${c.yellow}$${report.waste100TurnsUsd.sonnetUsd.toFixed(2)}${c.reset} (Sonnet) / ${c.red}$${report.waste100TurnsUsd.opusUsd.toFixed(2)}${c.reset} (Opus)`
+    `  ├─ 100-Turn Waste  : ${c.yellow}\$${report.waste100TurnsUsd.sonnetUsd.toFixed(2)}${c.reset} (Sonnet) / ${c.red}\$${report.waste100TurnsUsd.opusUsd.toFixed(2)}${c.reset} (Opus)`
   );
   lines.push(
     `  └─ MCP Servers     : ${report.mcpTax.activeServers} active, ${report.mcpTax.pooledServers} pooled (${report.mcpTax.totalServers} total)`
@@ -979,9 +1063,18 @@ export function renderScoreAnsi(report: ScoreReport): string {
     lines.push(
       `  ├─ Fragile Hotspots: ${report.totalHotspots} tracked, ${report.unprotectedHotspots === 0 ? c.green + '0 unprotected' : c.red + report.unprotectedHotspots + ' unprotected'}${c.reset}`
     );
-    lines.push(
-      `  └─ Capabilities    : ${report.capabilities.rulesCount} rules (${report.capabilities.scopedRulesCount} scoped), ${report.capabilities.memoriesCount} memories (${report.capabilities.verifiedMemoriesCount} verified AST)`
-    );
+    if (report.recallTelemetry && report.recallTelemetry.totalHits > 0) {
+      lines.push(
+        `  ├─ Capabilities    : ${report.capabilities.rulesCount} rules (${report.capabilities.scopedRulesCount} scoped), ${report.capabilities.memoriesCount} memories (${report.capabilities.verifiedMemoriesCount} verified AST)`
+      );
+      lines.push(
+        `  └─ Recall Impact   : ${report.recallTelemetry.totalHits} recalls · ${report.recallTelemetry.helpedCount} verified pitfalls avoided (~${report.recallTelemetry.measuredTokensSaved.toLocaleString()} tok saved)`
+      );
+    } else {
+      lines.push(
+        `  └─ Capabilities    : ${report.capabilities.rulesCount} rules (${report.capabilities.scopedRulesCount} scoped), ${report.capabilities.memoriesCount} memories (${report.capabilities.verifiedMemoriesCount} verified AST)`
+      );
+    }
 
     if (report.gitHotspots.length > 0) {
       lines.push('');
@@ -997,12 +1090,30 @@ export function renderScoreAnsi(report: ScoreReport): string {
     }
   }
 
+  const cliCmd =
+    process.argv[1] && /_npx|npx/i.test(process.argv[1])
+      ? 'npx evo-kernel'
+      : 'evo';
+
+  let actionCmd = '';
+  if (!report.hasEvo) {
+    actionCmd = `${cliCmd} init --stealth && ${cliCmd} virtualize --dry-run`;
+  } else if (report.mcpTax.activeServers > 0) {
+    actionCmd = `${cliCmd} virtualize --dry-run`;
+  } else if (report.capabilities.memoriesCount > report.capabilities.verifiedMemoriesCount) {
+    actionCmd = `${cliCmd} memory verify`;
+  } else if (report.unprotectedHotspots > 0 || report.capabilities.memoriesCount === 0) {
+    actionCmd = `${cliCmd} bootstrap`;
+  } else {
+    actionCmd = `Context OS is healthy and shielded — run \`${cliCmd} doctor\` or \`${cliCmd} ui\` to inspect.`;
+  }
+
   lines.push('');
   lines.push(
-    `  ${c.bold}Action:${c.reset} ${c.cyan}npx evo-kernel init --stealth && npx evo-kernel virtualize --dry-run${c.reset}`
+    `  ${c.bold}Action:${c.reset} ${c.cyan}${actionCmd}${c.reset}`
   );
   lines.push(
-    `${c.dim}Run \`npx evo-kernel ui\` to inspect interactive X-Ray treemap & capability constellation.${c.reset}`
+    `${c.dim}Run \`${cliCmd} ui\` to inspect interactive X-Ray treemap & capability constellation.${c.reset}`
   );
   lines.push('');
   return lines.join('\n');

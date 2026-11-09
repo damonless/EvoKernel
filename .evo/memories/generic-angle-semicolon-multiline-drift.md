@@ -2,14 +2,14 @@
 id: generic-angle-semicolon-multiline-drift
 title: "Generic Angle Type Literal Semicolon and Multiline Drift"
 l0_summary: "Fix generic angle skipping on semicolons in type literals and multiline defaults"
-created_commit: "49a6307"
-created_branch: "fix/deep-audit-8-defects"
+created_commit: "3ad564d"
+created_branch: "main"
 target_symbols: ["trySkipGenericAngles","findBraceBlockEnd"]
 ast_fingerprints: {"trySkipGenericAngles":{"symbol":"trySkipGenericAngles","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":275,"end_line":317,"signature":"export function trySkipGenericAngles(masked: string, pos: number): number","ast_hash":"1d46309b635963b2"},"findBraceBlockEnd":{"symbol":"findBraceBlockEnd","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":1805,"end_line":2119,"signature":"export function findBraceBlockEnd(","ast_hash":"f1156e782c0acaff"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-02T03:04:44.814Z"
-updated_at: "2026-11-08T17:52:48.910Z"
+updated_at: "2026-11-09T05:58:23.164Z"
 ---
 
 ## Symptom

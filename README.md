@@ -2,7 +2,7 @@
 
 # 🧬 EvoKernel (evo-kernel)
 
-### Cut MCP & Rule Prompt Tax by 94.4%. Keep 100% KV Cache Hit. Evolve AST-Verified Memories & Sandboxed Tools in Isolated Git Worktrees — with Zero External Dependencies.
+### Cut MCP Tool Schema Tax by 94.4% (and Static Prefix Tax by 88.7%). Keep 100% KV Cache Hit. Evolve AST-Verified Memories & Sandboxed Tools in Isolated Git Worktrees — with Zero External Dependencies.
 
 **The Deterministic Self-Evolving Meta-Kernel & Cognitive Context OS for AI Coding Agents**  
 *Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
@@ -15,7 +15,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#-zero-dependency-architecture)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#-core-architecture-5-fixed-meta-tools)
-[![Tests](https://img.shields.io/badge/tests-277%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
+[![Tests](https://img.shields.io/badge/tests-306%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 
 **[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Live Workbench 2.0](https://damonless.github.io/EvoKernel/) · [📊 Benchmarks](benchmarks/README.md)**
 
@@ -24,6 +24,8 @@
 <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-shotcraft.svg" alt="EvoKernel 3-Tier Context OS & Benchmark Telemetry" width="100%" /></a>
 
 </div>
+
+> **What is EvoKernel?** EvoKernel stops your AI coding agent from repeating the same bugs across sessions — crystallizing root-cause fixes into code-anchored memories and sandboxed micro-tools, while folding bloated MCP schemas & rules behind 5 fixed primitives (**-88.7% to -94.4% prompt tax, 100% KV cache hit, 0 external dependencies**).
 
 > [!NOTE]
 > **Disambiguation Note:** EvoKernel (`evo-kernel`) is an agent architecture and context engineering framework for AI coding assistants (Claude Code, Cursor, Windsurf, Codex, Gemini, etc.). It is not affiliated with academic ICML papers/benchmarks of similar naming or Linux kernel projects.
@@ -38,16 +40,18 @@ Get started in 3 commands — zero installation required:
 # 1. Instant Zero-Write X-Ray (<25ms) — scan host rules, git hotspots & memory coverage
 npx -y evo-kernel score
 
-# 2. One-Click Auto-Wiring & Virtualization — wire 10 IDEs + fold third-party MCPs
-npx -y evo-kernel init --stealth && npx -y evo-kernel virtualize
+# 2. One-Click Safe Wiring & Doctor Check — wire 10 IDEs safely with stealth mode
+npx -y evo-kernel init --stealth && npx -y evo-kernel doctor
+# (Preview MCP virtualization token savings safely with: npx -y evo-kernel virtualize --dry-run)
 
-# 3. Launch Workbench 2.0 (Zinc Theme, Orthogonal Topology & Native Micro-Window)
+# 3. Launch Workbench 2.0 & Verify Deliverables (.xlsx, .docx, .pptx, .csv, .json, .md)
 npx -y evo-kernel ui --app
-npx -y evo-kernel check ./report.xlsx
+npx -y evo-kernel check ./README.md
 ```
 
 > 💡 **Node.js 18 / 20 Instant 1-Liner (No Global Node Upgrade Needed):**  
 > `npx -y -p node@22 evo-kernel score`  
+> *(Note: `npx -p node@22` is recommended for one-off CLI diagnostics. For a persistent background MCP service, upgrade system Node to `>= 22.5.0` via `nvm install 22 && nvm use 22` or `fnm use 22`, and install globally via `npm install -g evo-kernel`.)*  
 > *Why Node.js >= 22.5.0?* EvoKernel runs purely on native `node:sqlite`, `node:module`, and `node:test` — providing **0 external npm dependencies and 0 supply-chain vulnerability risk**.
 
 <div align="center">
@@ -99,6 +103,31 @@ node ./dist/cli/index.js doctor
 
 ---
 
+## 🔒 Reversibility, Team Sharing & Privacy
+
+EvoKernel is designed from the ground up to be safe to trial, transparent to inspect, and completely reversible at any moment:
+
+### 1. What `evo init` Touches & 1-Command Lossless Uninstall
+When you run `npx evo-kernel init`, it touches only three isolated surfaces:
+- **Host Agent Rule Files**: Inserts a compact, bounded managed block between `<!-- EVO:START -->` and `<!-- EVO:END -->` markers in detected configuration files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/evo-kernel.mdc`). Existing user rules outside these markers are untouched.
+- **Host MCP Configs**: Registers a single stdio gateway entry for `evo-kernel` (leaving third-party servers untouched unless virtualized).
+- **Workspace `.evo/` Tree**: Generates local capability and episodic memory directories (`.evo/rules/`, `.evo/skills/`, `.evo/memories/`, `.evo/tools/`, `.evo/.cache/`).
+
+To cleanly and completely revert your repository and agent configurations back to baseline, run:
+```bash
+npx -y evo-kernel virtualize --restore && npx -y evo-kernel uninstall
+```
+This restores any virtualized MCP servers to host configuration files, strips all `<!-- EVO:START -->` blocks cleanly, unwires registered lifecycle hooks, and removes `.evo/` with **zero left-behind configuration artifacts**.
+
+### 2. Multi-Person Team Sharing vs. `--stealth` Mode
+- **Multi-Person Team Sharing (Default `evo init`)**: Commit `.evo/rules/`, `.evo/memories/`, and `.evo/tools/` to your Git repository. Every team member and coding agent immediately benefits from shared root-cause bug fixes and verified sandboxed micro-tools, while internal cache files (`.evo/.cache/`) are automatically gitignored.
+- **Personal Standalone Trial (`evo init --stealth`)**: Appends `.evo/` and modified host rule files to `.git/info/exclude`. Git completely ignores EvoKernel files locally without touching `.gitignore` or creating uncommitted working tree diffs in shared repositories. Zero git pollution.
+
+### 3. 100% Local-First & Zero Outbound Telemetry
+EvoKernel performs **0 outbound network requests**, transmits **0 analytics or telemetry**, and requires **0 external cloud APIs**. All SQLite FTS5 indexes and observable recall ledgers (`.evo/.cache/telemetry.db`) are stored 100% locally on your machine.
+
+---
+
 ## 📈 50-Turn Context-Tax Analytical Model & Live Engine Micro-Benchmark (`npm run benchmark`)
 
 Analytical cost/cache model across **8 standard MCP servers** (`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` — **77 tools** total) + a mature repo knowledge base (10 rules, 4 skills, 5 micro-tools, 15 debugging memories) over a **50-turn coding session** with 3 mid-session capability evolutions, paired with live local engine micro-benchmarks (reproduce locally via `npm run benchmark`).
@@ -107,12 +136,15 @@ Analytical cost/cache model across **8 standard MCP servers** (`github`, `playwr
 | Metric | Raw Multi-MCP + Monolithic `CLAUDE.md` | **🧬 EvoKernel 5-Tool Meta-Gateway** | Model / Live Result |
 | :--- | :---: | :---: | :---: |
 | **Exposed Tool Schemas** | 77 tools | **5 fixed meta-tools** | **-93.5% schema footprint** |
-| **Eager Static Prefix / Turn** | 27,150 tokens | **3,066 tokens** | **-88.7% prompt tax** |
+| **MCP Tool Schema Tax / Turn** | 27,150 tokens | **1,530 tokens** | **-94.4% MCP schema tax** |
+| **8-Server Full Static Prefix / Turn** | 27,150 tokens | **3,066 tokens** | **-88.7% static prefix reduction** |
 | **Mid-Session Cache Invalidations** | 3 full prefix busts | **0 (100% cache hit)** | **100% KV Cache Shield** |
 | **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% total token load** |
 | **50-Turn Cost (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **-70.4% API cost** |
 | **50-Turn Cost (Claude Opus 4.5)** | \$5.76 | **\$1.70** | **-70.4% API cost** |
-| **AST Anti-Drift Memory Check** | Unverified text (drifts silently) | **~0.35 ms / memory** | **Deterministic AST Grounding** |
+| **Live Engine AST Verification Speed** | Unverified text (drifts silently) | **~0.32 ms / memory** | **<11ms batch across 34 memories¹** |
+
+> ¹ *Terminology Note:* AST Anti-Drift / AST Fingerprinting utilizes **Zero-Dep Lexical-Structural Skeleton Fingerprinting**, which is immune to comments, code reformatting, and line-number drift without requiring external compiler dependencies.
 
 ---
 
@@ -398,7 +430,7 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-**274+ tests across 11 test suites pass in ~17 seconds with 0 failures:**
+**306+ tests across 11 test suites pass in ~21 seconds with 0 failures:**
 
 <details>
 <summary><b>🔍 View All 11 Verified Test Suites (Click to expand)</b></summary>
@@ -413,9 +445,9 @@ node ./scripts/test.mjs
 | 6 | `dist/tests/lifecycle-guard-hooks.test.js` | Lifecycle Guard Hooks, Trigger Cues & Reference Integrity | 27 tests |
 | 7 | `dist/tests/mcp-proxy.test.js` | Downstream MCP Proxy Virtualization Suite | 10 tests |
 | 8 | `dist/tests/multi-harness.test.js` | Multi-Agent Harness Matrix & Cascaded Detection Suite | 14 tests |
-| 9 | `dist/tests/optimize.test.js` | Offline Git Worktree Optimization Engine Suite | 19 tests |
-| 10 | `dist/tests/score-and-ui.test.js` | Score, Workbench 2.0 UI & Control API, Warmup & Slash Commands Suite | 22 tests |
-| 11 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & Hardening Suite | 32 tests |
+| 9 | `dist/tests/optimize.test.js` | Offline Git Worktree Optimization Engine Suite | 21 tests |
+| 10 | `dist/tests/score-and-ui.test.js` | Score, Workbench 2.0 UI & Control API, Warmup & Slash Commands Suite | 28 tests |
+| 11 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & Hardening Suite | 50 tests |
 
 </details>
 

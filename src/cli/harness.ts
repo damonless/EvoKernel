@@ -155,6 +155,60 @@ function isPluginBootstrapEntry(entry: unknown): boolean {
   return Array.isArray(args) && args[0] === '-e';
 }
 
+export function isEphemeralNpxCachePath(p: string): boolean {
+  if (!p || typeof p !== 'string') return false;
+  if (process.env.EVO_ALLOW_NPX_CACHE_ROOT === '1') return false;
+  const norm = p.replace(/\\/g, '/');
+  return norm.includes('/_npx/') || norm.includes('/npx-');
+}
+
+export function hasStaleNpxMcpEntry(entry: unknown): boolean {
+  if (!entry) return false;
+
+  const stringsToCheck: string[] = [];
+
+  const collectStrings = (obj: unknown) => {
+    if (typeof obj === 'string') {
+      stringsToCheck.push(obj);
+      if (obj.includes(' ')) {
+        const tokens = obj.split(/\s+/).map((t) => t.replace(/^["']|["']$/g, ''));
+        stringsToCheck.push(...tokens);
+      }
+    } else if (Array.isArray(obj)) {
+      for (const item of obj) {
+        collectStrings(item);
+      }
+    } else if (typeof obj === 'object' && obj !== null) {
+      for (const val of Object.values(obj)) {
+        collectStrings(val);
+      }
+    }
+  };
+
+  collectStrings(entry);
+
+  for (const raw of stringsToCheck) {
+    const clean = raw.trim().replace(/^["']|["']$/g, '');
+    if (!clean) continue;
+    const norm = clean.replace(/\\/g, '/');
+
+    const hasNpxIndicator = norm.includes('/_npx/') || norm.includes('/npx-') || norm.includes('_npx');
+    if (hasNpxIndicator && (path.isAbsolute(clean) || clean.startsWith('.')) && !fs.existsSync(clean)) {
+      return true;
+    }
+
+    const isEvoTargetScript =
+      norm.endsWith('dist/cli/index.js') ||
+      norm.endsWith('boot-mcp.mjs') ||
+      norm.endsWith('scripts/boot-mcp.mjs');
+    if (path.isAbsolute(clean) && isEvoTargetScript && !fs.existsSync(clean)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function resolveInstalledEvoKernelRoot(): string | null {
   if (process.env.EVO_FORCE_NPX === '1') {
     return null;
@@ -162,11 +216,17 @@ export function resolveInstalledEvoKernelRoot(): string | null {
   const candidates = [
     process.env.EVO_KERNEL_ROOT ? path.resolve(process.env.EVO_KERNEL_ROOT) : '',
     path.resolve(import.meta.dirname, '..', '..'),
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'npm', 'node_modules', 'evo-kernel') : '',
+    path.resolve(process.execPath, '../../lib/node_modules/evo-kernel'),
+    path.resolve(process.execPath, '../node_modules/evo-kernel'),
     path.join(os.homedir(), '.gemini', 'config', 'plugins', 'evo-kernel'),
     path.join(os.homedir(), '.gemini', 'extensions', 'evo-kernel'),
   ].filter(Boolean);
 
   for (const cand of candidates) {
+    if (isEphemeralNpxCachePath(cand)) {
+      continue;
+    }
     if (
       fs.existsSync(path.join(cand, 'scripts', 'boot-mcp.mjs')) ||
       fs.existsSync(path.join(cand, 'dist', 'cli', 'index.js'))
@@ -2055,7 +2115,10 @@ export function detectCascadedTargets(
     }
   }
   if (stage2.length > 0) {
-    return Array.from(new Set(stage2));
+    const uniqueStage2 = Array.from(new Set(stage2));
+    const dedicated = uniqueStage2.filter((id) => id !== 'agents');
+    const hasAgentsFile = fs.existsSync(path.join(workspaceRoot, 'AGENTS.md'));
+    return dedicated.length > 0 && !hasAgentsFile ? dedicated : uniqueStage2;
   }
 
   // Stage 3: User Home Global installations (~/.agent)
@@ -2066,7 +2129,10 @@ export function detectCascadedTargets(
     }
   }
   if (stage3.length > 0) {
-    return Array.from(new Set(stage3));
+    const uniqueStage3 = Array.from(new Set(stage3));
+    const dedicated = uniqueStage3.filter((id) => id !== 'agents');
+    const hasAgentsFile = fs.existsSync(path.join(workspaceRoot, 'AGENTS.md'));
+    return dedicated.length > 0 && !hasAgentsFile ? dedicated : uniqueStage3;
   }
 
   // Fallback: ['agents'] (AGENTS.md)
