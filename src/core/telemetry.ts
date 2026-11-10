@@ -915,9 +915,22 @@ export class EvoTelemetry {
       // Index external tools into telemetry and FTS
       for (const et of externalTools) {
         const idTokens = et.id.replace(/[-_]+/g, ' ');
+        const etPropsObj =
+          et.inputSchema &&
+          typeof et.inputSchema === 'object' &&
+          (et.inputSchema as Record<string, unknown>).properties &&
+          typeof (et.inputSchema as Record<string, unknown>).properties === 'object'
+            ? ((et.inputSchema as Record<string, unknown>).properties as Record<string, Record<string, unknown>>)
+            : {};
+        const etSchemaPropsText = Object.entries(etPropsObj)
+          .map(
+            ([k, v]) =>
+              `${k} ${k.replace(/[-_]+/g, ' ')} ${typeof v?.description === 'string' ? v.description : ''}`
+          )
+          .join(' ');
         const schemaText = JSON.stringify(et.inputSchema);
-        const cjkKw = extractCjkBigrams(`${et.title} ${et.description}`).join(' ');
-        const kw = `${idTokens} external proxy mcp ${et.serverName} ${et.originalName} ${cjkKw}`.trim();
+        const cjkKw = extractCjkBigrams(`${et.title} ${et.description} ${etSchemaPropsText}`).join(' ');
+        const kw = `${idTokens} external proxy mcp ${et.serverName} ${et.originalName} ${etSchemaPropsText} ${cjkKw}`.trim();
         const l0 = (et.description || `External MCP tool from ${et.serverName}`).slice(0, 140);
         upsertFtsRow(et.id, 'tool', et.title, l0, kw, schemaText);
         upsertTelemetry.run(et.id, 'tool', et.title, l0, '**/*', now, et.cachedAt || now);
@@ -1273,8 +1286,13 @@ export class EvoTelemetry {
     const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
       s === 'STALE' ? 2 : s === 'OTHER_BRANCH' ? 1 : 0;
 
-    const hasHighRelevanceHit = hits.some((h) => !h.low_overlap);
-    const effectiveHits = hasHighRelevanceHit ? hits.filter((h) => !h.low_overlap) : hits;
+    const highRelevanceHits = hits.filter((h) => !h.low_overlap);
+    const effectiveHits =
+      highRelevanceHits.length >= 2
+        ? highRelevanceHits
+        : highRelevanceHits.length === 1
+          ? hits.filter((h) => !h.low_overlap || (h.matched_concepts ?? 0) > 0)
+          : hits;
 
     return effectiveHits
       .sort((a, b) => {

@@ -1243,13 +1243,22 @@ export async function startUiServer(
               }
 
               const trimmedBody = body.trim();
-              const l1Match = trimmedBody.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
-              const l2Match = trimmedBody.match(/## L2 SOP\s+([\s\S]*)$/i);
+              const l1Match = trimmedBody.match(
+                /(?:^|\r?\n)#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b[^\r\n]*\r?\n([\s\S]*?)(?=(?:\r?\n)#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b|$)/i
+              );
+              const l2Match = trimmedBody.match(
+                /(?:^|\r?\n)#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b[^\r\n]*\r?\n([\s\S]*?)(?=(?:\r?\n)#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b|$)/i
+              );
               const l1_contract =
                 l1Match && l1Match[1].trim()
                   ? l1Match[1].trim()
                   : (existingSkill.l1_contract || 'Standard skill contract');
-              const l2_sop = l2Match && l2Match[1].trim() ? l2Match[1].trim() : trimmedBody;
+              const l2_sop =
+                l2Match && l2Match[1].trim()
+                  ? l2Match[1].trim()
+                  : !l1Match && trimmedBody
+                    ? trimmedBody
+                    : (existingSkill.l2_sop || '');
 
               preservedEnabled =
                 meta.enabled !== undefined
@@ -1335,6 +1344,15 @@ export async function startUiServer(
                   ? meta.review_status
                   : existingMem.review_status;
 
+              const nextTargetSymbols =
+                Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
+                  ? meta.target_symbols.map((s) => String(s).trim()).filter(Boolean)
+                  : existingMem.target_symbols;
+              const prevTargetSymbols = (existingMem.target_symbols || []).map((s) => s.trim()).filter(Boolean);
+              const sameTargetSymbols =
+                prevTargetSymbols.length === nextTargetSymbols.length &&
+                prevTargetSymbols.every((s, idx) => s === nextTargetSymbols[idx]);
+
               payload = {
                 kind: 'memory',
                 id: cleanId,
@@ -1345,16 +1363,24 @@ export async function startUiServer(
                 symptom,
                 root_cause,
                 solution,
-                target_symbols:
-                  Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
-                    ? meta.target_symbols.map(String)
-                    : existingMem.target_symbols,
+                target_symbols: nextTargetSymbols,
                 tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
                 origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
                 supersedes_id: cleanId,
                 enabled: preservedEnabled,
                 review_status: preservedReviewStatus,
-              };
+                ...(typeof meta.created_commit === 'string' && meta.created_commit.trim()
+                  ? { created_commit: meta.created_commit.trim() }
+                  : sameTargetSymbols && existingMem.created_commit
+                    ? { created_commit: existingMem.created_commit }
+                    : {}),
+                created_branch:
+                  typeof meta.created_branch === 'string' && meta.created_branch.trim()
+                    ? meta.created_branch.trim()
+                    : sameTargetSymbols
+                      ? existingMem.created_branch
+                      : undefined,
+              } as ProposalPayload;
             } else {
               const tool = storage.getTool(cleanId);
               if (!tool || !fs.existsSync(tool.script_path)) {

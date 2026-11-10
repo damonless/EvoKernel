@@ -4939,6 +4939,26 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       });
       assert.equal(Boolean(incompleteNewSkill.isError), true);
 
+      // Skill content with YAML frontmatter must strip frontmatter cleanly, and explicit l2_sop must take priority over content
+      const skillFrontmatterAndExplicitL2 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'skill',
+        supersedes_id: 'mppt-audit-sop',
+        content:
+          '---\nid: mppt-audit-sop\ntitle: Ignored Frontmatter\n---\n## L1 Contract\nUse when diagnosing PV input power overshoot or MPPT current limit.\n\n## L2 SOP\n1. Fallback L2 in content that should be overridden by explicit l2_sop.',
+        l2_sop:
+          '1. Read sDeratingChargeCurr.\n2. Verify line-mode battery feed load deduction and explicit l2_sop precedence.',
+      });
+      assert.equal(
+        Boolean(skillFrontmatterAndExplicitL2.isError),
+        false,
+        skillFrontmatterAndExplicitL2.content[0]?.text
+      );
+      const savedSkill4 = storage.getSkill('mppt-audit-sop');
+      assert.ok(savedSkill4);
+      assert.doesNotMatch(savedSkill4!.l1_contract, /Ignored Frontmatter/);
+      assert.match(savedSkill4!.l2_sop, /explicit l2_sop precedence/);
+
       // Superseding scoped rule without passing scope_glob or content inherits both
       const ruleScopeInherit = dispatcher.handleToolCall('evo_propose', {
         workspace: ws,
@@ -4969,6 +4989,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         root_cause: 'Legacy +2A headroom offset in sDeratingChargeCurr allowed extra PV current.',
         solution: 'Remove +2A offset in sDeratingChargeCurr.',
         target_symbols: [{ file: 'src/mppt.c', symbol: 'sDeratingChargeCurr' }],
+        tags: ['mppt', 'derating'],
       });
       assert.equal(Boolean(dirtyMemRes.isError), false, dirtyMemRes.content[0]?.text);
       const dirtyMemParsed = JSON.parse(dirtyMemRes.content[0].text);
@@ -4992,7 +5013,29 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       );
       assert.equal(memBeforeCommit!.created_commit, commit1);
 
-      // Commit the fix and re-propose the memory using minimal re-anchoring call (omitting symptom/root_cause/solution/target_symbols) -> created_commit must update to commit2
+      // Approve the memory and verify that if src/mppt.c is reverted to commit1 (pre-fix +2A),
+      // verifyMemoryFreshness does NOT falsely report VERIFIED via structural skeleton when histFp.ast_hash !== recorded.ast_hash
+      storage.saveMemory({ ...memBeforeCommit!, review_status: 'approved' });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'mppt.c'),
+        'void sDeratingChargeCurr(int vpv) {\n  int limit = vpv + 2;\n}\n',
+        'utf8'
+      );
+      clearMemoryVerificationCache();
+      const revertedReport = verifyMemoryFreshness(ws, storage.getMemory('pv-derating-headroom')!);
+      assert.equal(
+        revertedReport.overall_status,
+        'STALE',
+        'Dirty-anchored memory must report STALE when live file is reverted to pre-fix commit1 whose ast_hash differs from recorded.ast_hash'
+      );
+      // Restore the fix before committing
+      fs.writeFileSync(
+        path.join(ws, 'src', 'mppt.c'),
+        'void sDeratingChargeCurr(int vpv) {\n  int limit = vpv;\n}\n',
+        'utf8'
+      );
+
+      // Commit the fix and re-propose the memory using minimal re-anchoring call (omitting id/symptom/root_cause/solution/target_symbols) -> created_commit must update to commit2 and preserve tags & review_status
       spawnSync('git', ['add', 'src/mppt.c'], { cwd: ws, stdio: 'ignore' });
       spawnSync('git', ['commit', '-m', 'fix(mppt): remove +2A offset'], {
         cwd: ws,
@@ -5007,7 +5050,6 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       const cleanMemRes = dispatcher.handleToolCall('evo_propose', {
         workspace: ws,
         kind: 'memory',
-        id: 'pv-derating-headroom',
         supersedes_id: 'pv-derating-headroom',
       });
       assert.equal(Boolean(cleanMemRes.isError), false, cleanMemRes.content[0]?.text);
@@ -5018,6 +5060,16 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         memAfterCommit?.created_commit,
         commit2,
         'Re-proposing memory after git commit with minimal payload must inherit fields and update created_commit to HEAD (commit2)'
+      );
+      assert.deepEqual(
+        memAfterCommit?.tags,
+        ['mppt', 'derating'],
+        'Minimal memory re-anchor must preserve existing tags'
+      );
+      assert.equal(
+        memAfterCommit?.review_status,
+        'approved',
+        'Minimal memory re-anchor must preserve existing review_status'
       );
 
       // --- E1 & E4: Anti-poisoning session reminder & low_overlap tool script noise filtering ---

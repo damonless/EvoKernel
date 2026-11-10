@@ -797,13 +797,22 @@ export async function handleWebviewAction(
             return { ok: false, error: `Not Found: Skill "${cleanId}" not found` };
           }
           const trimmedBody = body.trim();
-          const l1Match = trimmedBody.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
-          const l2Match = trimmedBody.match(/## L2 SOP\s+([\s\S]*)$/i);
+          const l1Match = trimmedBody.match(
+            /(?:^|\r?\n)#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b[^\r\n]*\r?\n([\s\S]*?)(?=(?:\r?\n)#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b|$)/i
+          );
+          const l2Match = trimmedBody.match(
+            /(?:^|\r?\n)#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b[^\r\n]*\r?\n([\s\S]*?)(?=(?:\r?\n)#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b|$)/i
+          );
           const l1_contract =
             l1Match && l1Match[1].trim()
               ? l1Match[1].trim()
               : (existingSkill.l1_contract || 'Standard skill contract');
-          const l2_sop = l2Match && l2Match[1].trim() ? l2Match[1].trim() : trimmedBody;
+          const l2_sop =
+            l2Match && l2Match[1].trim()
+              ? l2Match[1].trim()
+              : !l1Match && trimmedBody
+                ? trimmedBody
+                : (existingSkill.l2_sop || '');
 
           preservedEnabled =
             meta.enabled !== undefined

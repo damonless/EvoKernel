@@ -3257,7 +3257,11 @@ export function verifyMemoryFreshness(
       ) {
         try {
           const histFp = extractSymbolFingerprintAtCommit(root, createdCommit, symKey, recorded);
-          if (histFp && (histFp.kind === live.kind || !live.kind)) {
+          if (
+            histFp &&
+            (!recorded.ast_hash || histFp.ast_hash === recorded.ast_hash) &&
+            (histFp.kind === live.kind || !live.kind)
+          ) {
             const histCleanRel = histFp.file_path.replace(/\\/g, '/').replace(/^\.\/+/,'');
             const histShowRes = spawnSync('git', ['show', `${createdCommit}:./${histCleanRel}`], {
               cwd: root,

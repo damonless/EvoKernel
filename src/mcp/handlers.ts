@@ -454,12 +454,13 @@ export class EvoMcpDispatcher {
     if (!wsMap || wsMap.size === 0) return '';
     const ids: string[] = [];
     for (const [id, k] of wsMap.entries()) {
-      if (filterKind === 'all' || k === filterKind) {
+      if (filterKind === 'all' || k === filterKind || k === 'memory') {
         ids.push(id);
       }
     }
     if (ids.length === 0) return '';
-    return `\n🔄 Anti-Poisoning Guard: Earlier in this session you crystallized [${ids.join(', ')}]. If new findings or user feedback refine or overturn that diagnosis, call evo_propose(id, supersedes_id: id, workspace) to update it.`;
+    const recentIds = ids.slice(-5);
+    return `\n🔄 Anti-Poisoning Guard: Earlier in this session you crystallized [${recentIds.join(', ')}]. If new findings or user feedback refine or overturn that diagnosis, call evo_propose(id, supersedes_id: id, workspace) to update it.`;
   }
 
   public setClientRoots(roots: string[], readyPromise?: Promise<void>): void {

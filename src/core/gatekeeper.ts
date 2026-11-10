@@ -1658,8 +1658,8 @@ export class EvoGatekeeper {
     options?: EvaluateOptions
   ): GatekeeperResult {
     const config = this.storage.getConfig();
-    const cleanId = sanitizeId(rawProposal.id || '');
     const cleanSupersedesId = rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : '';
+    const cleanId = sanitizeId(rawProposal.id || '') || cleanSupersedesId;
     const rawDict = rawProposal as unknown as Record<string, unknown>;
 
     const findExistingCapability = (targetId: string) => {
@@ -1708,7 +1708,7 @@ export class EvoGatekeeper {
       return String(s ?? '').trim();
     };
     const rawTargetSymbolsSource =
-      Array.isArray(rawProposal.target_symbols) && rawProposal.target_symbols.length > 0
+      rawProposal.target_symbols !== undefined
         ? rawProposal.target_symbols
         : existingMemoryForDefaults?.target_symbols;
     const normalizedTargetSymbols = Array.isArray(rawTargetSymbolsSource)
@@ -1746,9 +1746,12 @@ export class EvoGatekeeper {
         ? this.storage.getSkill(cleanId) ||
           (cleanSupersedesId ? this.storage.getSkill(cleanSupersedesId) : null)
         : null;
-    const skillBodySource = String(
+    const rawSkillBodySource = String(
       rawProposal.content ?? rawDict.body ?? rawDict.markdown ?? rawProposal.l2_sop ?? ''
     ).trim();
+    const skillBodySource = rawSkillBodySource
+      .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
+      .trim();
     const l1SectionMatch = skillBodySource.match(
       /(?:^|\r?\n)#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b[^\r\n]*\r?\n([\s\S]*?)(?=(?:\r?\n)#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b|$)/i
     );
@@ -1767,13 +1770,20 @@ export class EvoGatekeeper {
       .trim();
     const unstructuredSkillBodyAsL2 =
       !l1SectionMatch && !l2SectionMatch
-        ? String(rawDict.body ?? rawDict.markdown ?? rawProposal.content ?? '').trim()
+        ? String(rawDict.body ?? rawDict.markdown ?? rawProposal.content ?? '')
+            .trim()
+            .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
+            .trim()
         : '';
     const resolvedSkillL1 =
       explicitSkillL1 ||
       parsedSkillL1 ||
       (rawProposal.kind === 'skill' ? String(existingSkillForDefaults?.l1_contract ?? '').trim() : '');
+    const explicitL2HasL1Header = /(?:^|\r?\n)#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b/i.test(
+      String(rawProposal.l2_sop ?? rawDict.l2_body ?? '')
+    );
     const resolvedSkillL2 =
+      (!explicitL2HasL1Header && explicitSkillL2) ||
       parsedSkillL2 ||
       explicitSkillL2 ||
       unstructuredSkillBodyAsL2 ||
@@ -2221,7 +2231,8 @@ export class EvoGatekeeper {
           ? rawProposal.transfer_scenarios
           : inheritedTransferScenarios;
       const requireTransferScenarios =
-        !isCoreRule || rawProposal.transfer_scenarios !== undefined;
+        !isCoreRule ||
+        (Array.isArray(rawProposal.transfer_scenarios) && rawProposal.transfer_scenarios.length > 0);
       if (requireTransferScenarios) {
         const validScenarios = Array.isArray(effectiveTransferScenarios)
           ? Array.from(
@@ -2580,7 +2591,7 @@ export class EvoGatekeeper {
         };
       }
 
-      const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
+      const preservedCreatedAt = existing?.created_at || supersededRuleFromStorage?.created_at || options?.preservedCreatedAt || now;
       const inheritedTransferScenarios =
         rawProposal.transfer_scenarios !== undefined
           ? rawProposal.transfer_scenarios.map((s) => String(s).trim()).filter(Boolean)
@@ -2689,7 +2700,7 @@ export class EvoGatekeeper {
       const supersededSkill = rawProposal.supersedes_id
         ? this.storage.getSkill(sanitizeId(rawProposal.supersedes_id))
         : null;
-      const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
+      const preservedCreatedAt = existing?.created_at || supersededSkill?.created_at || options?.preservedCreatedAt || now;
       const correctionMetadata =
         this.telemetry.getSessionFlag('user_correction_detected') === 'true' ||
         this.telemetry.getSessionFlag('had_command_error') === 'true'
@@ -2772,7 +2783,7 @@ export class EvoGatekeeper {
         };
       }
 
-      const preservedCreatedAt = existing?.created_at || options?.preservedCreatedAt || now;
+      const preservedCreatedAt = baseTool?.created_at || options?.preservedCreatedAt || now;
       const toolTags = Array.isArray(rawProposal.tags)
         ? rawProposal.tags.map((t) => String(t).trim()).filter(Boolean)
         : (baseTool?.tags || []);
@@ -2899,11 +2910,19 @@ export class EvoGatekeeper {
         ast_fingerprints: extractedMemoryFingerprints,
         created_commit: currentCommit,
         created_branch: currentBranch,
-        tags: rawProposal.tags || [],
-        origin: rawProposal.origin || 'evolved',
+        tags: Array.isArray(rawProposal.tags) ? rawProposal.tags : (baseMem?.tags || []),
+        origin: rawProposal.origin || baseMem?.origin || 'evolved',
         supersedes_id: rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : undefined,
-        enabled: rawProposal.enabled === false ? false : true,
-        review_status: rawProposal.review_status === 'approved' ? 'approved' : 'pending',
+        enabled:
+          rawProposal.enabled !== undefined
+            ? rawProposal.enabled === false
+              ? false
+              : true
+            : baseMem?.enabled !== false,
+        review_status:
+          rawProposal.review_status === 'approved' || rawProposal.review_status === 'pending'
+            ? rawProposal.review_status
+            : (baseMem?.review_status || 'pending'),
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -2917,7 +2936,7 @@ export class EvoGatekeeper {
       let dirtyWorktreeFiles: string[] = [];
       let dirtyTargetFiles: string[] = [];
       try {
-        const statusRes = spawnSync('git', ['status', '--porcelain'], {
+        const statusRes = spawnSync('git', ['status', '--porcelain', '--', './'], {
           cwd: this.storage.rootDir,
           encoding: 'utf8',
           timeout: 1500,
@@ -2935,12 +2954,7 @@ export class EvoGatekeeper {
             .filter(
               (relPath) =>
                 relPath.length > 0 &&
-                relPath !== '.evo' &&
-                !relPath.startsWith('.evo/') &&
-                relPath !== '.git' &&
-                !relPath.startsWith('.git/') &&
-                relPath !== '.codegraph' &&
-                !relPath.startsWith('.codegraph/')
+                !/(?:^|\/)\.(?:evo|git|codegraph)(?:\/|$)/.test(relPath)
             );
           const targetRelPaths = new Set(
             Object.values(extractedMemoryFingerprints)
