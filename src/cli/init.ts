@@ -661,20 +661,54 @@ if (!entry) {
   }
 }
 const rawArgs = process.argv.slice(2);
-const firstArg = (rawArgs[0] || '').toLowerCase();
-const forwardedArgs =
-  firstArg && firstArg !== 'mcp' && !firstArg.startsWith('-')
-    ? rawArgs
-    : ['mcp', ...rawArgs.filter((arg) => arg !== 'mcp')];
+const VALUE_FLAGS = new Set([
+  '--workspace', '-w', '--port', '--token', '--export', '--svg', '--html',
+  '--targets', '--link', '--ide', '--max-commits', '--token-budget',
+  '--skill-budget', '--dim', '-k', '--proposer-cmd', '--probe-cmd',
+  '--payload', '--harness', '--event', '--tool', '--file',
+]);
+let firstPositional = '';
+for (let i = 0; i < rawArgs.length; i++) {
+  const a = rawArgs[i];
+  if (a.startsWith('-')) {
+    if (VALUE_FLAGS.has(a.toLowerCase()) && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('-')) {
+      i++;
+    }
+    continue;
+  }
+  firstPositional = a.toLowerCase();
+  break;
+}
+const hasExplicitCliIntent =
+  (Boolean(firstPositional) && firstPositional !== 'mcp') ||
+  rawArgs.some((a) => {
+    const lower = a.toLowerCase();
+    return lower === '--help' || lower === '-h' || lower === '--version' || lower === '-v';
+  });
+const forwardedArgs = hasExplicitCliIntent
+  ? rawArgs
+  : ['mcp', ...rawArgs.filter((arg) => arg.toLowerCase() !== 'mcp')];
 
 if (!entry) {
   if (process.env.EVO_DISABLE_NPX_FALLBACK !== '1') {
     try {
-      const res = spawnSync(
-        process.platform === 'win32' ? 'npx.cmd' : 'npx',
-        ['-y', 'evo-kernel', ...forwardedArgs],
-        { cwd: wsRoot, stdio: 'inherit', shell: process.platform === 'win32' }
-      );
+      const npxArgs = ['-y', 'evo-kernel', ...forwardedArgs];
+      const res =
+        process.platform === 'win32'
+          ? (() => {
+              const quoteWinArg = (arg) => {
+                const s = String(arg);
+                if (!/[\\s"&|<>^()]/.test(s)) return s;
+                return '"' + s.replace(/(\\\\*)"/g, '$1$1\\\\"').replace(/(\\\\+)$/, '$1$1') + '"';
+              };
+              const cmdLine = ['npx.cmd', ...npxArgs.map(quoteWinArg)].join(' ');
+              return spawnSync(
+                process.env.ComSpec || 'cmd.exe',
+                ['/d', '/s', '/c', '"' + cmdLine + '"'],
+                { cwd: wsRoot, stdio: 'inherit', windowsVerbatimArguments: true }
+              );
+            })()
+          : spawnSync('npx', npxArgs, { cwd: wsRoot, stdio: 'inherit' });
       if (!res.error) {
         process.exit(res.status ?? 1);
       }

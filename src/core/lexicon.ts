@@ -58,6 +58,8 @@ export const BASE_CANONICAL_MAP = new Map<string, string>([
   ['report', 'report'],
   ['文档', 'document'],
   ['document', 'document'],
+  ['docx', 'document'],
+  ['word', 'document'],
   ['表格', 'spreadsheet'],
   ['spreadsheet', 'spreadsheet'],
   ['excel', 'spreadsheet'],
@@ -114,22 +116,21 @@ export function compileLexiconConfig(config?: DomainLexiconConfig): CompiledLexi
 
   const canonicalMap = new Map<string, string>(BASE_CANONICAL_MAP);
   for (const [key, synList] of Object.entries(mergedSynonyms)) {
-    const group = [key, ...synList].map((t) => t.toLowerCase());
-    let root: string | undefined;
-    for (const term of group) {
-      if (canonicalMap.has(term)) {
-        root = canonicalMap.get(term);
-        break;
+    const lowerKey = key.toLowerCase();
+    if (canonicalMap.has(lowerKey)) continue;
+    if (!/^[a-z0-9_-]+$/.test(lowerKey)) {
+      const primaryAscii = synList
+        .map((t) => String(t).toLowerCase())
+        .find((t) => /^[a-z0-9_-]+$/.test(t));
+      const root = primaryAscii
+        ? canonicalMap.get(primaryAscii) || primaryAscii
+        : lowerKey;
+      canonicalMap.set(lowerKey, root);
+      if (primaryAscii && !canonicalMap.has(primaryAscii)) {
+        canonicalMap.set(primaryAscii, root);
       }
-    }
-    if (!root) {
-      const asciiCandidate = group.find((t) => /^[a-z0-9_-]+$/.test(t));
-      root = asciiCandidate || key.toLowerCase();
-    }
-    for (const term of group) {
-      if (!canonicalMap.has(term)) {
-        canonicalMap.set(term, root);
-      }
+    } else {
+      canonicalMap.set(lowerKey, lowerKey);
     }
   }
 

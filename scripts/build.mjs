@@ -8,8 +8,11 @@ const srcDir = path.join(rootDir, 'src');
 const distDir = path.join(rootDir, 'dist');
 
 export const SEED_RULES = [
-  'esm-typescript-imports.md',
   'gatekeeper-self-test-invariant.md',
+];
+
+export const SEED_SCOPED_RULES = [
+  'esm-typescript-imports.md',
 ];
 
 export const SEED_SKILLS = [
@@ -87,7 +90,18 @@ function syncCanonicalSeeds() {
       }
       const localScopedDir = path.join(evoDir, 'rules', 'scoped');
       const globalScopedDir = path.join(globalEvoDir, 'rules', 'scoped');
-      if (fs.existsSync(localScopedDir) && fs.existsSync(globalScopedDir)) {
+      if (fs.existsSync(localScopedDir)) {
+        fs.mkdirSync(globalScopedDir, { recursive: true });
+        for (const scopedFile of SEED_SCOPED_RULES) {
+          const srcScoped = path.join(localScopedDir, scopedFile);
+          if (fs.existsSync(srcScoped)) {
+            fs.copyFileSync(srcScoped, path.join(globalScopedDir, scopedFile));
+            const legacyTop = path.join(globalEvoDir, 'rules', scopedFile);
+            if (fs.existsSync(legacyTop)) {
+              fs.rmSync(legacyTop, { force: true });
+            }
+          }
+        }
         for (const f of fs.readdirSync(localScopedDir)) {
           if (f.endsWith('.md')) {
             const destScoped = path.join(globalScopedDir, f);
@@ -114,6 +128,7 @@ function syncCanonicalSeeds() {
   }
 
   // 2. Sync SEED_RULES: .evo/rules/<file> -> templates/seed-evo/rules/<file>
+  //    and SEED_SCOPED_RULES: .evo/rules/scoped/<file> -> templates/seed-evo/rules/scoped/<file>
   const localRulesDir = path.join(evoDir, 'rules');
   const seedRulesDir = path.join(seedEvoDir, 'rules');
   if (fs.existsSync(localRulesDir)) {
@@ -128,6 +143,23 @@ function syncCanonicalSeeds() {
     for (const entry of fs.readdirSync(seedRulesDir, { withFileTypes: true })) {
       if (entry.isFile() && entry.name.endsWith('.md') && !SEED_RULES.includes(entry.name)) {
         fs.rmSync(path.join(seedRulesDir, entry.name), { force: true });
+      }
+    }
+    const localScopedDir = path.join(localRulesDir, 'scoped');
+    const seedScopedDir = path.join(seedRulesDir, 'scoped');
+    if (fs.existsSync(localScopedDir)) {
+      fs.mkdirSync(seedScopedDir, { recursive: true });
+      for (const ruleFile of SEED_SCOPED_RULES) {
+        const srcRule = path.join(localScopedDir, ruleFile);
+        const destRule = path.join(seedScopedDir, ruleFile);
+        if (fs.existsSync(srcRule)) {
+          fs.copyFileSync(srcRule, destRule);
+        }
+      }
+      for (const entry of fs.readdirSync(seedScopedDir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith('.md') && !SEED_SCOPED_RULES.includes(entry.name)) {
+          fs.rmSync(path.join(seedScopedDir, entry.name), { force: true });
+        }
       }
     }
   }

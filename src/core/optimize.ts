@@ -1635,23 +1635,48 @@ export function probeCandidateInWorktree(
 
   try {
     if (hasValidGitHead) {
-      const addRes = child_process.spawnSync(
-        'git',
-        ['worktree', 'add', '--detach', wtDir, 'HEAD'],
-        { cwd: wsRoot, encoding: 'utf8' }
-      );
-      if (addRes.status === 0) {
-        usedGitWorktree = true;
-      } else {
-        copyDirRecursiveExcluding(wsRoot, wtDir, ['.git', 'node_modules', 'dist', '.cache']);
+      if (fs.existsSync(path.join(wtDir, '.git'))) {
+        child_process.spawnSync('git', ['checkout', '--detach', 'HEAD'], {
+          cwd: wtDir,
+          encoding: 'utf8',
+        });
+        const resetRes = child_process.spawnSync('git', ['reset', '--hard', 'HEAD'], {
+          cwd: wtDir,
+          encoding: 'utf8',
+        });
+        child_process.spawnSync('git', ['clean', '-fdx'], {
+          cwd: wtDir,
+          encoding: 'utf8',
+        });
+        if (resetRes.status === 0) {
+          usedGitWorktree = true;
+        }
+      }
+      if (!usedGitWorktree) {
+        const addRes = child_process.spawnSync(
+          'git',
+          ['worktree', 'add', '--force', '--detach', wtDir, 'HEAD'],
+          { cwd: wsRoot, encoding: 'utf8' }
+        );
+        if (addRes.status === 0) {
+          usedGitWorktree = true;
+        } else {
+          if (fs.existsSync(wtDir)) {
+            fs.rmSync(wtDir, { recursive: true, force: true });
+          }
+          copyDirRecursiveExcluding(wsRoot, wtDir, ['.git', 'node_modules', 'dist', '.cache']);
+        }
       }
     } else {
+      if (fs.existsSync(wtDir)) {
+        fs.rmSync(wtDir, { recursive: true, force: true });
+      }
       copyDirRecursiveExcluding(wsRoot, wtDir, ['.git', 'node_modules', 'dist', '.cache']);
     }
 
     // Overlay active workspace live .evo (excluding .cache/)
     const wtEvoDir = path.join(wtDir, '.evo');
-    if (usedGitWorktree && fs.existsSync(wtEvoDir)) {
+    if (fs.existsSync(wtEvoDir)) {
       fs.rmSync(wtEvoDir, { recursive: true, force: true });
     }
     const liveEvo = path.join(wsRoot, '.evo');
@@ -2171,201 +2196,237 @@ export function runOptimizationCycle(
   // 1. Establish baseline probe score if probeCmd is provided
   let baseScore: number | undefined;
   let basePassed: boolean | undefined;
+  const reusableWorktreeDir = path.join(
+    os.tmpdir(),
+    `evo-cycle-wt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  );
 
-  if (options.probeCmd) {
-    const baseProbe = probeCandidateInWorktree({
-      workspaceRoot: wsRoot,
-      candidateId: 'baseline',
-      dim: prep.dim,
-      proposals: [],
-      deletedIds: [],
-      probeCmd: options.probeCmd,
-      worktreeSetupCmd: options.worktreeSetupCmd,
-      leakGlobs: options.leakGlobs,
-    });
-    baseScore = baseProbe.score;
-    basePassed = baseProbe.probePassed;
-  }
-
-  // 2. Determine dimensions across k candidates
-  const rounds = Math.max(options.rounds ?? 1, 1);
-  const baseK = Math.max(options.k ?? 1, 1);
-  const k = options.rounds ? baseK * rounds : baseK;
-  const candidateDims: Array<'inv' | 'dom' | 'both'> = [];
-  for (let i = 0; i < k; i++) {
-    if (prep.dim === 'both' && k >= 2) {
-      candidateDims.push(i % 2 === 0 ? 'inv' : 'dom');
-    } else {
-      candidateDims.push(prep.dim);
-    }
-  }
-
-  // 3. Run proposer candidates and probes
   const candidates: CandidateProbeResult[] = [];
-
-  for (let i = 0; i < k; i++) {
-    const cDim = candidateDims[i];
-    const candidateId = `cand-${i + 1}-${cDim}`;
-
-    // Ensure clean candidate environment: clear previous proposals.json and reset harnessDir to base snapshot
-    const prevProposals = path.join(prep.contextDir, 'proposals.json');
-    if (fs.existsSync(prevProposals)) {
-      try {
-        fs.unlinkSync(prevProposals);
-      } catch {
-        // ignore
-      }
-    }
-    if (fs.existsSync(prep.harnessDir)) {
-      try {
-        fs.rmSync(prep.harnessDir, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
-    }
-    fs.mkdirSync(prep.harnessDir, { recursive: true });
-    const liveEvo = path.join(wsRoot, '.evo');
-    if (fs.existsSync(liveEvo)) {
-      copyCapabilitiesNonOverwriting(liveEvo, prep.harnessDir);
-    }
-
-    const proposerRes = runProposerCandidate({
-      proposerCmd: options.proposerCmd,
-      missionFile: prep.missionFile,
-      contextDir: prep.contextDir,
-      harnessDir: prep.harnessDir,
-      dim: cDim,
-      candidateId,
-      runDir: prep.runDir,
-      baseWorkspaceRoot: wsRoot,
-    });
-
-    if (proposerRes.keepBase) {
-      candidates.push({
-        candidateId,
-        dim: cDim,
-        passed: false,
-        gatekeeperPassed: true,
-        auditPassed: true,
-        probePassed: false,
-        score: baseScore ?? 0,
-        coreTokenDelta: 0,
-        proposals: [],
-        deletedIds: [],
-        attribution: 'no_effect',
-        notes: proposerRes.notes || 'Candidate chose KEEP_BASE',
-      });
-      continue;
-    }
-
-    const probeRes = probeCandidateInWorktree({
-      workspaceRoot: wsRoot,
-      candidateId,
-      dim: cDim,
-      proposals: proposerRes.proposals,
-      deletedIds: proposerRes.deletedIds,
-      probeCmd: options.probeCmd,
-      worktreeSetupCmd: options.worktreeSetupCmd,
-      leakGlobs: options.leakGlobs,
-      baseScore,
-      basePassed,
-      trajectories: options.trajectories,
-    });
-    probeRes.notes = proposerRes.notes;
-    candidates.push(probeRes);
-  }
-
-function isCandidateEligible(
-  c: CandidateProbeResult,
-  options: OptimizationCycleOptions,
-  baseScore: number | undefined,
-  basePassed: boolean | undefined
-): boolean {
-  if (!c.passed) return false;
-
-  const hasModifications = c.proposals.length > 0 || c.deletedIds.length > 0;
-  if (!hasModifications) return false;
-
-  if (options.probeCmd) {
-    const effectiveBaseScore = baseScore ?? 0;
-    const reqImprovement = options.requireProbeImprovement !== false;
-    if (reqImprovement) {
-      const strictlyImproves = c.score > effectiveBaseScore;
-      const maintainsWithReduction =
-        Boolean(basePassed) &&
-        Boolean(c.probePassed) &&
-        c.score >= effectiveBaseScore &&
-        c.coreTokenDelta < 0;
-      if (!strictlyImproves && !maintainsWithReduction) {
-        return false;
-      }
-    } else {
-      if (c.score < effectiveBaseScore || (!c.probePassed && Boolean(basePassed))) {
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
-
-  // 4. Test composition if both inv and dom passed and touch disjoint capability IDs
-  const passingInv = candidates.filter(
-    (c) => c.dim === 'inv' && isCandidateEligible(c, options, baseScore, basePassed)
-  );
-  const passingDom = candidates.filter(
-    (c) => c.dim === 'dom' && isCandidateEligible(c, options, baseScore, basePassed)
-  );
-
   let composedCandidate: CandidateProbeResult | undefined;
   let composedProbe: CandidateProbeResult | undefined;
 
-  if (passingInv.length > 0 && passingDom.length > 0) {
-    const bestInv = [...passingInv].sort(
-      (a, b) => b.score - a.score || a.coreTokenDelta - b.coreTokenDelta
-    )[0];
-    const bestDom = [...passingDom].sort(
-      (a, b) => b.score - a.score || a.coreTokenDelta - b.coreTokenDelta
-    )[0];
+  function isCandidateEligible(
+    c: CandidateProbeResult,
+    opts: OptimizationCycleOptions,
+    bScore: number | undefined,
+    bPassed: boolean | undefined
+  ): boolean {
+    if (!c.passed) return false;
 
-    const invIds = new Set([
-      ...bestInv.proposals.map((p) => p.id),
-      ...bestInv.deletedIds.map((d) => d.id),
-    ]);
-    const domIds = new Set([
-      ...bestDom.proposals.map((p) => p.id),
-      ...bestDom.deletedIds.map((d) => d.id),
-    ]);
+    const hasModifications = c.proposals.length > 0 || c.deletedIds.length > 0;
+    if (!hasModifications) return false;
 
-    let isDisjoint = true;
-    for (const id of invIds) {
-      if (domIds.has(id)) {
-        isDisjoint = false;
-        break;
+    if (opts.probeCmd) {
+      const effectiveBaseScore = bScore ?? 0;
+      const reqImprovement = opts.requireProbeImprovement !== false;
+      if (reqImprovement) {
+        const strictlyImproves = c.score > effectiveBaseScore;
+        const maintainsWithReduction =
+          Boolean(bPassed) &&
+          Boolean(c.probePassed) &&
+          c.score >= effectiveBaseScore &&
+          c.coreTokenDelta < 0;
+        if (!strictlyImproves && !maintainsWithReduction) {
+          return false;
+        }
+      } else {
+        if (c.score < effectiveBaseScore || (!c.probePassed && Boolean(bPassed))) {
+          return false;
+        }
       }
     }
 
-    if (isDisjoint) {
-      const compCandidateId = `${bestInv.candidateId}+${bestDom.candidateId}`;
-      const compRes = probeCandidateInWorktree({
+    return true;
+  }
+
+  try {
+    if (options.probeCmd) {
+      const baseProbe = probeCandidateInWorktree({
         workspaceRoot: wsRoot,
-        candidateId: compCandidateId,
-        dim: 'both',
-        proposals: [...bestInv.proposals, ...bestDom.proposals],
-        deletedIds: [...bestInv.deletedIds, ...bestDom.deletedIds],
+        candidateId: 'baseline',
+        dim: prep.dim,
+        proposals: [],
+        deletedIds: [],
         probeCmd: options.probeCmd,
+        worktreeSetupCmd: options.worktreeSetupCmd,
+        leakGlobs: options.leakGlobs,
+        reusableWorktreeDir,
+        keepWorktreeForReuse: true,
+      });
+      baseScore = baseProbe.score;
+      basePassed = baseProbe.probePassed;
+    }
+
+    // 2. Determine dimensions across k candidates
+    const rounds = Math.max(options.rounds ?? 1, 1);
+    const baseK = Math.max(options.k ?? 1, 1);
+    const k = options.rounds ? baseK * rounds : baseK;
+    const candidateDims: Array<'inv' | 'dom' | 'both'> = [];
+    for (let i = 0; i < k; i++) {
+      if (prep.dim === 'both' && k >= 2) {
+        candidateDims.push(i % 2 === 0 ? 'inv' : 'dom');
+      } else {
+        candidateDims.push(prep.dim);
+      }
+    }
+
+    // 3. Run proposer candidates and probes
+    for (let i = 0; i < k; i++) {
+      const cDim = candidateDims[i];
+      const candidateId = `cand-${i + 1}-${cDim}`;
+
+      // Ensure clean candidate environment: clear previous proposals.json and reset harnessDir to base snapshot
+      const prevProposals = path.join(prep.contextDir, 'proposals.json');
+      if (fs.existsSync(prevProposals)) {
+        try {
+          fs.unlinkSync(prevProposals);
+        } catch {
+          // ignore
+        }
+      }
+      if (fs.existsSync(prep.harnessDir)) {
+        try {
+          fs.rmSync(prep.harnessDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+      }
+      fs.mkdirSync(prep.harnessDir, { recursive: true });
+      const liveEvo = path.join(wsRoot, '.evo');
+      if (fs.existsSync(liveEvo)) {
+        copyCapabilitiesNonOverwriting(liveEvo, prep.harnessDir);
+      }
+
+      const proposerRes = runProposerCandidate({
+        proposerCmd: options.proposerCmd,
+        missionFile: prep.missionFile,
+        contextDir: prep.contextDir,
+        harnessDir: prep.harnessDir,
+        dim: cDim,
+        candidateId,
+        runDir: prep.runDir,
+        baseWorkspaceRoot: wsRoot,
+      });
+
+      if (proposerRes.keepBase) {
+        candidates.push({
+          candidateId,
+          dim: cDim,
+          passed: false,
+          gatekeeperPassed: true,
+          auditPassed: true,
+          probePassed: false,
+          score: baseScore ?? 0,
+          coreTokenDelta: 0,
+          proposals: [],
+          deletedIds: [],
+          attribution: 'no_effect',
+          notes: proposerRes.notes || 'Candidate chose KEEP_BASE',
+        });
+        continue;
+      }
+
+      const probeRes = probeCandidateInWorktree({
+        workspaceRoot: wsRoot,
+        candidateId,
+        dim: cDim,
+        proposals: proposerRes.proposals,
+        deletedIds: proposerRes.deletedIds,
+        probeCmd: options.probeCmd,
+        worktreeSetupCmd: options.worktreeSetupCmd,
         leakGlobs: options.leakGlobs,
         baseScore,
         basePassed,
         trajectories: options.trajectories,
+        reusableWorktreeDir,
+        keepWorktreeForReuse: true,
       });
+      probeRes.notes = proposerRes.notes;
+      candidates.push(probeRes);
+    }
 
-      composedProbe = compRes;
-      candidates.push(compRes);
+    // 4. Test composition if both inv and dom passed and touch disjoint capability IDs
+    const passingInv = candidates.filter(
+      (c) => c.dim === 'inv' && isCandidateEligible(c, options, baseScore, basePassed)
+    );
+    const passingDom = candidates.filter(
+      (c) => c.dim === 'dom' && isCandidateEligible(c, options, baseScore, basePassed)
+    );
 
-      if (isCandidateEligible(compRes, options, baseScore, basePassed)) {
-        composedCandidate = compRes;
+    if (passingInv.length > 0 && passingDom.length > 0) {
+      const bestInv = [...passingInv].sort(
+        (a, b) => b.score - a.score || a.coreTokenDelta - b.coreTokenDelta
+      )[0];
+      const bestDom = [...passingDom].sort(
+        (a, b) => b.score - a.score || a.coreTokenDelta - b.coreTokenDelta
+      )[0];
+
+      const invIds = new Set([
+        ...bestInv.proposals.map((p) => p.id),
+        ...bestInv.deletedIds.map((d) => d.id),
+      ]);
+      const domIds = new Set([
+        ...bestDom.proposals.map((p) => p.id),
+        ...bestDom.deletedIds.map((d) => d.id),
+      ]);
+
+      let isDisjoint = true;
+      for (const id of invIds) {
+        if (domIds.has(id)) {
+          isDisjoint = false;
+          break;
+        }
       }
+
+      if (isDisjoint) {
+        const compCandidateId = `${bestInv.candidateId}+${bestDom.candidateId}`;
+        const compRes = probeCandidateInWorktree({
+          workspaceRoot: wsRoot,
+          candidateId: compCandidateId,
+          dim: 'both',
+          proposals: [...bestInv.proposals, ...bestDom.proposals],
+          deletedIds: [...bestInv.deletedIds, ...bestDom.deletedIds],
+          probeCmd: options.probeCmd,
+          worktreeSetupCmd: options.worktreeSetupCmd,
+          leakGlobs: options.leakGlobs,
+          baseScore,
+          basePassed,
+          trajectories: options.trajectories,
+          reusableWorktreeDir,
+          keepWorktreeForReuse: true,
+        });
+
+        composedProbe = compRes;
+        candidates.push(compRes);
+
+        if (isCandidateEligible(compRes, options, baseScore, basePassed)) {
+          composedCandidate = compRes;
+        }
+      }
+    }
+  } finally {
+    const sharedRepoDir = path.join(reusableWorktreeDir, 'repo');
+    if (fs.existsSync(path.join(sharedRepoDir, '.git'))) {
+      try {
+        child_process.spawnSync('git', ['worktree', 'remove', '--force', sharedRepoDir], {
+          cwd: wsRoot,
+          encoding: 'utf8',
+        });
+        child_process.spawnSync('git', ['worktree', 'prune'], {
+          cwd: wsRoot,
+          encoding: 'utf8',
+        });
+      } catch {}
+    }
+    if (fs.existsSync(reusableWorktreeDir)) {
+      try {
+        fs.rmSync(reusableWorktreeDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 100,
+        });
+      } catch {}
     }
   }
 

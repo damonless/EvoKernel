@@ -169,10 +169,21 @@ export function hasStaleNpxMcpEntry(entry: unknown): boolean {
 
   const collectStrings = (obj: unknown) => {
     if (typeof obj === 'string') {
-      stringsToCheck.push(obj);
-      if (obj.includes(' ')) {
-        const tokens = obj.split(/\s+/).map((t) => t.replace(/^["']|["']$/g, ''));
-        stringsToCheck.push(...tokens);
+      const trimmed = obj.trim().replace(/^["']|["']$/g, '');
+      if (!trimmed) return;
+      if ((path.isAbsolute(trimmed) || trimmed.startsWith('.')) && fs.existsSync(trimmed)) {
+        return;
+      }
+      stringsToCheck.push(trimmed);
+      if (
+        trimmed.includes(' ') &&
+        /^(?:node|npx(?:\.cmd)?|cmd(?:\.exe)?|sh|bash|pwsh|powershell)\b/i.test(trimmed)
+      ) {
+        const matches = trimmed.match(/"[^"]+"|'[^']+'|\S+/g) || [];
+        for (const m of matches) {
+          const tok = m.replace(/^["']|["']$/g, '');
+          if (tok) stringsToCheck.push(tok);
+        }
       }
     } else if (Array.isArray(obj)) {
       for (const item of obj) {

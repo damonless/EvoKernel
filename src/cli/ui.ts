@@ -118,15 +118,88 @@ export function buildUiSnapshot(
       try {
         const localOnlyIds = new Set(['ceo-team-orchestrator','dual-agent-team','evo-dev-verification-sop','embedded-fsm-lookup-audit','evo-release-preflight','local-workflow-skill-isolation-guard','embedded-power-bms-guardrail']);
         const filterAnon = <T extends { id: string }>(items: T[]): T[] => options?.anon ? items.filter((item) => !localOnlyIds.has(item.id)) : items;
-        rules.push(...filterAnon(storage.listRules()).map(attach));
-        skills.push(...filterAnon(storage.listSkills()).map(attach));
-        tools.push(...filterAnon(storage.listTools()).map((tool) => { const attached = attach(tool); if (options?.anon && typeof attached.script_path === 'string') { const rel = path.relative(ws, attached.script_path).replace(/\\/g, '/'); attached.script_path = rel.startsWith('..') ? path.basename(attached.script_path) : rel; } return attached; }));
+        const scrubAnonText = (val: unknown) =>
+          options?.anon && typeof val === 'string' ? redactSensitiveDiagnostics(val, ws) : val;
+        rules.push(
+          ...filterAnon(storage.listRules()).map((rule) => {
+            const attached = attach(rule);
+            if (options?.anon) {
+              attached.title = scrubAnonText(attached.title);
+              attached.l0_summary = scrubAnonText(attached.l0_summary);
+              attached.content = scrubAnonText(attached.content);
+              if (typeof attached.contrastive_evidence === 'string') {
+                attached.contrastive_evidence = scrubAnonText(attached.contrastive_evidence);
+              }
+              if (Array.isArray(attached.transfer_scenarios)) {
+                attached.transfer_scenarios = attached.transfer_scenarios.map((s: string) =>
+                  scrubAnonText(s)
+                );
+              }
+            }
+            return attached;
+          })
+        );
+        skills.push(
+          ...filterAnon(storage.listSkills()).map((skill) => {
+            const attached = attach(skill);
+            if (options?.anon) {
+              attached.name = scrubAnonText(attached.name);
+              attached.title = scrubAnonText(attached.title);
+              attached.description = scrubAnonText(attached.description);
+              attached.l0_summary = scrubAnonText(attached.l0_summary);
+              attached.l1_contract = scrubAnonText(attached.l1_contract);
+              attached.l2_sop = scrubAnonText(attached.l2_sop);
+              if (typeof attached.trigger_cue === 'string') {
+                attached.trigger_cue = scrubAnonText(attached.trigger_cue);
+              }
+              if (typeof attached.contrastive_evidence === 'string') {
+                attached.contrastive_evidence = scrubAnonText(attached.contrastive_evidence);
+              }
+            }
+            return attached;
+          })
+        );
+        tools.push(
+          ...filterAnon(storage.listTools()).map((tool) => {
+            const attached = attach(tool);
+            if (options?.anon) {
+              attached.title = scrubAnonText(attached.title);
+              attached.l0_summary = scrubAnonText(attached.l0_summary);
+              attached.script_code = scrubAnonText(attached.script_code);
+              if (typeof attached.script_path === 'string') {
+                const rel = path.relative(ws, attached.script_path).replace(/\\/g, '/');
+                attached.script_path = rel.startsWith('..')
+                  ? path.basename(attached.script_path)
+                  : rel;
+              }
+            }
+            return attached;
+          })
+        );
         for (const m of filterAnon(storage.listMemories())) {
           const v = verifyMemoryFreshness(ws, m, { includeCallers: true, cacheDb: db });
           const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
-          memories.push(attach({ ...m, freshness: { ...v, callers } }));
+          const attached = attach({ ...m, freshness: { ...v, callers } });
+          if (options?.anon) {
+            attached.title = scrubAnonText(attached.title);
+            attached.l0_summary = scrubAnonText(attached.l0_summary);
+            attached.symptom = scrubAnonText(attached.symptom);
+            attached.root_cause = scrubAnonText(attached.root_cause);
+            attached.solution = scrubAnonText(attached.solution);
+          }
+          memories.push(attached);
         }
-        archived.push(...filterAnon(storage.listArchivedCapabilities()));
+        archived.push(
+          ...filterAnon(storage.listArchivedCapabilities()).map((item) => {
+            if (!options?.anon) return item;
+            return {
+              ...item,
+              title: scrubAnonText(item.title),
+              l0_summary: scrubAnonText(item.l0_summary),
+              archive_reason: scrubAnonText(item.archive_reason),
+            };
+          })
+        );
       } catch {}
     }
 
@@ -1188,9 +1261,13 @@ export async function startUiServer(
                   ? Boolean(meta.core === true || meta.core === 'true')
                   : existingRule.core;
               const scopeGlob = meta.scope_glob ? String(meta.scope_glob).trim() : existingRule.scope_glob;
-              const rawScenarios = Array.isArray(meta.transfer_scenarios)
+              const parsedScenarios = Array.isArray(meta.transfer_scenarios)
                 ? meta.transfer_scenarios.map(String).filter(Boolean)
-                : (existingRule.transfer_scenarios || []);
+                : [];
+              const rawScenarios =
+                parsedScenarios.length > 0
+                  ? parsedScenarios
+                  : (existingRule.transfer_scenarios || []);
               const transferScenarios =
                 rawScenarios.length >= 2
                   ? rawScenarios
@@ -1280,7 +1357,10 @@ export async function startUiServer(
                 l0_summary: skillL0,
                 l1_contract,
                 l2_sop,
-                tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingSkill.tags,
+                tags:
+                  Array.isArray(meta.tags) && meta.tags.length > 0
+                    ? meta.tags.map(String)
+                    : existingSkill.tags,
                 trigger_cue:
                   meta.trigger_cue !== undefined && String(meta.trigger_cue).trim()
                     ? String(meta.trigger_cue).trim()
@@ -1349,7 +1429,10 @@ export async function startUiServer(
                   Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
                     ? meta.target_symbols.map(String)
                     : existingMem.target_symbols,
-                tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
+                tags:
+                  Array.isArray(meta.tags) && meta.tags.length > 0
+                    ? meta.tags.map(String)
+                    : existingMem.tags,
                 origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
                 supersedes_id: cleanId,
                 enabled: preservedEnabled,

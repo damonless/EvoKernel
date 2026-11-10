@@ -744,9 +744,13 @@ export async function handleWebviewAction(
           const isCore =
             meta.core !== undefined ? Boolean(meta.core === true || meta.core === 'true') : existingRule.core;
           const scopeGlob = meta.scope_glob ? String(meta.scope_glob).trim() : existingRule.scope_glob;
-          const rawScenarios = Array.isArray(meta.transfer_scenarios)
+          const parsedScenarios = Array.isArray(meta.transfer_scenarios)
             ? meta.transfer_scenarios.map(String).filter(Boolean)
-            : (existingRule.transfer_scenarios || []);
+            : [];
+          const rawScenarios =
+            parsedScenarios.length > 0
+              ? parsedScenarios
+              : (existingRule.transfer_scenarios || []);
           const transferScenarios =
             rawScenarios.length >= 2
               ? rawScenarios
@@ -834,7 +838,10 @@ export async function handleWebviewAction(
             l0_summary: skillL0,
             l1_contract,
             l2_sop,
-            tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingSkill.tags,
+            tags:
+              Array.isArray(meta.tags) && meta.tags.length > 0
+                ? meta.tags.map(String)
+                : existingSkill.tags,
             trigger_cue:
               meta.trigger_cue !== undefined && String(meta.trigger_cue).trim()
                 ? String(meta.trigger_cue).trim()
@@ -901,7 +908,10 @@ export async function handleWebviewAction(
               Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
                 ? meta.target_symbols.map(String)
                 : existingMem.target_symbols,
-            tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
+            tags:
+              Array.isArray(meta.tags) && meta.tags.length > 0
+                ? meta.tags.map(String)
+                : existingMem.tags,
             origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
             supersedes_id: cleanId,
             enabled: preservedEnabled,

@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { findGitRoot, parseInitTargets, runInit, runUninstall } from './init.js';
+import { hasStaleNpxMcpEntry } from './harness.js';
 import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import * as child_process from 'node:child_process';
@@ -492,6 +493,21 @@ export function ensureGlobalFallbackSeeded(
         hasTemplateSeed
       );
     }
+    if (!hasTemplateSeed) {
+      const scopedSeedSrc = path.join(seedEvoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
+      const scopedSeedDest = path.join(storage.evoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
+      if (fs.existsSync(scopedSeedSrc) && !fs.existsSync(scopedSeedDest)) {
+        fs.mkdirSync(path.dirname(scopedSeedDest), { recursive: true });
+        fs.copyFileSync(scopedSeedSrc, scopedSeedDest);
+      }
+    }
+    const legacyTopLevelTsRule = path.join(storage.evoDir, 'rules', 'esm-typescript-imports.md');
+    const canonicalScopedTsRule = path.join(storage.evoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
+    if (fs.existsSync(legacyTopLevelTsRule) && fs.existsSync(canonicalScopedTsRule)) {
+      try {
+        fs.unlinkSync(legacyTopLevelTsRule);
+      } catch {}
+    }
     storage.rebuildCoreInvariantsDigest();
   }
 
@@ -506,7 +522,7 @@ export function resolveWorkspaceRoot(
   const wsEq = args.find((a) => a.startsWith('--workspace='));
   if (wsEq) {
     const explicit = path.resolve(wsEq.slice('--workspace='.length));
-    if (allowGlobalFallback && isHostGlobalConfigDir(explicit)) {
+    if (isHostGlobalConfigDir(explicit)) {
       return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
     }
     return findNearestEvoWorkspace(explicit) || explicit;
@@ -514,19 +530,22 @@ export function resolveWorkspaceRoot(
   const wsFlagIdx = args.indexOf('--workspace') !== -1 ? args.indexOf('--workspace') : args.indexOf('-w');
   if (wsFlagIdx !== -1 && args[wsFlagIdx + 1] && !args[wsFlagIdx + 1].startsWith('-')) {
     const explicit = path.resolve(args[wsFlagIdx + 1]);
-    if (allowGlobalFallback && isHostGlobalConfigDir(explicit)) {
+    if (isHostGlobalConfigDir(explicit)) {
       return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
     }
     return findNearestEvoWorkspace(explicit) || explicit;
   }
   if (process.env.EVO_WORKSPACE) {
     const envWs = path.resolve(process.env.EVO_WORKSPACE);
-    if (allowGlobalFallback && isHostGlobalConfigDir(envWs)) {
+    if (isHostGlobalConfigDir(envWs)) {
       return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
     }
     return findNearestEvoWorkspace(envWs) || envWs;
   }
   const cwd = path.resolve(cwdOverride || process.cwd());
+  if (isHostGlobalConfigDir(cwd)) {
+    return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
+  }
   if (!allowGlobalFallback) {
     return cwd;
   }
@@ -738,7 +757,7 @@ export function checkMcpGatewayConfigs(workspaceRoot: string): McpInspection {
     if (!fs.existsSync(cfg.path)) continue;
     try {
       const content = fs.readFileSync(cfg.path, 'utf8');
-      if (content.includes('evo-kernel') || content.includes('evo') || cfg.name === '.mcp.json') {
+      if (content.includes('evo-kernel') || content.includes('evo')) {
         let isConfigured = false;
         try {
           const parsed = JSON.parse(content);
@@ -750,28 +769,18 @@ export function checkMcpGatewayConfigs(workspaceRoot: string): McpInspection {
           if (servers && (servers['evo-kernel'] || servers.evo || servers.evokernel)) {
             isConfigured = true;
             const entry = servers['evo-kernel'] || servers.evo || servers.evokernel;
-            const argsList: string[] = Array.isArray(entry.args) ? [...entry.args] : [];
-            if (typeof entry.command === 'string') argsList.push(entry.command);
-            for (const a of argsList) {
-              if (typeof a === 'string' && a.includes('_npx')) {
-                const parts = a.split(/\s+/);
-                for (const p of parts) {
-                  if (p.includes('_npx') && !fs.existsSync(p)) {
-                    staleNpxPath = true;
-                  }
-                }
-              }
+            if (hasStaleNpxMcpEntry(entry)) {
+              staleNpxPath = true;
             }
-          } else if (cfg.name === '.mcp.json') {
-            isConfigured = true;
           }
         } catch {
-          if (content.includes('evo-kernel') || cfg.name === '.mcp.json') {
+          if (content.includes('evo-kernel')) {
             isConfigured = true;
             if (content.includes('_npx')) {
-              const matches = content.match(/[^\s"',]+\b_npx[^\s"',]*/g) || [];
-              for (const m of matches) {
-                if (!fs.existsSync(m)) {
+              const matches = content.match(/"[^"]*_npx[^"]*"|'[^']*_npx[^']*'|[^\s"',]+\b_npx[^\s"',]*/g) || [];
+              for (const rawMatch of matches) {
+                const m = rawMatch.replace(/^["']|["']$/g, '');
+                if (m && !fs.existsSync(m)) {
                   staleNpxPath = true;
                 }
               }
@@ -906,10 +915,15 @@ export function runCli(argv: string[]): void {
 
   if (isHelpRequested) {
     let targetSubcmd = cmd;
-    if (cmd === 'help') {
-      targetSubcmd = (args[1] || '').toLowerCase();
-    } else if (cmd === '--help' || cmd === '-h') {
-      targetSubcmd = '';
+    if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
+      const sub = args.find(
+        (a, idx) =>
+          idx > 0 &&
+          !a.startsWith('-') &&
+          VALID_COMMANDS.includes(a.toLowerCase()) &&
+          a.toLowerCase() !== 'help'
+      );
+      targetSubcmd = sub ? sub.toLowerCase() : (cmd === 'help' ? (args[1] || '').toLowerCase() : '');
     }
 
     switch (targetSubcmd) {
@@ -969,6 +983,11 @@ export function runCli(argv: string[]): void {
     }
   }
 
+  if (cmd.startsWith('-')) {
+    args.unshift('score');
+    cmd = 'score';
+  }
+
   if (cmd !== 'hook' && cmd !== 'mcp' && cmd !== 'ui') {
     for (const arg of args.slice(1)) {
       if (arg.startsWith('-')) {
@@ -1022,7 +1041,11 @@ export function runCli(argv: string[]): void {
       : process.env.EVO_WORKSPACE
       ? path.resolve(process.env.EVO_WORKSPACE)
       : path.resolve(process.cwd());
-    workspaceRoot = findNearestEvoWorkspace(target) || findGitRoot(target) || target;
+    if (isHostGlobalConfigDir(target)) {
+      workspaceRoot = resolveGlobalFallbackDir();
+    } else {
+      workspaceRoot = findNearestEvoWorkspace(target) || findGitRoot(target) || target;
+    }
   } else {
     workspaceRoot = resolveWorkspaceRoot(args, !isLocalMutationCmd);
   }

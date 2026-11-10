@@ -2,14 +2,14 @@
 id: audit-broken-refs-and-hook-param-fix
 title: "Skill Ref Audit & Hook Param Resolution Fix"
 l0_summary: "Fix skill capability ref extraction, supersedes_id exclusion, and runHook argument discrimination."
-created_commit: "3ad564d"
+created_commit: "765dd5e"
 created_branch: "main"
 target_symbols: ["validateCapabilityReferences","runHook"]
-ast_fingerprints: {"validateCapabilityReferences":{"symbol":"validateCapabilityReferences","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"function","start_line":481,"end_line":526,"signature":"export function validateCapabilityReferences(","ast_hash":"da76821b4f274c68"},"runHook":{"symbol":"runHook","file_path":"src/cli/hook.ts","file":"src/cli/hook.ts","kind":"function","start_line":1274,"end_line":1363,"signature":"export function runHook(","ast_hash":"08cc5557e7f44738"}}
+ast_fingerprints: {"validateCapabilityReferences":{"symbol":"validateCapabilityReferences","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"function","start_line":518,"end_line":563,"signature":"export function validateCapabilityReferences(","ast_hash":"da76821b4f274c68"},"runHook":{"symbol":"runHook","file_path":"src/cli/hook.ts","file":"src/cli/hook.ts","kind":"function","start_line":1274,"end_line":1363,"signature":"export function runHook(","ast_hash":"08cc5557e7f44738"}}
 tags: []
 origin: "evolved"
 created_at: "2026-10-31T09:02:45.683Z"
-updated_at: "2026-11-09T05:58:22.999Z"
+updated_at: "2026-11-10T17:22:54.530Z"
 ---
 
 ## Symptom

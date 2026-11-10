@@ -209,7 +209,7 @@ function loadHookState(statePath) {
 
 function saveHookState(statePath, state, conversationId, convState) {
   try {
-    const merged = { ...loadHookState(statePath), ...state };
+    const merged = { ...state, ...loadHookState(statePath) };
     if (conversationId && convState) {
       merged[conversationId] = convState;
     }

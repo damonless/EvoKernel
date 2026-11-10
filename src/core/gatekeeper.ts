@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -38,12 +39,12 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   },
   {
     pattern:
-      /\b(?:(?:fs(?:\.promises)?|fsPromises)\.(?:rmSync|rmdirSync|rm|rmdir)|rmSync|rmdirSync|shutil\.rmtree)\s*\(\s*(?:['"`](?:\/|~|\$HOME|\.\.(?:[/\\][^'"`]*)?|[A-Za-z]:\\)['"`]|os\.homedir\s*\(\)|os\.getcwd\s*\(\)|os\.path\.expanduser\s*\(\s*['"`]~[^'"`]*['"`]\s*\)|Path\.(?:home|cwd)\s*\(\)|process\.cwd\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE|EVO_WORKSPACE)\b|\[\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]|workspace(?:Root)?\b)/i,
+      /\b(?:(?:fs(?:\.promises)?|fsPromises)\.(?:rmSync|rmdirSync|rm|rmdir)|rmSync|rmdirSync|rm|rmdir|shutil\.rmtree)\s*\(\s*(?:['"`](?:\/|~|\$HOME|\.\.(?:[/\\][^'"`]*)?|[A-Za-z]:\\)['"`]|os\.homedir\s*\(\)|os\.getcwd\s*\(\)|os\.path\.expanduser\s*\(\s*['"`]~[^'"`]*['"`]\s*\)|Path\.(?:home|cwd)\s*\(\)|process\.cwd\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE|EVO_WORKSPACE)\b|\[\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]|workspace(?:Root)?\b)/i,
     reason: 'Destructive programmatic root/home/parent/workspace directory deletion detected',
   },
   {
     pattern:
-      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env\.(?:HOME|USERPROFILE)|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[\s\S]{0,80}[\/\\'"`]\.(?:ssh|aws|gnupg|kube|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|kube|env)\b|[\/\\]\.(?:ssh|aws|gnupg|kube)(?:[\/\\][A-Za-z0-9_.-]+|[\/\\]?['"`])|(?:\.kube[\/\\]config\b|['"`]\.kube['"`]\s*,\s*['"`]config['"`]|['"`]\.kube\/?['"`]\s*\+\s*['"`]\/?config['"`])/i,
+      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE)|\[\s*['"`](?:HOME|USERPROFILE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[\s\S]{0,80}[\/\\'"`]\.(?:ssh|aws|gnupg|kube|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|kube|env)\b|[\/\\]\.(?:ssh|aws|gnupg|kube)(?:[\/\\][A-Za-z0-9_.-]+|[\/\\]?['"`])|(?:\.kube[\/\\]config\b|['"`]\.kube['"`]\s*,\s*['"`]config['"`]|['"`]\.kube\/?['"`]\s*\+\s*['"`]\/?config['"`])/i,
     reason: 'Sensitive home credential directory access (~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.env) detected',
   },
   { pattern: /\b(Format-Volume|Clear-Disk|mkfs\.|dd\s+if=)/i, reason: 'Disk formatting command detected' },
@@ -101,9 +102,9 @@ export function isValidContrastiveEvidence(
         path.relative(workspaceRoot, f).replace(/\\/g, '/').toLowerCase()
       );
       wsBasenamesLower = new Set(wsRelFilesLower.map((r) => path.basename(r)));
-      if (wsFiles.length > 0 && wsFiles.length <= 80) {
+      if (wsFiles.length > 0) {
         const chunks: string[] = [];
-        for (const f of wsFiles) {
+        for (const f of wsFiles.slice(0, 80)) {
           try {
             chunks.push(fs.readFileSync(f, 'utf8'));
           } catch {
@@ -148,17 +149,53 @@ export function isValidContrastiveEvidence(
             ? cleanTok.split(':')[1]
             : cleanTok;
         const filePartLower = filePart.replace(/\\/g, '/').toLowerCase();
-        const fileExistsInWs =
-          Boolean(filePartLower) &&
-          (fs.existsSync(path.resolve(workspaceRoot, filePart)) ||
-            wsBasenamesLower.has(filePartLower) ||
-            wsRelFilesLower.some((r) => r === filePartLower || r.endsWith(`/${filePartLower}`)));
+        let matchedFilePath: string | null = null;
+        if (filePartLower) {
+          const directCandidate = path.resolve(workspaceRoot, filePart);
+          if (fs.existsSync(directCandidate) && fs.statSync(directCandidate).isFile()) {
+            matchedFilePath = directCandidate;
+          } else {
+            const matchedIdx = wsRelFilesLower.findIndex(
+              (r) =>
+                r === filePartLower ||
+                r.endsWith(`/${filePartLower}`) ||
+                path.basename(r) === filePartLower
+            );
+            if (matchedIdx !== -1) {
+              matchedFilePath = wsFiles[matchedIdx];
+            }
+          }
+        }
 
-        if (fileExistsInWs) {
+        if (matchedFilePath) {
           if (!hasExplicitFileSep || !symPart) {
             matchedInWorkspace = true;
-          } else if (!wsContentJoined || wsContentJoined.includes(symPart)) {
-            matchedInWorkspace = true;
+          } else {
+            let targetFileContent = '';
+            try {
+              targetFileContent = fs.readFileSync(matchedFilePath, 'utf8');
+            } catch {
+              targetFileContent = wsContentJoined;
+            }
+            if (/^L?\d+(?:-L?\d+)?$/i.test(symPart)) {
+              const lineNums = (symPart.match(/\d+/g) || []).map((n) => Number.parseInt(n, 10));
+              const totalLines = targetFileContent ? targetFileContent.split(/\r?\n/).length : 0;
+              if (
+                lineNums.length > 0 &&
+                totalLines > 0 &&
+                lineNums.every((n) => n >= 1 && n <= totalLines)
+              ) {
+                matchedInWorkspace = true;
+              }
+            } else {
+              const symLeaf = symPart.includes('.') ? symPart.split('.').pop()! : symPart;
+              if (symLeaf.length >= 2 && targetFileContent) {
+                const escapedSym = symLeaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                if (new RegExp(`\\b${escapedSym}\\b`).test(targetFileContent)) {
+                  matchedInWorkspace = true;
+                }
+              }
+            }
           }
         } else if (!hasExplicitFileSep && looksLikeFileOrSymbol && symPart && symPart.length >= 4 && wsContentJoined) {
           const escapedSym = symPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1336,6 +1373,20 @@ export interface WorkspaceRollbackSnapshot {
   gitDirtyFiles: Set<string>;
 }
 
+function computeFileMutationSig(fullPath: string, stat: fs.Stats): string {
+  const base = `${stat.size}:${Math.floor(stat.mtimeMs)}`;
+  if (stat.size <= 64 * 1024) {
+    try {
+      const buf = fs.readFileSync(fullPath);
+      const digest = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 8);
+      return `${base}:${digest}`;
+    } catch {
+      return base;
+    }
+  }
+  return base;
+}
+
 export function captureWorkspaceMutationSignature(rootDir: string, maxFiles = 10000): Map<string, string> {
   const sigMap = new Map<string, string>();
   if (!rootDir || !fs.existsSync(rootDir)) {
@@ -1382,7 +1433,7 @@ export function captureWorkspaceMutationSignature(rootDir: string, maxFiles = 10
         }
         try {
           const stat = fs.statSync(fullPath);
-          sigMap.set(relPath, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+          sigMap.set(relPath, computeFileMutationSig(fullPath, stat));
           fileCount++;
         } catch {
           // ignore inaccessible files
@@ -1415,7 +1466,7 @@ export function captureWorkspaceMutationSignature(rootDir: string, maxFiles = 10
           try {
             if (fs.existsSync(fullPath)) {
               const stat = fs.statSync(fullPath);
-              sigMap.set(rel, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+              sigMap.set(rel, computeFileMutationSig(fullPath, stat));
             } else {
               sigMap.set(rel, `GIT_STATUS:${status}`);
             }
@@ -1440,6 +1491,7 @@ export function captureWorkspaceRollbackSnapshot(
   const contents = new Map<string, Buffer>();
   const dirs = new Set<string>();
   const gitDirtyFiles = new Set<string>();
+  const gitDirtyStatuses = new Map<string, string>();
 
   if (!rootDir || !fs.existsSync(rootDir)) {
     return { sig, contents, dirs, gitDirtyFiles };
@@ -1455,11 +1507,14 @@ export function captureWorkspaceRollbackSnapshot(
       const lines = gitRes.stdout.split(/\r?\n/);
       for (const l of lines) {
         if (!l.trim()) continue;
+        const status = l.slice(0, 2).trim();
         let rel = l.slice(3).trim();
         if (rel.includes(' -> ')) rel = rel.split(' -> ').pop()!.trim();
         if (rel.startsWith('"') && rel.endsWith('"')) rel = rel.slice(1, -1);
         rel = rel.replace(/\\/g, '/');
-        if (rel) gitDirtyFiles.add(rel);
+        if (!rel || rel === '.evo/.cache' || rel.startsWith('.evo/.cache/')) continue;
+        gitDirtyFiles.add(rel);
+        gitDirtyStatuses.set(rel, status);
       }
     }
   } catch {
@@ -1468,12 +1523,16 @@ export function captureWorkspaceRollbackSnapshot(
 
   const ignoredDirNames = new Set(['.git', 'node_modules', '.codegraph', 'dist', 'build']);
   let fileCount = 0;
+  let hitLimit = false;
   const MAX_FILE_SIZE_FOR_CONTENT = 2 * 1024 * 1024; // 2MB
   const TOTAL_CONTENT_BUDGET = 64 * 1024 * 1024; // 64MB
   let totalContentBytes = 0;
 
   function walk(currentDir: string, depth: number) {
-    if (depth > 12 || fileCount >= maxFiles) return;
+    if (depth > 12 || fileCount >= maxFiles) {
+      hitLimit = true;
+      return;
+    }
 
     const currentRel = path.relative(rootDir, currentDir).replace(/\\/g, '/');
     if (currentRel && currentRel !== '.') {
@@ -1488,7 +1547,10 @@ export function captureWorkspaceRollbackSnapshot(
     }
 
     for (const entry of entries) {
-      if (fileCount >= maxFiles) break;
+      if (fileCount >= maxFiles) {
+        hitLimit = true;
+        break;
+      }
 
       const fullPath = path.join(currentDir, entry.name);
       const relPath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
@@ -1508,7 +1570,7 @@ export function captureWorkspaceRollbackSnapshot(
         }
         try {
           const stat = fs.statSync(fullPath);
-          sig.set(relPath, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+          sig.set(relPath, computeFileMutationSig(fullPath, stat));
           fileCount++;
 
           const isDirty = gitDirtyFiles.has(relPath);
@@ -1529,6 +1591,38 @@ export function captureWorkspaceRollbackSnapshot(
   }
 
   walk(path.resolve(rootDir), 0);
+
+  if (hitLimit) {
+    for (const [rel, status] of gitDirtyStatuses.entries()) {
+      if (sig.has(rel)) continue;
+      let parentRel = path.dirname(rel).replace(/\\/g, '/');
+      while (parentRel && parentRel !== '.' && parentRel !== '') {
+        dirs.add(parentRel);
+        const nextParent = path.dirname(parentRel).replace(/\\/g, '/');
+        if (nextParent === parentRel) break;
+        parentRel = nextParent;
+      }
+      const fullPath = path.join(rootDir, rel);
+      try {
+        if (fs.existsSync(fullPath)) {
+          const stat = fs.statSync(fullPath);
+          if (stat.isFile()) {
+            sig.set(rel, computeFileMutationSig(fullPath, stat));
+            if (stat.size <= 32 * 1024 * 1024) {
+              const buf = fs.readFileSync(fullPath);
+              contents.set(rel, buf);
+              totalContentBytes += buf.length;
+            }
+          }
+        } else {
+          sig.set(rel, `GIT_STATUS:${status}`);
+        }
+      } catch {
+        sig.set(rel, `GIT_STATUS:${status}`);
+      }
+    }
+  }
+
   return { sig, contents, dirs, gitDirtyFiles };
 }
 
@@ -1543,6 +1637,9 @@ export function restoreWorkspaceFromSnapshot(
   for (const [filePath, sig] of postWorkspaceSig.entries()) {
     const beforeSig = preSnapshot.sig.get(filePath);
     if (beforeSig === undefined) {
+      if (preSnapshot.gitDirtyFiles.has(filePath)) {
+        continue;
+      }
       mutatedFiles.push(filePath);
       const fullMutatedPath = path.join(rootDir, filePath);
       try {
@@ -1590,8 +1687,11 @@ export function restoreWorkspaceFromSnapshot(
     }
   }
 
-  for (const filePath of preSnapshot.sig.keys()) {
+  for (const [filePath, beforeSig] of preSnapshot.sig.entries()) {
     if (!postWorkspaceSig.has(filePath)) {
+      if (beforeSig.startsWith('GIT_STATUS:')) {
+        continue;
+      }
       mutatedFiles.push(filePath);
       const fullMutatedPath = path.join(rootDir, filePath);
       if (preSnapshot.contents.has(filePath)) {
@@ -2764,13 +2864,35 @@ export class EvoGatekeeper {
         Boolean(baseMem) &&
         baseSymbols.length === targetSymbols.length &&
         baseSymbols.every((s, idx) => s === targetSymbols[idx]);
+      const hasCompleteBaseFingerprints =
+        sameTargetSymbols &&
+        Boolean(baseMem?.ast_fingerprints) &&
+        targetSymbols.length > 0 &&
+        targetSymbols.every((s) => Boolean(baseMem!.ast_fingerprints[s]));
+
+      const liveHeadCommit = resolveCurrentGitCommit(this.storage.rootDir);
+      const explicitCommit =
+        typeof (rawProposal as any).created_commit === 'string' &&
+        (rawProposal as any).created_commit.trim()
+          ? (rawProposal as any).created_commit.trim()
+          : '';
+      const preserveHistoricalAnchor =
+        sameTargetSymbols &&
+        Boolean(baseMem?.created_commit) &&
+        (!explicitCommit || explicitCommit === baseMem!.created_commit);
 
       const currentCommit =
-        (typeof (rawProposal as any).created_commit === 'string' && (rawProposal as any).created_commit.trim()) ||
-        (sameTargetSymbols && baseMem?.created_commit ? baseMem.created_commit : resolveCurrentGitCommit(this.storage.rootDir));
+        explicitCommit ||
+        (preserveHistoricalAnchor ? baseMem!.created_commit : liveHeadCommit);
       const currentBranch =
         (typeof rawProposal.created_branch === 'string' && rawProposal.created_branch.trim()) ||
-        (sameTargetSymbols && baseMem?.created_branch ? baseMem.created_branch : resolveCurrentGitBranch(this.storage.rootDir));
+        (preserveHistoricalAnchor && baseMem?.created_branch
+          ? baseMem.created_branch
+          : resolveCurrentGitBranch(this.storage.rootDir));
+      const finalMemoryFingerprints =
+        preserveHistoricalAnchor && hasCompleteBaseFingerprints
+          ? baseMem!.ast_fingerprints
+          : extractedMemoryFingerprints;
 
       if (options?.dryRun) {
         return {
@@ -2782,7 +2904,7 @@ export class EvoGatekeeper {
             created_commit: currentCommit,
             created_branch: currentBranch,
             target_symbols: targetSymbols,
-            ast_fingerprints: extractedMemoryFingerprints,
+            ast_fingerprints: finalMemoryFingerprints,
           },
         };
       }
@@ -2819,7 +2941,7 @@ export class EvoGatekeeper {
         root_cause: rootCause,
         solution,
         target_symbols: targetSymbols,
-        ast_fingerprints: extractedMemoryFingerprints,
+        ast_fingerprints: finalMemoryFingerprints,
         created_commit: currentCommit,
         created_branch: currentBranch,
         tags: rawProposal.tags || [],
@@ -2869,7 +2991,7 @@ export class EvoGatekeeper {
           created_commit: currentCommit,
           created_branch: currentBranch,
           target_symbols: targetSymbols,
-          ast_fingerprints: extractedMemoryFingerprints,
+          ast_fingerprints: finalMemoryFingerprints,
           scoped_rule_upgrade_candidates: upgradeCandidates,
         },
       };

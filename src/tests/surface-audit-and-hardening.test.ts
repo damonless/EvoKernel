@@ -33,6 +33,15 @@ import {
 import { runInit, BOOT_MCP_STUB } from '../cli/init.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import {
+  captureWorkspaceRollbackSnapshot,
+  captureWorkspaceMutationSignature,
+  restoreWorkspaceFromSnapshot,
+} from '../core/gatekeeper.js';
+import { computeStructuralSkeletonHash } from '../core/memory.js';
+import { compileLexiconConfig, getCanonicalToken } from '../core/lexicon.js';
+import { buildUiSnapshot } from '../cli/ui.js';
+import { resolveWorkspaceRoot } from '../cli/index.js';
+import {
   renderEvoStats,
   renderEvoTree,
   buildEvoStatsJson,
@@ -3617,6 +3626,410 @@ process.exit(hasRule ? 0 : 1);
 
     const fullLine = truncateTerminalLine(mixedLine, 100, true);
     assert.strictEqual(fullLine, mixedLine, 'truncateTerminalLine with full: true must preserve entire string');
+  });
+
+  // =========================================================================
+  // 57. [Issues #28 & #29 Red-Team Audit & CLI Routing Regression Suite (Defects 1-18)]
+  // =========================================================================
+  test('57. [Issues #28 & #29 Red-Team Audit & CLI Routing Regression Suite (Defects 1-18)]', async () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const bootMcpEntry = path.resolve(process.cwd(), 'scripts', 'boot-mcp.mjs');
+
+    // --- Defect 1: Gatekeeper Rollback Snapshot & Mutation Signature under hitLimit ---
+    const ws1 = createTempWorkspace();
+    try {
+      child_process.execFileSync('git', ['init'], { cwd: ws1, stdio: 'ignore' });
+      child_process.execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws1, stdio: 'ignore' });
+      child_process.execFileSync('git', ['config', 'user.name', 'Test'], { cwd: ws1, stdio: 'ignore' });
+
+      for (let i = 0; i < 6; i++) {
+        fs.writeFileSync(path.join(ws1, `file_${i}.txt`), `committed_${i}`, 'utf8');
+      }
+      fs.writeFileSync(path.join(ws1, 'pre_deleted.txt'), 'to_be_deleted', 'utf8');
+      child_process.execFileSync('git', ['add', '.'], { cwd: ws1, stdio: 'ignore' });
+      child_process.execFileSync('git', ['commit', '-m', 'init'], { cwd: ws1, stdio: 'ignore' });
+
+      // Create uncommitted dirty file beyond maxFiles=3 limit and delete tracked file
+      fs.mkdirSync(path.join(ws1, 'zzz_late'), { recursive: true });
+      const dirtyLateFile = path.join(ws1, 'zzz_late', 'uncommitted.ts');
+      fs.writeFileSync(dirtyLateFile, 'export const precious = 42;\n', 'utf8');
+      fs.unlinkSync(path.join(ws1, 'pre_deleted.txt'));
+
+      const preSnap = captureWorkspaceRollbackSnapshot(ws1, 3);
+      const postSigNoOp = captureWorkspaceMutationSignature(ws1, 3);
+      const noOpRestore = restoreWorkspaceFromSnapshot(ws1, preSnap, postSigNoOp);
+      assert.strictEqual(
+        noOpRestore.mutatedFiles.length,
+        0,
+        'No-op under hitLimit must not report false mutation'
+      );
+      assert.ok(fs.existsSync(dirtyLateFile), 'Uncommitted dirty file beyond maxFiles must never be unlinked');
+      assert.strictEqual(fs.readFileSync(dirtyLateFile, 'utf8'), 'export const precious = 42;\n');
+
+      // Same-size & same-mtime in-place overwrite must still be detected via content digest
+      const file0 = path.join(ws1, 'file_0.txt');
+      const origStat = fs.statSync(file0);
+      const snapBefore = captureWorkspaceRollbackSnapshot(ws1, 100);
+      fs.writeFileSync(file0, 'MUTATED_000', 'utf8'); // exact same length as 'committed_0' (11 bytes)
+      fs.utimesSync(file0, origStat.atime, origStat.mtime);
+      const sigAfter = captureWorkspaceMutationSignature(ws1, 100);
+      const digestRestore = restoreWorkspaceFromSnapshot(ws1, snapBefore, sigAfter);
+      assert.ok(
+        digestRestore.mutatedFiles.includes('file_0.txt'),
+        'Same-size & same-mtime content mutation must be detected via SHA-1 digest'
+      );
+      assert.strictEqual(fs.readFileSync(file0, 'utf8'), 'committed_0');
+    } finally {
+      safeCleanup(ws1);
+    }
+
+    // --- Defect 2: probeCandidateInWorktree worktree reuse & stale .evo cleanup ---
+    const ws2 = createTempWorkspace();
+    const reusableWt = createTempWorkspace();
+    try {
+      child_process.execFileSync('git', ['init'], { cwd: ws2, stdio: 'ignore' });
+      child_process.execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws2, stdio: 'ignore' });
+      child_process.execFileSync('git', ['config', 'user.name', 'Test'], { cwd: ws2, stdio: 'ignore' });
+      const st2 = new EvoStorage(ws2);
+      st2.ensureInitialized();
+      fs.writeFileSync(path.join(ws2, 'index.js'), 'console.log("ok");\n', 'utf8');
+      child_process.execFileSync('git', ['add', '.'], { cwd: ws2, stdio: 'ignore' });
+      child_process.execFileSync('git', ['commit', '-m', 'init'], { cwd: ws2, stdio: 'ignore' });
+
+      // First probe creates worktree in reusableWt/repo
+      const probe1 = probeCandidateInWorktree({
+        workspaceRoot: ws2,
+        candidateId: 'cand-1',
+        dim: 'both',
+        proposals: [],
+        deletedIds: [],
+        reusableWorktreeDir: reusableWt,
+        keepWorktreeForReuse: true,
+        probeCmd: 'node index.js',
+      });
+      assert.strictEqual(probe1.passed, true, `First worktree probe should pass: ${probe1.gatekeeperError || probe1.auditError}`);
+      // Plant stale rule inside reusableWt/repo/.evo/rules/scoped/stale.md
+      const staleRulePath = path.join(reusableWt, 'repo', '.evo', 'rules', 'scoped', 'stale.md');
+      fs.mkdirSync(path.dirname(staleRulePath), { recursive: true });
+      fs.writeFileSync(staleRulePath, 'stale rule', 'utf8');
+
+      // Second probe reuses reusableWt/repo via git reset/clean and wipes stale .evo
+      const probe2 = probeCandidateInWorktree({
+        workspaceRoot: ws2,
+        candidateId: 'cand-2',
+        dim: 'both',
+        proposals: [],
+        deletedIds: [],
+        reusableWorktreeDir: reusableWt,
+        keepWorktreeForReuse: false,
+        probeCmd: 'node index.js',
+      });
+      assert.strictEqual(probe2.passed, true, `Second reused worktree probe should pass: ${probe2.gatekeeperError || probe2.auditError}`);
+      assert.ok(!fs.existsSync(staleRulePath), 'Reusable worktree must wipe stale .evo files before re-copying');
+      try {
+        child_process.execFileSync('git', ['worktree', 'remove', '--force', reusableWt], { cwd: ws2, stdio: 'ignore' });
+      } catch {
+        // ignore
+      }
+    } finally {
+      safeCleanup(reusableWt);
+      safeCleanup(ws2);
+    }
+
+    // --- Defects 3 & 4: Memory classHint scoping (Go/Python/Rust) & overload container grouping ---
+    const goLines = [
+      'package main',
+      'type Alpha struct{}',
+      'func (a *Alpha) Process() int {',
+      '  return 1',
+      '}',
+      'type Beta struct{}',
+      'func (b *Beta) Process() int {',
+      '  return 2',
+      '}',
+    ];
+    const alphaBlock = extractSymbolBlockFromLines(goLines, 'Process', 'Alpha', '.go');
+    assert.ok(alphaBlock, 'Should extract Alpha.Process in Go');
+    assert.ok(alphaBlock!.blockCode.includes('(a *Alpha)'), 'Must match Alpha receiver');
+    assert.ok(!alphaBlock!.blockCode.includes('(b *Beta)'), 'Must not match Beta receiver');
+    const missingGamma = extractSymbolBlockFromLines(goLines, 'Process', 'Gamma', '.go');
+    assert.strictEqual(missingGamma, null, 'Nonexistent Go receiver Gamma.Process must not fall back to Alpha/Beta');
+
+    const pyLines = [
+      'class First:',
+      '    def compute(self):',
+      '        return 10',
+      '',
+      'class Second:',
+      '    def compute(self):',
+      '        return 20',
+    ];
+    const secondPy = extractSymbolBlockFromLines(pyLines, 'compute', 'Second', '.py');
+    assert.ok(secondPy && secondPy.blockCode.includes('return 20') && !secondPy.blockCode.includes('return 10'));
+    assert.strictEqual(extractSymbolBlockFromLines(pyLines, 'compute', 'Third', '.py'), null);
+
+    const rustLines = [
+      'struct EngineA;',
+      'impl EngineA {',
+      '    pub fn run(&self) -> i32 { 11 }',
+      '}',
+      'struct EngineB;',
+      'impl EngineB {',
+      '    pub fn run(&self) -> i32 { 22 }',
+      '}',
+    ];
+    const rustEngineB = extractSymbolBlockFromLines(rustLines, 'run', 'EngineB', '.rs');
+    assert.ok(rustEngineB && rustEngineB.blockCode.includes('22') && !rustEngineB.blockCode.includes('11'));
+
+    // Defect 4: Unqualified method name with multiple classes must not merge across classes
+    const tsTwoClasses = [
+      'export class ServiceA {',
+      '  handle(x: number): number;',
+      '  handle(x: number): number { return x + 1; }',
+      '}',
+      'export class ServiceB {',
+      '  handle(x: string): string { return x; }',
+      '}',
+    ];
+    const unqualifiedHandle = extractSymbolBlockFromLines(tsTwoClasses, 'handle', undefined, '.ts');
+    assert.ok(unqualifiedHandle, 'Should extract handle from first container');
+    assert.strictEqual(unqualifiedHandle!.start_line, 3);
+    assert.strictEqual(unqualifiedHandle!.end_line, 3, 'Must not merge ServiceA.handle with ServiceB.handle across classes');
+
+    // --- Defect 5: findBraceBlockEnd paired #ifdef brace delta & non-C #if comments ---
+    const cPairedIfdef = [
+      'void paired_lock() {',
+      '#ifdef USE_LOCK',
+      '  if (lock) {',
+      '#endif',
+      '    do_work();',
+      '#ifdef USE_LOCK',
+      '  }',
+      '#endif',
+      '}',
+      'void next_fn() {}',
+    ];
+    const cEnd = findBraceBlockEnd(cPairedIfdef, 0, '.c');
+    assert.strictEqual(cEnd, 8, 'Paired #ifdef { ... #ifdef } in C must close function at line 8');
+
+    const pyHashIfInJs = [
+      'function buildScript() {',
+      '  const s = `',
+      '#if 0',
+      '  `;',
+      '  return s;',
+      '}',
+    ];
+    assert.strictEqual(findBraceBlockEnd(pyHashIfInJs, 0, '.ts'), 5, '#if 0 inside TS template literal must not disable brace tracking');
+
+    // --- Defect 6 & 7: computeStructuralSkeletonHash on Rust lifetimes & stripCStyleComments on C chars ---
+    const rustLifetimeFn1 = [
+      "pub fn parse<'a>(input: &'a str) -> &'a str {",
+      '    if input.is_empty() {',
+      '        return input;',
+      '    }',
+      '    input',
+      '}',
+    ].join('\n');
+    const rustLifetimeFn2 = [
+      "pub fn parse<'a>(input: &'a str) -> &'a str {",
+      '    while !input.is_empty() {',
+      '        for _ in 0..1 { return input; }',
+      '    }',
+      '    input',
+      '}',
+    ].join('\n');
+    assert.notStrictEqual(
+      computeStructuralSkeletonHash(rustLifetimeFn1, '.rs'),
+      computeStructuralSkeletonHash(rustLifetimeFn2, '.rs'),
+      "Rust lifetimes 'a must not mask control-flow keywords between them"
+    );
+
+    const cMultiChar = "int x = 'ab'; // trailing comment\nint y = 2;";
+    const strippedC = stripCStyleComments(cMultiChar, '.c');
+    assert.ok(strippedC.includes("'ab'"), 'C multi-char literal must be preserved');
+    assert.ok(!strippedC.includes('trailing comment'), 'Comment after C multi-char literal must be stripped');
+
+    const jsUrlInSingleQuote = "const u = 'http://example.com'; // real comment";
+    const strippedJs = stripCStyleComments(jsUrlInSingleQuote, '.js');
+    assert.ok(strippedJs.includes("'http://example.com'"), 'Single-quoted URL in JS must not be stripped as comment');
+    assert.ok(!strippedJs.includes('real comment'));
+
+    // --- Defect 8: parseFrontmatter single-quoted inline arrays & UI/VSCode non-empty array fallbacks ---
+    const parsedFm = parseFrontmatter(
+      "---\nid: test-fm\ntags: ['alpha', 'beta']\ntransfer_scenarios: [one, two]\n---\nBody text"
+    );
+    assert.deepStrictEqual(parsedFm.meta.tags, ['alpha', 'beta']);
+    assert.deepStrictEqual(parsedFm.meta.transfer_scenarios, ['one', 'two']);
+
+    // --- Defect 9: Lexicon docx/word mapping & non-collapsing ASCII hardware domain terms ---
+    assert.strictEqual(getCanonicalToken('docx'), 'document');
+    assert.strictEqual(getCanonicalToken('word'), 'document');
+    const hwLex = compileLexiconConfig({
+      version: 1,
+      domains: ['embedded-hardware'],
+      synonyms: {
+        voltage: ['current', 'adc', 'pin', 'hardware'],
+        电压: ['voltage', 'vcc'],
+      },
+    });
+    assert.strictEqual(getCanonicalToken('voltage', hwLex), 'voltage');
+    assert.strictEqual(getCanonicalToken('current', hwLex), 'current');
+    assert.strictEqual(getCanonicalToken('adc', hwLex), 'adc');
+    assert.strictEqual(getCanonicalToken('电压', hwLex), 'voltage');
+
+    // --- Defect 10 & 11: Gatekeeper dangerous patterns & isValidContrastiveEvidence ---
+    const ws10 = createTempWorkspace();
+    try {
+      const st10 = new EvoStorage(ws10);
+      st10.ensureInitialized();
+      const gk10 = new EvoGatekeeper(st10, new EvoTelemetry(st10));
+      const secRm = gk10.scanDangerousPatterns("const { rm } = require('fs/promises'); await rm(os.homedir(), { recursive: true });");
+      assert.ok(secRm, 'Destructured rm() must be blocked by static security');
+      const secEnv = gk10.scanDangerousPatterns("const p = path.join(process.env['HOME'], '.ssh', 'id_rsa');");
+      assert.ok(secEnv, "Bracket process.env['HOME'] credential path must be blocked by static security");
+
+      fs.mkdirSync(path.join(ws10, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws10, 'src', 'widget.ts'),
+        'export function computeWidgetMetric() {\n  return 42;\n}\n',
+        'utf8'
+      );
+      assert.strictEqual(
+        isValidContrastiveEvidence('src/widget.ts:computeWidgetMetric and src/widget.ts:L1-L3 verified', ws10),
+        true
+      );
+      assert.strictEqual(
+        isValidContrastiveEvidence('src/widget.ts:L99-L120 and src/widget.ts:nonExistentSymbol verified', ws10),
+        false
+      );
+      assert.strictEqual(
+        isValidContrastiveEvidence('src/widget.ts:a and src/widget.ts:b verified', ws10),
+        false,
+        'Single-letter symbol must be rejected'
+      );
+    } finally {
+      safeCleanup(ws10);
+    }
+
+    // --- Defect 13: resolveWorkspaceRoot & read-only CLI commands inside host global config dir ---
+    const hostClaudeSubdir = path.join(os.homedir(), '.claude', 'plugins', 'test-routing-check');
+    const resolved = resolveWorkspaceRoot(['--workspace', hostClaudeSubdir], { allowGlobalFallback: true });
+    assert.notStrictEqual(
+      path.resolve(resolved),
+      path.resolve(hostClaudeSubdir),
+      'resolveWorkspaceRoot must redirect host global config dir (.claude) even when allowGlobalFallback is true'
+    );
+
+    // --- Defect 14: Scoped seed rule placement ---
+    assert.ok(
+      fs.existsSync(path.join(process.cwd(), '.evo', 'rules', 'scoped', 'esm-typescript-imports.md')),
+      'esm-typescript-imports.md must live in .evo/rules/scoped/'
+    );
+    assert.ok(
+      !fs.existsSync(path.join(process.cwd(), '.evo', 'rules', 'esm-typescript-imports.md')),
+      'Legacy top-level .evo/rules/esm-typescript-imports.md must not exist'
+    );
+
+    // --- Defect 15: Option A --anon mode in buildScoreReport & buildUiSnapshot ---
+    const ws15 = createTempWorkspace();
+    try {
+      const st15 = new EvoStorage(ws15);
+      st15.ensureInitialized();
+      fs.writeFileSync(
+        path.join(ws15, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            'evo-kernel': { command: 'node', args: ['/Users/alice/secret-path/boot-mcp.mjs'] },
+          },
+        }),
+        'utf8'
+      );
+      st15.saveRule({
+        id: 'public-demo-rule',
+        title: 'Public Demo Rule',
+        l0_summary: 'Public rule referencing /Users/alice/project/src/index.ts',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        priority: 100,
+        tokens: 20,
+        confidence: 'HIGH',
+        origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        transfer_scenarios: ['Scenario A', 'Scenario B'],
+        content: 'Check /Users/alice/project/src/index.ts and Bearer sk-1234567890abcdef1234567890abcdef',
+      });
+      const anonScore = buildScoreReport(ws15, { anon: true });
+      for (const srv of anonScore.mcpTax.servers) {
+        assert.ok(!srv.source.includes('alice'), '--anon score report must sanitize server source paths');
+      }
+      const anonSnap = buildUiSnapshot(ws15, { anon: true });
+      const pubRule = anonSnap.rules.find((r) => r.id === 'public-demo-rule');
+      assert.ok(pubRule, 'Non-blacklisted rule must remain visible in --anon UI snapshot');
+      assert.ok(!pubRule!.l0_summary.includes('/Users/alice'), '--anon UI snapshot must redact user paths in l0_summary');
+      assert.ok(!pubRule!.content.includes('/Users/alice'), '--anon UI snapshot must redact user paths in content');
+      assert.ok(!pubRule!.content.includes('sk-1234567890abcdef'), '--anon UI snapshot must redact tokens in content');
+
+      // --- Defect 17: CLI --help with --workspace, flag-only invocation, and boot-mcp forwarding ---
+      const helpWithWs = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, '--workspace', ws15, '--help'],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(helpWithWs.status, 0, 'evo --workspace <dir> --help must exit 0');
+      assert.ok(helpWithWs.stdout.includes('Usage:'), 'Must print general help instead of treating workspace path as subcommand');
+
+      const flagOnlyJson = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, '--workspace', ws15, '--json'],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(flagOnlyJson.status, 0, 'evo --workspace <dir> --json must default to score and exit 0');
+      const flagOnlyParsed = JSON.parse(flagOnlyJson.stdout);
+      assert.ok(typeof flagOnlyParsed.overallScore === 'number', 'Flag-only invocation with --json must output score JSON');
+
+      const bootMcpHelp = child_process.spawnSync(
+        process.execPath,
+        [bootMcpEntry, '--help'],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(bootMcpHelp.status, 0, 'boot-mcp.mjs --help must forward to CLI help and exit 0');
+      assert.ok(bootMcpHelp.stdout.includes('Usage:'));
+
+      const bootMcpMemoryVerify = child_process.spawnSync(
+        process.execPath,
+        [bootMcpEntry, 'memory', 'verify', '--workspace', ws15],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(bootMcpMemoryVerify.status, 0, 'boot-mcp.mjs memory verify must forward subcommand instead of starting MCP server');
+    } finally {
+      safeCleanup(ws15);
+    }
+
+    // --- Defect 16: Windows paths with spaces in hasStaleNpxMcpEntry ---
+    const dirWithSpace = fs.mkdtempSync(path.join(os.tmpdir(), 'evo space path '));
+    try {
+      const scriptWithSpace = path.join(dirWithSpace, 'boot-mcp.mjs');
+      fs.writeFileSync(scriptWithSpace, '// stub\n', 'utf8');
+      assert.strictEqual(
+        hasStaleNpxMcpEntry(scriptWithSpace),
+        false,
+        'Existing file path containing spaces must not be flagged as stale npx entry'
+      );
+    } finally {
+      safeCleanup(dirWithSpace);
+    }
+
+    // --- Defect 18: BOOT_MCP_STUB uses windowsVerbatimArguments without shell: true ---
+    assert.ok(
+      BOOT_MCP_STUB.includes('windowsVerbatimArguments: true'),
+      'BOOT_MCP_STUB must use windowsVerbatimArguments: true on Windows'
+    );
+    assert.ok(
+      !BOOT_MCP_STUB.includes('shell: isWin'),
+      'BOOT_MCP_STUB must not use shell: isWin which splits paths with spaces'
+    );
   });
 
 });

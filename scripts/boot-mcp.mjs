@@ -39,10 +39,32 @@ if (!fs.existsSync(distEntry)) {
 }
 
 const rawArgs = process.argv.slice(2);
-const firstArg = (rawArgs[0] || '').toLowerCase();
-const forwardedArgs =
-  firstArg && firstArg !== 'mcp' && !firstArg.startsWith('-')
-    ? rawArgs
-    : ['mcp', ...rawArgs.filter((arg) => arg !== 'mcp')];
+const VALUE_FLAGS = new Set([
+  '--workspace', '-w', '--port', '--token', '--export', '--svg', '--html',
+  '--targets', '--link', '--ide', '--max-commits', '--token-budget',
+  '--skill-budget', '--dim', '-k', '--proposer-cmd', '--probe-cmd',
+  '--payload', '--harness', '--event', '--tool', '--file',
+]);
+let firstPositional = '';
+for (let i = 0; i < rawArgs.length; i++) {
+  const a = rawArgs[i];
+  if (a.startsWith('-')) {
+    if (VALUE_FLAGS.has(a.toLowerCase()) && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('-')) {
+      i++;
+    }
+    continue;
+  }
+  firstPositional = a.toLowerCase();
+  break;
+}
+const hasExplicitCliIntent =
+  (Boolean(firstPositional) && firstPositional !== 'mcp') ||
+  rawArgs.some((a) => {
+    const lower = a.toLowerCase();
+    return lower === '--help' || lower === '-h' || lower === '--version' || lower === '-v';
+  });
+const forwardedArgs = hasExplicitCliIntent
+  ? rawArgs
+  : ['mcp', ...rawArgs.filter((arg) => arg.toLowerCase() !== 'mcp')];
 process.argv = [process.argv[0], distEntry, ...forwardedArgs];
 await import(url.pathToFileURL(distEntry).href);

@@ -801,7 +801,7 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
   return out;
 }
 
-export function stripCStyleComments(input: string): string {
+export function stripCStyleComments(input: string, ext?: string): string {
   if (!input) return '';
   let out = '';
   let i = 0;
@@ -809,6 +809,12 @@ export function stripCStyleComments(input: string): string {
   let inSingle = false;
   let inDouble = false;
   let inTemplate = false;
+  const isRustExt = ext ? ext.toLowerCase() === '.rs' : false;
+  const allowLineCommentContinuation = ext
+    ? /^\.(?:c|h|cpp|hpp|cc|cxx)$/i.test(ext)
+    : !/\b(?:export|import|function|let|var|interface|async|await|fn|pub|impl|func|package)\b/.test(
+        input
+      );
 
   while (i < len) {
     const ch = input[i];
@@ -861,6 +867,7 @@ export function stripCStyleComments(input: string): string {
     }
 
     if (ch === '/' && next === '/') {
+      const commentStart = i + 2;
       i += 2;
       while (i < len) {
         if (input[i] === '\n') {
@@ -868,9 +875,13 @@ export function stripCStyleComments(input: string): string {
             i > 0 && input[i - 1] === '\r'
               ? (i > 1 ? input[i - 2] : '')
               : (i > 0 ? input[i - 1] : '');
-          if (charBeforeBreak === '\\') {
-            i++;
-            continue;
+          if (allowLineCommentContinuation && charBeforeBreak === '\\') {
+            const commentSegment = input.slice(commentStart, i).replace(/\r$/, '');
+            const isWindowsPathTail = /[A-Za-z]:\\[^\r\n]*\\$/.test(commentSegment);
+            if (!isWindowsPathTail) {
+              i++;
+              continue;
+            }
           }
           break;
         }
@@ -953,11 +964,44 @@ export function stripCStyleComments(input: string): string {
         i++;
         continue;
       }
-      if (i + 1 < len && /[a-zA-Z_]/.test(input[i + 1])) {
-        if (!(i + 2 < len && input[i + 2] === "'")) {
+      if (isRustExt) {
+        let isChar = false;
+        if (input[i + 1] === '\\') {
+          const end = input.indexOf("'", i + 2);
+          if (end !== -1 && end - i <= 10 && !input.slice(i, end).includes('\n')) {
+            isChar = true;
+          }
+        } else if (i + 1 < len && input[i + 1] !== "'" && input[i + 1] !== '\r' && input[i + 1] !== '\n') {
+          const cp = input.codePointAt(i + 1);
+          const charLen = cp !== undefined && cp > 0xffff ? 2 : 1;
+          if (i + 1 + charLen < len && input[i + 1 + charLen] === "'") {
+            isChar = true;
+          }
+        }
+        if (!isChar) {
           out += ch;
           i++;
           continue;
+        }
+      } else if (!ext && i + 1 < len && /[a-zA-Z_]/.test(input[i + 1])) {
+        let identEnd = i + 2;
+        while (identEnd < len && /[a-zA-Z0-9_]/.test(input[identEnd])) {
+          identEnd++;
+        }
+        const isClosedAfterIdent = identEnd < len && input[identEnd] === "'";
+        if (!isClosedAfterIdent) {
+          const prevNonSpace = out.trimEnd().slice(-1);
+          const looksLikeRustLifetime =
+            prevNonSpace === '&' ||
+            prevNonSpace === '<' ||
+            prevNonSpace === '+' ||
+            prevNonSpace === ':' ||
+            prevNonSpace === ',';
+          if (looksLikeRustLifetime) {
+            out += ch;
+            i++;
+            continue;
+          }
         }
       }
       inSingle = true;
@@ -979,7 +1023,7 @@ export function normalizeCodeStructureV1(code: string, ext = '.ts'): string {
       .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, ' ')
       .replace(/(^|\s)#[^\r\n]*/g, ' ');
   } else {
-    stripped = stripCStyleComments(stripped);
+    stripped = stripCStyleComments(stripped, ext);
   }
   return stripped
     .replace(/\s+/g, ' ')
@@ -1001,7 +1045,7 @@ export function normalizeCodeStructure(code: string, ext = '.ts'): string {
       .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, ' ')
       .replace(/(^|\s)#[^\r\n]*/g, ' ');
   } else {
-    stripped = stripCStyleComments(stripped);
+    stripped = stripCStyleComments(stripped, ext);
   }
 
   return stripped
@@ -1018,22 +1062,15 @@ export function computeAstHash(code: string, ext = '.ts'): string {
 export function computeStructuralSkeletonHash(code: string, ext = '.ts'): string {
   if (!code || !code.trim()) return '';
 
-  // 1. Strip comments (stripCStyleComments or Python/shell/script comments/docstrings)
+  // 1. Lexically mask comments and string/character literals while preserving Rust lifetimes and JS/TS template ${...} expressions
   let stripped = code;
-  if (ext === '.py') {
-    stripped = stripped
-      .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, ' ')
-      .replace(/(?:^|[ \t])#[^\r\n]*/g, ' ');
-  } else if (ext === '.sh' || ext === '.ps1' || ext === '.rb') {
-    stripped = stripped.replace(/(?:^|[ \t])#[^\r\n]*/g, ' ');
+  if (ext === '.sh' || ext === '.ps1' || ext === '.rb') {
+    stripped = maskSourceLexical(stripped.replace(/(?:^|[ \t])#[^\r\n]*/gm, ' '), ext);
   } else if (ext === '.sql' || ext === '.lua') {
-    stripped = stripped.replace(/--[^\r\n]*/g, ' ');
+    stripped = maskSourceLexical(stripped.replace(/--[^\r\n]*/g, ' '), ext);
   } else {
-    stripped = stripCStyleComments(stripped);
+    stripped = maskSourceLexical(stripped, ext);
   }
-
-  // 2. Replace string literals ('... ', "... ", `...`) with canonical placeholder ""
-  stripped = stripped.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/gs, '""');
 
   // 3. Strip common diagnostic/logging lines (console.(log|debug|info|warn|error)(...), printf(...), printk(...), logging.(debug|info|warning)(...))
   const logStartPattern = /\b(?:console\.(?:log|debug|info|warn|error)|printf|printk|logging\.(?:debug|info|warning|error))\s*\(/g;
@@ -1365,6 +1402,77 @@ export function isBodylessForwardDeclaration(
   return false;
 }
 
+interface ContainerRange {
+  name: string;
+  start: number;
+  end: number;
+}
+
+function collectContainerRangesInLines(lines: string[], ext = '.ts'): ContainerRange[] {
+  const containers: ContainerRange[] = [];
+  const isPy = ext === '.py';
+  const isRust = ext === '.rs';
+  const isGo = ext === '.go';
+  const mLines = isPy ? undefined : maskSourceLexical(lines.join('\n'), ext).split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i] || '';
+    const cleanLine = mLines ? (mLines[i] ?? rawLine) : rawLine.replace(/#.*$/, '');
+    if (!cleanLine.trim()) continue;
+
+    if (isPy) {
+      const pyMatch = cleanLine.match(/^\s*class\s+([A-Za-z_]\w*)\b/);
+      if (pyMatch) {
+        const end = findPythonBlockEnd(lines, i);
+        containers.push({ name: pyMatch[1], start: i, end });
+      }
+      continue;
+    }
+
+    if (isRust) {
+      const implMatch = cleanLine.match(
+        /^\s*(?:unsafe\s+)?impl(?:<[^>]*>)?\s+(?:[A-Za-z0-9_:<>]+\s+for\s+)?([A-Za-z_]\w*)\b/
+      );
+      if (implMatch) {
+        const end = findBraceBlockEnd(lines, i, ext, mLines);
+        containers.push({ name: implMatch[1], start: i, end });
+        continue;
+      }
+      const typeMatch = cleanLine.match(
+        /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait|union)\s+([A-Za-z_]\w*)\b/
+      );
+      if (typeMatch && !/;\s*$/.test(cleanLine.trim())) {
+        const end = findBraceBlockEnd(lines, i, ext, mLines);
+        containers.push({ name: typeMatch[1], start: i, end });
+      }
+      continue;
+    }
+
+    if (isGo) {
+      const goTypeMatch = cleanLine.match(/^\s*type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b/);
+      if (goTypeMatch) {
+        const end = findBraceBlockEnd(lines, i, ext, mLines);
+        containers.push({ name: goTypeMatch[1], start: i, end });
+      }
+      continue;
+    }
+
+    const classMatch = cleanLine.match(
+      /^\s*(?:export\s+)?(?:default\s+)?(?:(?:abstract|public|private|protected|internal|final|sealed|static|typedef)\s+)*(?:class|struct|interface)\s+([A-Za-z_]\w*)\b/
+    );
+    if (classMatch) {
+      const trimmed = cleanLine.trim();
+      if (trimmed.endsWith(';') && !trimmed.includes('{')) {
+        continue;
+      }
+      const end = findBraceBlockEnd(lines, i, ext, mLines);
+      containers.push({ name: classMatch[1], start: i, end });
+    }
+  }
+
+  return containers;
+}
+
 export function findAllSymbolDeclarationsInLines(
   lines: string[],
   symbolName: string,
@@ -1418,22 +1526,16 @@ export function findAllSymbolDeclarationsInLines(
     }
   }
 
-  let searchStart = 0;
-  let searchEnd = lines.length - 1;
+  const allContainers = classHint ? collectContainerRangesInLines(lines, ext) : [];
+  const targetClassRanges = classHint
+    ? allContainers.filter((c) => c.name === classHint)
+    : [];
+  const otherClassRanges = classHint
+    ? allContainers.filter((c) => c.name !== classHint)
+    : [];
 
-  if (classHint) {
-    const classEsc = escapeRegExp(classHint);
-    const classRe = new RegExp(
-      `^\\s*(?:export\\s+)?(?:default\\s+)?(?:abstract\\s+)?(?:class|struct|interface)\\s+${classEsc}\\b`
-    );
-    for (let i = 0; i < lines.length; i++) {
-      if (classRe.test(lines[i])) {
-        searchStart = i;
-        const endLine = findBraceBlockEnd(lines, i, ext);
-        searchEnd = endLine;
-        break;
-      }
-    }
+  if (classHint && ext === '.go' && targetClassRanges.length === 0) {
+    return [];
   }
 
   const patterns: Array<{ kind: SymbolKind; regex: RegExp }> = [
@@ -1463,7 +1565,9 @@ export function findAllSymbolDeclarationsInLines(
     // Go / Rust fn / func / struct
     {
       kind: 'function',
-      regex: new RegExp(`^\\s*(?:pub\\s+)?(?:async\\s+)?(?:fn|func)\\s+(?:\\([^)]*\\)\\s*)?${esc}\\b`),
+      regex: classHint
+        ? new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:async\\s+)?(?:unsafe\\s+)?(?:const\\s+)?(?:fn|func)\\s+${esc}\\b`)
+        : new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:async\\s+)?(?:unsafe\\s+)?(?:const\\s+)?(?:fn|func)\\s+(?:\\([^)]*\\)\\s*)?${esc}\\b`),
     },
     // C / C++ struct or typedef struct or enum
     {
@@ -1496,7 +1600,30 @@ export function findAllSymbolDeclarationsInLines(
     },
   ];
 
-  const collectInRange = (start: number, end: number): DeclarationMatch[] => {
+  const cppQualifiedRe = classHint
+    ? new RegExp(
+        `\\b${escapeRegExp(classHint)}\\s*::\\s*${esc}\\s*\\([^;{]*(?:\\{.*)?$`
+      )
+    : null;
+
+  const isInsideOtherClass = (lineIdx: number): boolean => {
+    if (!classHint || otherClassRanges.length === 0) return false;
+    for (const oc of otherClassRanges) {
+      if (lineIdx >= oc.start && lineIdx <= oc.end) {
+        const surroundedByTarget = targetClassRanges.some(
+          (tc) => tc.start <= oc.start && oc.end <= tc.end && (oc.start > tc.start || oc.end < tc.end)
+        );
+        if (surroundedByTarget) return true;
+        const insideTarget = targetClassRanges.some(
+          (tc) => lineIdx >= tc.start && lineIdx <= tc.end && tc.start >= oc.start && tc.end <= oc.end
+        );
+        if (!insideTarget) return true;
+      }
+    }
+    return false;
+  };
+
+  const collectInRange = (start: number, end: number, respectOtherClasses = true): DeclarationMatch[] => {
     const matches: DeclarationMatch[] = [];
     for (let i = start; i <= end && i < lines.length; i++) {
       const line = lines[i];
@@ -1506,6 +1633,19 @@ export function findAllSymbolDeclarationsInLines(
         .replace(/\/\*.*$/, '');
       const trimmed = cleanLine.trim();
       if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
+        continue;
+      }
+
+      if (cppQualifiedRe && cppQualifiedRe.test(cleanLine)) {
+        matches.push({
+          kind: 'method',
+          lineIndex: i,
+          signature: trimmed.replace(/\s*\{$/, '').trim(),
+        });
+        continue;
+      }
+
+      if (respectOtherClasses && isInsideOtherClass(i)) {
         continue;
       }
 
@@ -1589,9 +1729,39 @@ export function findAllSymbolDeclarationsInLines(
     return matches;
   };
 
-  let rawMatches = collectInRange(searchStart, searchEnd);
-  if (rawMatches.length === 0 && (searchStart > 0 || searchEnd < lines.length - 1)) {
-    rawMatches = collectInRange(0, lines.length - 1);
+  let rawMatches: DeclarationMatch[] = [];
+  if (classHint) {
+    const seenLine = new Set<number>();
+    for (const tc of targetClassRanges) {
+      for (const m of collectInRange(tc.start, tc.end, true)) {
+        if (!seenLine.has(m.lineIndex)) {
+          seenLine.add(m.lineIndex);
+          rawMatches.push(m);
+        }
+      }
+    }
+    if (cppQualifiedRe) {
+      for (let i = 0; i < lines.length; i++) {
+        if (seenLine.has(i)) continue;
+        const cleanLine = lines[i]
+          .replace(/\/\/.*$/, '')
+          .replace(/\/\*.*?\*\//g, '')
+          .replace(/\/\*.*$/, '');
+        if (cppQualifiedRe.test(cleanLine)) {
+          seenLine.add(i);
+          rawMatches.push({
+            kind: 'method',
+            lineIndex: i,
+            signature: cleanLine.trim().replace(/\s*\{$/, '').trim(),
+          });
+        }
+      }
+    }
+    if (rawMatches.length === 0 && targetClassRanges.length === 0 && otherClassRanges.length === 0) {
+      rawMatches = collectInRange(0, lines.length - 1, true);
+    }
+  } else {
+    rawMatches = collectInRange(0, lines.length - 1, false);
   }
 
   const bodyful = rawMatches.filter(
@@ -1690,16 +1860,45 @@ export function extractSymbolBlockFromLines(
     };
   }
 
-  // Same-File Overload Aggregation
-  const combinedBlockCode = blocks.map((b) => b.code).join('\n');
-  const overloadSkeletonHash = blocks
+  let sameScopeBlocks = blocks;
+  if (!classHint) {
+    const containers = collectContainerRangesInLines(lines, ext);
+    const getContainerKey = (lineIdx: number): string => {
+      let best: ContainerRange | null = null;
+      for (const c of containers) {
+        if (lineIdx > c.start && lineIdx <= c.end) {
+          if (!best || c.end - c.start < best.end - best.start) {
+            best = c;
+          }
+        }
+      }
+      return best ? `${best.name}@${best.start}` : 'top-level';
+    };
+    const firstScopeKey = getContainerKey(blocks[0].decl.lineIndex);
+    sameScopeBlocks = blocks.filter((b) => getContainerKey(b.decl.lineIndex) === firstScopeKey);
+  }
+
+  if (sameScopeBlocks.length === 1) {
+    return {
+      kind: sameScopeBlocks[0].decl.kind,
+      start_line: sameScopeBlocks[0].startIdx + 1,
+      end_line: sameScopeBlocks[0].endIdx + 1,
+      signature: sameScopeBlocks[0].decl.signature,
+      blockCode: sameScopeBlocks[0].code,
+      skeleton_hash: computeStructuralSkeletonHash(sameScopeBlocks[0].code, ext),
+    };
+  }
+
+  // Same-File Overload Aggregation (within identical class/container or top-level scope)
+  const combinedBlockCode = sameScopeBlocks.map((b) => b.code).join('\n');
+  const overloadSkeletonHash = sameScopeBlocks
     .map((b) => computeStructuralSkeletonHash(b.code, ext))
     .join('|');
   return {
-    kind: blocks[0].decl.kind,
-    start_line: blocks[0].startIdx + 1,
-    end_line: blocks[blocks.length - 1].endIdx + 1,
-    signature: blocks[0].decl.signature,
+    kind: sameScopeBlocks[0].decl.kind,
+    start_line: sameScopeBlocks[0].startIdx + 1,
+    end_line: sameScopeBlocks[sameScopeBlocks.length - 1].endIdx + 1,
+    signature: sameScopeBlocks[0].decl.signature,
     blockCode: combinedBlockCode,
     skeleton_hash: overloadSkeletonHash,
   };
@@ -1833,11 +2032,13 @@ export function findBraceBlockEnd(
   const startLine = lines[startIndex] || '';
   const isTypeDecl = /^\s*(?:export\s+)?type\b/.test(startLine);
   const isVarDecl = /^\s*(?:export\s+)?(?:const|let|var)\b/.test(startLine);
-  const isCpp = /^\.(?:cpp|hpp|cc|c|h)$/i.test(ext);
+  const isCpp = /^\.(?:cpp|hpp|cc|cxx|c|h)$/i.test(ext);
+  const hasCPreprocessor = /^\.(?:c|h|cpp|hpp|cc|cxx|cs|m|mm)$/i.test(ext);
 
   let seenTopLevelEquals = false;
   let seenArrow = false;
   let inCppInitList = false;
+  let unclosedIfdefBraceDelta = 0;
 
   const ppStack: Array<{
     entryBraceDepth: number;
@@ -1854,14 +2055,14 @@ export function findBraceBlockEnd(
   for (let i = startIndex; i < lines.length; i++) {
     const rawLine = lines[i] || '';
     const cleanLine = mLines[i] ?? rawLine;
-    const ppMatch =
-      rawLine.match(/^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b/) ||
-      cleanLine.match(/^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b/);
+    const ppMatch = hasCPreprocessor
+      ? cleanLine.match(/^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b/)
+      : null;
 
     if (ppMatch) {
       const dir = ppMatch[1];
       if (dir === 'if' || dir === 'ifdef' || dir === 'ifndef') {
-        const isIfZero = dir === 'if' && /^#\s*if\s+0\b/.test(rawLine.trim());
+        const isIfZero = dir === 'if' && /^#\s*if\s+0\b/.test(cleanLine.trim());
         const parentDead = ppStack.length > 0 && ppStack[ppStack.length - 1].inDeadBranch;
         ppStack.push({
           entryBraceDepth: braceDepth,
@@ -1886,7 +2087,7 @@ export function findBraceBlockEnd(
             top.hasElse = true;
             top.inDeadBranch = top.parentDead;
           } else if (dir === 'elif') {
-            const isElifZero = /^#\s*elif\s+0\b/.test(rawLine.trim());
+            const isElifZero = /^#\s*elif\s+0\b/.test(cleanLine.trim());
             top.inDeadBranch = top.parentDead || isElifZero;
           }
           braceDepth = top.entryBraceDepth;
@@ -1907,7 +2108,21 @@ export function findBraceBlockEnd(
               typeBraceDepth = Math.max(...top.branchTypeBraceDepths);
               foundBodyOpen = top.anyFoundBodyOpen;
             } else {
-              braceDepth = Math.max(top.entryBraceDepth, ...top.branchBraceDepths);
+              const maxBranchBrace = Math.max(...top.branchBraceDepths);
+              const minBranchBrace = Math.min(...top.branchBraceDepths);
+              if (maxBranchBrace > top.entryBraceDepth) {
+                unclosedIfdefBraceDelta += maxBranchBrace - top.entryBraceDepth;
+                braceDepth = maxBranchBrace;
+              } else if (minBranchBrace < top.entryBraceDepth && unclosedIfdefBraceDelta > 0) {
+                const closed = Math.min(
+                  unclosedIfdefBraceDelta,
+                  top.entryBraceDepth - minBranchBrace
+                );
+                unclosedIfdefBraceDelta -= closed;
+                braceDepth = top.entryBraceDepth - closed;
+              } else {
+                braceDepth = Math.max(top.entryBraceDepth, maxBranchBrace);
+              }
               typeBraceDepth = Math.max(top.entryTypeBraceDepth, ...top.branchTypeBraceDepths);
               foundBodyOpen = top.entryFoundBodyOpen || top.anyFoundBodyOpen;
             }
@@ -3257,7 +3472,12 @@ export function verifyMemoryFreshness(
       ) {
         try {
           const histFp = extractSymbolFingerprintAtCommit(root, createdCommit, symKey, recorded);
-          if (histFp && (histFp.kind === live.kind || !live.kind)) {
+          const histMatchesRecorded =
+            Boolean(histFp) &&
+            (histFp!.ast_hash === recorded.ast_hash ||
+              extractSymbolFingerprintAtCommitV1(root, createdCommit, symKey, recorded)?.ast_hash ===
+                recorded.ast_hash);
+          if (histFp && histMatchesRecorded && (histFp.kind === live.kind || !live.kind)) {
             const histCleanRel = histFp.file_path.replace(/\\/g, '/').replace(/^\.\/+/,'');
             const histShowRes = spawnSync('git', ['show', `${createdCommit}:./${histCleanRel}`], {
               cwd: root,

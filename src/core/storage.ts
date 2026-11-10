@@ -1304,7 +1304,32 @@ export function parseFrontmatter(raw: string): { meta: Record<string, unknown>; 
     try {
       meta[key] = JSON.parse(rawVal);
     } catch {
-      meta[key] = rawVal;
+      if (rawVal.startsWith('[') && rawVal.endsWith(']')) {
+        const inner = rawVal.slice(1, -1).trim();
+        if (!inner) {
+          meta[key] = [];
+        } else {
+          const items = inner.match(/'(?:''|[^'])*'|"(?:\\.|[^"])*"|[^,]+/g) || [];
+          meta[key] = items
+            .map((item) => {
+              const t = item.trim();
+              if (t.length >= 2 && t.startsWith("'") && t.endsWith("'")) {
+                return t.slice(1, -1).replace(/''/g, "'");
+              }
+              if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+                try {
+                  return JSON.parse(t);
+                } catch {
+                  return t.slice(1, -1);
+                }
+              }
+              return t;
+            })
+            .filter((s) => s.length > 0);
+        }
+      } else {
+        meta[key] = rawVal;
+      }
     }
   }
   return { meta, body };

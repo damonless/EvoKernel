@@ -617,9 +617,17 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
   const mode = isProj ? 'project' : 'global';
 
   const mcpTax = inspectMcpTaxSnapshot(ws, {
-    includeGlobal: options?.includeGlobal ?? true,
+    includeGlobal: options?.anon ? false : (options?.includeGlobal ?? true),
     globalOnly: mode === 'global',
   });
+  if (options?.anon && Array.isArray(mcpTax.servers)) {
+    mcpTax.servers = mcpTax.servers.map((srv) => ({
+      ...srv,
+      id: redactSensitiveDiagnostics(srv.id || '', ws),
+      name: redactSensitiveDiagnostics(srv.name || '', ws),
+      source: redactSensitiveDiagnostics(srv.source || '', ws),
+    }));
+  }
 
   const gitHotspots = mode === 'project' ? computeGitBugHotspots(ws, 10) : [];
   const unprotectedHotspots = gitHotspots.filter((h) => h.unprotected).length;
