@@ -346,15 +346,16 @@ function evaluateConceptOverlap(
   conceptGroups: QueryConceptGroup[],
   row: Record<string, unknown>
 ): { matchedConcepts: number; matchedSpecific: number; lowOverlap: boolean } {
-  if (conceptGroups.length < 2) {
-    return { matchedConcepts: conceptGroups.length, matchedSpecific: conceptGroups.length, lowOverlap: false };
+  if (conceptGroups.length === 0) {
+    return { matchedConcepts: 0, matchedSpecific: 0, lowOverlap: false };
   }
+  const isTool = String(row.kind || '') === 'tool';
   const searchable = [
     String(row.id || ''),
     String(row.title || ''),
     String(row.l0_summary || ''),
     String(row.keywords || ''),
-    String(row.body || ''),
+    isTool ? '' : String(row.body || ''),
   ]
     .join(' ')
     .toLowerCase();
@@ -373,10 +374,12 @@ function evaluateConceptOverlap(
   }
 
   // A hit is low-overlap when:
+  // 0. None of the query concepts matched in searchable metadata (e.g., a tool matching only raw script_code literals).
   // 1. The query has >= 2 distinct concepts with at least 1 specific technical anchor (e.g. "EPO", "emergency"),
   //    and the candidate matches 0 specific anchors (only matching generic domain words like "power", "delay").
-  // 2. Or the query has >= 3 distinct concepts (all generic) and the candidate only matches <= 1 concept.
+  // 2. Or the query has >= 3 distinct concepts and the candidate only matches <= 1 concept.
   const lowOverlap =
+    matchedConcepts === 0 ||
     (conceptGroups.length >= 2 && totalSpecific >= 1 && matchedSpecific === 0) ||
     (conceptGroups.length >= 3 && matchedConcepts <= 1);
 
@@ -1270,7 +1273,10 @@ export class EvoTelemetry {
     const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
       s === 'STALE' ? 2 : s === 'OTHER_BRANCH' ? 1 : 0;
 
-    return hits
+    const hasHighRelevanceHit = hits.some((h) => !h.low_overlap);
+    const effectiveHits = hasHighRelevanceHit ? hits.filter((h) => !h.low_overlap) : hits;
+
+    return effectiveHits
       .sort((a, b) => {
         const tierDiff = statusTier(a.memory_status) - statusTier(b.memory_status);
         if (tierDiff !== 0) return tierDiff;

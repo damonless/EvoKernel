@@ -1659,26 +1659,141 @@ export class EvoGatekeeper {
   ): GatekeeperResult {
     const config = this.storage.getConfig();
     const cleanId = sanitizeId(rawProposal.id || '');
+    const cleanSupersedesId = rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : '';
     const rawDict = rawProposal as unknown as Record<string, unknown>;
 
+    const findExistingCapability = (targetId: string) => {
+      if (!targetId) return null;
+      if (rawProposal.kind === 'rule') return this.storage.getRule(targetId);
+      if (rawProposal.kind === 'skill') return this.storage.getSkill(targetId);
+      if (rawProposal.kind === 'tool') return this.storage.getTool(targetId);
+      if (rawProposal.kind === 'memory') return this.storage.getMemory(targetId);
+      return (
+        this.storage.getRule(targetId) ||
+        this.storage.getSkill(targetId) ||
+        this.storage.getTool(targetId) ||
+        this.storage.getMemory(targetId)
+      );
+    };
+    const existingCapForDefaults =
+      findExistingCapability(cleanId) || findExistingCapability(cleanSupersedesId);
+
+    const rawTitleInput = String(rawProposal.title ?? rawProposal.name ?? '').trim();
+    const rawL0Input = String(rawProposal.l0_summary ?? '').trim();
+    const inheritedTitle = String(existingCapForDefaults?.title ?? '').trim();
+    const inheritedL0 = String(existingCapForDefaults?.l0_summary ?? '').trim();
+    const effectiveL0Summary = rawL0Input || inheritedL0;
+    const effectiveTitle = rawTitleInput || inheritedTitle || effectiveL0Summary;
+    const inheritedScopeGlob = String(
+      (existingCapForDefaults as { scope_glob?: string } | null)?.scope_glob ?? ''
+    ).trim();
+    const effectiveScopeGlob =
+      String(rawProposal.scope_glob ?? '').trim() || inheritedScopeGlob || rawProposal.scope_glob;
+
+    const existingMemoryForDefaults =
+      rawProposal.kind === 'memory'
+        ? this.storage.getMemory(cleanId) ||
+          (cleanSupersedesId ? this.storage.getMemory(cleanSupersedesId) : null)
+        : null;
+
+    const normalizeTargetSymbol = (s: unknown): string => {
+      if (typeof s === 'string') return s.trim();
+      if (s && typeof s === 'object' && !Array.isArray(s)) {
+        const obj = s as Record<string, unknown>;
+        const filePart = String(obj.file_path ?? obj.file ?? obj.path ?? '').trim();
+        const symPart = String(obj.symbol_name ?? obj.symbol ?? obj.name ?? '').trim();
+        if (filePart && symPart) return `${filePart}#${symPart}`;
+        return symPart || filePart;
+      }
+      return String(s ?? '').trim();
+    };
+    const rawTargetSymbolsSource =
+      Array.isArray(rawProposal.target_symbols) && rawProposal.target_symbols.length > 0
+        ? rawProposal.target_symbols
+        : existingMemoryForDefaults?.target_symbols;
+    const normalizedTargetSymbols = Array.isArray(rawTargetSymbolsSource)
+      ? rawTargetSymbolsSource.map(normalizeTargetSymbol).filter(Boolean)
+      : [];
+
+    rawProposal = {
+      ...rawProposal,
+      title: effectiveTitle,
+      l0_summary: effectiveL0Summary,
+      ...(effectiveScopeGlob ? { scope_glob: effectiveScopeGlob } : {}),
+      ...(normalizedTargetSymbols.length > 0 || Array.isArray(rawProposal.target_symbols)
+        ? { target_symbols: normalizedTargetSymbols }
+        : {}),
+    };
+
     // Normalize polymorphic aliases (Module 5)
+    const existingRuleForDefaults =
+      rawProposal.kind === 'rule'
+        ? this.storage.getRule(cleanId) ||
+          (cleanSupersedesId ? this.storage.getRule(cleanSupersedesId) : null)
+        : null;
     const resolvedRuleContent = String(
       rawProposal.content ??
         rawDict.body ??
         rawDict.l2_body ??
         rawDict.markdown ??
         rawProposal.l2_sop ??
+        existingRuleForDefaults?.content ??
         ''
     ).trim();
-    const resolvedSkillL1 = String(
+
+    const existingSkillForDefaults =
+      rawProposal.kind === 'skill'
+        ? this.storage.getSkill(cleanId) ||
+          (cleanSupersedesId ? this.storage.getSkill(cleanSupersedesId) : null)
+        : null;
+    const skillBodySource = String(
+      rawProposal.content ?? rawDict.body ?? rawDict.markdown ?? rawProposal.l2_sop ?? ''
+    ).trim();
+    const l1SectionMatch = skillBodySource.match(
+      /(?:^|\r?\n)#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b[^\r\n]*\r?\n([\s\S]*?)(?=(?:\r?\n)#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b|$)/i
+    );
+    const l2SectionMatch = skillBodySource.match(
+      /(?:^|\r?\n)#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b[^\r\n]*\r?\n([\s\S]*?)(?=(?:\r?\n)#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b|$)/i
+    );
+    const parsedSkillL1 = l1SectionMatch && l1SectionMatch[1].trim() ? l1SectionMatch[1].trim() : '';
+    const parsedSkillL2 = l2SectionMatch && l2SectionMatch[1].trim() ? l2SectionMatch[1].trim() : '';
+    const explicitSkillL1 = String(
       rawProposal.l1_contract ?? rawDict.l1_overview ?? rawDict.contract ?? ''
-    ).trim();
-    const resolvedSkillL2 = String(
-      rawProposal.l2_sop ?? rawDict.l2_body ?? rawDict.body ?? rawProposal.content ?? ''
-    ).trim();
+    )
+      .replace(/^#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b[^\r\n]*\r?\n?/i, '')
+      .trim();
+    const explicitSkillL2 = String(rawProposal.l2_sop ?? rawDict.l2_body ?? '')
+      .replace(/^#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b[^\r\n]*\r?\n?/i, '')
+      .trim();
+    const unstructuredSkillBodyAsL2 =
+      !l1SectionMatch && !l2SectionMatch
+        ? String(rawDict.body ?? rawDict.markdown ?? rawProposal.content ?? '').trim()
+        : '';
+    const resolvedSkillL1 =
+      explicitSkillL1 ||
+      parsedSkillL1 ||
+      (rawProposal.kind === 'skill' ? String(existingSkillForDefaults?.l1_contract ?? '').trim() : '');
+    const resolvedSkillL2 =
+      parsedSkillL2 ||
+      explicitSkillL2 ||
+      unstructuredSkillBodyAsL2 ||
+      (rawProposal.kind === 'skill' ? String(existingSkillForDefaults?.l2_sop ?? '').trim() : '');
 
     // Auto-scrub user paths in memory fields before security scan (Module 6.3)
     const isLegacyWorkspaceRedactTest = cleanId === 'mode-switch-semicolon-comment-case';
+    const rawSymptomSource = String(
+      rawProposal.symptom || rawProposal.l1_contract || existingMemoryForDefaults?.symptom || ''
+    ).trim();
+    const rawRootCauseSource = String(
+      rawProposal.root_cause || existingMemoryForDefaults?.root_cause || ''
+    ).trim();
+    const rawSolutionSource = String(
+      rawProposal.solution ||
+        rawProposal.content ||
+        rawProposal.l2_sop ||
+        existingMemoryForDefaults?.solution ||
+        ''
+    ).trim();
     const resolvedTitle =
       rawProposal.kind === 'memory'
         ? (isLegacyWorkspaceRedactTest
@@ -1694,28 +1809,20 @@ export class EvoGatekeeper {
     const resolvedSymptom =
       rawProposal.kind === 'memory'
         ? (isLegacyWorkspaceRedactTest
-            ? redactUserPaths(String(rawProposal.symptom || rawProposal.l1_contract || '').trim())
-            : scrubLocalUserPaths(String(rawProposal.symptom || rawProposal.l1_contract || '').trim()))
+            ? redactUserPaths(rawSymptomSource)
+            : scrubLocalUserPaths(rawSymptomSource))
         : String(rawProposal.symptom || '').trim();
     const resolvedRootCause =
       rawProposal.kind === 'memory'
         ? (isLegacyWorkspaceRedactTest
-            ? redactUserPaths(String(rawProposal.root_cause || '').trim())
-            : scrubLocalUserPaths(String(rawProposal.root_cause || '').trim()))
+            ? redactUserPaths(rawRootCauseSource)
+            : scrubLocalUserPaths(rawRootCauseSource))
         : String(rawProposal.root_cause || '').trim();
     const resolvedSolution =
       rawProposal.kind === 'memory'
         ? (isLegacyWorkspaceRedactTest
-            ? redactUserPaths(
-                String(
-                  rawProposal.solution || rawProposal.content || rawProposal.l2_sop || ''
-                ).trim()
-              )
-            : scrubLocalUserPaths(
-                String(
-                  rawProposal.solution || rawProposal.content || rawProposal.l2_sop || ''
-                ).trim()
-              ))
+            ? redactUserPaths(rawSolutionSource)
+            : scrubLocalUserPaths(rawSolutionSource))
         : String(rawProposal.solution || '').trim();
 
     // =========================================================================
@@ -1780,7 +1887,7 @@ export class EvoGatekeeper {
       resolvedSymptom,
       resolvedRootCause,
       resolvedSolution,
-      ...(rawProposal.target_symbols || []),
+      ...normalizedTargetSymbols,
     ].join('\n');
 
     for (const rule of DANGEROUS_PATTERNS) {
@@ -2145,20 +2252,7 @@ export class EvoGatekeeper {
       const symptom = resolvedSymptom;
       const rootCause = resolvedRootCause;
       const solution = resolvedSolution;
-      const normalizeTargetSymbol = (s: unknown): string => {
-        if (typeof s === 'string') return s.trim();
-        if (s && typeof s === 'object' && !Array.isArray(s)) {
-          const obj = s as Record<string, unknown>;
-          const filePart = String(obj.file_path ?? obj.file ?? obj.path ?? '').trim();
-          const symPart = String(obj.symbol_name ?? obj.symbol ?? obj.name ?? '').trim();
-          if (filePart && symPart) return `${filePart}:${symPart}`;
-          return symPart || filePart;
-        }
-        return String(s ?? '').trim();
-      };
-      const targetSymbols = Array.isArray(rawProposal.target_symbols)
-        ? rawProposal.target_symbols.map(normalizeTargetSymbol).filter(Boolean)
-        : [];
+      const targetSymbols = normalizedTargetSymbols;
 
       if (!symptom || !rootCause || !solution) {
         return {
@@ -2741,36 +2835,19 @@ export class EvoGatekeeper {
       const symptom = resolvedSymptom;
       const rootCause = resolvedRootCause;
       const solution = resolvedSolution;
-      const targetSymbols = (rawProposal.target_symbols || [])
-        .map((s: unknown) => {
-          if (typeof s === 'string') return s.trim();
-          if (s && typeof s === 'object' && !Array.isArray(s)) {
-            const obj = s as Record<string, unknown>;
-            const filePart = String(obj.file_path ?? obj.file ?? obj.path ?? '').trim();
-            const symPart = String(obj.symbol_name ?? obj.symbol ?? obj.name ?? '').trim();
-            if (filePart && symPart) return `${filePart}:${symPart}`;
-            return symPart || filePart;
-          }
-          return String(s ?? '').trim();
-        })
-        .filter(Boolean);
+      const targetSymbols = normalizedTargetSymbols;
       const existing = this.storage.getMemory(cleanId);
       const supersededMem = rawProposal.supersedes_id
         ? this.storage.getMemory(sanitizeId(rawProposal.supersedes_id))
         : undefined;
       const baseMem = existing ?? supersededMem;
-      const baseSymbols = (baseMem?.target_symbols || []).map((s) => s.trim()).filter(Boolean);
-      const sameTargetSymbols =
-        Boolean(baseMem) &&
-        baseSymbols.length === targetSymbols.length &&
-        baseSymbols.every((s, idx) => s === targetSymbols[idx]);
 
       const currentCommit =
         (typeof (rawProposal as any).created_commit === 'string' && (rawProposal as any).created_commit.trim()) ||
-        (sameTargetSymbols && baseMem?.created_commit ? baseMem.created_commit : resolveCurrentGitCommit(this.storage.rootDir));
+        resolveCurrentGitCommit(this.storage.rootDir);
       const currentBranch =
         (typeof rawProposal.created_branch === 'string' && rawProposal.created_branch.trim()) ||
-        (sameTargetSymbols && baseMem?.created_branch ? baseMem.created_branch : resolveCurrentGitBranch(this.storage.rootDir));
+        resolveCurrentGitBranch(this.storage.rootDir);
 
       if (options?.dryRun) {
         return {
@@ -2837,6 +2914,53 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
 
+      let dirtyWorktreeFiles: string[] = [];
+      let dirtyTargetFiles: string[] = [];
+      try {
+        const statusRes = spawnSync('git', ['status', '--porcelain'], {
+          cwd: this.storage.rootDir,
+          encoding: 'utf8',
+          timeout: 1500,
+        });
+        if (statusRes.status === 0 && statusRes.stdout) {
+          dirtyWorktreeFiles = statusRes.stdout
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 2)
+            .map((line) => {
+              const rawPath = line.replace(/^\S+\s+/, '').trim().replace(/^"+|"+$/g, '');
+              const arrowIdx = rawPath.indexOf(' -> ');
+              return (arrowIdx !== -1 ? rawPath.slice(arrowIdx + 4) : rawPath).replace(/\\/g, '/');
+            })
+            .filter(
+              (relPath) =>
+                relPath.length > 0 &&
+                relPath !== '.evo' &&
+                !relPath.startsWith('.evo/') &&
+                relPath !== '.git' &&
+                !relPath.startsWith('.git/') &&
+                relPath !== '.codegraph' &&
+                !relPath.startsWith('.codegraph/')
+            );
+          const targetRelPaths = new Set(
+            Object.values(extractedMemoryFingerprints)
+              .map((fp) => (fp.file_path || '').replace(/\\/g, '/').toLowerCase())
+              .filter(Boolean)
+          );
+          dirtyTargetFiles = dirtyWorktreeFiles.filter((df) => {
+            const normDf = df.toLowerCase();
+            for (const tf of targetRelPaths) {
+              if (normDf === tf || normDf.endsWith(`/${tf}`) || tf.endsWith(`/${normDf}`)) {
+                return true;
+              }
+            }
+            return false;
+          });
+        }
+      } catch {
+        // ignore git status check errors
+      }
+
       const upgradeCandidates = [
         ...this.storage
           .listRules()
@@ -2854,15 +2978,23 @@ export class EvoGatekeeper {
         })),
       ].slice(0, 6);
 
+      const dirtyCommitWarning =
+        dirtyWorktreeFiles.length > 0
+          ? `⚠️ [PRE-COMMIT ANCHOR WARNING] Working tree has uncommitted changes (${dirtyTargetFiles.length > 0 ? `target file(s): ${dirtyTargetFiles.join(', ')}` : `${dirtyWorktreeFiles.length} modified file(s)`}) while 'created_commit' is anchored to pre-fix HEAD (${currentCommit}). After running 'git commit', call evo_propose(kind: 'memory', id: '${cleanId}', supersedes_id: '${cleanId}', workspace) to re-anchor 'created_commit' to the actual fix commit.`
+          : '';
+
       const methodologyWarning =
         upgradeCandidates.length > 0
           ? `METHODOLOGY AUDIT: If this session also involved a user correction or reusable cross-module methodology improvement, do NOT stop at kind: 'memory'. Upgrade the relevant rule/skill (${upgradeCandidates.map((c) => `${c.id} [${c.kind}]`).join(', ')}) via evo_propose with supersedes_id.`
           : `METHODOLOGY AUDIT: If this session also involved a user correction or reusable cross-module methodology improvement, do NOT stop at kind: 'memory' — also crystallize or upgrade a scoped rule/skill.`;
 
+      const combinedWarning = [dirtyCommitWarning, methodologyWarning].filter(Boolean).join('\n\n');
+      const baseMemMessage = `Episodic Memory '${cleanId}' passed AST Symbol Grounding (${targetSymbols.length} symbol(s) fingerprinted @ commit ${currentCommit}) and is crystallized at .evo/memories/${cleanId}.md (0 core budget tokens used).`;
+
       return {
         passed: true,
-        message: `Episodic Memory '${cleanId}' passed AST Symbol Grounding (${targetSymbols.length} symbol(s) fingerprinted @ commit ${currentCommit}) and is crystallized at .evo/memories/${cleanId}.md (0 core budget tokens used).`,
-        warning: methodologyWarning,
+        message: dirtyCommitWarning ? `${baseMemMessage} ${dirtyCommitWarning}` : baseMemMessage,
+        warning: combinedWarning,
         diagnostics: {
           id: cleanId,
           kind: 'memory',
@@ -2870,6 +3002,8 @@ export class EvoGatekeeper {
           created_branch: currentBranch,
           target_symbols: targetSymbols,
           ast_fingerprints: extractedMemoryFingerprints,
+          uncommitted_worktree: dirtyWorktreeFiles.length > 0,
+          ...(dirtyTargetFiles.length > 0 ? { dirty_target_files: dirtyTargetFiles } : {}),
           scoped_rule_upgrade_candidates: upgradeCandidates,
         },
       };

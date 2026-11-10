@@ -887,6 +887,15 @@ export async function handleWebviewAction(
               ? meta.review_status
               : existingMem.review_status;
 
+          const nextTargetSymbols =
+            Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
+              ? meta.target_symbols.map((s) => String(s).trim()).filter(Boolean)
+              : existingMem.target_symbols;
+          const prevTargetSymbols = (existingMem.target_symbols || []).map((s) => s.trim()).filter(Boolean);
+          const sameTargetSymbols =
+            prevTargetSymbols.length === nextTargetSymbols.length &&
+            prevTargetSymbols.every((s, idx) => s === nextTargetSymbols[idx]);
+
           payload = {
             kind: 'memory',
             id: cleanId,
@@ -897,16 +906,24 @@ export async function handleWebviewAction(
             symptom,
             root_cause,
             solution,
-            target_symbols:
-              Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
-                ? meta.target_symbols.map(String)
-                : existingMem.target_symbols,
+            target_symbols: nextTargetSymbols,
             tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
             origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
             supersedes_id: cleanId,
             enabled: preservedEnabled,
             review_status: preservedReviewStatus,
-          };
+            ...(typeof meta.created_commit === 'string' && meta.created_commit.trim()
+              ? { created_commit: meta.created_commit.trim() }
+              : sameTargetSymbols && existingMem.created_commit
+                ? { created_commit: existingMem.created_commit }
+                : {}),
+            created_branch:
+              typeof meta.created_branch === 'string' && meta.created_branch.trim()
+                ? meta.created_branch.trim()
+                : sameTargetSymbols
+                  ? existingMem.created_branch
+                  : undefined,
+          } as ProposalPayload;
         } else {
           const tool = storage.getTool(cleanId);
           if (!tool || !fs.existsSync(tool.script_path) || !isSubpathOf(ws, tool.script_path)) {

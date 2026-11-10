@@ -291,6 +291,16 @@ export class EvoStorage {
 
     if (!fs.existsSync(this.configPath)) {
       fs.writeFileSync(this.configPath, JSON.stringify(DEFAULT_EVO_CONFIG, null, 2), 'utf8');
+    } else {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+        if (parsed && typeof parsed === 'object' && parsed.maxCoreRuleTokens === 2400) {
+          parsed.maxCoreRuleTokens = DEFAULT_EVO_CONFIG.maxCoreRuleTokens;
+          fs.writeFileSync(this.configPath, JSON.stringify(parsed, null, 2), 'utf8');
+        }
+      } catch {
+        // ignore malformed config during initialization
+      }
     }
 
     const evoGitignore = path.join(this.evoDir, '.gitignore');
@@ -307,6 +317,9 @@ export class EvoStorage {
       try {
         const parsed = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
         base = { ...base, ...parsed };
+        if (parsed && parsed.maxCoreRuleTokens === 2400) {
+          base.maxCoreRuleTokens = DEFAULT_EVO_CONFIG.maxCoreRuleTokens;
+        }
       } catch {
         // ignore malformed shared/master config
       }
@@ -599,7 +612,7 @@ export class EvoStorage {
       if (!trigger_cue && l1_contract) {
         const triggerMatch = l1_contract.match(/-\s*\*\*Trigger\*\*:\s*([^\r\n]+)/i);
         if (triggerMatch && triggerMatch[1].trim()) {
-          trigger_cue = triggerMatch[1].trim().slice(0, 90);
+          trigger_cue = triggerMatch[1].trim().slice(0, 120);
         }
       }
 
