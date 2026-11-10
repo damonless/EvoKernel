@@ -915,15 +915,23 @@ export function runCli(argv: string[]): void {
 
   if (isHelpRequested) {
     let targetSubcmd = cmd;
-    if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
-      const sub = args.find(
-        (a, idx) =>
-          idx > 0 &&
-          !a.startsWith('-') &&
-          VALID_COMMANDS.includes(a.toLowerCase()) &&
-          a.toLowerCase() !== 'help'
-      );
-      targetSubcmd = sub ? sub.toLowerCase() : (cmd === 'help' ? (args[1] || '').toLowerCase() : '');
+    if (cmd === 'help' || cmd === '--help' || cmd === '-h' || cmd.startsWith('-')) {
+      let sub = '';
+      for (let idx = 0; idx < args.length; idx++) {
+        const a = args[idx];
+        if (a.startsWith('-')) {
+          if (VALUE_TAKING_FLAGS.has(a) && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
+            idx++;
+          }
+          continue;
+        }
+        const lower = a.toLowerCase();
+        if (lower !== 'help' && VALID_COMMANDS.includes(lower)) {
+          sub = lower;
+          break;
+        }
+      }
+      targetSubcmd = sub || (cmd === 'help' ? (args[1] || '').toLowerCase() : '');
     }
 
     switch (targetSubcmd) {

@@ -98,14 +98,28 @@ export function buildUiSnapshot(
       } catch {}
 
       try {
+        const localOnlyEventIds = new Set([
+          'ceo-team-orchestrator',
+          'dual-agent-team',
+          'evo-dev-verification-sop',
+          'embedded-fsm-lookup-audit',
+          'evo-release-preflight',
+          'local-workflow-skill-isolation-guard',
+          'embedded-power-bms-guardrail',
+        ]);
         const gRows = db.prepare(
           'SELECT id, timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics FROM gatekeeper_events ORDER BY id DESC LIMIT 200'
         ).all() as any[];
-        gatekeeperEvents = gRows.map((r) => ({
-          ...r,
-          passed: r.passed === 1,
-          diagnostics: redactSensitiveDiagnostics(r.diagnostics || '', ws),
-        }));
+        gatekeeperEvents = gRows
+          .filter((r) => !options?.anon || !localOnlyEventIds.has(String(r.target_id || '')))
+          .map((r) => ({
+            ...r,
+            target_name: options?.anon
+              ? redactSensitiveDiagnostics(r.target_name || '', ws)
+              : r.target_name,
+            passed: r.passed === 1,
+            diagnostics: redactSensitiveDiagnostics(r.diagnostics || '', ws),
+          }));
       } catch {}
     }
 
@@ -1433,6 +1447,12 @@ export async function startUiServer(
                   Array.isArray(meta.tags) && meta.tags.length > 0
                     ? meta.tags.map(String)
                     : existingMem.tags,
+                created_commit: meta.created_commit
+                  ? String(meta.created_commit).trim()
+                  : existingMem.created_commit,
+                created_branch: meta.created_branch
+                  ? String(meta.created_branch).trim()
+                  : existingMem.created_branch,
                 origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
                 supersedes_id: cleanId,
                 enabled: preservedEnabled,

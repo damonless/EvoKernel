@@ -699,7 +699,21 @@ if (!entry) {
               const quoteWinArg = (arg) => {
                 const s = String(arg);
                 if (!/[\\s"&|<>^()]/.test(s)) return s;
-                return '"' + s.replace(/(\\\\*)"/g, '$1$1\\\\"').replace(/(\\\\+)$/, '$1$1') + '"';
+                const crt = '"' + s.replace(/(\\\\*)"/g, '$1$1\\\\"').replace(/(\\\\+)$/, '$1$1') + '"';
+                let out = '';
+                let inCmdQuote = false;
+                for (let i = 0; i < crt.length; i++) {
+                  const ch = crt[i];
+                  if (ch === '"') {
+                    inCmdQuote = !inCmdQuote;
+                    out += ch;
+                  } else if (!inCmdQuote && /[&|<>^()]/.test(ch)) {
+                    out += '^^^' + ch;
+                  } else {
+                    out += ch;
+                  }
+                }
+                return out;
               };
               const cmdLine = ['npx.cmd', ...npxArgs.map(quoteWinArg)].join(' ');
               return spawnSync(

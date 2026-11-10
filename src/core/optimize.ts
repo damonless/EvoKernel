@@ -1632,15 +1632,19 @@ export function probeCandidateInWorktree(
     encoding: 'utf8',
   });
   const hasValidGitHead = headCheck.status === 0;
+  const targetHeadSha =
+    hasValidGitHead && typeof headCheck.stdout === 'string' && headCheck.stdout.trim()
+      ? headCheck.stdout.trim()
+      : 'HEAD';
 
   try {
     if (hasValidGitHead) {
       if (fs.existsSync(path.join(wtDir, '.git'))) {
-        child_process.spawnSync('git', ['checkout', '--detach', 'HEAD'], {
+        child_process.spawnSync('git', ['checkout', '--detach', targetHeadSha], {
           cwd: wtDir,
           encoding: 'utf8',
         });
-        const resetRes = child_process.spawnSync('git', ['reset', '--hard', 'HEAD'], {
+        const resetRes = child_process.spawnSync('git', ['reset', '--hard', targetHeadSha], {
           cwd: wtDir,
           encoding: 'utf8',
         });
@@ -1655,7 +1659,7 @@ export function probeCandidateInWorktree(
       if (!usedGitWorktree) {
         const addRes = child_process.spawnSync(
           'git',
-          ['worktree', 'add', '--force', '--detach', wtDir, 'HEAD'],
+          ['worktree', 'add', '--force', '--detach', wtDir, targetHeadSha],
           { cwd: wsRoot, encoding: 'utf8' }
         );
         if (addRes.status === 0) {
@@ -2043,7 +2047,7 @@ export function probeCandidateInWorktree(
       }
     } else if (usedGitWorktree) {
       try {
-        child_process.spawnSync('git', ['reset', '--hard', 'HEAD'], { cwd: wtDir, encoding: 'utf8' });
+        child_process.spawnSync('git', ['reset', '--hard', targetHeadSha], { cwd: wtDir, encoding: 'utf8' });
         child_process.spawnSync('git', ['clean', '-fdx'], { cwd: wtDir, encoding: 'utf8' });
       } catch {}
     }

@@ -399,7 +399,11 @@ function maskSpanPreserveNewlines(src: string, startIdx: number, endIdx: number)
   return chunk;
 }
 
-export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
+export function maskSourceLexical(
+  rawSrc: string,
+  ext = '.ts',
+  options?: { keepStringPlaceholder?: boolean }
+): string {
   if (!rawSrc) return '';
   const len = rawSrc.length;
   const isPy = ext === '.py';
@@ -407,6 +411,7 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
   const isGo = ext === '.go';
   const isRust = ext === '.rs';
   const isCpp = /^\.(?:cpp|hpp|cc|cxx|c|h)$/i.test(ext);
+  const keepStr = Boolean(options?.keepStringPlaceholder);
 
   let out = '';
   let i = 0;
@@ -437,7 +442,9 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
             ch === '\n' && i > 0 && rawSrc[i - 1] === '\r'
               ? (i > 1 ? rawSrc[i - 2] : '')
               : (i > 0 ? rawSrc[i - 1] : '');
-          if (charBeforeBreak !== '\\') {
+          const lineTail = rawSrc.slice(Math.max(0, i - 120), i).replace(/\r$/, '');
+          const isWinPathTail = /[A-Za-z]:\\[^\r\n]*\\$/.test(lineTail);
+          if (charBeforeBreak !== '\\' || isWinPathTail) {
             inLineComment = false;
           }
         } else {
@@ -483,7 +490,7 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
         continue;
       }
       if (ch === '"' && next === '"' && next2 === '"') {
-        out += '   ';
+        out += keepStr ? '"" ' : '   ';
         i += 3;
         inPyTripleDouble = false;
       } else {
@@ -499,7 +506,7 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
         continue;
       }
       if (ch === "'" && next === "'" && next2 === "'") {
-        out += '   ';
+        out += keepStr ? '"" ' : '   ';
         i += 3;
         inPyTripleSingle = false;
       } else {
@@ -526,7 +533,7 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
         continue;
       }
       if (ch === "'") {
-        out += ' ';
+        out += keepStr ? '""' : ' ';
         inSingleQuote = false;
       } else {
         out += ' ';
@@ -552,7 +559,7 @@ export function maskSourceLexical(rawSrc: string, ext = '.ts'): string {
         continue;
       }
       if (ch === '"') {
-        out += ' ';
+        out += keepStr ? '""' : ' ';
         inDoubleQuote = false;
       } else {
         out += ' ';
@@ -989,14 +996,15 @@ export function stripCStyleComments(input: string, ext?: string): string {
           identEnd++;
         }
         const isClosedAfterIdent = identEnd < len && input[identEnd] === "'";
-        if (!isClosedAfterIdent) {
+        const isUrlScheme = input.slice(identEnd, identEnd + 3) === '://';
+        if (!isClosedAfterIdent && !isUrlScheme) {
           const prevNonSpace = out.trimEnd().slice(-1);
           const looksLikeRustLifetime =
             prevNonSpace === '&' ||
             prevNonSpace === '<' ||
-            prevNonSpace === '+' ||
-            prevNonSpace === ':' ||
-            prevNonSpace === ',';
+            ((prevNonSpace === '+' || prevNonSpace === ':' || prevNonSpace === ',') &&
+              /\b(?:fn|impl|pub|trait)\b/.test(input) &&
+              /^(?:\s*[,+>)\]:;{]|$)/.test(input.slice(identEnd)));
           if (looksLikeRustLifetime) {
             out += ch;
             i++;
@@ -1065,11 +1073,15 @@ export function computeStructuralSkeletonHash(code: string, ext = '.ts'): string
   // 1. Lexically mask comments and string/character literals while preserving Rust lifetimes and JS/TS template ${...} expressions
   let stripped = code;
   if (ext === '.sh' || ext === '.ps1' || ext === '.rb') {
-    stripped = maskSourceLexical(stripped.replace(/(?:^|[ \t])#[^\r\n]*/gm, ' '), ext);
+    stripped = maskSourceLexical(stripped.replace(/(?:^|[ \t])#[^\r\n]*/gm, ' '), ext, {
+      keepStringPlaceholder: true,
+    });
   } else if (ext === '.sql' || ext === '.lua') {
-    stripped = maskSourceLexical(stripped.replace(/--[^\r\n]*/g, ' '), ext);
+    stripped = maskSourceLexical(stripped.replace(/--[^\r\n]*/g, ' '), ext, {
+      keepStringPlaceholder: true,
+    });
   } else {
-    stripped = maskSourceLexical(stripped, ext);
+    stripped = maskSourceLexical(stripped, ext, { keepStringPlaceholder: true });
   }
 
   // 3. Strip common diagnostic/logging lines (console.(log|debug|info|warn|error)(...), printf(...), printk(...), logging.(debug|info|warning)(...))
@@ -1431,7 +1443,7 @@ function collectContainerRangesInLines(lines: string[], ext = '.ts'): ContainerR
 
     if (isRust) {
       const implMatch = cleanLine.match(
-        /^\s*(?:unsafe\s+)?impl(?:<[^>]*>)?\s+(?:[A-Za-z0-9_:<>]+\s+for\s+)?([A-Za-z_]\w*)\b/
+        /^\s*(?:unsafe\s+)?impl(?:<[^>]*>)?\s+(?:[^{]+?\bfor\s+)?([A-Za-z_]\w*)\b/
       );
       if (implMatch) {
         const end = findBraceBlockEnd(lines, i, ext, mLines);
@@ -1458,7 +1470,7 @@ function collectContainerRangesInLines(lines: string[], ext = '.ts'): ContainerR
     }
 
     const classMatch = cleanLine.match(
-      /^\s*(?:export\s+)?(?:default\s+)?(?:(?:abstract|public|private|protected|internal|final|sealed|static|typedef)\s+)*(?:class|struct|interface)\s+([A-Za-z_]\w*)\b/
+      /^\s*(?:template\s*<[^>]*>\s*)?(?:export\s+)?(?:default\s+)?(?:(?:abstract|public|private|protected|internal|final|sealed|static|typedef)\s+)*(?:class|struct|interface)\s+([A-Za-z_]\w*)\b/
     );
     if (classMatch) {
       const trimmed = cleanLine.trim();
@@ -1645,6 +1657,15 @@ export function findAllSymbolDeclarationsInLines(
         continue;
       }
 
+      if (classHint) {
+        const anyQualifiedMatch = cleanLine.match(
+          new RegExp(`\\b([A-Za-z_]\\w*)\\s*::\\s*${esc}\\b`)
+        );
+        if (anyQualifiedMatch && anyQualifiedMatch[1] !== classHint) {
+          continue;
+        }
+      }
+
       if (respectOtherClasses && isInsideOtherClass(i)) {
         continue;
       }
@@ -1757,7 +1778,12 @@ export function findAllSymbolDeclarationsInLines(
         }
       }
     }
-    if (rawMatches.length === 0 && targetClassRanges.length === 0 && otherClassRanges.length === 0) {
+    if (
+      rawMatches.length === 0 &&
+      targetClassRanges.length === 0 &&
+      otherClassRanges.length === 0 &&
+      new RegExp(`\\b${escapeRegExp(classHint)}\\b`).test(lines.join('\n'))
+    ) {
       rawMatches = collectInRange(0, lines.length - 1, true);
     }
   } else {

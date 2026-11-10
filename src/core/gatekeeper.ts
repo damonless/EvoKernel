@@ -1513,7 +1513,12 @@ export function captureWorkspaceRollbackSnapshot(
         if (rel.startsWith('"') && rel.endsWith('"')) rel = rel.slice(1, -1);
         rel = rel.replace(/\\/g, '/');
         if (!rel || rel === '.evo/.cache' || rel.startsWith('.evo/.cache/')) continue;
-        gitDirtyFiles.add(rel);
+        const fullDirtyPath = path.join(rootDir, rel);
+        if (fs.existsSync(fullDirtyPath)) {
+          gitDirtyFiles.add(rel);
+        } else {
+          sig.set(rel, `GIT_STATUS:${status}`);
+        }
         gitDirtyStatuses.set(rel, status);
       }
     }
@@ -1672,7 +1677,14 @@ export function restoreWorkspaceFromSnapshot(
     } else if (beforeSig !== sig) {
       mutatedFiles.push(filePath);
       const fullMutatedPath = path.join(rootDir, filePath);
-      if (preSnapshot.contents.has(filePath)) {
+      if (beforeSig.startsWith('GIT_STATUS:')) {
+        try {
+          if (fs.existsSync(fullMutatedPath)) {
+            fs.unlinkSync(fullMutatedPath);
+            restoredFiles.push(filePath);
+          }
+        } catch {}
+      } else if (preSnapshot.contents.has(filePath)) {
         try {
           fs.mkdirSync(path.dirname(fullMutatedPath), { recursive: true });
           fs.writeFileSync(fullMutatedPath, preSnapshot.contents.get(filePath)!);
@@ -1692,8 +1704,16 @@ export function restoreWorkspaceFromSnapshot(
       if (beforeSig.startsWith('GIT_STATUS:')) {
         continue;
       }
-      mutatedFiles.push(filePath);
       const fullMutatedPath = path.join(rootDir, filePath);
+      try {
+        if (fs.existsSync(fullMutatedPath)) {
+          const stat = fs.statSync(fullMutatedPath);
+          if (stat.isFile() && computeFileMutationSig(fullMutatedPath, stat) === beforeSig) {
+            continue;
+          }
+        }
+      } catch {}
+      mutatedFiles.push(filePath);
       if (preSnapshot.contents.has(filePath)) {
         try {
           fs.mkdirSync(path.dirname(fullMutatedPath), { recursive: true });
@@ -2876,10 +2896,18 @@ export class EvoGatekeeper {
         (rawProposal as any).created_commit.trim()
           ? (rawProposal as any).created_commit.trim()
           : '';
+      const baseFingerprintsMatchLive =
+        hasCompleteBaseFingerprints &&
+        targetSymbols.every(
+          (s) =>
+            baseMem!.ast_fingerprints[s]?.ast_hash &&
+            baseMem!.ast_fingerprints[s]?.ast_hash === extractedMemoryFingerprints[s]?.ast_hash
+        );
       const preserveHistoricalAnchor =
         sameTargetSymbols &&
         Boolean(baseMem?.created_commit) &&
-        (!explicitCommit || explicitCommit === baseMem!.created_commit);
+        (explicitCommit === baseMem!.created_commit ||
+          (!explicitCommit && (baseFingerprintsMatchLive || !hasCompleteBaseFingerprints)));
 
       const currentCommit =
         explicitCommit ||

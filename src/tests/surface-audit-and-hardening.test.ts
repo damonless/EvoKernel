@@ -3679,6 +3679,30 @@ process.exit(hasRule ? 0 : 1);
         'Same-size & same-mtime content mutation must be detected via SHA-1 digest'
       );
       assert.strictEqual(fs.readFileSync(file0, 'utf8'), 'committed_0');
+
+      // Recreating a pre-deleted file or shifting the maxFiles scan window with a new early file:
+      const snapWindow = captureWorkspaceRollbackSnapshot(ws1, 3);
+      fs.writeFileSync(path.join(ws1, 'pre_deleted.txt'), 'rogue_recreated', 'utf8');
+      fs.writeFileSync(path.join(ws1, '000_early_rogue.txt'), 'rogue_early', 'utf8');
+      const sigWindow = captureWorkspaceMutationSignature(ws1, 3);
+      const winRestore = restoreWorkspaceFromSnapshot(ws1, snapWindow, sigWindow);
+      assert.ok(
+        winRestore.mutatedFiles.includes('pre_deleted.txt'),
+        'Recreating a pre-deleted file must be detected as a workspace mutation'
+      );
+      assert.ok(
+        !fs.existsSync(path.join(ws1, 'pre_deleted.txt')),
+        'Recreated pre-deleted file must be unlinked on rollback'
+      );
+      assert.ok(
+        winRestore.mutatedFiles.includes('000_early_rogue.txt') &&
+          !fs.existsSync(path.join(ws1, '000_early_rogue.txt')),
+        'Early rogue file must be detected and unlinked'
+      );
+      assert.ok(
+        !winRestore.mutatedFiles.some((f) => f.startsWith('file_')),
+        'Untouched tracked files pushed out of maxFiles window must not be falsely flagged as mutated'
+      );
     } finally {
       safeCleanup(ws1);
     }
@@ -3781,6 +3805,25 @@ process.exit(hasRule ? 0 : 1);
     const rustEngineB = extractSymbolBlockFromLines(rustLines, 'run', 'EngineB', '.rs');
     assert.ok(rustEngineB && rustEngineB.blockCode.includes('22') && !rustEngineB.blockCode.includes('11'));
 
+    const rustGenericTraitLines = [
+      "impl<'a, T: Clone> MyTrait<'a, T> for EngineB<'a> {",
+      '    pub fn run(&self) -> i32 { 33 }',
+      '}',
+    ];
+    const rustTraitEngineB = extractSymbolBlockFromLines(rustGenericTraitLines, 'run', 'EngineB', '.rs');
+    assert.ok(rustTraitEngineB && rustTraitEngineB.blockCode.includes('33'));
+
+    const cppOutOfLineOtherClass = [
+      'void Client::close() {',
+      '  return;',
+      '}',
+    ];
+    assert.strictEqual(
+      extractSymbolBlockFromLines(cppOutOfLineOtherClass, 'close', 'Server', '.cpp'),
+      null,
+      'Out-of-line C++ Client::close must never match classHint=Server'
+    );
+
     // Defect 4: Unqualified method name with multiple classes must not merge across classes
     const tsTwoClasses = [
       'export class ServiceA {',
@@ -3855,12 +3898,31 @@ process.exit(hasRule ? 0 : 1);
     assert.ok(strippedJs.includes("'http://example.com'"), 'Single-quoted URL in JS must not be stripped as comment');
     assert.ok(!strippedJs.includes('real comment'));
 
+    const jsObjUrlNoExt = "const o = { u: 'http://example.com' }; // trailing comment";
+    const strippedJsNoExt = stripCStyleComments(jsObjUrlNoExt);
+    assert.ok(
+      strippedJsNoExt.includes("'http://example.com'") && strippedJsNoExt.includes('};'),
+      'Single-arg stripCStyleComments must not treat { u: \'http://...\' } as a Rust lifetime'
+    );
+    assert.ok(!strippedJsNoExt.includes('trailing comment'));
+
+    assert.strictEqual(
+      computeStructuralSkeletonHash('function f() { return "hello"; }', '.ts'),
+      computeStructuralSkeletonHash('function f() { return "world"; }', '.ts'),
+      'Changing string literal text must preserve structural skeleton hash'
+    );
+    assert.notStrictEqual(
+      computeStructuralSkeletonHash('function f() { return "hello"; }', '.ts'),
+      computeStructuralSkeletonHash('function f() { return; }', '.ts'),
+      'Removing string literal return value must change structural skeleton hash'
+    );
+
     // --- Defect 8: parseFrontmatter single-quoted inline arrays & UI/VSCode non-empty array fallbacks ---
     const parsedFm = parseFrontmatter(
-      "---\nid: test-fm\ntags: ['alpha', 'beta']\ntransfer_scenarios: [one, two]\n---\nBody text"
+      "---\nid: test-fm\ntags: ['alpha', 'beta']\ntransfer_scenarios: ['first', 'second, with comma']\n---\nBody text"
     );
     assert.deepStrictEqual(parsedFm.meta.tags, ['alpha', 'beta']);
-    assert.deepStrictEqual(parsedFm.meta.transfer_scenarios, ['one', 'two']);
+    assert.deepStrictEqual(parsedFm.meta.transfer_scenarios, ['first', 'second, with comma']);
 
     // --- Defect 9: Lexicon docx/word mapping & non-collapsing ASCII hardware domain terms ---
     assert.strictEqual(getCanonicalToken('docx'), 'document');
@@ -4030,6 +4092,56 @@ process.exit(hasRule ? 0 : 1);
       !BOOT_MCP_STUB.includes('shell: isWin'),
       'BOOT_MCP_STUB must not use shell: isWin which splits paths with spaces'
     );
+    if (process.platform === 'win32') {
+      const cmdTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-win-cmd-'));
+      try {
+        const echoScript = path.join(cmdTmp, 'echo.js');
+        fs.writeFileSync(echoScript, 'console.log(JSON.stringify(process.argv.slice(2)));\n', 'utf8');
+        const mockNpxCmd = path.join(cmdTmp, 'mock-npx.cmd');
+        fs.writeFileSync(mockNpxCmd, `@"${process.execPath}" "${echoScript}" %*\r\n`, 'utf8');
+        const quoteWinArg = (arg: string) => {
+          const s = String(arg);
+          if (!/[\s"&|<>^()]/.test(s)) return s;
+          const crt = '"' + s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1') + '"';
+          let out = '';
+          let inCmdQuote = false;
+          for (let i = 0; i < crt.length; i++) {
+            const ch = crt[i];
+            if (ch === '"') {
+              inCmdQuote = !inCmdQuote;
+              out += ch;
+            } else if (!inCmdQuote && /[&|<>^()]/.test(ch)) {
+              out += '^^^' + ch;
+            } else {
+              out += ch;
+            }
+          }
+          return out;
+        };
+        const trickyArgs = [
+          '--workspace',
+          'C:\\Users\\John & Jane\\My (Project) ^1\\',
+          'hook',
+          'pre-tool',
+          '--payload',
+          '{"tool":"bash","cmd":"echo a & echo (b) ^1"}',
+        ];
+        const cmdLine = [quoteWinArg(mockNpxCmd), ...trickyArgs.map(quoteWinArg)].join(' ');
+        const winRes = child_process.spawnSync(
+          process.env.ComSpec || 'cmd.exe',
+          ['/d', '/s', '/c', '"' + cmdLine + '"'],
+          { encoding: 'utf8', windowsVerbatimArguments: true }
+        );
+        assert.strictEqual(winRes.status, 0);
+        assert.deepStrictEqual(
+          JSON.parse(winRes.stdout.trim()),
+          trickyArgs,
+          'Windows cmd.exe /d /s /c + quoteWinArg must preserve spaces, quotes, &, (), and ^ across .cmd %* shims'
+        );
+      } finally {
+        safeCleanup(cmdTmp);
+      }
+    }
   });
 
 });

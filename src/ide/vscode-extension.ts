@@ -912,6 +912,12 @@ export async function handleWebviewAction(
               Array.isArray(meta.tags) && meta.tags.length > 0
                 ? meta.tags.map(String)
                 : existingMem.tags,
+            created_commit: meta.created_commit
+              ? String(meta.created_commit).trim()
+              : existingMem.created_commit,
+            created_branch: meta.created_branch
+              ? String(meta.created_branch).trim()
+              : existingMem.created_branch,
             origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
             supersedes_id: cleanId,
             enabled: preservedEnabled,

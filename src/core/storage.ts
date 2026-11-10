@@ -298,6 +298,21 @@ export class EvoStorage {
       fs.writeFileSync(evoGitignore, '/.cache/\n/optimize/\n/archive/\n', 'utf8');
     }
 
+    const legacyTopLevelTsRule = path.join(this.rulesDir, 'esm-typescript-imports.md');
+    const canonicalScopedTsRule = path.join(this.rulesDir, 'scoped', 'esm-typescript-imports.md');
+    if (fs.existsSync(legacyTopLevelTsRule)) {
+      try {
+        if (fs.existsSync(canonicalScopedTsRule)) {
+          fs.unlinkSync(legacyTopLevelTsRule);
+        } else {
+          const raw = fs.readFileSync(legacyTopLevelTsRule, 'utf8');
+          if (/^core:\s*false\b/m.test(raw)) {
+            fs.renameSync(legacyTopLevelTsRule, canonicalScopedTsRule);
+          }
+        }
+      } catch {}
+    }
+
     return this.getConfig();
   }
 
@@ -1309,12 +1324,16 @@ export function parseFrontmatter(raw: string): { meta: Record<string, unknown>; 
         if (!inner) {
           meta[key] = [];
         } else {
-          const items = inner.match(/'(?:''|[^'])*'|"(?:\\.|[^"])*"|[^,]+/g) || [];
+          const items =
+            inner.match(/\s*(?:'(?:''|\\.|[^'])*'|"(?:\\.|[^"])*"|[^,]+)\s*/g) || [];
           meta[key] = items
             .map((item) => {
               const t = item.trim();
               if (t.length >= 2 && t.startsWith("'") && t.endsWith("'")) {
-                return t.slice(1, -1).replace(/''/g, "'");
+                return t
+                  .slice(1, -1)
+                  .replace(/''/g, "'")
+                  .replace(/\\'/g, "'");
               }
               if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
                 try {
