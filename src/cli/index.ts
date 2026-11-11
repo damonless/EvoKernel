@@ -844,6 +844,7 @@ export interface McpLaunchTarget {
   source: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
   isWorkspace: boolean;
 }
 
@@ -872,11 +873,25 @@ function extractLaunchTargetFromEntry(
   isWorkspace: boolean
 ): McpLaunchTarget | undefined {
   if (!entry || typeof entry !== 'object') return undefined;
+  let env: Record<string, string> | undefined;
+  const rawEnv =
+    entry.env && typeof entry.env === 'object' && !Array.isArray(entry.env)
+      ? entry.env
+      : entry.environment && typeof entry.environment === 'object' && !Array.isArray(entry.environment)
+        ? entry.environment
+        : undefined;
+  if (rawEnv) {
+    env = {};
+    for (const [k, v] of Object.entries(rawEnv)) {
+      if (v !== undefined && v !== null) env[k] = String(v);
+    }
+  }
   if (typeof entry.command === 'string' && entry.command.trim()) {
     return {
       source,
       command: entry.command.trim(),
       args: Array.isArray(entry.args) ? entry.args.map(String) : [],
+      ...(env ? { env } : {}),
       isWorkspace,
     };
   }
@@ -885,6 +900,7 @@ function extractLaunchTargetFromEntry(
       source,
       command: entry.command[0].trim(),
       args: entry.command.slice(1).map(String),
+      ...(env ? { env } : {}),
       isWorkspace,
     };
   }
@@ -1036,6 +1052,7 @@ export function checkMcpGatewayConfigs(
 
 const MCP_STDIO_PROBE_SCRIPT = `
 const { spawn } = require('node:child_process');
+const path = require('node:path');
 const cfg = JSON.parse(process.env.EVO_MCP_PROBE_CFG || '{}');
 const t0 = Date.now();
 const isWin = process.platform === 'win32';
@@ -1044,9 +1061,14 @@ let cArgs = Array.isArray(cfg.args) ? cfg.args : [];
 if (/^node(?:\\.exe)?$/i.test(cmd)) {
   cmd = process.execPath;
 }
+const childEnv = {
+  ...process.env,
+  ...(cfg.env && typeof cfg.env === 'object' ? cfg.env : {}),
+  EVO_WORKSPACE: cfg.cwd,
+};
 let child;
 try {
-  if (isWin && /^(?:npx|npm|pnpm|yarn)(?:\\.cmd)?$/i.test(cmd)) {
+  if (isWin && (/\\.(?:cmd|bat)$/i.test(cmd) || /^(?:npx|npm|pnpm|yarn)$/i.test(cmd))) {
     const q = (arg) => {
       const s = String(arg);
       if (!/[\\s"&|<>^()%]/.test(s)) return s;
@@ -1068,18 +1090,23 @@ try {
       }
       return out;
     };
-    const full = [q(/\\.cmd$/i.test(cmd) ? cmd : cmd + '.cmd'), ...cArgs.map(q)].join(' ');
+    const rawWinCmd = /\\.(?:cmd|bat)$/i.test(cmd) ? cmd : cmd + '.cmd';
+    const resolvedWinCmd = /[\\\\/]/.test(rawWinCmd)
+      ? path.resolve(cfg.cwd || process.cwd(), rawWinCmd)
+      : rawWinCmd;
+    const quotedCmd = /^"/.test(q(resolvedWinCmd)) ? q(resolvedWinCmd) : '"' + resolvedWinCmd + '"';
+    const full = [quotedCmd, ...cArgs.map(q)].join(' ');
     child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', '"' + full + '"'], {
       cwd: cfg.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsVerbatimArguments: true,
-      env: { ...process.env, EVO_WORKSPACE: cfg.cwd },
+      env: childEnv,
     });
   } else {
     child = spawn(cmd, cArgs, {
       cwd: cfg.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, EVO_WORKSPACE: cfg.cwd },
+      env: childEnv,
     });
   }
 } catch (err) {
@@ -1141,7 +1168,12 @@ child.stdout.on('data', (d) => {
 child.on('close', (code) => {
   clearTimeout(timer);
   if (!settled) {
-    const snippet = errBuf.trim().split(/\\r?\\n/)[0] || ('Process exited with code ' + code);
+    const errLines = errBuf
+      .trim()
+      .split(/\\r?\\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const snippet = errLines.slice(0, 2).join(' ') || ('Process exited with code ' + code);
     finish({ reachable: false, toolCount: 0, latencyMs: Date.now() - t0, error: snippet });
   }
 });
@@ -1183,6 +1215,7 @@ export function probeMcpServerStdioSync(
         EVO_MCP_PROBE_CFG: JSON.stringify({
           command: target.command,
           args: target.args,
+          env: target.env,
           cwd: ws,
           timeoutMs,
         }),
@@ -2166,6 +2199,8 @@ export function runCli(argv: string[]): void {
           : 'Not configured — run `npx -y evo-kernel init` to register';
       logDoctor(`  ├─ ${mcpIcon} Meta-MCP Config       : ${mcpConfigDesc}`);
 
+      const probeNeedsLocalInstall =
+        Boolean(probeResult.error) && /npm install --save-dev evo-kernel/i.test(probeResult.error || '');
       let probeDesc = noProbe
         ? 'Skipped (--no-probe)'
         : !mcpRegistered
@@ -2174,7 +2209,9 @@ export function runCli(argv: string[]): void {
       if (probeResult.attempted) {
         probeDesc = probeResult.reachable
           ? `Reachable in ${probeResult.latencyMs ?? 0}ms (v${probeResult.serverVersion || 'unknown'} · ${probeResult.toolCount}/5 meta-tools verified via ${probeResult.source})`
-          : `Handshake failed via ${probeResult.source} (${probeResult.error || 'unreachable'}) — run \`npx -y evo-kernel init\``;
+          : probeNeedsLocalInstall
+            ? `Handshake failed via ${probeResult.source} (${probeResult.error})`
+            : `Handshake failed via ${probeResult.source} (${probeResult.error || 'unreachable'}) — run \`npx -y evo-kernel init\``;
       }
       logDoctor(`  └─ ${probeIcon} MCP Live Handshake    : ${probeDesc}`);
       if (!showRoi) {
@@ -2201,7 +2238,11 @@ export function runCli(argv: string[]): void {
       } else if (staleNpxPath) {
         logDoctor('  ⚠️  Verdict: Stale _npx path detected in MCP config — run `npx -y evo-kernel init` to repair');
       } else if (probeResult.attempted && !probeResult.reachable) {
-        logDoctor('  ⚠️  Verdict: MCP stdio handshake failed — run `npx -y evo-kernel init` and reload your IDE');
+        logDoctor(
+          probeNeedsLocalInstall
+            ? '  ⚠️  Verdict: MCP stdio handshake failed — run `npm install --save-dev evo-kernel` (or `npm install -g evo-kernel`) and reload your IDE'
+            : '  ⚠️  Verdict: MCP stdio handshake failed — run `npx -y evo-kernel init` and reload your IDE'
+        );
       } else if (hasVersionDrift) {
         logDoctor('  ⚠️  Verdict: Workspace version/seed drift detected — run `npx -y evo-kernel init` to sync');
       } else if (staleMems > 0) {

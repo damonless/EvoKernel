@@ -37,24 +37,6 @@ function scrubAnonString(raw: string, ws?: string): string {
   return out;
 }
 
-let _geminiCache: { dir: string; ts: number; entries: Set<string> } | null = null;
-function getHomeGeminiEntries(homeDir: string): Set<string> {
-  const dir = path.join(homeDir, '.gemini');
-  const now = Date.now();
-  if (_geminiCache && _geminiCache.dir === dir && now - _geminiCache.ts < 30000) {
-    return _geminiCache.entries;
-  }
-  let entries = new Set<string>();
-  try {
-    entries = new Set(fs.readdirSync(dir));
-  } catch {}
-  _geminiCache = { dir, ts: now, entries };
-  return entries;
-}
-try {
-  getHomeGeminiEntries(os.homedir());
-} catch {}
-
 export function isProjectDirectoryFast(dir: string): boolean {
   try {
     const resolved = path.resolve(dir);
@@ -62,7 +44,9 @@ export function isProjectDirectoryFast(dir: string): boolean {
     const root = path.parse(resolved).root;
     if (
       resolved.toLowerCase() === home.toLowerCase() ||
-      resolved.toLowerCase() === root.toLowerCase()
+      resolved.toLowerCase() === root.toLowerCase() ||
+      (path.dirname(resolved).toLowerCase() === home.toLowerCase() &&
+        /^\.(?:claude|gemini|cursor|codex|windsurf|cline|roo|codeium)$/i.test(path.basename(resolved)))
     ) {
       return false;
     }
@@ -370,16 +354,11 @@ export function inspectMcpTaxSnapshot(
     const home = os.homedir();
     inspectConfigFile(path.join(home, '.claude.json'), 'global:~/.claude.json');
     inspectConfigFile(path.join(home, '.cursor', 'mcp.json'), 'global:~/.cursor/mcp.json');
-    const geminiEntries = getHomeGeminiEntries(home);
-    if (geminiEntries.has('settings.json')) {
-      inspectConfigFile(path.join(home, '.gemini', 'settings.json'), 'global:~/.gemini/settings.json');
-    }
-    if (geminiEntries.has('antigravity')) {
-      inspectConfigFile(
-        path.join(home, '.gemini', 'antigravity', 'mcp_config.json'),
-        'global:~/.gemini/antigravity/mcp_config.json'
-      );
-    }
+    inspectConfigFile(path.join(home, '.gemini', 'settings.json'), 'global:~/.gemini/settings.json');
+    inspectConfigFile(
+      path.join(home, '.gemini', 'antigravity', 'mcp_config.json'),
+      'global:~/.gemini/antigravity/mcp_config.json'
+    );
     inspectConfigFile(path.join(home, '.codex', 'config.toml'), 'global:~/.codex/config.toml');
     inspectConfigFile(
       path.join(home, '.codeium', 'windsurf', 'mcp_config.json'),
@@ -851,7 +830,7 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
       : effectiveIncludeGlobal || Boolean(options?.globalOnly)
         ? [
             path.join(home, '.claude', 'CLAUDE.md'),
-            ...(getHomeGeminiEntries(home).has('GEMINI.md') ? [path.join(home, '.gemini', 'GEMINI.md')] : []),
+            path.join(home, '.gemini', 'GEMINI.md'),
             path.join(home, '.codex', 'AGENTS.md'),
           ]
         : [];

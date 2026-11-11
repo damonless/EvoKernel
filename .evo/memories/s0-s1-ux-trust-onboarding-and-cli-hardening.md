@@ -2,16 +2,16 @@
 id: s0-s1-ux-trust-onboarding-and-cli-hardening
 title: "S0-S1 UX/DX Overhaul: Zero Fabricated Fallbacks, Responsive Workbench, MCP Startup & CLI Hardening"
 l0_summary: "S0-S1 UX & DX overhaul: removed fabricated fallbacks, fixed 1440/mobile UI, skipped _npx cache, hardened CLI & recall receipts."
-created_commit: "d077ff6"
+created_commit: "540dc0f"
 created_branch: "main"
 target_symbols: ["src/templates/ui-client.ts#renderUiClientHtml","src/cli/visualizer.ts#renderEvoStats","src/cli/score.ts#renderScoreAnsi","src/cli/index.ts#runCli","src/cli/harness.ts#resolveInstalledEvoKernelRoot"]
-ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":5769,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"f5a92b27b9f5d033"},"src/cli/visualizer.ts#renderEvoStats":{"symbol":"src/cli/visualizer.ts#renderEvoStats","file_path":"src/cli/visualizer.ts","file":"src/cli/visualizer.ts","kind":"function","start_line":250,"end_line":373,"signature":"export function renderEvoStats(","ast_hash":"2bfb0fac0f3b54c0"},"src/cli/score.ts#renderScoreAnsi":{"symbol":"src/cli/score.ts#renderScoreAnsi","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":1146,"end_line":1288,"signature":"export function renderScoreAnsi(","ast_hash":"19092a4fc3708f18"},"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1315,"end_line":2362,"signature":"export function runCli(argv: string[]): void","ast_hash":"2f942e80ff6648ae"},"src/cli/harness.ts#resolveInstalledEvoKernelRoot":{"symbol":"src/cli/harness.ts#resolveInstalledEvoKernelRoot","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":257,"end_line":283,"signature":"export function resolveInstalledEvoKernelRoot(): string | null","ast_hash":"a01aec8f34b9a763"}}
+ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":5770,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"88b58f2f81597d22"},"src/cli/visualizer.ts#renderEvoStats":{"symbol":"src/cli/visualizer.ts#renderEvoStats","file_path":"src/cli/visualizer.ts","file":"src/cli/visualizer.ts","kind":"function","start_line":250,"end_line":373,"signature":"export function renderEvoStats(","ast_hash":"2bfb0fac0f3b54c0"},"src/cli/score.ts#renderScoreAnsi":{"symbol":"src/cli/score.ts#renderScoreAnsi","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":1125,"end_line":1267,"signature":"export function renderScoreAnsi(","ast_hash":"19092a4fc3708f18"},"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1348,"end_line":2403,"signature":"export function runCli(argv: string[]): void","ast_hash":"58647406e0773a04"},"src/cli/harness.ts#resolveInstalledEvoKernelRoot":{"symbol":"src/cli/harness.ts#resolveInstalledEvoKernelRoot","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":257,"end_line":283,"signature":"export function resolveInstalledEvoKernelRoot(): string | null","ast_hash":"a01aec8f34b9a763"}}
 tags: ["ux","workbench","trust","cli","onboarding","mcp"]
 origin: "evolved"
 supersedes_id: "ux-audit-fabricated-fallbacks-and-pages-leak"
 review_status: "pending"
 created_at: "2026-11-07T18:55:36.052Z"
-updated_at: "2026-11-11T08:12:04.133Z"
+updated_at: "2026-11-11T08:48:10.357Z"
 ---
 
 ## Symptom

@@ -670,8 +670,8 @@ if (homeDir) {
   candidates.push(path.join(homeDir, '.gemini', 'extensions', 'evo-kernel', 'dist', 'cli', 'index.js'));
 }
 
-let entry = candidates.find((c) => fs.existsSync(c));
-if (!entry) {
+let entry = process.env.EVO_FORCE_NPX === '1' ? undefined : candidates.find((c) => fs.existsSync(c));
+if (!entry && process.env.EVO_FORCE_NPX !== '1') {
   const buildScript = path.join(wsRoot, 'scripts', 'build.mjs');
   if (fs.existsSync(buildScript)) {
     spawnSync(process.execPath, [buildScript], { cwd: wsRoot, stdio: 'ignore' });
@@ -755,8 +755,9 @@ if (!entry) {
       }
     } catch {}
   }
-  console.error('[EvoKernel] Error: evo-kernel not found in workspace node_modules or dist.');
-  console.error('Please run: npm install --save-dev evo-kernel (or npm install -g evo-kernel)');
+  console.error(
+    '[EvoKernel] Error: evo-kernel not found in workspace node_modules or dist. Please run: npm install --save-dev evo-kernel (or npm install -g evo-kernel)'
+  );
   process.exit(1);
 }
 process.argv = [process.argv[0], entry, ...forwardedArgs];

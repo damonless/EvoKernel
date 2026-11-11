@@ -44,7 +44,7 @@ import {
 } from '../core/gatekeeper.js';
 import { computeStructuralSkeletonHash } from '../core/memory.js';
 import { compileLexiconConfig, getCanonicalToken } from '../core/lexicon.js';
-import { buildUiSnapshot, startUiServer } from '../cli/ui.js';
+import { buildUiSnapshot, exportUiHtml, startUiServer } from '../cli/ui.js';
 import {
   COMMAND_VALID_FLAGS,
   VALUE_TAKING_FLAGS,
@@ -6048,6 +6048,165 @@ process.exit(hasRule ? 0 : 1);
       safeCleanup(wsGemini);
       safeCleanup(wsEmpty);
       safeCleanup(emptyHome);
+    }
+  });
+
+  test('75. [Red-Team Reviewer Hardening] doctor probes .mcp.json env + .cmd wrapper with npm install offline guidance, score avoids stale ~/.gemini cache & host config misclassification, and Pages/Workbench embed data-URI favicon', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-rt75-home-'));
+    const wsOffline = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-rt75-offline-'));
+    const pagesCheckDir = path.resolve(process.cwd(), 'public');
+    try {
+      // Seed a fake global plugin under fakeHome to prove EVO_FORCE_NPX=1 skips local/global candidates too
+      const fakePluginCli = path.join(fakeHome, '.gemini', 'config', 'plugins', 'evo-kernel', 'dist', 'cli');
+      fs.mkdirSync(fakePluginCli, { recursive: true });
+      fs.copyFileSync(cliEntry, path.join(fakePluginCli, 'index.js'));
+
+      runInit(wsOffline, ['claude'], { globalHomeDir: fakeHome });
+
+      // Point .mcp.json to a custom wrapper script (.cmd on Windows, .sh on POSIX) + entry.env flags
+      const isWin = process.platform === 'win32';
+      const wrapperRel = isWin ? './.evo/custom-wrapper.cmd' : './.evo/custom-wrapper.sh';
+      const wrapperAbs = path.join(wsOffline, '.evo', isWin ? 'custom-wrapper.cmd' : 'custom-wrapper.sh');
+      if (isWin) {
+        fs.writeFileSync(
+          wrapperAbs,
+          `@"${process.execPath}" "%~dp0boot-mcp.mjs" %*\r\n`,
+          'utf8'
+        );
+      } else {
+        fs.writeFileSync(
+          wrapperAbs,
+          `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/boot-mcp.mjs" "$@"\n`,
+          { encoding: 'utf8', mode: 0o755 }
+        );
+        fs.chmodSync(wrapperAbs, 0o755);
+      }
+      fs.writeFileSync(
+        path.join(wsOffline, '.mcp.json'),
+        JSON.stringify(
+          {
+            mcpServers: {
+              'evo-kernel': {
+                command: wrapperRel,
+                args: ['mcp'],
+                env: {
+                  EVO_FORCE_NPX: '1',
+                  EVO_DISABLE_NPX_FALLBACK: '1',
+                },
+              },
+            },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+
+      const baseEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+        APPDATA: path.join(fakeHome, 'AppData', 'Roaming'),
+      };
+      delete baseEnv.EVO_FORCE_NPX;
+      delete baseEnv.EVO_DISABLE_NPX_FALLBACK;
+
+      // (1) doctor --json must honor entry.env, execute .cmd/.sh wrapper cleanly, and preserve npm install --save-dev evo-kernel
+      const docJsonRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--json', '--workspace', wsOffline],
+        { encoding: 'utf8', env: baseEnv, timeout: 15000 }
+      );
+      assert.strictEqual(docJsonRes.status, 0, docJsonRes.stderr);
+      const docJson = JSON.parse(docJsonRes.stdout);
+      assert.strictEqual(docJson.mcpProbe.reachable, false, `Expected offline EVO_FORCE_NPX probe failure, got ${JSON.stringify(docJson.mcpProbe)}`);
+      assert.match(
+        String(docJson.mcpProbe.error || ''),
+        /npm install --save-dev evo-kernel/,
+        `Expected npm install guidance in mcpProbe.error, got: ${docJson.mcpProbe.error}`
+      );
+
+      const docTxtRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--ascii', '--no-color', '--workspace', wsOffline],
+        { encoding: 'utf8', env: baseEnv, timeout: 15000 }
+      );
+      assert.strictEqual(docTxtRes.status, 0, docTxtRes.stderr);
+      assert.match(
+        docTxtRes.stdout,
+        /npm install --save-dev evo-kernel/,
+        `Expected npm install guidance in doctor text output, got:\n${docTxtRes.stdout}`
+      );
+
+      // (2) score.js must not cache stale empty ~/.gemini at import time, and must not misclassify ~/.gemini or ~/.claude as code projects
+      const freshHome = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-rt75-gemhome-'));
+      try {
+        const scoreSub = child_process.spawnSync(
+          process.execPath,
+          [
+            '-e',
+            `(async () => {
+              const fs = await import('node:fs');
+              const path = await import('node:path');
+              const os = await import('node:os');
+              const { buildScoreReport, inspectMcpTaxSnapshot, isProjectDirectoryFast } = await import('./dist/cli/score.js');
+              const home = os.homedir();
+              fs.mkdirSync(path.join(home, '.gemini'), { recursive: true });
+              fs.writeFileSync(path.join(home, '.gemini', 'GEMINI.md'), '# Global Gemini Rules\\n'.repeat(20), 'utf8');
+              fs.writeFileSync(path.join(home, '.gemini', 'settings.json'), JSON.stringify({
+                mcpServers: { github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] } }
+              }), 'utf8');
+              fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+              fs.writeFileSync(path.join(home, '.claude', 'CLAUDE.md'), '# Global Claude Rules\\n', 'utf8');
+              const tax = inspectMcpTaxSnapshot(home, { includeGlobal: true, globalOnly: true });
+              const rep = buildScoreReport(home, { globalOnly: true });
+              console.log(JSON.stringify({
+                totalServers: tax.totalServers,
+                userStaticRuleTokens: rep.contextSavings.userStaticRuleTokens,
+                beforeTokens: rep.contextSavings.beforeTokens,
+                geminiIsProj: isProjectDirectoryFast(path.join(home, '.gemini')),
+                claudeIsProj: isProjectDirectoryFast(path.join(home, '.claude')),
+              }));
+            })()`,
+          ],
+          {
+            cwd: process.cwd(),
+            encoding: 'utf8',
+            env: { ...process.env, HOME: freshHome, USERPROFILE: freshHome },
+          }
+        );
+        assert.strictEqual(scoreSub.status, 0, scoreSub.stderr);
+        const parsedScore = JSON.parse(scoreSub.stdout.trim());
+        assert.strictEqual(parsedScore.totalServers, 1, `Expected newly created ~/.gemini/settings.json server, got ${scoreSub.stdout}`);
+        assert.ok(parsedScore.userStaticRuleTokens > 0, `Expected newly created ~/.gemini/GEMINI.md tokens, got ${scoreSub.stdout}`);
+        assert.ok(parsedScore.beforeTokens > 0);
+        assert.strictEqual(parsedScore.geminiIsProj, false, '~/.gemini host config dir must not be classified as project');
+        assert.strictEqual(parsedScore.claudeIsProj, false, '~/.claude host config dir must not be classified as project');
+      } finally {
+        safeCleanup(freshHome);
+      }
+
+      // (3) Static exported Workbench & Pages landing HTML must include inline data:image/svg+xml favicon
+      const tmpExportHtml = path.join(wsOffline, 'workbench-export.html');
+      exportUiHtml(process.cwd(), tmpExportHtml, { anon: true });
+      const exportedHtmlTxt = fs.readFileSync(tmpExportHtml, 'utf8');
+      assert.match(exportedHtmlTxt, /<link\s+rel="icon"\s+href="data:image\/svg\+xml,/);
+
+      const pagesBuildRes = child_process.spawnSync(
+        process.execPath,
+        [path.resolve(process.cwd(), 'scripts', 'build-pages.mjs')],
+        { cwd: process.cwd(), encoding: 'utf8' }
+      );
+      assert.strictEqual(pagesBuildRes.status, 0, pagesBuildRes.stderr);
+      const landingHtmlTxt = fs.readFileSync(path.join(pagesCheckDir, 'index.html'), 'utf8');
+      const demoHtmlTxt = fs.readFileSync(path.join(pagesCheckDir, 'demo', 'index.html'), 'utf8');
+      assert.match(landingHtmlTxt, /<link\s+rel="icon"\s+href="data:image\/svg\+xml,/);
+      assert.match(demoHtmlTxt, /<link\s+rel="icon"\s+href="data:image\/svg\+xml,/);
+    } finally {
+      safeCleanup(wsOffline);
+      safeCleanup(fakeHome);
+      safeCleanup(pagesCheckDir);
     }
   });
 

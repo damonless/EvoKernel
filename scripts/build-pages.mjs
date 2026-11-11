@@ -226,6 +226,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; script-src 'sha256-${scriptHash}'; connect-src 'none'; base-uri 'self';" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2L4 6v6c0 5.25 3.4 10.1 8 11.4 4.6-1.3 8-6.15 8-11.4V6l-8-4z'/%3E%3Cpath d='M9 12l2 2 4-4'/%3E%3C/svg%3E" />
   <title>EvoKernel — Deterministic Cognitive Memory &amp; Meta-Kernel for AI Coding Agents</title>
   <meta name="description" content="AST-verified cognitive memory, visible recall receipts, and 6-stage deterministic Gatekeeper for AI coding agents — with 88.7% lower session-start token tax and 0 dependencies." />
   <style>
