@@ -2,30 +2,30 @@
 
 # 🧬 EvoKernel (evo-kernel)
 
-### Cut MCP Tool Schema Tax by 94.4% (and Static Prefix Tax by 88.7%). Keep 100% KV Cache Hit. Evolve AST-Verified Memories & Sandboxed Tools in Isolated Git Worktrees — with Zero External Dependencies.
+### Stop Repeating the Same Bug Across Coding Sessions — AST-Verified Cognitive Memory & 6-Stage Deterministic Gatekeeper, with 88.7% Lower Session-Start Token Tax and 0 External Dependencies.
 
 **The Deterministic Self-Evolving Meta-Kernel & Cognitive Context OS for AI Coding Agents**  
 *Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
 
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
-[![Workbench 2.0 Demo](https://img.shields.io/badge/Workbench_2.0-Interactive_Demo-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
+[![EvoKernel Workbench Demo](https://img.shields.io/badge/EvoKernel_Workbench-Interactive_Demo-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/demo/)
 [![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#-30-second-quick-start)
 [![Version](https://img.shields.io/badge/npm-v0.3.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#-zero-dependency-architecture)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#-core-architecture-5-fixed-meta-tools)
-[![Tests](https://img.shields.io/badge/tests-306%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
+[![Tests](https://img.shields.io/badge/tests-325%2B%20passed%20%7C%2011%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 
-**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Live Workbench 2.0](https://damonless.github.io/EvoKernel/) · [📊 Benchmarks](benchmarks/README.md)**
+**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Product Site](https://damonless.github.io/EvoKernel/) · [🖥️ Interactive Workbench Demo](https://damonless.github.io/EvoKernel/demo/) · [📊 Benchmarks](benchmarks/README.md)**
 
 <br/>
 
-<a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-shotcraft.svg" alt="EvoKernel 3-Tier Context OS & Benchmark Telemetry" width="100%" /></a>
+<a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-shotcraft.svg" alt="EvoKernel Cognitive Memory, Deterministic Gatekeeper & Benchmark Telemetry" width="100%" /></a>
 
 </div>
 
-> **What is EvoKernel?** EvoKernel stops your AI coding agent from repeating the same bugs across sessions — crystallizing root-cause fixes into code-anchored memories and sandboxed micro-tools, while folding bloated MCP schemas & rules behind 5 fixed primitives (**-88.7% to -94.4% prompt tax, 100% KV cache hit, 0 external dependencies**).
+> **What is EvoKernel?** EvoKernel gives your AI coding agent **cross-session AST-verified cognitive memory, visible 1-line recall receipts (`🛡️ EvoKernel Recall`), and a 6-stage deterministic Gatekeeper** so fixed bugs stay fixed across sessions — while folding sprawling MCP tool schemas and monolithic rule files behind 5 fixed meta-primitives (**-88.7% session-start token tax: `27,150 → 3,066` tok/turn, 100% KV cache hit, 0 external dependencies**).
 
 > [!NOTE]
 > **Disambiguation Note:** EvoKernel (`evo-kernel`) is an agent architecture and context engineering framework for AI coding assistants (Claude Code, Cursor, Windsurf, Codex, Gemini, etc.). It is not affiliated with academic ICML papers/benchmarks of similar naming or Linux kernel projects.
@@ -44,15 +44,19 @@ npx -y evo-kernel score
 npx -y evo-kernel init --stealth && npx -y evo-kernel doctor
 # (Preview MCP virtualization token savings safely with: npx -y evo-kernel virtualize --dry-run)
 
-# 3. Launch Workbench 2.0 & Verify Deliverables (.xlsx, .docx, .pptx, .csv, .json, .md)
-npx -y evo-kernel ui --app
-npx -y evo-kernel check ./README.md
+# 3. Launch EvoKernel Workbench to inspect capabilities, AST memories & 7-day recall
+npx -y evo-kernel ui
 ```
 
 > 💡 **Node.js 18 / 20 Instant 1-Liner (No Global Node Upgrade Needed):**  
 > `npx -y -p node@22 evo-kernel score`  
 > *(Note: `npx -p node@22` is recommended for one-off CLI diagnostics. For a persistent background MCP service, upgrade system Node to `>= 22.5.0` via `nvm install 22 && nvm use 22` or `fnm use 22`, and install globally via `npm install -g evo-kernel`.)*  
 > *Why Node.js >= 22.5.0?* EvoKernel runs purely on native `node:sqlite`, `node:module`, and `node:test` — providing **0 external npm dependencies and 0 supply-chain vulnerability risk**.
+
+<details>
+<summary><b>🖥️ Visual Tour: 3-Act CLI Pipeline, EvoKernel Workbench &amp; Terminal X-Ray (Click to expand)</b></summary>
+
+<br/>
 
 <div align="center">
   <img src="./assets/quickstart-shotcraft.svg" alt="EvoKernel 30-Second Quick Start Pipeline" width="100%" />
@@ -63,8 +67,8 @@ npx -y evo-kernel check ./README.md
 <table>
 <tr>
 <td align="center" width="56%">
-  <b>EvoKernel Workbench 2.0 (<code>npx evo-kernel ui --app</code>)</b><br/>
-  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/workbench-showcase.svg" width="100%" alt="EvoKernel Workbench 2.0 Zinc Dark Cockpit and AST Topology" /></a>
+  <b>EvoKernel Workbench (<code>npx evo-kernel ui</code>)</b><br/>
+  <a href="https://damonless.github.io/EvoKernel/demo/"><img src="./assets/workbench-showcase.png" width="100%" alt="EvoKernel Workbench — Capabilities, AST Memories &amp; 7-Day Recall" /></a>
 </td>
 <td align="center" width="44%">
   <b>Instant Terminal X-Ray (<code>npx evo-kernel score</code>)</b><br/>
@@ -73,8 +77,10 @@ npx -y evo-kernel check ./README.md
 </tr>
 </table>
 
+</details>
+
 <details>
-<summary><b>🛠️ Clone from Source & Advanced CLI Workflows (Click to expand)</b></summary>
+<summary><b>🛠️ Clone from Source, CI Deliverable Checks &amp; Advanced CLI Workflows (Click to expand)</b></summary>
 
 ```bash
 # Clone and build from source (takes <50ms, zero npm install required)
@@ -91,12 +97,14 @@ node ./dist/cli/index.js bootstrap --max-commits=50
 # Run offline worktree optimization cycle
 node ./dist/cli/index.js optimize --dim both -k 3
 
-# Inspect capability tree, multi-branch AST memory freshness & ROI ledger
+# CI / Deliverable canonical inspection (.xlsx, .docx, .pptx, .csv, .json, .md)
+npx -y evo-kernel check ./README.md
+
+# Inspect capability tree, multi-branch AST memory freshness & live MCP handshake
 node ./dist/cli/index.js tree
 node ./dist/cli/index.js memory verify
-node ./dist/cli/index.js stats
+node ./dist/cli/index.js doctor --roi
 node ./dist/cli/index.js audit --global
-node ./dist/cli/index.js doctor
 ```
 
 </details>
@@ -109,7 +117,7 @@ EvoKernel is designed from the ground up to be safe to trial, transparent to ins
 
 ### 1. What `evo init` Touches & 1-Command Lossless Uninstall
 When you run `npx evo-kernel init`, it touches only three isolated surfaces:
-- **Host Agent Rule Files**: Inserts a compact, bounded managed block between `<!-- EVO:START -->` and `<!-- EVO:END -->` markers in detected configuration files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/evo-kernel.mdc`). Existing user rules outside these markers are untouched.
+- **Host Agent Rule Files**: Inserts a compact (<1,100 tok), bounded English managed block between `<!-- EVO:START -->` and `<!-- EVO:END -->` markers in detected configuration files (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/evo-kernel.mdc`, or `GEMINI.md` when `.gemini/` is present — avoiding duplicate root Markdown injection). Existing user rules outside these markers are untouched.
 - **Host MCP Configs**: Registers a single stdio gateway entry for `evo-kernel` (leaving third-party servers untouched unless virtualized).
 - **Workspace `.evo/` Tree**: Generates local capability and episodic memory directories (`.evo/rules/`, `.evo/skills/`, `.evo/memories/`, `.evo/tools/`, `.evo/.cache/`).
 
@@ -135,14 +143,13 @@ Analytical cost/cache model across **8 standard MCP servers** (`github`, `playwr
 
 | Metric | Raw Multi-MCP + Monolithic `CLAUDE.md` | **🧬 EvoKernel 5-Tool Meta-Gateway** | Model / Live Result |
 | :--- | :---: | :---: | :---: |
-| **Exposed Tool Schemas** | 77 tools | **5 fixed meta-tools** | **-93.5% schema footprint** |
-| **MCP Tool Schema Tax / Turn** | 27,150 tokens | **1,530 tokens** | **-94.4% MCP schema tax** |
-| **8-Server Full Static Prefix / Turn** | 27,150 tokens | **3,066 tokens** | **-88.7% static prefix reduction** |
+| **Exposed Tool Schemas** | 77 tools (`14,700` tok) | **5 fixed meta-tools (`1,916` tok)** | **-93.5% schema count (`-87.0%` schema tok)** |
+| **Session-Start Static Prefix / Turn** | 27,150 tokens | **3,066 tokens** | **-88.7% session-start token tax** |
 | **Mid-Session Cache Invalidations** | 3 full prefix busts | **0 (100% cache hit)** | **100% KV Cache Shield** |
 | **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% total token load** |
 | **50-Turn Cost (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **-70.4% API cost** |
 | **50-Turn Cost (Claude Opus 4.5)** | \$5.76 | **\$1.70** | **-70.4% API cost** |
-| **Live Engine AST Verification Speed** | Unverified text (drifts silently) | **~0.32 ms / memory** | **<11ms batch across 34 memories¹** |
+| **Live Engine AST Verification Speed** | Unverified text (drifts silently) | **~0.32 ms / memory** | **<12ms batch across 36 memories¹** |
 
 > ¹ *Terminology Note:* AST Anti-Drift / AST Fingerprinting utilizes **Zero-Dep Lexical-Structural Skeleton Fingerprinting**, which is immune to comments, code reformatting, and line-number drift without requiring external compiler dependencies.
 
@@ -161,12 +168,17 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 **EvoKernel solves all five with a deterministic local compiler, worktree evolution engine & routing kernel:**
 
 <div align="center">
-  <img src="./assets/gatekeeper-shotcraft.svg" alt="EvoKernel 4-Stage Deterministic Gatekeeper" width="100%" />
+  <img src="./assets/gatekeeper-shotcraft.svg" alt="EvoKernel 6-Stage Deterministic Gatekeeper" width="100%" />
 </div>
 
 ---
 
 ## 📊 Comprehensive Competitive Benchmark Matrix
+
+<details>
+<summary><b>📊 Expand 13-Dimension Competitive Matrix (MemGPT / Letta, Aider, Direct MCP Proxies, ECC, SkillClaw vs. EvoKernel)</b></summary>
+
+<br/>
 
 | Dimension | `MemGPT / Letta` | `Aider` | Direct MCP Proxies | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.3.0 (Ours)** |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -175,158 +187,41 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 | **Runtime Dependencies** | Heavy (Postgres, Python, vector DBs) | Python pip packages | Node / Python packages | Zero (plain markdown) | Python FastAPI daemon | **0 Dependencies (Pure Node.js `>= 22.5` built-ins: `node:sqlite`, `node:module`, `node:test`)** |
 | **Prompt Cache Stability** | Cache-unfriendly (frequent context shifts) | Varies per edit | **Destructive** (exposing all child tools busts KV prefix on every change) | High context footprint | Neutral | **100% Byte-Stable: Exactly 5 immutable meta-tools exposed to host** |
 | **Downstream MCP Virtualization** | None | None | Dumb pass-through (50+ tools in prompt) | None | None | **Zero-cache-invalidation FTS5 index + on-demand stdio JSON-RPC proxy** |
-| **Verification & Gatekeeper** | Model self-reflection | Git commit diffs & tests | None | Manual `/learn-eval` | Async LLM reviewer | **4-Stage Deterministic Gatekeeper (Static AST, Sandbox Exit 0, BM25, 1500-tok Cap, Anti-Confounding)** |
+| **Verification & Gatekeeper** | Model self-reflection | Git commit diffs & tests | None | Manual `/learn-eval` | Async LLM reviewer | **6-Stage Deterministic Gatekeeper (Static Security, Lexical De-Symbol, Sandbox Exit 0, BM25, 1500-tok Cap, Anti-Confounding)** |
 | **Offline Worktree Optimization** | None | None | None | None | Cloud LLM evaluations | **`evo optimize`: Isolated Git worktrees, dual `inv`/`dom` cycles, automated probe evaluation & regression rollbacks** |
 | **Deliverable Inspection** | None | None | None | None | None | **Zero-dependency canonical parser for `.xlsx`, `.docx`, `.pptx`, CSV, JSON/JSONL, and Markdown** |
 | **Episodic Memory & Anti-Drift** | Semantic vector embeddings (hallucination prone) | Repo map only | None | None (static docs) | No AST verification | **Zero-Dep Lexical-Structural Symbol Fingerprinting (Fast regex/lexical AST hash, [STALE] demotion, Topology Penetration Anchors)** |
-| **Workbench & Diagnostic Scoring** | Web UI with Postgres | None | None | None | Web UI | **`evo score` (<40ms zero-cost scan) & `evo ui` (0-dep Workbench 2.0, dual-mode native client, SSE live-reload, strict CSP, exportable single-file HTML)** |
+| **Workbench & Diagnostic Scoring** | Web UI with Postgres | None | None | None | Web UI | **`evo score` (<25ms zero-write scan) & `evo ui` (0-dep EvoKernel Workbench, dual-mode native client, SSE live-reload, strict CSP, exportable single-file HTML)** |
 | **Causal Telemetry** | None | Git diff size | None | None | Win/loss counter | **Causal outcomes (`helped`, `hurt`, `contested`) with `ERR_CONFOUNDED_CAUSATION` protection** |
 | **Multi-Agent Harness Support** | Standalone only | Standalone only | Generic MCP clients | Claude Code / Cursor only | Generic proxy | **10 Native Harnesses (Claude, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, Antigravity)** |
 | **Cold-Start Gene Extraction** | Empty until chat sessions accumulate | Git repo scan | Empty | Static catalog | Empty until chat history grows | **`evo bootstrap` mines project stacks + git fixes in <10s** |
-
----
-
-## 🚀 Offline Git Worktree Optimization Engine (`evo optimize`)
-
-EvoKernel v0.3.0 introduces an autonomous offline capability optimizer. It runs iterative evolution experiments inside **isolated, transient Git worktrees** without risking uncommitted changes in your main workspace:
-
-```bash
-# Run offline optimization across both Invariant and Domain dimensions
-evo optimize --dim both -k 3
-
-# Run targeted optimization using a session trajectory and deliverable inspector
-evo optimize --trajectory session.jsonl --deliverable report.xlsx --apply
-```
-
-### Key Engineering Features:
-- **Zero Dirty-State Pollution**: Worktrees are allocated under `.evo/.cache/optimize/worktrees/opt-...` and completely cleaned up after each round.
-- **Orthogonal Dual-Dimension Evolution**:
-  - **Invariant (`inv`)**: Evolves cross-module architectural rules and anti-confounding guards.
-  - **Domain (`dom`)**: Evolves domain-specific episodic troubleshooting memories and SOP playbooks.
-- **Multi-Harness Trajectory Parsing**:
-  - Replays session steps from **Antigravity** (`transcript.jsonl` with double-JSON unquoting), **Codex CLI** (`thread-item`), **OpenCode** (event stream), and **Claude Code** (`stream-json`).
-- **Automated Proposer & Isolated Probe Verification**:
-  - Runs candidate proposer scripts in the worktree.
-  - Executes isolated probe commands to evaluate scores against baseline.
-  - Strictly enforces `KEEP_BASE` rollbacks if candidate verification regresses or violates the 4-Stage Gatekeeper.
-
----
-
-## 📑 Zero-Dependency Deliverable Canonical Consumer-Reader (`deliverable-canonical-inspector`)
-
-<a id="-zero-dependency-architecture"></a>
-AI agents frequently generate corrupted deliverables (`.xlsx`, `.docx`, `.pptx`, CSV, JSON, Markdown) that look convincing on the surface but fail downstream consumption. EvoKernel includes a built-in, zero-dependency canonical deliverable validator:
-
-```bash
-# Validate any deliverable file directly via top-level CLI:
-npx evo-kernel check report.xlsx
-
-# Structured JSON output for CI pipelines:
-npx evo-kernel check report.xlsx --json
-
-# Top-level CLI alias:
-npx evo-kernel inspect report.xlsx
-```
-
-<details>
-<summary><b>📋 Supported Deliverable Formats & Validation Rules (Click to expand)</b></summary>
-
-### Comprehensive Format Support:
-- **XLSX (.xlsx)**:
-  - Custom IEEE 802.3 CRC32 + ZIP central directory decompressor.
-  - Normalizes openpyxl leading slashes (`/xl/worksheets/sheet1.xml`).
-  - Strips phonetic `<rPh>` runs before extracting cell text.
-  - Correctly preserves sibling cells after self-closing XML nodes (`<c .../>`).
-  - Detects shared formula follower nodes and flags formula errors (`#REF!`, `#DIV/0!`, `#VALUE!`, `t="e"`).
-  - Detects empty sheets and verifies expected table header shape.
-- **DOCX (.docx)**:
-  - Canonical extraction of paragraphs, headings with spaces (`Heading 1`, `Heading 2`, `Title`), and table cell matrices.
-  - Flags `EMPTY_DOCUMENT` defects.
-- **PPTX (.pptx)**:
-  - Numerically sorts slide decks and formats text into canonical `## Slide N` blocks.
-  - Emits warnings on empty individual slides and flags `EMPTY_PRESENTATION`.
-- **CSV & JSON / JSONL**:
-  - RFC-4180 compliant CSV parser handling escaped quotes and multi-line fields.
-  - Validates `requiredKeys`, `strictKeys` per line, and flags `RAGGED_COLUMNS`.
-- **Markdown (.md)**:
-  - Detects `UNCLOSED_CODE_FENCE` syntax errors.
-  - Flags unresolved template placeholder leaks outside code fences:
-    ```markdown
-    {{VARIABLE}}
-    ```
-    while safely ignoring valid variables inside fenced code blocks.
 
 </details>
 
 ---
 
-## 🛡️ Causal Outcome Attribution & Anti-Confounding Gatekeeper
+<a id="-zero-dependency-architecture"></a>
+<a id="-core-architecture-5-fixed-meta-tools"></a>
+## 🧠 Core Architecture & Deep Technical Reference
 
-Most agent frameworks suffer from superstitious learning: an agent adds a rule after a successful run, even though an unrelated file edit was the actual cause of the fix.
+EvoKernel exposes **5 immutable meta-tools** (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`) over `stdio` for 100% KV prompt-cache retention, backed by offline Git worktree optimization, zero-dependency deliverable inspection, causal outcome attribution, and 10-host configuration adapters.
 
-EvoKernel solves this with **Deterministic Causal Outcome Attribution**:
-- **Outcome Ledger**: Capabilities recalled during a session are classified in SQLite telemetry:
-  - `helped`: Directly contributed to successful test passage and zero regressions.
-  - `hurt`: Recalled during a failed attempt or reverted commit.
-  - `contested`: Recalled during multi-step error recovery loops where multiple variables changed simultaneously.
-- **Anti-Confounding Gatekeeper (`ERR_CONFOUNDED_CAUSATION`)**:
-  - When multiple capabilities are recalled simultaneously during a bug-fix cycle, EvoKernel blocks single-variable credit assignment.
-  - Proposers must supply contrastive evidence or Stage-3 **Topology Penetration Anchors** (concrete file line ranges, caller chains, and negative dead-ends) to prove causation.
+<details>
+<summary><b>🧠 5 Fixed Meta-Tools, Downstream MCP Virtualization &amp; Hook Router (Click to expand)</b></summary>
 
----
+<br/>
 
-## 🎯 10-Agent Harness Matrix & Silent-Failure Surface Audit
+### 5 Immutable Meta-Tools (`stdio` JSON-RPC 2.0)
 
-EvoKernel connects cleanly to 10 major AI coding agent environments with non-destructive marker updates and stealth Git isolation:
+| Meta-Tool | Tier | Purpose |
+| :--- | :--- | :--- |
+| `evo_search` | **L0** | FTS5 BM25 search across Rules, Skills, Micro-Tools, Virtualized External Tools, and Memories. Performs live Stage-2 AST fingerprint verification and demotes `[STALE]` memories automatically. |
+| `evo_inspect` | **L1 / L2** | Progressive disclosure loader. Delivers Symptom/Root-Cause/Solution triads, JSON Schemas for virtualized external tools, and **Topology Penetration Anchors** (live line spans, callers, and negative dead-ends). |
+| `evo_run` | **Execution** | Executes local sandboxed Micro-Tools (`.mjs`, `.py`, `.ps1`, `.sh`) or proxies calls to downstream MCP servers via `McpProxyManager`. |
+| `evo_propose` | **Evolution** | Submits a candidate Rule, Skill, Micro-Tool, or Memory through the 6-Stage Deterministic Gatekeeper (Static Security, Lexical De-Symbol, Sandbox Dry-Run, BM25 Deduplication, Token Budget Cap, Anti-Confounding). |
+| `evo_compact` | **GC** | Atomically merges fragmented rules or archives `[STALE]` memories into `.evo/archive/` to keep core token consumption under the 1,500-token limit. |
 
-| Agent / Harness | Rule Injection Target | MCP Gateway Target | Detection Mechanisms | Stealth Mode (`.git/info/exclude`) |
-| :--- | :--- | :--- | :--- | :---: |
-| **Claude Code** | `CLAUDE.md` | `.mcp.json` + `.claude/settings.json` | `CLAUDE.md`, `.claude/`, `CLAUDE_CONFIG_DIR`, `~/.claude` | ✅ |
-| **Cursor** | `.cursor/rules/evo-kernel.mdc` | `.cursor/mcp.json` | `.cursor/`, `.cursorrules`, `CURSOR_AGENT`, `~/.cursor` | ✅ |
-| **Windsurf** | `.windsurfrules` | `.windsurf/mcp.json` | `.windsurf/`, `.windsurfrules`, `WINDSURF_DIR`, `~/.windsurf` | ✅ |
-| **Cline** | `.clinerules` | `.cline/mcp.json` | `.clinerules`, `.cline/`, `CLINE_DIR`, `~/.cline` | ✅ |
-| **Roo Code** | `.roo/rules/evo-kernel.md` | `.roo/mcp.json` | `.roo/`, `.roorules`, `ROO_DIR`, `~/.roo` | ✅ |
-| **GitHub Copilot / VS Code** | `.github/copilot-instructions.md` | `.vscode/mcp.json` | `.github/copilot-instructions.md`, `.vscode/`, `VSCODE_PID` | ✅ |
-| **Codex CLI** | `AGENTS.md` | `.codex/config.toml` | `.codex/`, `CODEX_HOME`, `~/.codex` | ✅ |
-| **OpenCode** | `opencode.json` + `AGENTS.md` | `opencode.json` | `opencode.json`, `.opencode/`, `OPENCODE_CONFIG` | ✅ |
-| **Gemini CLI** | `GEMINI.md` | `.gemini/settings.json` | `GEMINI.md`, `.gemini/`, `GEMINI_CLI_HOME`, `~/.gemini` | ✅ |
-| **Antigravity** | `GEMINI.md` | `mcp_config.json` + `.mcp.json` | `mcp_config.json`, `ANTIGRAVITY_AGENT`, `~/.antigravity` | ✅ |
-
-### Silent-Failure Surface Defenses:
-- **BOM Corruption Prevention**: Strips and guards against UTF-8 Byte Order Marks (`0xFEFF`) across all JSON and Markdown parsers.
-- **Comment-Preserving Merging**: Losslessly merges TOML (`.codex/config.toml`) and JSON configs without stripping user comments or sibling server definitions.
-- **Zero-Build Compilation Fallback**: Routes harnesses through `scripts/boot-mcp.mjs` using native TypeScript stripping, ensuring immediate execution even if `dist/` is unbuilt.
-- **Idle Pipe Stdin Resilience**: Safe asynchronous stdin stream handling with 50ms timeout ensures hooks never hang when spawned with open idle stdin pipes in non-TTY environments.
-
----
-
-## 🪝 Universal Hook Router & Single-Line JSON Guard Hooks
-
-EvoKernel provides a CLI hook router (`evo hook <event>`) for agent lifecycle integration (Claude Code `PostToolUse` / `Stop` hooks, Cursor automation, Antigravity native hooks, and Git pre-commit guards):
-
-```bash
-# 1. Post-Tool Hook: Tracks mutations, read-only diagnostics (>=10 reads), & recalls scoped rules
-evo hook post-tool --tool Edit --file src/core/storage.ts
-
-# 2. Stop Hook: Emits crystallization reminders (edits, diagnostics, user corrections) & anti-poisoning dirty alerts
-evo hook stop
-
-# 3. Pre-Commit Guard: Blocks commits if internal caches are staged or token budget >1500
-evo hook pre-commit
-
-# 4. Error Recovery Marker: Records recovery telemetry after command failures
-evo hook mark-recovery
-```
-
-- **Single-Line JSON Output**: Emits structured hook directives (`hook_trigger`) compatible with all major agent frameworks.
-- **Read-Only Diagnostic & Counter-Question Detection**: Prompts experience crystallization on read-only troubleshooting sessions (`>= 10` diagnostic reads with `< 4` edits) or when a user correction / rhetorical counter-question is detected.
-- **Anti-Poisoning Alert**: Alerts if source files are modified *after* capability crystallization without re-verification.
-
----
-
-## 🔌 Downstream MCP Proxy Virtualization
-
-EvoKernel virtualizes downstream MCP servers behind its **Fixed 5-Tool Meta-MCP Gateway**. Your agent interacts with only 5 meta-tools, while hundreds of downstream tools become searchable, inspectable, and executable on demand:
+### Downstream MCP Proxy Virtualization (`evo virtualize`)
 
 ```text
 Host Coding Agent (Claude / Cursor / Copilot / etc.)
@@ -351,29 +246,81 @@ Host Coding Agent (Claude / Cursor / Copilot / etc.)
 ```
 
 ```bash
-# Preview token savings without modifying files
-evo virtualize --dry-run
-
-# Fold all third-party stdio MCPs into EvoKernel's dynamic proxy
-evo virtualize
-
-# Losslessly restore virtualized MCP servers back to their original host configs
-evo virtualize --restore
+evo virtualize --dry-run   # Preview token savings without modifying files
+evo virtualize             # Fold third-party stdio MCPs into EvoKernel's dynamic proxy
+evo virtualize --restore   # Losslessly restore virtualized MCP servers back to host configs
 ```
 
----
+### Universal Hook Router (`evo hook <event>`)
 
-## 🧠 Core Architecture: 5 Fixed Meta-Tools
+```bash
+evo hook post-tool --tool Edit --file src/core/storage.ts   # Track mutations, >=10 diagnostic reads & scoped rules
+evo hook stop                                               # Emit crystallization & anti-poisoning dirty alerts
+evo hook pre-commit                                         # Block leaked caches or >1,500-token core budget
+evo hook mark-recovery                                      # Record recovery telemetry after command failures
+```
 
-EvoKernel exposes **exactly 5 immutable meta-tools** over `stdio` to ensure 100% Prompt-Cache retention:
+</details>
 
-| Meta-Tool | Tier | Purpose |
-| :--- | :--- | :--- |
-| `evo_search` | **L0** | FTS5 BM25 search across Rules, Skills, Micro-Tools, Virtualized External Tools, and Memories. Performs live Stage-2 AST fingerprint verification and demotes `[STALE]` memories automatically. |
-| `evo_inspect` | **L1 / L2** | Progressive disclosure loader. Delivers Symptom/Root-Cause/Solution triads, JSON Schemas for virtualized external tools, and **Topology Penetration Anchors** (live line spans, callers, and negative dead-ends). |
-| `evo_run` | **Execution** | Executes local sandboxed Micro-Tools (`.mjs`, `.py`, `.ps1`, `.sh`) or proxies calls to downstream MCP servers via `McpProxyManager`. |
-| `evo_propose` | **Evolution** | Submits a candidate Rule, Skill, Micro-Tool, or Memory through the 4-Stage Deterministic Gatekeeper (Static AST, Sandbox Dry-Run, BM25 Deduplication, Token Budget Cap, Anti-Confounding). |
-| `evo_compact` | **GC** | Atomically merges fragmented rules or archives `[STALE]` memories into `.evo/archive/` to keep core token consumption under the 1,500-token limit. |
+<details>
+<summary><b>🚀 Offline Git Worktree Optimization Engine (<code>evo optimize</code>) &amp; Causal Attribution (Click to expand)</b></summary>
+
+<br/>
+
+```bash
+# Run offline optimization across both Invariant and Domain dimensions
+evo optimize --dim both -k 3
+
+# Run targeted optimization using session trajectories and deliverable checks
+evo optimize --trajectories session.jsonl --deliverables report.xlsx --apply
+```
+
+- **Zero Dirty-State Pollution**: Worktrees allocate under `.evo/.cache/optimize/worktrees/opt-...` and clean up automatically after each round.
+- **Orthogonal Dual-Dimension Evolution**: Evolves cross-module invariants (`inv`) separately from domain troubleshooting memories and SOP playbooks (`dom`).
+- **Multi-Harness Trajectory Parsing**: Replays session steps from **Antigravity**, **Codex CLI**, **OpenCode**, and **Claude Code**, enforcing `KEEP_BASE` rollbacks whenever a candidate violates the 6-Stage Gatekeeper.
+- **Deterministic Causal Outcome Attribution (`ERR_CONFOUNDED_CAUSATION`)**: Tracks `helped`, `hurt`, and `contested` recall outcomes in SQLite and blocks single-variable credit assignment when multiple capabilities fire in the same bug-fix loop unless Stage-3 **Topology Penetration Anchors** prove causation.
+
+</details>
+
+<details>
+<summary><b>📑 Zero-Dependency Deliverable Canonical Inspector (<code>evo check</code> / <code>deliverable-canonical-inspector</code>) (Click to expand)</b></summary>
+
+<br/>
+
+AI agents frequently generate corrupted deliverables (`.xlsx`, `.docx`, `.pptx`, CSV, JSON, Markdown) that look convincing on the surface but fail downstream consumption:
+
+```bash
+npx evo-kernel check report.xlsx          # Human-readable validation
+npx evo-kernel check report.xlsx --json   # Structured JSON output for CI pipelines
+```
+
+- **XLSX (`.xlsx`)**: Custom IEEE 802.3 CRC32 + ZIP central directory decompressor; normalizes leading slashes, strips phonetic `<rPh>` runs, preserves sibling cells after `<c .../>`, and flags `#REF!` / `#DIV/0!` / `#VALUE!` / `t="e"` formula errors and empty sheets.
+- **DOCX (`.docx`) & PPTX (`.pptx`)**: Extracts headings, paragraphs, tables, and numerically sorted `## Slide N` decks; flags `EMPTY_DOCUMENT` and `EMPTY_PRESENTATION`.
+- **CSV, JSON/JSONL & Markdown (`.md`)**: RFC-4180 CSV parser (`RAGGED_COLUMNS`), `requiredKeys`/`strictKeys` validation, `UNCLOSED_CODE_FENCE` detection, and `{{VARIABLE}}` placeholder leak detection outside code fences.
+
+</details>
+
+<details>
+<summary><b>🎯 10-Agent Harness Matrix &amp; Silent-Failure Surface Defenses (Click to expand)</b></summary>
+
+<br/>
+
+| Agent / Harness | Rule Injection Target | MCP Gateway Target | Detection Mechanisms | Stealth Mode (`.git/info/exclude`) |
+| :--- | :--- | :--- | :--- | :---: |
+| **Claude Code** | `CLAUDE.md` | `.mcp.json` + `.claude/settings.json` | `CLAUDE.md`, `.claude/`, `CLAUDE_CONFIG_DIR`, `~/.claude` | ✅ |
+| **Cursor** | `.cursor/rules/evo-kernel.mdc` | `.cursor/mcp.json` | `.cursor/`, `.cursorrules`, `CURSOR_AGENT`, `~/.cursor` | ✅ |
+| **Windsurf** | `.windsurfrules` | `.windsurf/mcp.json` | `.windsurf/`, `.windsurfrules`, `WINDSURF_DIR`, `~/.windsurf` | ✅ |
+| **Cline** | `.clinerules` | `.cline/mcp.json` | `.clinerules`, `.cline/`, `CLINE_DIR`, `~/.cline` | ✅ |
+| **Roo Code** | `.roo/rules/evo-kernel.md` | `.roo/mcp.json` | `.roo/`, `.roorules`, `ROO_DIR`, `~/.roo` | ✅ |
+| **GitHub Copilot / VS Code** | `.github/copilot-instructions.md` | `.vscode/mcp.json` | `.github/copilot-instructions.md`, `.vscode/`, `VSCODE_PID` | ✅ |
+| **Codex CLI** | `AGENTS.md` | `.codex/config.toml` | `.codex/`, `CODEX_HOME`, `~/.codex` | ✅ |
+| **OpenCode** | `opencode.json` + `AGENTS.md` | `opencode.json` | `opencode.json`, `.opencode/`, `OPENCODE_CONFIG` | ✅ |
+| **Gemini CLI** | `GEMINI.md` *(skipped when `AGENTS.md` co-exists)* | `.gemini/settings.json` | `GEMINI.md`, `.gemini/`, `GEMINI_CLI_HOME`, `~/.gemini` | ✅ |
+| **Antigravity** | `AGENTS.md` | `mcp_config.json` + `.mcp.json` | `mcp_config.json`, `ANTIGRAVITY_AGENT`, `~/.gemini/antigravity` | ✅ |
+
+- **Silent-Failure Surface Defenses**: UTF-8 BOM (`0xFEFF`) stripping across JSON/Markdown, comment-preserving TOML/JSON merges, native `scripts/boot-mcp.mjs` TypeScript fallback, automatic stale `_npx` cache repair across workspace & global host configs, and 50ms non-blocking idle-stdin timeout on hooks.
+
+</details>
 
 <details>
 <summary><b>🌳 View ASCII Self-Evolving Capability Tree (.evo/) Output (Click to expand)</b></summary>
@@ -383,39 +330,33 @@ EvoKernel exposes **exactly 5 immutable meta-tools** over `stdio` to ensure 100%
 │ 🧬 EvoKernel — Self-Evolving Capability Tree (.evo/)                     │
 ╰──────────────────────────────────────────────────────────────────────────╯
 📦 Workspace: /path/to/your-repo
-├── 🛡️  Rules (5 active | Core Token Budget: 286/1500 tokens)
+├── 🛡️  Rules (5 active | Core Token Budget: 132/1500 tokens)
 │   ├── [CORE] gatekeeper-self-test-invariant (132 tok | hits: 4) — Every evolved Micro-Tool script must handle --self-test and exit 0.
-│   ├── [CORE] esm-typescript-imports (154 tok | hits: 7) — Always use explicit .js extensions on relative imports in ESM TypeScript.
+│   ├── [SCOPED] esm-typescript-imports (154 tok | hits: 7) — Always use explicit .js extensions on relative imports in ESM TypeScript.
 │   ├── [SCOPED] core-architecture-and-ast-invariants-guard (728 tok) — Dry-run compaction, comment-stripped AST matching & Git lookups.
 │   ├── [SCOPED] multi-harness-config-and-proxy-isolation (906 tok) — Lossless config merge/restore, fail-closed user configs & proxy roots.
 │   └── [SCOPED] workspace-isolation-and-fts5-guard (537 tok) — Isolate uninitialized fallback, parent Git detection & FTS5 search.
 ├── ⚡ Skills (2 verified L0/L1/L2 playbooks)
 │   ├── [SOP] bug-to-guardrail-sop (hits: 3 | tags: debugging,evolution) — Standard workflow to turn a resolved root cause into a Rule.
-│   └── [SOP] evo-rule-architect (hits: 2 | tags: refactor,rules) — 4-stage rule decoupling and budget refactoring workflow.
+│   └── [SOP] evo-rule-architect (hits: 2 | tags: refactor,rules) — Rule decoupling and token budget refactoring workflow.
 ├── 🔧 Micro-Tools (4 sandboxed scripts | Fixed Meta-MCP Routed)
 │   ├── [NODE] agy-config-auditor (runs: 55 | pass: 100%) — Audits host rule budgets and memory AST symbols.
 │   ├── [NODE] deliverable-canonical-inspector (runs: 18 | pass: 100%) — Zero-dep validator for .xlsx, .docx, .pptx, CSV, JSON, MD.
 │   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
 │   └── [NODE] workspace-metrics-scanner (runs: 13 | pass: 100%) — Scans file counts, LOC, and extension distribution.
-└── 🧠 Episodic Memories (18 fault cases | 18 VERIFIED · 0 STALE)
+└── 🧠 Episodic Memories (36 fault cases | 36 VERIFIED · 0 STALE)
     ├── [VERIFIED] audit-broken-refs-and-hook-param-fix (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] cli-help-zero-side-effect-isolation (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] codex-hooks-corrupt-file-unlink (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] generic-angle-semicolon-multiline-drift (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] ghost-workspace-resurrection-and-sqlite-handle-lock (confidence: HIGH | symbols: 5/5 fresh)
-    ├── [VERIFIED] git-fix-387153f (confidence: HIGH | symbols: 3/3 fresh)
-    ├── [VERIFIED] git-fix-d0d4e13 (confidence: HIGH | symbols: 3/3 fresh)
     ├── [VERIFIED] harness-hook-filter-preserve-untouched-entries (confidence: HIGH | symbols: 3/3 fresh)
-    ├── [VERIFIED] issue-20-global-isolation-and-concept-overlap-fix (confidence: HIGH | symbols: 4/4 fresh)
-    ├── [VERIFIED] issue-8-workspace-isolation-and-atomic-compact (confidence: HIGH | symbols: 5/5 fresh)
-    ├── [VERIFIED] issues-10-11-12-audit-hook-and-cross-lang-recall (confidence: HIGH | symbols: 7/7 fresh)
-    ├── [VERIFIED] memory-verification-inprocess-stat-caching (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] issue-25-lexical-ast-sandbox-and-attribution-hardening (confidence: HIGH | symbols: 6/6 fresh)
+    ├── [VERIFIED] issues-28-29-red-team-audit-and-cli-routing (confidence: HIGH | symbols: 5/5 fresh)
     ├── [VERIFIED] multi-harness-cascaded-detection-and-reversible-teardown (confidence: HIGH | symbols: 8/8 fresh)
-    ├── [VERIFIED] open-idle-pipe-stdin-hang-fix (confidence: HIGH | symbols: 2/2 fresh)
-    ├── [VERIFIED] score-and-ui-zero-write-csp-and-pool-dedup (confidence: HIGH | symbols: 6/6 fresh)
-    ├── [VERIFIED] ui-cli-flags-port-validation-and-powershell-escaping (confidence: HIGH | symbols: 2/2 fresh)
-    ├── [VERIFIED] ui-shotcraft-modal-csp-invariant (confidence: HIGH | symbols: 3/3 fresh)
-    └── [VERIFIED] worktree-probe-score-improvement (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] s0-s1-ux-trust-onboarding-and-cli-hardening (confidence: HIGH | symbols: 5/5 fresh)
+    ├── [VERIFIED] s1-s3-workbench-ci-and-anon-parity (confidence: HIGH | symbols: 4/4 fresh)
+    └── ... (+25 additional AST-verified fault cases)
 ```
 
 </details>
@@ -430,7 +371,7 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-**306+ tests across 11 test suites pass in ~21 seconds with 0 failures:**
+**325+ tests across 11 test suites pass in ~21 seconds with 0 failures:**
 
 <details>
 <summary><b>🔍 View All 11 Verified Test Suites (Click to expand)</b></summary>
@@ -446,8 +387,8 @@ node ./scripts/test.mjs
 | 7 | `dist/tests/mcp-proxy.test.js` | Downstream MCP Proxy Virtualization Suite | 10 tests |
 | 8 | `dist/tests/multi-harness.test.js` | Multi-Agent Harness Matrix & Cascaded Detection Suite | 14 tests |
 | 9 | `dist/tests/optimize.test.js` | Offline Git Worktree Optimization Engine Suite | 21 tests |
-| 10 | `dist/tests/score-and-ui.test.js` | Score, Workbench 2.0 UI & Control API, Warmup & Slash Commands Suite | 28 tests |
-| 11 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & Hardening Suite | 50 tests |
+| 10 | `dist/tests/score-and-ui.test.js` | Score, EvoKernel Workbench UI & Control API, Warmup & Slash Commands Suite | 28 tests |
+| 11 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & S0-S3 Hardening Suite | 70+ tests |
 
 </details>
 
@@ -459,7 +400,7 @@ EvoKernel is an independent, from-scratch open-source engineering runtime built 
 
 - **Progressive Disclosure & Context Engineering**: The 5 fixed meta-tools (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`) and the L0/L1/L2 tiered loading architecture draw inspiration from Anthropic's engineering guidelines on context window economics, prompt-cache preservation, and progressive skill disclosure.
 - **Offline Worktree Rollout & Orthogonal Capability Optimization**: The `evo optimize` offline Git worktree evaluation loop, invariant (`inv`) vs. domain (`dom`) orthogonal exploration, and canonical deliverable verification are informed by recent research on agent harness evaluation, trajectory replay, and automated capability refinement.
-- **Original EvoKernel Contributions**: The 4-Stage Deterministic Gatekeeper (Static AST Security, Sandbox `--self-test` Dry-Run, BM25 Deduplication, 1,500-Token Hard Cap, and Causal Anti-Confounding), the 3-Stage AST-Anchored Cognitive Memory with git-topology drift detection (`VERIFIED` / `OTHER_BRANCH` / `STALE`), and the 10-host lossless adapter matrix are original to EvoKernel.
+- **Original EvoKernel Contributions**: The 6-Stage Deterministic Gatekeeper (Static Security, Lexical De-Symbolization, Sandbox `--self-test` Dry-Run, BM25 Deduplication, 1,500-Token Hard Cap, and Causal Anti-Confounding), the 3-Stage AST-Anchored Cognitive Memory with git-topology drift detection (`VERIFIED` / `OTHER_BRANCH` / `STALE`), and the 10-host lossless adapter matrix are original to EvoKernel.
 
 ---
 

@@ -6,25 +6,34 @@
  * Never imported by src/mcp/* or used to patch process.stdout / console.
  */
 
-export function isColorEnabled(args?: string[]): boolean {
-  if (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== '') {
+export function isColorEnabled(
+  args?: string[],
+  env: Record<string, string | undefined> = process.env,
+  isTTY: boolean = Boolean(process.stdout?.isTTY)
+): boolean {
+  if (env.NO_COLOR !== undefined && env.NO_COLOR !== '') {
     return false;
   }
   if (args && args.includes('--no-color')) {
     return false;
   }
-  const hasForceColor =
-    process.env.FORCE_COLOR !== undefined &&
-    process.env.FORCE_COLOR !== '' &&
-    process.env.FORCE_COLOR !== '0';
-  if (!process.stdout?.isTTY && !hasForceColor) {
+  const forceVal = env.FORCE_COLOR?.trim().toLowerCase();
+  if (forceVal === '0' || forceVal === 'false') {
+    return false;
+  }
+  const hasForceColor = forceVal !== undefined && forceVal !== '';
+  if (!isTTY && !hasForceColor) {
     return false;
   }
   return true;
 }
 
-export function isAsciiMode(args?: string[]): boolean {
-  if (process.env.EVO_ASCII === '1') {
+export function isAsciiMode(
+  args?: string[],
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  const envVal = env.EVO_ASCII?.trim().toLowerCase();
+  if (envVal === '1' || envVal === 'true') {
     return true;
   }
   if (args && args.includes('--ascii')) {
@@ -36,6 +45,84 @@ export function isAsciiMode(args?: string[]): boolean {
 export function stripAnsi(str: string): string {
   if (!str) return '';
   return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+export function toAsciiOutput(str: string): string {
+  if (!str) return '';
+  let out = stripAnsi(str);
+  out = out
+    .replace(/置信度/g, 'Confidence')
+    .replace(/\[✓\]/g, '[OK]')
+    .replace(/\[✗\]/g, '[FAIL]')
+    .replace(/✅\s?/g, '[OK] ')
+    .replace(/❌\s?/g, '[ERROR] ')
+    .replace(/⚠️?\s?/g, '[WARN] ')
+    .replace(/🔍\uFE0F?[ ]?/g, '[SCAN] ')
+    .replace(/🚀\uFE0F?[ ]?/g, '[NEXT] ')
+    .replace(/🧹\uFE0F?[ ]?/g, '[CLEAN] ')
+    .replace(/🔌\uFE0F?[ ]?/g, '[IDE] ')
+    .replace(/✓/g, 'OK')
+    .replace(/✗/g, 'X')
+    .replace(/≥/g, '>=')
+    .replace(/≤/g, '<=')
+    .replace(/≠/g, '!=')
+    .replace(/↔/g, '<->')
+    .replace(/→/g, '->')
+    .replace(/←/g, '<-')
+    .replace(/[╭╮╰╯╔╗╚╝┌┐└┘├┤┬┴┼╠╣╦╩╬]/g, '+')
+    .replace(/[─═━]/g, '-')
+    .replace(/[│║┃]/g, '|')
+    .replace(/█/g, '#')
+    .replace(/░/g, '.')
+    .replace(/[—–]/g, '--')
+    .replace(/×/g, 'x')
+    .replace(/[•·]/g, '*')
+    .replace(/…/g, '...')
+    .replace(/[\uFE0E\uFE0F]/g, '');
+
+  // Strip remaining non-ASCII glyphs (e.g. emojis/CJK headers) cleanly without leaving double spaces
+  out = out.replace(/[^\x00-\x7F]+[ ]{1,2}/g, '').replace(/[^\x00-\x7F]+/g, '');
+
+  // Keep framed ASCII header boxes (+---+ / | ... | / +---+) flush-right aligned after glyph width changes
+  if (out.includes('+---')) {
+    const lines = out.split('\n');
+    const borderRe = /^\+-{10,}\+$/;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.startsWith('| ') || !line.endsWith(' |')) continue;
+      const adjBorder =
+        (i > 0 && borderRe.test(lines[i - 1]) ? lines[i - 1] : '') ||
+        (i + 1 < lines.length && borderRe.test(lines[i + 1]) ? lines[i + 1] : '');
+      if (!adjBorder) continue;
+      const targetLen = adjBorder.length;
+      if (line.length < targetLen) {
+        lines[i] = line.slice(0, -1) + ' '.repeat(targetLen - line.length) + '|';
+      } else if (line.length > targetLen) {
+        const excess = line.length - targetLen;
+        const m = line.match(/^(.*?)( +)\|$/);
+        if (m && m[2].length > excess) {
+          lines[i] = m[1] + ' '.repeat(m[2].length - excess) + '|';
+        }
+      }
+    }
+    out = lines.join('\n');
+  }
+
+  return out;
+}
+
+export function formatTerminalOutput(
+  str: string,
+  options?: { color?: boolean; ascii?: boolean }
+): string {
+  if (!str) return '';
+  if (options?.ascii) {
+    return toAsciiOutput(str);
+  }
+  if (options?.color === false) {
+    return stripAnsi(str);
+  }
+  return str;
 }
 
 export function visualWidth(str: string): number {

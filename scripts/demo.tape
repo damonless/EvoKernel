@@ -21,9 +21,9 @@ Sleep 400ms
 Enter
 Sleep 3s
 
-Type "# 3. Export Self-Contained Interactive Cockpit (2D Treemap + AST Constellation)"
+Type "# 3. Export Self-Contained Interactive EvoKernel Workbench"
 Enter
-Type "npx evo-kernel ui --export ./evo-cockpit.html"
+Type "npx evo-kernel ui --export ./evo-workbench.html"
 Sleep 400ms
 Enter
 Sleep 2.5s

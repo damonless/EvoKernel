@@ -176,7 +176,7 @@ describe('EvoKernel Bootstrap Cold-Start Expansion Suite (Milestone 3)', () => {
   // =========================================================================
   // 3. TECHNOLOGY SEED RULES & GATEKEEPER COMPLIANCE
   // =========================================================================
-  test('14. generateStackSeedRules: passes Gatekeeper 4-stage validation for all 6 stacks', () => {
+  test('14. generateStackSeedRules: passes Gatekeeper 6-stage validation for all 6 stacks', () => {
     const ws = createTempWorkspace();
     try {
       const storage = new EvoStorage(ws);

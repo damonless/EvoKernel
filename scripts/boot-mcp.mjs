@@ -40,12 +40,15 @@ if (!fs.existsSync(distEntry)) {
 
 const rawArgs = process.argv.slice(2);
 const VALUE_FLAGS = new Set([
-  '--workspace', '-w', '--port', '--token', '--export', '--svg', '--html',
+  '--workspace', '-w', '--port', '-p', '--host', '--token', '--export', '--svg', '--html',
   '--targets', '--link', '--ide', '--max-commits', '--token-budget',
-  '--skill-budget', '--dim', '-k', '--proposer-cmd', '--probe-cmd',
+  '--skill-budget', '--dim', '-k', '--k', '--rounds', '--proposer-cmd', '--probe-cmd',
+  '--worktree-setup-cmd', '--task', '--task-file', '--trajectory', '--trajectories',
+  '--deliverable', '--deliverables', '--leak-glob',
   '--payload', '--harness', '--event', '--tool', '--file',
 ]);
 let firstPositional = '';
+let firstPositionalIdx = -1;
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
   if (a.startsWith('-')) {
@@ -55,6 +58,7 @@ for (let i = 0; i < rawArgs.length; i++) {
     continue;
   }
   firstPositional = a.toLowerCase();
+  firstPositionalIdx = i;
   break;
 }
 const hasExplicitCliIntent =
@@ -65,6 +69,9 @@ const hasExplicitCliIntent =
   });
 const forwardedArgs = hasExplicitCliIntent
   ? rawArgs
-  : ['mcp', ...rawArgs.filter((arg) => arg.toLowerCase() !== 'mcp')];
+  : [
+      'mcp',
+      ...rawArgs.filter((_, idx) => !(idx === firstPositionalIdx && firstPositional === 'mcp')),
+    ];
 process.argv = [process.argv[0], distEntry, ...forwardedArgs];
 await import(url.pathToFileURL(distEntry).href);

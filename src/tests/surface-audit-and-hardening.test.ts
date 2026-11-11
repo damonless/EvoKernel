@@ -6,9 +6,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import {
+  EVO_KERNEL_VERSION,
+  META_MCP_5_TOOLS_TOKENS,
   EvoStorage,
+  estimateTokens,
   isHostGlobalConfigDir,
   isPluginOrExtensionInstallDir,
+  openSqliteReadOnly,
   parseFrontmatter,
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
@@ -27,6 +31,7 @@ import { auditHarnessSurfaces, runAudit, runRefactor } from '../cli/audit.js';
 import {
   isExcludedGitHotspotPath,
   buildScoreReport,
+  inspectMcpTaxSnapshot,
   renderScoreSvg,
   renderScoreAnsi,
 } from '../cli/score.js';
@@ -39,8 +44,15 @@ import {
 } from '../core/gatekeeper.js';
 import { computeStructuralSkeletonHash } from '../core/memory.js';
 import { compileLexiconConfig, getCanonicalToken } from '../core/lexicon.js';
-import { buildUiSnapshot } from '../cli/ui.js';
-import { resolveWorkspaceRoot } from '../cli/index.js';
+import { buildUiSnapshot, startUiServer } from '../cli/ui.js';
+import {
+  COMMAND_VALID_FLAGS,
+  VALUE_TAKING_FLAGS,
+  checkMcpGatewayConfigs,
+  checkNodeRuntimeVersion,
+  probeMcpServerStdioSync,
+  resolveWorkspaceRoot,
+} from '../cli/index.js';
 import {
   renderEvoStats,
   renderEvoTree,
@@ -52,7 +64,12 @@ import {
   visualWidth,
   suggestClosestToken,
   formatCliInvocationPrefix,
+  isColorEnabled,
+  isAsciiMode,
+  toAsciiOutput,
+  formatTerminalOutput,
 } from '../cli/term.js';
+import { parseOptimizeFlags, renderOptimizeHelp } from '../cli/optimize.js';
 import {
   syncDeclaredPreToolHooks,
   isEvoHookCommand,
@@ -62,7 +79,9 @@ import {
   detectCascadedTargets,
   isEphemeralNpxCachePath,
   hasStaleNpxMcpEntry,
+  extractCodexTomlEvoEntry,
 } from '../cli/harness.js';
+import { L0_META_RULE_SEED } from '../templates/meta-rule.js';
 import { EvoMcpDispatcher } from '../mcp/handlers.js';
 import {
   handlePostTool,
@@ -4141,6 +4160,1818 @@ process.exit(hasRule ? 0 : 1);
       } finally {
         safeCleanup(cmdTmp);
       }
+    }
+  });
+
+  // 58. [Batch1-1 Linux CI & Live _npx Cache]
+  test('58. [Batch1-1 Linux CI & Live _npx Cache] hasStaleNpxMcpEntry detects Windows C:/ paths on POSIX and flags live existing _npx cache paths', () => {
+    // Cross-platform Windows drive letter path (even when running on Linux CI where path.isAbsolute('C:/...') === false)
+    assert.strictEqual(
+      hasStaleNpxMcpEntry('C:/nonexistent/_npx/abcd1234/node_modules/evo-kernel/scripts/boot-mcp.mjs'),
+      true,
+      'Must detect Windows C:/ absolute path on all OSes'
+    );
+    assert.strictEqual(
+      hasStaleNpxMcpEntry('D:\\nonexistent\\missing-boot-mcp.mjs'),
+      true,
+      'Must detect dead Windows D:\\ absolute path on all OSes'
+    );
+
+    // Live existing _npx cache path on disk MUST still be flagged stale even when fs.existsSync is true!
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-live-npx-'));
+    try {
+      const liveNpxDir = path.join(tmpRoot, '_npx', 'f00dcafe', 'node_modules', 'evo-kernel', 'scripts');
+      fs.mkdirSync(liveNpxDir, { recursive: true });
+      const liveNpxBoot = path.join(liveNpxDir, 'boot-mcp.mjs');
+      fs.writeFileSync(liveNpxBoot, '// live npx cache script\n', 'utf8');
+      assert.strictEqual(fs.existsSync(liveNpxBoot), true);
+
+      assert.strictEqual(
+        hasStaleNpxMcpEntry(liveNpxBoot),
+        true,
+        'Live existing _npx/<hash> path must still be flagged as ephemeral/stale'
+      );
+      assert.strictEqual(
+        hasStaleNpxMcpEntry({ command: 'node', args: [liveNpxBoot] }),
+        true,
+        'MCP object pointing to live _npx/<hash> path must be flagged stale'
+      );
+
+      const tomlRaw = `[mcp_servers.evo-kernel]\ncommand = "node"\nargs = [${JSON.stringify(liveNpxBoot)}]\n`;
+      const extracted = extractCodexTomlEvoEntry(tomlRaw);
+      assert.ok(extracted, 'extractCodexTomlEvoEntry must parse [mcp_servers.evo-kernel]');
+      assert.strictEqual(
+        hasStaleNpxMcpEntry(extracted),
+        true,
+        'Codex TOML entry pointing to live _npx/<hash> path must be flagged stale'
+      );
+    } finally {
+      safeCleanup(tmpRoot);
+    }
+  });
+
+  // 59. [Batch1-2 Gateway Parity & Init Migration]
+  test('59. [Batch1-2 Gateway Parity & Init Migration] doctor checks Gemini/Codex/Windsurf global configs and init heals stale _npx entries', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-gw-parity-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-fake-home-'));
+    try {
+      // Populate global Gemini, Codex (stale _npx), and Windsurf configs under fakeHome
+      fs.mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+      fs.writeFileSync(
+        path.join(fakeHome, '.gemini', 'settings.json'),
+        JSON.stringify({
+          mcpServers: {
+            'evo-kernel': { command: 'npx', args: ['-y', 'evo-kernel@0.3.0', 'mcp'] },
+          },
+        }),
+        'utf8'
+      );
+      fs.mkdirSync(path.join(fakeHome, '.codex'), { recursive: true });
+      fs.writeFileSync(
+        path.join(fakeHome, '.codex', 'config.toml'),
+        `[mcp_servers.evo-kernel]\ncommand = "node"\nargs = ["C:/Users/ghost/AppData/Local/npm-cache/_npx/1234/boot-mcp.mjs"]\n`,
+        'utf8'
+      );
+      fs.mkdirSync(path.join(fakeHome, '.codeium', 'windsurf'), { recursive: true });
+      fs.writeFileSync(
+        path.join(fakeHome, '.codeium', 'windsurf', 'mcp_config.json'),
+        JSON.stringify({
+          mcpServers: {
+            'evo-kernel': { command: 'npx', args: ['-y', 'evo-kernel@0.3.0', 'mcp'] },
+          },
+        }),
+        'utf8'
+      );
+
+      runInit(ws, ['claude']);
+      const docRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--json', '--no-probe', '--workspace', ws],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome },
+        }
+      );
+      assert.strictEqual(docRes.status, 0, `doctor --json failed: ${docRes.stderr}`);
+      const docJson = JSON.parse(docRes.stdout);
+      const foundConfigs = (docJson.mcpConfigs || []).map((c: any) => String(c));
+      assert.ok(
+        foundConfigs.includes('~/.gemini/settings.json'),
+        `doctor must check ~/.gemini/settings.json, got: ${JSON.stringify(foundConfigs)}`
+      );
+      assert.ok(
+        foundConfigs.includes('~/.codex/config.toml'),
+        `doctor must check ~/.codex/config.toml, got: ${JSON.stringify(foundConfigs)}`
+      );
+      assert.ok(
+        foundConfigs.includes('~/.codeium/windsurf/mcp_config.json'),
+        `doctor must check ~/.codeium/windsurf/mcp_config.json, got: ${JSON.stringify(foundConfigs)}`
+      );
+      assert.strictEqual(docJson.staleNpxPath, true, 'doctor must flag stale _npx path in ~/.codex/config.toml');
+
+      // Verify runInit heals stale _npx entries in existing workspace MCP configs (.mcp.json & .cursor/mcp.json)
+      fs.writeFileSync(
+        path.join(ws, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            'evo-kernel': {
+              command: 'node',
+              args: ['C:/Users/ghost/AppData/Local/npm-cache/_npx/dead/boot-mcp.mjs'],
+            },
+          },
+        }),
+        'utf8'
+      );
+      fs.mkdirSync(path.join(ws, '.cursor'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, '.cursor', 'mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            'evo-kernel': {
+              command: 'node',
+              args: ['/tmp/_npx/dead/node_modules/evo-kernel/scripts/boot-mcp.mjs'],
+            },
+          },
+        }),
+        'utf8'
+      );
+
+      runInit(ws, ['claude', 'cursor']);
+      const healedMcp = JSON.parse(fs.readFileSync(path.join(ws, '.mcp.json'), 'utf8'));
+      const healedCursor = JSON.parse(fs.readFileSync(path.join(ws, '.cursor', 'mcp.json'), 'utf8'));
+      assert.strictEqual(
+        hasStaleNpxMcpEntry(healedMcp.mcpServers['evo-kernel'], ws),
+        false,
+        'runInit must heal stale _npx entry in workspace .mcp.json (with workspaceRoot)'
+      );
+      assert.strictEqual(
+        hasStaleNpxMcpEntry(healedMcp.mcpServers['evo-kernel']),
+        false,
+        'hasStaleNpxMcpEntry must not falsely flag relative .evo/boot-mcp.mjs when workspaceRoot is omitted'
+      );
+      assert.strictEqual(
+        hasStaleNpxMcpEntry(healedCursor.mcpServers['evo-kernel'], ws),
+        false,
+        'runInit must heal stale _npx entry in workspace .cursor/mcp.json'
+      );
+    } finally {
+      safeCleanup(ws);
+      safeCleanup(fakeHome);
+    }
+  });
+
+  // 60. [Batch1-3 Windows %VAR% Escaping & Version Pin]
+  test('60. [Batch1-3 Windows %VAR% Escaping & Version Pin] BOOT_MCP_STUB pins evo-kernel version and prevents cmd.exe %VAR% expansion', () => {
+    assert.ok(
+      BOOT_MCP_STUB.includes(`'evo-kernel@${EVO_KERNEL_VERSION}'`),
+      `BOOT_MCP_STUB must pin fallback npx package to evo-kernel@${EVO_KERNEL_VERSION}`
+    );
+
+    // Extract actual quoteWinArg function body from BOOT_MCP_STUB so test verifies shipped code
+    const fnMatch = BOOT_MCP_STUB.match(/const quoteWinArg = \(arg\) => \{[\s\S]*?\n\s*return out;\n\s*\};/);
+    assert.ok(fnMatch, 'Must locate quoteWinArg in BOOT_MCP_STUB');
+    const stubQuoteWinArg = new Function(`${fnMatch![0]}\nreturn quoteWinArg;`)() as (arg: string) => string;
+
+    const barePct = stubQuoteWinArg('%SECRET_ENV_VAR%');
+    assert.ok(barePct.includes('^%'), `Bare %VAR% must be caret-escaped by quoteWinArg, got: ${barePct}`);
+    const spacedPct = stubQuoteWinArg('hello %SECRET_ENV_VAR% world');
+    assert.ok(spacedPct.includes('"^%"'), `Quoted %VAR% must close/escape cmd quotes ("^%"), got: ${spacedPct}`);
+
+    if (process.platform === 'win32') {
+      const cmdTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-pct-cmd-'));
+      try {
+        const echoScript = path.join(cmdTmp, 'echo.js');
+        fs.writeFileSync(echoScript, 'console.log(JSON.stringify(process.argv.slice(2)));\n', 'utf8');
+        const mockNpxCmd = path.join(cmdTmp, 'mock-npx.cmd');
+        fs.writeFileSync(mockNpxCmd, `@"${process.execPath}" "${echoScript}" %*\r\n`, 'utf8');
+
+        const inputArgs = ['%EVO_TEST_SECRET%', 'path with %EVO_TEST_SECRET% and & ()'];
+        const cmdLine = [stubQuoteWinArg(mockNpxCmd), ...inputArgs.map(stubQuoteWinArg)].join(' ');
+        const res = child_process.spawnSync(
+          process.env.ComSpec || 'cmd.exe',
+          ['/d', '/s', '/c', '"' + cmdLine + '"'],
+          {
+            encoding: 'utf8',
+            windowsVerbatimArguments: true,
+            env: { ...process.env, EVO_TEST_SECRET: 'PWNED_EXPANDED_SECRET' },
+          }
+        );
+        assert.strictEqual(res.status, 0);
+        assert.deepStrictEqual(
+          JSON.parse(res.stdout.trim()),
+          inputArgs,
+          'cmd.exe /d /s /c must NOT expand %EVO_TEST_SECRET% when escaped by BOOT_MCP_STUB quoteWinArg'
+        );
+      } finally {
+        safeCleanup(cmdTmp);
+      }
+    }
+  });
+
+  // 61. [Batch1-4 Lexicon Synonym Merge]
+  test('61. [Batch1-4 Lexicon Synonym Merge] compileLexiconConfig merges custom synonyms when key already exists in BASE_CONCEPT_CLUSTERS', () => {
+    const hwLexPath = path.resolve(process.cwd(), 'templates', 'lexicons', 'embedded-hardware.json');
+    const hwRaw = JSON.parse(fs.readFileSync(hwLexPath, 'utf8'));
+    const hwLex = compileLexiconConfig(hwRaw);
+
+    const netRoot = getCanonicalToken('网络', hwLex);
+    assert.strictEqual(netRoot, 'network');
+    assert.strictEqual(
+      getCanonicalToken('net', hwLex),
+      netRoot,
+      'Custom synonym "net" under existing key "网络" in embedded-hardware.json must bind to canonical root'
+    );
+
+    const customNetLex = compileLexiconConfig({
+      synonyms: {
+        网络: ['net', 'mdio', 'phy'],
+      },
+    });
+    assert.strictEqual(
+      getCanonicalToken('mdio', customNetLex),
+      'network',
+      'Custom synonym "mdio" under existing key "网络" must bind to canonical root'
+    );
+    assert.strictEqual(
+      getCanonicalToken('phy', customNetLex),
+      'network',
+      'Custom synonym "phy" under existing key "网络" must bind to canonical root'
+    );
+    assert.strictEqual(
+      getCanonicalToken('net', customNetLex),
+      'network',
+      'Custom synonym "net" under existing key "网络" must bind to canonical root'
+    );
+  });
+
+  // 62. [Batch1-5 Non-TTY Pure Flags Fallback]
+  test('62. [Batch1-5 Non-TTY Pure Flags Fallback] evo --no-color defaults to help in non-TTY without creating .evo', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const emptyWs = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-nontty-flags-'));
+    try {
+      const noColorRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, '--no-color'],
+        { cwd: emptyWs, encoding: 'utf8' }
+      );
+      assert.strictEqual(noColorRes.status, 0, 'evo --no-color must exit 0');
+      assert.ok(noColorRes.stdout.includes('Usage:'), 'Non-TTY evo --no-color must print help');
+      assert.strictEqual(fs.existsSync(path.join(emptyWs, '.evo')), false, 'Must not write .evo on help');
+
+      const jsonFlagRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, '--no-color', '--json'],
+        { cwd: emptyWs, encoding: 'utf8' }
+      );
+      assert.strictEqual(jsonFlagRes.status, 0, 'evo --no-color --json must exit 0');
+      const parsed = JSON.parse(jsonFlagRes.stdout);
+      assert.strictEqual(typeof parsed.overallScore, 'number');
+    } finally {
+      safeCleanup(emptyWs);
+    }
+  });
+
+  // 63. [Batch1-6 Non-ASCII Untracked Rollback]
+  test('63. [Batch1-6 Non-ASCII Untracked Rollback] rollback snapshot cleanly unlinks non-ASCII untracked files created during failed self-test', () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-nonascii-rb-'));
+    try {
+      child_process.spawnSync('git', ['init'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['config', 'user.name', 'Test'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws, stdio: 'ignore' });
+      // Explicitly ensure git core.quotePath is true (Git default) to test octal-quoting defense
+      child_process.spawnSync('git', ['config', 'core.quotePath', 'true'], { cwd: ws, stdio: 'ignore' });
+      fs.writeFileSync(path.join(ws, 'tracked.txt'), 'baseline\n', 'utf8');
+      child_process.spawnSync('git', ['add', 'tracked.txt'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['commit', '-m', 'init'], { cwd: ws, stdio: 'ignore' });
+
+      const preSig = captureWorkspaceMutationSignature(ws);
+      const snap = captureWorkspaceRollbackSnapshot(ws);
+
+      const nonAsciiFile = path.join(ws, '测试_未跟踪文件.txt');
+      const nestedDir = path.join(ws, '目录_中文');
+      const nestedFile = path.join(nestedDir, '嵌套_αβγ.log');
+      fs.mkdirSync(nestedDir, { recursive: true });
+      fs.writeFileSync(nonAsciiFile, 'mutated\n', 'utf8');
+      fs.writeFileSync(nestedFile, 'nested\n', 'utf8');
+
+      const midSig = captureWorkspaceMutationSignature(ws);
+      assert.notDeepStrictEqual(midSig, preSig, 'Mutation signature must detect non-ASCII untracked files');
+
+      restoreWorkspaceFromSnapshot(ws, snap, midSig);
+      assert.strictEqual(fs.existsSync(nonAsciiFile), false, 'Non-ASCII untracked file must be unlinked on rollback');
+      assert.strictEqual(fs.existsSync(nestedFile), false, 'Nested non-ASCII untracked file must be unlinked on rollback');
+      assert.deepStrictEqual(captureWorkspaceMutationSignature(ws), preSig, 'Post-rollback signature must match baseline');
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  // 64. [Batch1-7 & S3.4 Anon Sanitization & Pages Bundle]
+  test('64. [Batch1-7 & S3.4 Anon Sanitization & Pages Bundle] buildUiSnapshot(anon=true) scrubs leaks and public/ Pages bundle passes audit', () => {
+    const leakRe = /(?:\/Users\/|\/home\/|(?<![A-Za-z])[A-Za-z]:[/\\]|ghp_|sk-ant-|AKIA)/;
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-anon-scrub-'));
+    try {
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(ws, 'src', 'secret-billing.ts'), 'export function charge() { return 1; }\n', 'utf8');
+      child_process.spawnSync('git', ['init'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['config', 'user.name', 'Test'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['add', '.'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['commit', '-m', 'fix: billing bug'], { cwd: ws, stdio: 'ignore' });
+
+      runInit(ws, ['claude']);
+      fs.writeFileSync(
+        path.join(ws, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            'evo-kernel': { command: 'npx', args: ['-y', 'evo-kernel@0.3.0', 'mcp'] },
+            'internal-corp-postgres': { command: 'node', args: ['/Users/alice/.corp/mcp-pg.js'] },
+          },
+        }),
+        'utf8'
+      );
+
+      const storage = new EvoStorage(ws);
+      storage.saveMemory({
+        id: 'secret-leak-case',
+        title: 'Crash in C:\\Users\\alice\\project\\src\\secret-billing.ts',
+        l0_summary: 'Path /home/bob/keys and token ghp_1234567890abcdef leaked',
+        symptom: 'Failed with sk-ant-api03-supersecret and AKIAIOSFODNN7EXAMPLE',
+        root_cause: 'Hardcoded C:/Users/alice/config.json',
+        solution: 'Read from env',
+        target_symbols: ['src/secret-billing.ts#charge'],
+        ast_fingerprints: {},
+        created_commit: 'HEAD',
+        tags: ['security'],
+        origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const anonSnap = buildUiSnapshot(ws, { anon: true });
+      assert.ok(
+        anonSnap.score.gitHotspots.every((h) => /^src\/module-\d+\.ts$/.test(h.filePath)),
+        `anon=true must scrub gitHotspots paths to generic src/module-N.ts, got: ${JSON.stringify(anonSnap.score.gitHotspots)}`
+      );
+      const serialized = JSON.stringify(anonSnap);
+      assert.strictEqual(leakRe.test(serialized), false, `anon=true snapshot leaked sensitive pattern: ${serialized.match(leakRe)?.[0]}`);
+      assert.strictEqual(serialized.includes('internal-corp-postgres'), false, 'anon=true must scrub non-evo MCP server names');
+      assert.strictEqual(serialized.includes('secret-billing.ts'), false, 'anon=true must scrub target_symbols and gitHotspots file paths');
+    } finally {
+      safeCleanup(ws);
+    }
+
+    // Verify public/index.html and public/demo/index.html generated by scripts/build-pages.mjs
+    const buildPagesScript = path.resolve(process.cwd(), 'scripts', 'build-pages.mjs');
+    const pagesRes = child_process.spawnSync(process.execPath, [buildPagesScript], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    assert.strictEqual(pagesRes.status, 0, `build-pages.mjs failed: ${pagesRes.stderr}`);
+    for (const rel of ['public/index.html', 'public/demo/index.html']) {
+      const full = path.resolve(process.cwd(), rel);
+      assert.strictEqual(fs.existsSync(full), true, `${rel} must be generated`);
+      const html = fs.readFileSync(full, 'utf8');
+      assert.strictEqual(leakRe.test(html), false, `${rel} must contain zero path/credential leaks`);
+      assert.strictEqual(/\bon[a-z]+\s*=/i.test(html), false, `${rel} must contain zero inline event handlers`);
+    }
+  });
+
+  // 65. [S0.1 & S0.2 Zero Fabricated Token Multipliers & Benchmark --json SSOT]
+  test('65. [S0.1 & S0.2] visualizer and benchmark report real measured token metrics with zero fabricated multipliers', () => {
+    const benchRes = child_process.spawnSync(
+      process.execPath,
+      [path.resolve(process.cwd(), 'benchmarks', 'context-tax-benchmark.mjs'), '--json'],
+      { encoding: 'utf8' }
+    );
+    assert.strictEqual(benchRes.status, 0);
+    const benchJson = JSON.parse(benchRes.stdout);
+    assert.strictEqual(benchJson.benchmark.rawEagerTokensPerTurn, 27150);
+    assert.strictEqual(benchJson.benchmark.evoBasePrefixTokens, 3066);
+    assert.strictEqual(benchJson.benchmark.staticPrefixReductionPct, 88.7);
+
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s01-stats-'));
+    try {
+      runInit(ws, ['claude']);
+      const statsJson = buildEvoStatsJson(ws);
+      // 4 seed tools * 1200 = 4800 was the old fabricated number when 0 telemetry runs existed
+      assert.strictEqual(
+        statsJson.telemetry.recordedTokensSaved,
+        0,
+        'Must report 0 recordedTokensSaved instead of fabricating tools.length * 1200 when 0 recalls occurred'
+      );
+      assert.strictEqual(typeof statsJson.sessionStartTax.beforeTokens, 'number');
+      assert.strictEqual(statsJson.window7d.searchEvents, 0);
+      const statsText = renderEvoStats(ws);
+      assert.ok(
+        statsText.includes('Fixed 5-Tool Meta-MCP (~1,916 tok)'),
+        'renderEvoStats must report unified Fixed 5-Tool Meta-MCP (~1,916 tok)'
+      );
+      assert.ok(statsText.includes('* AST ='), 'renderEvoStats must include * AST terminology footnote');
+      const scoreText = renderScoreAnsi(buildScoreReport(ws));
+      assert.ok(scoreText.includes('* AST ='), 'renderScoreAnsi must include * AST terminology footnote');
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  // 66. [S1.1 Incremental 7-Day Recall Window & Recall Receipt]
+  test('66. [S1.1] EvoTelemetry recall_events tracks incremental search/inspect/run with zero backfill and L0_META_RULE_SEED < 1,100 tok', async () => {
+    assert.ok(L0_META_RULE_SEED.includes('🛡️ EvoKernel Recall:'), 'L0_META_RULE_SEED must include 1-line Recall Receipt rule');
+    assert.ok(
+      estimateTokens(L0_META_RULE_SEED) < 1100,
+      `L0_META_RULE_SEED must remain compact (< 1,100 tokens, got ${estimateTokens(L0_META_RULE_SEED)})`
+    );
+
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s11-recall-'));
+    try {
+      runInit(ws, ['claude']);
+      const storage = new EvoStorage(ws);
+      storage.saveRule({
+        id: 'sample-recall-rule',
+        title: 'Sample Recall Guardrail',
+        l0_summary: 'Verify sample recall guardrail tracking.',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        priority: 50,
+        tokens: 20,
+        confidence: 'HIGH',
+        origin: 'evolved',
+        transfer_scenarios: ['Scenario 1', 'Scenario 2'],
+        content: 'Check sample recall invariant.',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      storage.saveTool(
+        {
+          id: 'sample-recall-tool',
+          title: 'Sample Recall Tool',
+          l0_summary: 'Runs a deterministic self-test and exits 0.',
+          runtime: 'node',
+          entry_script: 'run.mjs',
+          input_schema: { type: 'object', properties: {} },
+          origin: 'evolved',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        'if (process.argv.includes("--self-test") || process.env.EVO_SELF_TEST === "1") process.exit(0);\nconsole.log("ok");\n'
+      );
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        // Record legacy hit_count directly without recall_events -> window7d must NOT backfill!
+        telemetry.syncFromDisk();
+        telemetry.recordUsage('sample-recall-rule', true);
+        const initialWin = telemetry.getWindowStats(7);
+        assert.strictEqual(
+          initialWin.searchEvents + initialWin.inspectEvents + initialWin.runEvents,
+          0,
+          'Must not backfill historical hit_count into recall_events'
+        );
+      } finally {
+        telemetry.close();
+      }
+
+      // Dispatch live MCP search, inspect, and run calls
+      const dispatcher = new EvoMcpDispatcher(ws);
+      try {
+        await dispatcher.handleToolCall('evo_search', { query: 'sample recall guardrail', workspace: ws });
+        await dispatcher.handleToolCall('evo_inspect', { id: 'sample-recall-rule', tier: 'L2', workspace: ws });
+        await dispatcher.handleToolCall('evo_run', { tool_id: 'sample-recall-tool', args: {}, workspace: ws });
+      } finally {
+        dispatcher.close();
+      }
+
+      const score = buildScoreReport(ws);
+      assert.ok(score.window7d.searchEvents >= 1, 'window7d must count evo_search');
+      assert.ok(score.window7d.inspectEvents >= 1, 'window7d must count evo_inspect');
+      assert.ok(score.window7d.runEvents >= 1, 'window7d must count evo_run');
+      assert.ok(score.window7d.adoptedCount >= 2, 'window7d adoptedCount must sum inspect + run');
+
+      const uiSnap = buildUiSnapshot(ws);
+      assert.strictEqual(uiSnap.window7d.adoptedCount, score.window7d.adoptedCount);
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  // 67. [S1.3 & S3.1 Live MCP Handshake Probe, Version Drift & stats Deprecation]
+  test('67. [S1.3 & S3.1] doctor runs live 5-tool MCP stdio handshake, flags version drift, writes zero files on empty dir, and stats deprecates cleanly', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const emptyWs = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-doc-empty-'));
+    const initWs = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-doc-probe-'));
+    try {
+      // Empty dir: zero file writes even without --no-probe
+      const emptyDoc = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--workspace', emptyWs],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(emptyDoc.status, 0);
+      assert.deepStrictEqual(fs.readdirSync(emptyWs), [], 'doctor must write zero files in an empty directory');
+
+      // Initialized dir with drifted .evo/config.json version: live stdio MCP handshake + drift warning
+      runInit(initWs, ['claude']);
+      const cfgPath = path.join(initWs, '.evo', 'config.json');
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      cfg.version = '0.1.0';
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+
+      const probeDoc = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--json', '--workspace', initWs],
+        { encoding: 'utf8', timeout: 15000 }
+      );
+      assert.strictEqual(probeDoc.status, 0, `doctor --json failed: ${probeDoc.stderr}`);
+      const probeJson = JSON.parse(probeDoc.stdout);
+      assert.ok(probeJson.mcpProbe, 'doctor --json must include mcpProbe');
+      assert.strictEqual(probeJson.mcpProbe.reachable, true, `MCP stdio probe must succeed: ${JSON.stringify(probeJson.mcpProbe)}`);
+      assert.strictEqual(probeJson.mcpProbe.toolCount, 5, 'MCP stdio probe must verify 5 tools');
+      assert.strictEqual(probeJson.mcpProbe.serverVersion, EVO_KERNEL_VERSION);
+      assert.strictEqual(
+        probeJson.versionDrift?.drifted,
+        true,
+        `doctor must report versionDrift.drifted when .evo/config.json version != CLI version (${JSON.stringify(probeJson.versionDrift)})`
+      );
+
+      // --no-probe skips spawning MCP server
+      const noProbeDoc = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--json', '--no-probe', '--workspace', initWs],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(noProbeDoc.status, 0);
+      assert.strictEqual(JSON.parse(noProbeDoc.stdout).mcpProbe.attempted, false);
+
+      // doctor --roi text output
+      const roiDoc = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--roi', '--no-probe', '--workspace', initWs],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(roiDoc.status, 0);
+      assert.ok(roiDoc.stdout.includes('Session-Start') || roiDoc.stdout.includes('7-Day Recall'));
+
+      // stats --json must emit deprecation notice on stderr while keeping stdout pure JSON
+      const statsRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'stats', '--json', '--workspace', initWs],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(statsRes.status, 0);
+      assert.ok(statsRes.stderr.includes('doctor --roi'), 'stats must emit deprecation notice to stderr');
+      const statsParsed = JSON.parse(statsRes.stdout);
+      assert.strictEqual(typeof statsParsed.capabilities.rules, 'number');
+    } finally {
+      safeCleanup(emptyWs);
+      safeCleanup(initWs);
+    }
+  });
+
+  // 68. [S1.4 Root Markdown Dedup + Gemini Settings Registration + Global _npx Heal]
+  test('68. [S1.4] auto-detect init writes .gemini/settings.json while skipping GEMINI.md when AGENTS.md exists, host-accurate duplicate seed audit ignores disjoint CLAUDE.md+AGENTS.md, and init heals global stale _npx configs', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const wsAuto = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s14-auto-'));
+    const wsDisjoint = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s14-disjoint-'));
+    const wsOverlap = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s14-overlap-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s14-home-'));
+    const prevGeminiEnv = process.env.GEMINI_CLI;
+    try {
+      // (a) Auto-detect with AGENTS.md + .gemini/ (or Stage-3 ~/.gemini + ~/.codex) MUST write .gemini/settings.json while skipping GEMINI.md
+      fs.writeFileSync(path.join(wsAuto, 'AGENTS.md'), '# Project Agents\n', 'utf8');
+      fs.mkdirSync(path.join(wsAuto, '.gemini'), { recursive: true });
+      runInit(wsAuto, { globalHomeDir: fakeHome }); // targets === undefined (auto-detect)
+      assert.strictEqual(
+        fs.existsSync(path.join(wsAuto, 'GEMINI.md')),
+        false,
+        'Auto-detect init must NOT create redundant GEMINI.md when AGENTS.md exists'
+      );
+      assert.strictEqual(
+        fs.existsSync(path.join(wsAuto, '.gemini', 'settings.json')),
+        true,
+        'Auto-detect init MUST still write .gemini/settings.json MCP registration even when GEMINI.md is skipped'
+      );
+      assert.ok(
+        fs.existsSync(path.join(wsAuto, '.gemini', 'commands')) &&
+          fs.readdirSync(path.join(wsAuto, '.gemini', 'commands')).length > 0,
+        'Auto-detect init MUST still write .gemini/commands/* slash commands'
+      );
+      // Re-running auto-detect init when .gemini/settings.json already exists must remain idempotent (still no GEMINI.md)
+      runInit(wsAuto, { globalHomeDir: fakeHome });
+      assert.strictEqual(
+        fs.existsSync(path.join(wsAuto, 'GEMINI.md')),
+        false,
+        'Second auto-detect init run must still skip GEMINI.md idempotently'
+      );
+
+      // Also verify Stage-2 env auto-detect (GEMINI_CLI=1 + CODEX_CLI=1 in clean repo) writes AGENTS.md + .gemini/settings.json without GEMINI.md
+      const wsEnvAuto = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s14-envauto-'));
+      const prevCodexEnv = process.env.CODEX_CLI;
+      try {
+        process.env.GEMINI_CLI = '1';
+        process.env.CODEX_CLI = '1';
+        runInit(wsEnvAuto, { globalHomeDir: fakeHome });
+        assert.strictEqual(fs.existsSync(path.join(wsEnvAuto, 'AGENTS.md')), true);
+        assert.strictEqual(fs.existsSync(path.join(wsEnvAuto, '.gemini', 'settings.json')), true);
+        assert.strictEqual(fs.existsSync(path.join(wsEnvAuto, 'GEMINI.md')), false);
+      } finally {
+        if (prevCodexEnv === undefined) delete process.env.CODEX_CLI;
+        else process.env.CODEX_CLI = prevCodexEnv;
+        safeCleanup(wsEnvAuto);
+      }
+
+      // (b) Disjoint hosts (CLAUDE.md + AGENTS.md) must NOT trigger duplicate-seed warnings
+      runInit(wsDisjoint, { targets: ['claude', 'agents'], globalHomeDir: fakeHome });
+      assert.strictEqual(fs.existsSync(path.join(wsDisjoint, 'CLAUDE.md')), true);
+      assert.strictEqual(fs.existsSync(path.join(wsDisjoint, 'AGENTS.md')), true);
+      const disjointAudit = runAudit(wsDisjoint);
+      assert.strictEqual(
+        disjointAudit.surfaceViolations.some((v) => v.code === 'DUPLICATE_WORKSPACE_ROOT_EVO_START'),
+        false,
+        'Disjoint CLAUDE.md + AGENTS.md must NOT trigger DUPLICATE_WORKSPACE_ROOT_EVO_START'
+      );
+      const docDisjoint = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--json', '--no-probe', '--workspace', wsDisjoint],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(docDisjoint.status, 0);
+      assert.strictEqual(JSON.parse(docDisjoint.stdout).seeds.duplicateRootSeeds, false);
+
+      // Overlapping AGENTS.md + GEMINI.md MUST trigger duplicate-seed warning in both audit and doctor
+      runInit(wsOverlap, { targets: ['claude', 'agents', 'gemini'], globalHomeDir: fakeHome });
+      assert.strictEqual(fs.existsSync(path.join(wsOverlap, 'GEMINI.md')), true, 'Explicit gemini target must still create GEMINI.md');
+      const overlapAudit = runAudit(wsOverlap);
+      assert.ok(
+        overlapAudit.surfaceViolations.find((v) => v.code === 'DUPLICATE_WORKSPACE_ROOT_EVO_START'),
+        'runAudit must flag overlapping AGENTS.md + GEMINI.md <!-- EVO:START --> blocks'
+      );
+      const docOverlap = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--json', '--no-probe', '--workspace', wsOverlap],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(docOverlap.status, 0);
+      assert.strictEqual(JSON.parse(docOverlap.stdout).seeds.duplicateRootSeeds, true);
+
+      // EvoKernel's own repo root must dogfood S1.4 with zero root GEMINI.md
+      assert.strictEqual(
+        fs.existsSync(path.resolve(process.cwd(), 'GEMINI.md')),
+        false,
+        'EvoKernel root must not carry redundant GEMINI.md alongside AGENTS.md'
+      );
+
+      // (c) Global stale _npx repair across all 6 global host configs
+      const staleEntry = {
+        command: 'node',
+        args: ['C:/Users/ghost/AppData/Local/npm-cache/_npx/deadbeef99/node_modules/evo-kernel/dist/cli/index.js', 'mcp'],
+      };
+      fs.writeFileSync(
+        path.join(fakeHome, '.claude.json'),
+        JSON.stringify({
+          mcpServers: { 'evo-kernel': staleEntry, keepOther: { command: 'echo', args: ['ok'] } },
+          projects: { [wsDisjoint]: { mcpServers: { 'evo-kernel': staleEntry } } },
+        }, null, 2),
+        'utf8'
+      );
+      fs.mkdirSync(path.join(fakeHome, '.cursor'), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { 'evo-kernel': staleEntry } }, null, 2), 'utf8');
+      fs.mkdirSync(path.join(fakeHome, '.gemini', 'antigravity'), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, '.gemini', 'settings.json'), JSON.stringify({ mcpServers: { 'evo-kernel': staleEntry } }, null, 2), 'utf8');
+      fs.writeFileSync(path.join(fakeHome, '.gemini', 'antigravity', 'mcp_config.json'), JSON.stringify({ mcpServers: { 'evo-kernel': staleEntry } }, null, 2), 'utf8');
+      fs.mkdirSync(path.join(fakeHome, '.codeium', 'windsurf'), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, '.codeium', 'windsurf', 'mcp_config.json'), JSON.stringify({ mcpServers: { 'evo-kernel': staleEntry } }, null, 2), 'utf8');
+      fs.mkdirSync(path.join(fakeHome, '.codex'), { recursive: true });
+      fs.writeFileSync(
+        path.join(fakeHome, '.codex', 'config.toml'),
+        '[mcp_servers.evo-kernel]\ncommand = "node"\nargs = ["C:/Users/ghost/AppData/Local/npm-cache/_npx/deadbeef99/node_modules/evo-kernel/dist/cli/index.js", "mcp"]\n',
+        'utf8'
+      );
+
+      const healRes = runInit(wsDisjoint, { targets: ['claude'], globalHomeDir: fakeHome });
+      for (const expectedLabel of [
+        '~/.claude.json',
+        '~/.cursor/mcp.json',
+        '~/.gemini/settings.json',
+        '~/.gemini/antigravity/mcp_config.json',
+        '~/.codeium/windsurf/mcp_config.json',
+        '~/.codex/config.toml',
+      ]) {
+        assert.ok(
+          healRes.healedGlobalMcpConfigFiles?.includes(expectedLabel),
+          `Expected global stale _npx heal to include ${expectedLabel}, got ${JSON.stringify(healRes.healedGlobalMcpConfigFiles)}`
+        );
+      }
+      for (const rel of [
+        '.claude.json',
+        path.join('.cursor', 'mcp.json'),
+        path.join('.gemini', 'settings.json'),
+        path.join('.gemini', 'antigravity', 'mcp_config.json'),
+        path.join('.codeium', 'windsurf', 'mcp_config.json'),
+        path.join('.codex', 'config.toml'),
+      ]) {
+        const healedRaw = fs.readFileSync(path.join(fakeHome, rel), 'utf8');
+        assert.strictEqual(healedRaw.includes('deadbeef99'), false, `Stale _npx path must be removed from ${rel}`);
+      }
+    } finally {
+      if (prevGeminiEnv === undefined) delete process.env.GEMINI_CLI;
+      else process.env.GEMINI_CLI = prevGeminiEnv;
+      safeCleanup(wsAuto);
+      safeCleanup(wsDisjoint);
+      safeCleanup(wsOverlap);
+      safeCleanup(fakeHome);
+    }
+  });
+
+  // 69. [S1.6, S3.2, S2 & S3.6 Strict CLI Flag Validation & Workbench 2.2 Invariants]
+  test('69. [S1.6, S3.2, S2 & S3.6] unknown CLI flags exit 1 with suggestion (hook exempt) and Workbench HTML satisfies CSP, WCAG, and 100% EN/ZH i18n parity', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+
+    const badUiFlag = child_process.spawnSync(process.execPath, [cliEntry, 'ui', '--prot', '4310'], { encoding: 'utf8' });
+    assert.strictEqual(badUiFlag.status, 1, 'Unknown flag on ui must exit 1');
+    assert.ok(badUiFlag.stderr.includes('--port'), `Must suggest --port for --prot, got: ${badUiFlag.stderr}`);
+
+    const badInitFlag = child_process.spawnSync(process.execPath, [cliEntry, 'init', '--target', 'claude'], { encoding: 'utf8' });
+    assert.strictEqual(badInitFlag.status, 1, 'Unknown flag on init must exit 1');
+    assert.ok(badInitFlag.stderr.includes('--targets'), `Must suggest --targets for --target, got: ${badInitFlag.stderr}`);
+
+    const hookUnknownFlag = child_process.spawnSync(
+      process.execPath,
+      [cliEntry, 'hook', 'stop', '--unknown-future-host-flag'],
+      { encoding: 'utf8' }
+    );
+    assert.strictEqual(hookUnknownFlag.status, 0, 'evo hook must remain exempt from strict unknown-flag exit 1');
+
+    // Workbench 2.2 HTML & EN/ZH dictionary parity checks
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-wb22-inv-'));
+    try {
+      runInit(ws, ['claude']);
+      const snap = buildUiSnapshot(ws);
+      const html = renderUiClientHtml(snap, { isExport: true, anon: true });
+
+      assert.strictEqual(/\bon[a-z]+\s*=/i.test(html), false, 'Zero inline on* event handlers allowed');
+      assert.strictEqual(html.includes('confirm('), false, 'Zero confirm() dialogs allowed');
+      assert.strictEqual(html.includes('max-width: 360px;'), false, 'Zero max-width: 360px allowed');
+      assert.strictEqual(html.toLowerCase().includes('#71717a'), false, 'Muted text must use WCAG AA #8b8b95 instead of #71717a');
+
+      for (const requiredToken of [
+        '--text-muted: #8b8b95',
+        '--text-xs:',
+        '--text-2xl:',
+        '--kind-rule:',
+        '--kind-skill:',
+        '--kind-tool:',
+        '--kind-memory:',
+        ':focus-visible',
+        'prefers-reduced-motion: reduce',
+        'role="dialog"',
+        'aria-modal="true"',
+        'tr.tabIndex = 0;',
+        'id="stage-kpi-strip"',
+        'id="needs-attention-panel"',
+        'id="sse-disconnect-banner"',
+      ]) {
+        assert.ok(html.includes(requiredToken), `Workbench HTML missing required token: ${requiredToken}`);
+      }
+
+      // Extract i18n dictionary object and prove 100% EN/ZH key parity & translated ZH headers
+      const i18nStart = html.indexOf('var i18n = {');
+      const dictEnd = html.indexOf('function el(id)', i18nStart);
+      assert.ok(i18nStart > 0 && dictEnd > i18nStart, 'Must locate var i18n block in rendered Workbench script');
+      const i18nObj = new Function(`${html.slice(i18nStart, dictEnd)}\nreturn i18n;`)() as {
+        en: Record<string, string>;
+        zh: Record<string, string>;
+      };
+      const enKeys = Object.keys(i18nObj.en).sort();
+      const zhKeys = Object.keys(i18nObj.zh).sort();
+      assert.deepStrictEqual(enKeys, zhKeys, 'i18n.en and i18n.zh must have 100% identical keys');
+      for (const thKey of [
+        'thCapType',
+        'thCapTitle',
+        'thCapScope',
+        'thCapAttr',
+        'thCapActions',
+        'thHsPath',
+        'thHsFrag',
+        'thHsCommits',
+        'thHsMems',
+        'thHsStatus',
+        'thHsAction',
+      ]) {
+        assert.ok(
+          /[\u4e00-\u9fff]/.test(i18nObj.zh[thKey] || ''),
+          `ZH table header ${thKey} must be Chinese (got "${i18nObj.zh[thKey]}")`
+        );
+      }
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  // 70. [Red-Team Deep Regression Audit: Lexicon Canonical, Multi-line Codex TOML, Memory/Refactor CLI, Relative Anon Scrub & Demo Telemetry]
+  test('70. [Red-Team Regression] preserves default canonical tokens, parses multi-line Codex TOML, handles memory/refactor --workspace/--json, scrubs relative paths, and validates /demo/ snapshot', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+
+    // (a) Default lexicon must NOT collapse CORE_SOFTWARE_SYNONYMS into unrelated canonical roots
+    assert.strictEqual(getCanonicalToken('test'), 'test');
+    assert.strictEqual(getCanonicalToken('trace'), 'trace');
+    assert.strictEqual(getCanonicalToken('qa'), 'qa');
+    assert.strictEqual(getCanonicalToken('net'), 'network');
+
+    // (b) Multi-line Codex TOML args = [...] and quoted [mcp_servers."evo-kernel"]
+    const multilineToml = [
+      '[mcp_servers."evo-kernel"]',
+      'command = "node"',
+      'args = [',
+      '  "C:/Users/ghost/AppData/Local/npm-cache/_npx/dead999/node_modules/evo-kernel/dist/cli/index.js", # inline comment',
+      '  "mcp",',
+      ']',
+    ].join('\n');
+    const parsedToml = extractCodexTomlEvoEntry(multilineToml);
+    assert.ok(parsedToml, 'extractCodexTomlEvoEntry must parse quoted [mcp_servers."evo-kernel"]');
+    assert.strictEqual(parsedToml!.command, 'node');
+    assert.deepStrictEqual(parsedToml!.args, [
+      'C:/Users/ghost/AppData/Local/npm-cache/_npx/dead999/node_modules/evo-kernel/dist/cli/index.js',
+      'mcp',
+    ]);
+    assert.strictEqual(hasStaleNpxMcpEntry(parsedToml), true, 'Multi-line Codex TOML stale _npx entry must be flagged');
+
+    // (c) evo memory refresh --workspace <dir> --json & evo refactor --json + relative anon scrubbing
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-redteam-70-'));
+    try {
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(ws, 'src', 'secret-billing.ts'), 'export function chargeUser() { return 42; }\n', 'utf8');
+      child_process.spawnSync('git', ['init'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['config', 'user.name', 'Test'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['add', '.'], { cwd: ws, stdio: 'ignore' });
+      child_process.spawnSync('git', ['commit', '-m', 'fix: billing bug'], { cwd: ws, stdio: 'ignore' });
+
+      runInit(ws, ['claude']);
+      const storage = new EvoStorage(ws);
+      storage.saveMemory({
+        id: 'rel-path-leak',
+        title: 'Regression in src/secret-billing.ts chargeUser',
+        l0_summary: 'Relative path src/secret-billing.ts without OS home prefix',
+        symptom: 'secret-billing.ts threw on zero amount',
+        root_cause: 'Missing guard in src/secret-billing.ts',
+        solution: 'Validate input in src/secret-billing.ts',
+        target_symbols: ['src/secret-billing.ts#chargeUser'],
+        ast_fingerprints: {},
+        created_commit: '0000000',
+        tags: ['billing'],
+        origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      const memRefreshRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'memory', 'refresh', '--workspace', ws, '--json'],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(memRefreshRes.status, 0, `memory refresh --workspace --json failed: ${memRefreshRes.stderr}`);
+      const memRefreshJson = JSON.parse(memRefreshRes.stdout);
+      assert.strictEqual(memRefreshJson.total, 1);
+      assert.strictEqual(
+        memRefreshJson.verified,
+        1,
+        '--workspace <dir> value must NOT be parsed as positional targetId; memory must refresh to VERIFIED'
+      );
+      assert.strictEqual(memRefreshJson.stale, 0);
+
+      const refactorRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'refactor', '--workspace', ws, '--json'],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(refactorRes.status, 0, `refactor --json failed: ${refactorRes.stderr}`);
+      const refactorJson = JSON.parse(refactorRes.stdout);
+      assert.ok(Array.isArray(refactorJson.stages), 'refactor --json must emit stages array');
+      assert.ok(Array.isArray(refactorJson.appliedChanges), 'refactor --json must emit appliedChanges array');
+
+      // Verify doctor --json has zero duplicate drift reasons and doctor text has * AST footnote
+      const cfgPath = path.join(ws, '.evo', 'config.json');
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      cfg.version = '0.1.0';
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+
+      const docJsonRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--json', '--no-probe', '--workspace', ws],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(docJsonRes.status, 0);
+      const docJson = JSON.parse(docJsonRes.stdout);
+      const reasons: string[] = docJson.versionDrift?.reasons || [];
+      assert.strictEqual(new Set(reasons).size, reasons.length, `versionDrift.reasons must not contain duplicates: ${JSON.stringify(reasons)}`);
+
+      const docTextRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--no-probe', '--workspace', ws],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(docTextRes.status, 0);
+      assert.ok(docTextRes.stdout.includes('* AST ='), 'doctor text output must include * AST terminology footnote');
+
+      // Verify anon=true scrubs relative file paths AND keeps hotspot-to-memory file paths 1-for-1 aligned
+      const anonSnap = buildUiSnapshot(ws, { anon: true });
+      const anonJson = JSON.stringify(anonSnap);
+      assert.strictEqual(anonJson.includes('secret-billing.ts'), false, 'anon=true must scrub relative file paths without home prefixes');
+      assert.strictEqual(anonSnap.score.gitHotspots[0]?.filePath, 'src/module-1.ts');
+      assert.strictEqual(anonSnap.memories[0]?.target_symbols?.[0], 'src/module-1.ts#chargeUser');
+    } finally {
+      safeCleanup(ws);
+    }
+
+    // (d) Verify public/demo/index.html & public/index.html (auto-build pages if absent so standalone test runs pass)
+    const demoHtmlPath = path.resolve(process.cwd(), 'public', 'demo', 'index.html');
+    const landingHtmlPath = path.resolve(process.cwd(), 'public', 'index.html');
+    if (!fs.existsSync(demoHtmlPath) || !fs.existsSync(landingHtmlPath)) {
+      const buildPagesRes = child_process.spawnSync(
+        process.execPath,
+        [path.resolve(process.cwd(), 'scripts', 'build-pages.mjs')],
+        { cwd: process.cwd(), encoding: 'utf8' }
+      );
+      assert.strictEqual(buildPagesRes.status, 0, `build-pages.mjs failed: ${buildPagesRes.stderr}`);
+    }
+    assert.strictEqual(fs.existsSync(demoHtmlPath), true, 'public/demo/index.html must exist');
+    assert.strictEqual(fs.existsSync(landingHtmlPath), true, 'public/index.html must exist');
+    const landingHtml = fs.readFileSync(landingHtmlPath, 'utf8');
+    assert.ok(
+      landingHtml.includes('./assets/workbench-showcase.'),
+      'public/index.html must embed real workbench-showcase preview visual'
+    );
+    assert.ok(
+      landingHtml.includes('href="./demo/"') &&
+        landingHtml.includes('class="showcase-card"') &&
+        landingHtml.includes('class="showcase-link"'),
+      'public/index.html showcase preview must link directly to ./demo/'
+    );
+
+    const demoHtml = fs.readFileSync(demoHtmlPath, 'utf8');
+    const snapMatch = demoHtml.match(/var snapshot = (\{[\s\S]*?\});\s*\r?\n\s*var token =/);
+    assert.ok(snapMatch, 'public/demo/index.html must inline var snapshot JSON');
+    const demoSnap = JSON.parse(snapMatch![1]);
+    assert.ok(demoSnap.skills.length >= 2, `Demo snapshot must include seed skills, got ${demoSnap.skills.length}`);
+    assert.ok(demoSnap.tools.length >= 4, `Demo snapshot must include seed micro-tools, got ${demoSnap.tools.length}`);
+    assert.ok(demoSnap.score.overallScore >= 90, `Demo overallScore must be Grade A/A+ (>=90), got ${demoSnap.score.overallScore}`);
+    assert.ok(
+      demoSnap.score.contextSavings.savingsPercent >= 88 && demoSnap.score.contextSavings.savingsPercent <= 90,
+      `Demo contextSavings.savingsPercent must align with ~88.7% / 89% (88-90%), got ${demoSnap.score.contextSavings.savingsPercent}%`
+    );
+    const allDemoCaps = [...demoSnap.rules, ...demoSnap.skills, ...demoSnap.tools, ...demoSnap.memories];
+    const helpedCaps = allDemoCaps.filter((c: any) => c.attribution === 'helped' && c.hit_count > 0);
+    assert.ok(helpedCaps.length >= 3, `Demo snapshot must showcase >=3 capabilities with helped attribution & hits, got ${helpedCaps.length}`);
+    assert.ok(
+      demoSnap.window7d.helpedCount <= demoSnap.window7d.adoptedCount,
+      `window7d.helpedCount (${demoSnap.window7d.helpedCount}) must be <= adoptedCount (${demoSnap.window7d.adoptedCount})`
+    );
+  });
+
+  // 71. [Round 2 Hardening: Real .evo/ Token Measurement, Unified 5-Tool Constant, --no-color/--ascii, Optimize/Doctor/Stats CLI & Workbench 2.3]
+  test('71. [Round 2 Hardening] measures real .evo/ tokens + unified 1916 Meta-MCP constant, enforces --no-color & 7-bit --ascii across CLI, wires optimize/doctor --roi --json/stats/packaging, and locks Workbench static/SSE/keyboard/SVG invariants', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+
+    // (a) Unified 5-Tool Meta-MCP schema constant (1916 tok) & real on-disk .evo/ file token measurement (zero hardcoded multipliers)
+    assert.strictEqual(META_MCP_5_TOOLS_TOKENS, 1916);
+    const benchSrc = fs.readFileSync(path.resolve(process.cwd(), 'benchmarks', 'context-tax-benchmark.mjs'), 'utf8');
+    assert.ok(benchSrc.includes('1916'), 'benchmarks/context-tax-benchmark.mjs must use 1916 token constant');
+
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-r2-71-'));
+    try {
+      runInit(ws, ['claude']);
+      const storage = new EvoStorage(ws);
+      storage.saveMemory({
+        id: 'disk-token-probe',
+        title: 'Probe memory',
+        l0_summary: 'Short summary',
+        symptom: 'Short symptom',
+        root_cause: 'Short cause',
+        solution: 'Short fix',
+        target_symbols: [],
+        ast_fingerprints: {},
+        created_commit: '0000000',
+        tags: [],
+        origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      const scoreBefore = buildScoreReport(ws);
+      // Expand the on-disk memory file by ~9000 bytes (~2250 tokens, well above evoSeedTokens floor) without changing memory count
+      const memFile = path.join(storage.memoriesDir, 'disk-token-probe.md');
+      fs.appendFileSync(memFile, '\n' + 'Detailed root-cause trace payload line.\n'.repeat(250), 'utf8');
+      const scoreAfter = buildScoreReport(ws);
+      assert.ok(
+        scoreAfter.contextSavings.beforeTokens >= scoreBefore.contextSavings.beforeTokens + 1000,
+        `buildScoreReport beforeTokens must reflect real on-disk .evo/ file sizes (${scoreBefore.contextSavings.beforeTokens} -> ${scoreAfter.contextSavings.beforeTokens})`
+      );
+
+      const statsText = renderEvoStats(ws);
+      assert.ok(
+        statsText.includes('1,916 tok'),
+        `renderEvoStats must display unified Fixed 5-Tool Meta-MCP (~1,916 tok), got: ${statsText}`
+      );
+
+      // Verify openSqliteReadOnly opens telemetry DB cleanly
+      const roDb = openSqliteReadOnly(path.join(ws, '.evo', '.cache', 'telemetry.db'));
+      try {
+        const row = roDb.prepare('SELECT COUNT(*) as c FROM sqlite_master').get() as { c: number };
+        assert.ok(row.c >= 0);
+      } finally {
+        roDb.close();
+      }
+
+      // (b) S1.7: --no-color / non-TTY pipe emits ZERO ANSI \x1b[, and --ascii emits 100% 7-bit ASCII /^[\x00-\x7F]*$/
+      assert.strictEqual(isColorEnabled(['--no-color'], {}, true), false);
+      assert.strictEqual(isColorEnabled([], { NO_COLOR: '1', FORCE_COLOR: '1' }, true), false);
+      assert.strictEqual(isColorEnabled([], {}, false), false);
+      assert.strictEqual(isColorEnabled([], { FORCE_COLOR: '1' }, false), true);
+      assert.strictEqual(isAsciiMode(['--ascii'], {}), true);
+      assert.strictEqual(isAsciiMode([], { EVO_ASCII: '1' }), true);
+      assert.match(formatTerminalOutput('\x1b[32m╭─ 🧬 EvoKernel → 100% ✓ ─╮\x1b[0m', { color: false, ascii: true }), /^[\x00-\x7F]*$/);
+
+      const cliCommandsToCheck: string[][] = [
+        ['score', '--workspace', ws],
+        ['doctor', '--no-probe', '--roi', '--workspace', ws],
+        ['tree', '--workspace', ws],
+        ['stats', '--workspace', ws],
+        ['audit', '--workspace', ws],
+      ];
+      for (const cmdArgs of cliCommandsToCheck) {
+        // Non-TTY pipe default (without FORCE_COLOR) must emit zero \x1b[
+        const pipeEnv = { ...process.env };
+        delete pipeEnv.FORCE_COLOR;
+        const pipeRes = child_process.spawnSync(process.execPath, [cliEntry, ...cmdArgs], {
+          encoding: 'utf8',
+          env: pipeEnv,
+        });
+        assert.strictEqual(pipeRes.status, 0, `${cmdArgs[0]} failed: ${pipeRes.stderr}`);
+        assert.strictEqual(
+          pipeRes.stdout.includes('\x1b['),
+          false,
+          `Non-TTY pipe output for "${cmdArgs.join(' ')}" leaked ANSI escape codes`
+        );
+
+        // --ascii (even with FORCE_COLOR=1 unless --no-color, test both) must emit pure 7-bit ASCII glyphs
+        const asciiRes = child_process.spawnSync(
+          process.execPath,
+          [cliEntry, ...cmdArgs, '--no-color', '--ascii'],
+          { encoding: 'utf8', env: { ...pipeEnv, FORCE_COLOR: '1' } }
+        );
+        assert.strictEqual(asciiRes.status, 0);
+        assert.strictEqual(asciiRes.stdout.includes('\x1b['), false, `--no-color must override FORCE_COLOR on ${cmdArgs[0]}`);
+        assert.match(
+          asciiRes.stdout,
+          /^[\x00-\x7F]*$/,
+          `--ascii output for "${cmdArgs.join(' ')}" contained non-ASCII characters:\n${asciiRes.stdout}`
+        );
+      }
+
+      // (c) S1.6 / S3.1 / Packaging: optimize flags, doctor --roi --json, hidden stats alias, package.json exclusions
+      const parsedOpt = parseOptimizeFlags(
+        ['--trajectories', 'a.jsonl,b.jsonl', '--deliverables=out/report.xlsx', '--k=4', '--dim=inv'],
+        ws
+      );
+      assert.deepStrictEqual(parsedOpt.trajectories, [path.resolve(ws, 'a.jsonl'), path.resolve(ws, 'b.jsonl')]);
+      assert.deepStrictEqual(parsedOpt.deliverables, [path.resolve(ws, 'out/report.xlsx')]);
+      assert.strictEqual(parsedOpt.k, 4);
+      assert.strictEqual(parsedOpt.dim, 'inv');
+
+      const badCandidatesFlag = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'optimize', '--candidates', '2', '--workspace', ws],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(badCandidatesFlag.status, 1, 'Removed --candidates flag must fail strict validation with exit 1');
+
+      const docRoiJsonRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--roi', '--json', '--no-probe', '--workspace', ws],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(docRoiJsonRes.status, 0);
+      const docRoiJson = JSON.parse(docRoiJsonRes.stdout);
+      assert.ok(docRoiJson.roi && typeof docRoiJson.roi === 'object', 'doctor --roi --json must include roi breakdown object');
+      assert.strictEqual(docRoiJson.roi.metaMcpTokens, 1916);
+
+      const helpRes = child_process.spawnSync(process.execPath, [cliEntry, '--help'], { encoding: 'utf8' });
+      assert.strictEqual(helpRes.status, 0);
+      assert.strictEqual(/\bevo stats\b/.test(helpRes.stdout), false, 'Main evo --help must omit deprecated stats command');
+
+      const statsAliasRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'stats', '--workspace', ws],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(statsAliasRes.status, 0, 'Hidden evo stats alias must continue exiting 0');
+      assert.ok(statsAliasRes.stderr.includes('doctor --roi'), 'evo stats must emit deprecation hint to stderr');
+
+      const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8'));
+      for (const allowed of [
+        'bin',
+        'dist/index.js',
+        'dist/cli',
+        'dist/core',
+        'dist/ide',
+        'dist/mcp',
+        'dist/templates',
+        'scripts/antigravity_hook.mjs',
+        'scripts/boot-mcp.mjs',
+        'scripts/build.mjs',
+        'templates',
+      ]) {
+        assert.ok(
+          pkgJson.files.includes(allowed),
+          `package.json files array must include positive allowlist entry "${allowed}"`
+        );
+      }
+      for (const excluded of [
+        'dist',
+        'scripts',
+        'dist/tests',
+        'scripts/build-pages.mjs',
+        'scripts/render-promo-assets.mjs',
+        'scripts/test.mjs',
+        'scripts/demo.tape',
+      ]) {
+        assert.strictEqual(
+          pkgJson.files.includes(excluded),
+          false,
+          `package.json files array must not include broad or dev-only entry "${excluded}"`
+        );
+      }
+      assert.strictEqual(
+        pkgJson.files.some((entry: string) => entry.startsWith('!')),
+        false,
+        `package.json files must contain zero unsupported !-prefixed negation entries: ${JSON.stringify(pkgJson.files)}`
+      );
+      for (const relEntry of pkgJson.files as string[]) {
+        assert.strictEqual(
+          fs.existsSync(path.resolve(process.cwd(), relEntry)),
+          true,
+          `package.json files allowlist entry "${relEntry}" must exist on disk`
+        );
+      }
+
+      // (d) S2.1, S2.3, S2.4, S2.5, S3.3, S3.6 Workbench static snapshot, SSE backoff, 7d recall rail, keyboard, tokens & SVGs
+      const snap = buildUiSnapshot(ws);
+      const exportHtml = renderUiClientHtml(snap, { isExport: true, anon: true });
+      assert.ok(exportHtml.includes('STATIC SNAPSHOT') && exportHtml.includes('静态快照'), 'Static export must include STATIC SNAPSHOT / 静态快照');
+      assert.ok(exportHtml.includes('status-dot-pulse snapshot'), 'Static export must render non-pulsing snapshot status dot');
+      assert.ok(exportHtml.includes('[1500, 3000, 6000, 15000]'), 'Live SSE client must configure exponential backoff [1500, 3000, 6000, 15000]');
+      assert.ok(exportHtml.includes('id="bento-recall-7d"'), 'Left rail must include #bento-recall-7d card');
+      assert.ok(exportHtml.includes("e.key === 'ArrowDown'") && exportHtml.includes("e.key === 'ArrowUp'"), 'Table rows must wire ArrowUp/ArrowDown keyboard focus');
+      assert.ok(exportHtml.includes("selectedCapability = null"), 'Escape handler must support clearing selectedCapability on desktop');
+      assert.ok(exportHtml.includes("return 'var(--kind-rule)'"), 'kindSemanticColor must return CSS var(--kind-*) tokens');
+
+      const styleBlock = exportHtml.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] || '';
+      const styleOutsideRoot = styleBlock.replace(/:root\s*\{[\s\S]*?\}/, '');
+      assert.strictEqual(
+        /font-size:\s*\d+px/i.test(styleOutsideRoot),
+        false,
+        'Workbench CSS outside :root must use --text-* tokens with zero hardcoded font-size: ...px'
+      );
+      for (const bannedEmoji of ['🔔', '🗑️', '🟢', '⏸', '💡', '🔄', '⚠️', '👁', '🩺', '⌫']) {
+        assert.strictEqual(exportHtml.includes(bannedEmoji), false, `Workbench HTML must replace emoji ${bannedEmoji} with inline SVG`);
+      }
+
+      const uiServerSrc = fs.readFileSync(path.resolve(process.cwd(), 'src', 'cli', 'ui.ts'), 'utf8');
+      assert.strictEqual(uiServerSrc.includes('EvoKernel Workbench 2.0'), false, 'ui.ts must not contain versioned EvoKernel Workbench 2.0 string');
+      assert.ok(uiServerSrc.includes('Archived via EvoKernel Workbench'), 'ui.ts must use clean Archived via EvoKernel Workbench');
+    } finally {
+      safeCleanup(ws);
+    }
+  });
+
+  test('72. [Round-2 Adversarial Review] FORCE_COLOR=0/false, ASCII box-width alignment, openSqliteReadOnly Node 22.5 guard, harness MCP parity & SSE warn/resync', async () => {
+    const ws = createTempWorkspace();
+    const fakeHome = createTempWorkspace();
+    try {
+      // (1) FORCE_COLOR=0 and FORCE_COLOR=false must disable color on both TTY and non-TTY
+      assert.strictEqual(isColorEnabled([], { FORCE_COLOR: '0' }, true), false);
+      assert.strictEqual(isColorEnabled([], { FORCE_COLOR: '0' }, false), false);
+      assert.strictEqual(isColorEnabled([], { FORCE_COLOR: 'false' }, true), false);
+      assert.strictEqual(isColorEnabled([], { FORCE_COLOR: 'false' }, false), false);
+      assert.strictEqual(isColorEnabled([], { FORCE_COLOR: '1' }, false), true);
+      assert.strictEqual(isColorEnabled(['--no-color'], { FORCE_COLOR: '1' }, true), false);
+
+      // (2) score --ascii header box must align to exact 70 columns and convert '×' -> 'x'
+      const asciiConverted = formatTerminalOutput('3 × 5 = 15', { color: false, ascii: true });
+      assert.strictEqual(asciiConverted, '3 x 5 = 15');
+
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const scoreRep = buildScoreReport(ws, { mode: 'local' });
+      const asciiScore = renderScoreAnsi(scoreRep, { noColor: true, ascii: true });
+      assert.match(asciiScore, /^[\x00-\x7F]*$/);
+      const boxLines = asciiScore
+        .split('\n')
+        .filter((l) => l.startsWith('+---') || l.startsWith('|   EvoKernel Workbench'));
+      assert.strictEqual(boxLines.length, 3, 'Expected top border, title row, and bottom border');
+      assert.strictEqual(boxLines[0].length, 70);
+      assert.strictEqual(boxLines[1].length, 70, `Title row overflowed border: "${boxLines[1]}"`);
+      assert.strictEqual(boxLines[2].length, 70);
+
+      // bootstrap --ascii & virtualize --dry-run --ascii must be pure 7-bit ASCII and state 6-stage Gatekeeper
+      const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+      const bootAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'bootstrap', '--ascii', '--no-color', '--workspace', ws],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(bootAscii.status, 0, bootAscii.stderr);
+      assert.match(bootAscii.stdout, /^[\x00-\x7F]*$/, 'evo bootstrap --ascii leaked non-ASCII');
+      assert.ok(bootAscii.stdout.includes('6-stage Gatekeeper'), 'bootstrap output must say 6-stage Gatekeeper');
+
+      const virtAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'virtualize', '--dry-run', '--ascii', '--no-color', '--workspace', ws],
+        { encoding: 'utf8' }
+      );
+      assert.strictEqual(virtAscii.status, 0, virtAscii.stderr);
+      assert.match(virtAscii.stdout, /^[\x00-\x7F]*$/, 'evo virtualize --ascii leaked non-ASCII');
+
+      // (3) openSqliteReadOnly: Node 22.5-22.11 option TypeError falls back to 1-arg; SQLite runtime error rethrows; missing path throws ENOENT
+      const missingDbPath = path.join(ws, 'does-not-exist.db');
+      assert.throws(
+        () => openSqliteReadOnly(missingDbPath),
+        (err: any) => err?.code === 'ENOENT' && /does not exist/.test(String(err))
+      );
+      assert.strictEqual(fs.existsSync(missingDbPath), false, 'openSqliteReadOnly must never create missing DB');
+
+      const existingDbStub = path.join(ws, 'stub.db');
+      fs.writeFileSync(existingDbStub, '', 'utf8');
+      const ctorCalls: number[] = [];
+      class Node225MockDb {
+        constructor(_p: string, opts?: { readOnly?: boolean }) {
+          ctorCalls.push(opts ? 2 : 1);
+          if (opts) {
+            throw new TypeError('Unknown option "readOnly"');
+          }
+        }
+      }
+      const fallbackDb = openSqliteReadOnly(existingDbStub, Node225MockDb as any);
+      assert.ok(fallbackDb);
+      assert.deepStrictEqual(ctorCalls, [2, 1], 'Should try { readOnly: true } first, then fallback to 1-arg constructor');
+
+      let rwRetriedOnCorrupt = false;
+      class CorruptSqliteMockDb {
+        constructor(_p: string, opts?: { readOnly?: boolean }) {
+          if (!opts) rwRetriedOnCorrupt = true;
+          const err: NodeJS.ErrnoException = new Error('database disk image is malformed');
+          err.code = 'ERR_SQLITE_ERROR';
+          throw err;
+        }
+      }
+      assert.throws(() => openSqliteReadOnly(existingDbStub, CorruptSqliteMockDb as any), /malformed/);
+      assert.strictEqual(rwRetriedOnCorrupt, false, 'Must NOT retry read-write when ERR_SQLITE_ERROR is thrown');
+
+      // (4) Workspace MCP gateway parity across Windsurf (.windsurf/mcp.json), Cline (.cline/mcp.json), and Gemini (.gemini/settings.json)
+      const staleEntry = {
+        command: 'node',
+        args: ['/tmp/_npx/deadbeef999/node_modules/evo-kernel/dist/cli/index.js', 'mcp'],
+      };
+      fs.mkdirSync(path.join(ws, '.windsurf'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, '.windsurf', 'mcp.json'),
+        JSON.stringify({ mcpServers: { 'evo-kernel': staleEntry } }, null, 2),
+        'utf8'
+      );
+      fs.mkdirSync(path.join(ws, '.cline'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, '.cline', 'mcp.json'),
+        JSON.stringify({ mcpServers: { 'evo-kernel': staleEntry } }, null, 2),
+        'utf8'
+      );
+      fs.mkdirSync(path.join(ws, '.gemini'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, '.gemini', 'settings.json'),
+        JSON.stringify(
+          {
+            mcpServers: {
+              github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] },
+            },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+
+      const preHeal = checkMcpGatewayConfigs(ws, fakeHome);
+      assert.ok(
+        preHeal.foundConfigs.includes('.windsurf/mcp.json') &&
+          preHeal.foundConfigs.includes('.cline/mcp.json'),
+        `Expected checkMcpGatewayConfigs to detect .windsurf/mcp.json and .cline/mcp.json, got: ${JSON.stringify(preHeal.foundConfigs)}`
+      );
+      assert.strictEqual(preHeal.staleNpxPath, true, 'Expected staleNpxPath=true before init');
+
+      runInit(ws, ['claude'], { globalHomeDir: fakeHome });
+
+      const postHeal = checkMcpGatewayConfigs(ws, fakeHome);
+      assert.strictEqual(postHeal.staleNpxPath, false, 'runInit must heal stale _npx in .windsurf/mcp.json and .cline/mcp.json');
+      assert.strictEqual(fs.readFileSync(path.join(ws, '.windsurf', 'mcp.json'), 'utf8').includes('_npx'), false);
+      assert.strictEqual(fs.readFileSync(path.join(ws, '.cline', 'mcp.json'), 'utf8').includes('_npx'), false);
+
+      const mcpTax = inspectMcpTaxSnapshot(ws, { includeGlobal: false });
+      assert.ok(
+        mcpTax.servers.some((s) => s.name === 'github' && s.source.includes('.gemini/settings.json')),
+        'inspectMcpTaxSnapshot must detect third-party MCP servers in .gemini/settings.json'
+      );
+
+      const wsGeminiOnly = createTempWorkspace();
+      try {
+        fs.mkdirSync(path.join(wsGeminiOnly, '.gemini'), { recursive: true });
+        fs.writeFileSync(
+          path.join(wsGeminiOnly, '.gemini', 'settings.json'),
+          JSON.stringify(
+            {
+              mcpServers: {
+                github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] },
+              },
+            },
+            null,
+            2
+          ),
+          'utf8'
+        );
+        const geminiRoi = buildEvoStatsJson(wsGeminiOnly);
+        assert.strictEqual(geminiRoi.harnesses.mcpConfigured, true);
+        assert.ok(
+          geminiRoi.sessionStartTax.beforeTokens > 0,
+          'buildEvoStatsJson must compute MCP savings when only .gemini/settings.json is present'
+        );
+      } finally {
+        safeCleanup(wsGeminiOnly);
+      }
+
+      // (5) Workbench SSE warning toast, reconnect resync, .search-trigger mobile CSS & i18n parity
+      const snap = buildUiSnapshot(ws);
+      const liveHtml = renderUiClientHtml(snap, { token: 'test-tok', isExport: false });
+      assert.ok(
+        liveHtml.includes("showToast('warn', curDict.sseDisconnectedToast)"),
+        'Live SSE disconnect must trigger warning toast'
+      );
+      assert.ok(
+        liveHtml.includes('if (wasOffline) {\n          refreshSnapshotFromServer();\n        }'),
+        'Live SSE open recovery must refresh snapshot when recovering from offline'
+      );
+      assert.strictEqual(
+        liveHtml.includes('.search-trigger-btn'),
+        false,
+        'Dead .search-trigger-btn selector must be replaced with .search-trigger'
+      );
+
+      const uiSrv = await startUiServer(ws, { port: 0, token: 'fav-tok' });
+      try {
+        const favRes = await fetch(`http://127.0.0.1:${uiSrv.port}/favicon.ico`);
+        assert.strictEqual(favRes.status, 204, 'GET /favicon.ico must return 204 without triggering 401 console error');
+        const unauthSnap = await fetch(`http://127.0.0.1:${uiSrv.port}/api/snapshot`);
+        assert.strictEqual(unauthSnap.status, 401, 'GET /api/snapshot without token must still return 401');
+      } finally {
+        await uiSrv.close();
+      }
+    } finally {
+      safeCleanup(ws);
+      safeCleanup(fakeHome);
+    }
+  });
+
+  test('73. [Stage-Gate Final Blockers] pages.yml -rnIE leak scan on public/, CI npm pack allowlist, 7-bit --ascii across all remaining CLI surfaces, unified optimize --help, boot-mcp flag parity & zero-stale SVG card', async () => {
+    const repoRoot = path.resolve(process.cwd());
+    const cliEntry = path.join(repoRoot, 'dist', 'cli', 'index.js');
+
+    // (1) [BLOCK-1] pages.yml uses grep -rnIE (or --binary-files=without-match) AND exact leak check passes on public/
+    const pagesYml = fs.readFileSync(path.join(repoRoot, '.github', 'workflows', 'pages.yml'), 'utf8');
+    assert.strictEqual(
+      pagesYml.includes('if grep -rnE '),
+      false,
+      'pages.yml must not use binary-matching grep -rnE against public/'
+    );
+    const grepMatch = pagesYml.match(
+      /grep\s+(-rnIE|-rnE\s+--binary-files=without-match|--binary-files=without-match\s+-rnE)\s+'([^']+)'\s+public\//
+    );
+    assert.ok(grepMatch, 'pages.yml must invoke grep -rnIE (or --binary-files=without-match) with leak regex on public/');
+    const leakPattern = grepMatch[2];
+    const leakRegex = new RegExp(leakPattern);
+
+    const publicDir = path.join(repoRoot, 'public');
+    if (!fs.existsSync(path.join(publicDir, 'index.html')) || !fs.existsSync(path.join(publicDir, 'demo', 'index.html'))) {
+      const buildPagesRes = child_process.spawnSync(
+        process.execPath,
+        [path.join(repoRoot, 'scripts', 'build-pages.mjs')],
+        { cwd: repoRoot, encoding: 'utf8' }
+      );
+      assert.strictEqual(buildPagesRes.status, 0, `build-pages.mjs failed: ${buildPagesRes.stderr}`);
+    }
+
+    function collectFilesRecursive(dir: string): string[] {
+      const out: string[] = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          out.push(...collectFilesRecursive(full));
+        } else if (entry.isFile()) {
+          out.push(full);
+        }
+      }
+      return out;
+    }
+
+    const publicFiles = collectFilesRecursive(publicDir);
+    assert.ok(publicFiles.length >= 2, 'public/ must contain generated Pages files');
+    let scannedTextFiles = 0;
+    const leakedHits: string[] = [];
+    for (const filePath of publicFiles) {
+      const buf = fs.readFileSync(filePath);
+      // Mirror GNU grep -I binary detection (skip files containing NUL byte in stream)
+      if (buf.includes(0)) {
+        continue;
+      }
+      scannedTextFiles++;
+      const lines = buf.toString('utf8').split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        if (leakRegex.test(lines[i])) {
+          leakedHits.push(`${path.relative(repoRoot, filePath)}:${i + 1}: ${lines[i].slice(0, 120)}`);
+        }
+      }
+    }
+    assert.ok(scannedTextFiles >= 2, `Must scan text files in public/, scanned ${scannedTextFiles}`);
+    assert.deepStrictEqual(leakedHits, [], `public/ text bundle leaked forbidden host/credential/skill tokens: ${leakedHits.join('\n')}`);
+
+    // Also run real grep -rnIE subprocess if GNU/BSD grep is available on PATH or Git for Windows
+    const grepCandidates = ['grep', 'C:\\Program Files\\Git\\usr\\bin\\grep.exe'];
+    for (const grepBin of grepCandidates) {
+      const ver = child_process.spawnSync(grepBin, ['--version'], { encoding: 'utf8' });
+      if (ver.status === 0) {
+        const realGrep = child_process.spawnSync(grepBin, ['-rnIE', leakPattern, 'public/'], {
+          cwd: repoRoot,
+          encoding: 'utf8',
+        });
+        assert.strictEqual(
+          realGrep.status,
+          1,
+          `Real grep -rnIE matched unexpected content in public/ (exit ${realGrep.status}):\n${realGrep.stdout}`
+        );
+        break;
+      }
+    }
+
+    // (2) [BLOCK-2] ci.yml enforces npm pack --dry-run --json gate against dist/tests/ and promo/pages scripts
+    const ciYml = fs.readFileSync(path.join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+    assert.ok(ciYml.includes('npm pack --dry-run --json'), 'ci.yml must run npm pack --dry-run --json verification');
+    assert.ok(ciYml.includes('dist/tests/'), 'ci.yml npm pack gate must guard against dist/tests/');
+    assert.ok(ciYml.includes('scripts/build-pages.mjs'), 'ci.yml npm pack gate must guard against scripts/build-pages.mjs');
+    assert.ok(ciYml.includes('scripts/render-promo-assets.mjs'), 'ci.yml npm pack gate must guard against scripts/render-promo-assets.mjs');
+    const ciNodeScriptMatch = ciYml.match(/PACK_JSON_OUT="\$PACK_JSON_OUT"\s+node\s+-e\s+'([\s\S]*?)'/);
+    assert.ok(ciNodeScriptMatch, 'ci.yml must contain executable node -e tarball validator');
+    const ciValidatorCode = ciNodeScriptMatch![1];
+
+    const pkgAllowlist = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).files as string[];
+    const realPackedFiles: Array<{ path: string }> = [
+      { path: 'package.json' },
+      { path: 'README.md' },
+      { path: 'LICENSE' },
+    ];
+    for (const rel of pkgAllowlist) {
+      const abs = path.join(repoRoot, rel);
+      if (fs.statSync(abs).isDirectory()) {
+        for (const f of collectFilesRecursive(abs)) {
+          // Simulate Windows backslash paths on windows-latest too
+          realPackedFiles.push({ path: path.relative(repoRoot, f).replace(/\//g, '\\') });
+        }
+      } else {
+        realPackedFiles.push({ path: rel });
+      }
+    }
+
+    const tmpPackDir = createTempWorkspace();
+    try {
+      // Valid tarball with prepack stdout preamble + trailing npm notice must pass CI validator
+      const validPackJson = path.join(tmpPackDir, 'valid-pack.json');
+      fs.writeFileSync(
+        validPackJson,
+        `> evo-kernel@0.3.0 prepack\n> node ./scripts/build.mjs\n\nBuilt dist/ from src/.\n${JSON.stringify(
+          [{ id: 'evo-kernel@0.3.0', files: realPackedFiles }],
+          null,
+          2
+        )}\nnpm notice New minor version of npm available!\n`,
+        'utf8'
+      );
+      const validCiRes = child_process.spawnSync(process.execPath, ['-e', ciValidatorCode], {
+        encoding: 'utf8',
+        env: { ...process.env, PACK_JSON_OUT: validPackJson },
+      });
+      assert.strictEqual(validCiRes.status, 0, `CI tarball validator rejected clean allowlist: ${validCiRes.stderr}`);
+
+      // Leaked dist/tests/ or build-pages.mjs must fail CI validator
+      for (const badPath of ['dist/tests/evo-kernel.test.js', 'scripts/build-pages.mjs']) {
+        const leakPackJson = path.join(tmpPackDir, 'leak-pack.json');
+        fs.writeFileSync(
+          leakPackJson,
+          JSON.stringify([{ id: 'evo-kernel@0.3.0', files: [...realPackedFiles, { path: badPath }] }]),
+          'utf8'
+        );
+        const leakCiRes = child_process.spawnSync(process.execPath, ['-e', ciValidatorCode], {
+          encoding: 'utf8',
+          env: { ...process.env, PACK_JSON_OUT: leakPackJson },
+        });
+        assert.notStrictEqual(leakCiRes.status, 0, `CI tarball validator must reject leaked ${badPath}`);
+      }
+    } finally {
+      safeCleanup(tmpPackDir);
+    }
+
+    // (3) [BLOCK-3] Emoji-to-tag mappings in toAsciiOutput & 7-bit --ascii across all 6 remaining CLI surfaces + error/version paths
+    assert.strictEqual(toAsciiOutput('🔍 Inspecting file'), '[SCAN] Inspecting file');
+    assert.strictEqual(toAsciiOutput('🚀 Next Steps:'), '[NEXT] Next Steps:');
+    assert.strictEqual(toAsciiOutput('🧹 Cleaned markers'), '[CLEAN] Cleaned markers');
+    assert.strictEqual(toAsciiOutput('🔌 Mounting IDE'), '[IDE] Mounting IDE');
+    assert.strictEqual(
+      toAsciiOutput('[置信度: HIGH (≥80%)] · ≤50% · a ≠ b'),
+      '[Confidence: HIGH (>=80%)] * <=50% * a != b'
+    );
+    const boxedSample = toAsciiOutput(
+      '╭──────────────────────────────────────────────────────────────────────────╮\n' +
+        '│ 🧠 EvoKernel Cognitive Memory — AST Anti-Drift & Topology Audit          │\n' +
+        '╰──────────────────────────────────────────────────────────────────────────╯'
+    ).split('\n');
+    assert.strictEqual(boxedSample[0].length, 76);
+    assert.strictEqual(boxedSample[1].length, 76, `ASCII header box row must align flush to 76 cols: "${boxedSample[1]}"`);
+    assert.strictEqual(boxedSample[2].length, 76);
+
+    const oldNodeAscii = checkNodeRuntimeVersion('20.11.0', ['--ascii']);
+    assert.strictEqual(oldNodeAscii.ok, false);
+    assert.ok(oldNodeAscii.message && oldNodeAscii.message.includes('[ERROR]'));
+    assert.match(oldNodeAscii.message!, /^[\x00-\x7F]*$/, 'checkNodeRuntimeVersion --ascii must be pure 7-bit ASCII');
+
+    const oldNodeDefault = checkNodeRuntimeVersion('20.11.0', []);
+    assert.strictEqual(oldNodeDefault.ok, false);
+    assert.ok(oldNodeDefault.message && oldNodeDefault.message.includes('22.5.0'));
+
+    const ws = createTempWorkspace();
+    const fakeHome = createTempWorkspace();
+    try {
+      const cleanEnv = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, EVO_GLOBAL_DIR: path.join(fakeHome, '.evo-global') };
+      delete cleanEnv.FORCE_COLOR;
+
+      const helpAscii = child_process.spawnSync(process.execPath, [cliEntry, '--help', '--ascii'], {
+        encoding: 'utf8',
+        env: cleanEnv,
+      });
+      assert.strictEqual(helpAscii.status, 0, helpAscii.stderr);
+      assert.match(helpAscii.stdout, /^[\x00-\x7F]*$/, 'evo --help --ascii leaked non-ASCII');
+      assert.ok(helpAscii.stdout.includes('EvoKernel v'), 'evo --help --ascii must include header');
+
+      const checkReadmeAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'check', path.join(repoRoot, 'README.md'), '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(checkReadmeAscii.status, 0, checkReadmeAscii.stderr);
+      assert.match(checkReadmeAscii.stdout, /^[\x00-\x7F]*$/, 'evo check README.md --ascii leaked non-ASCII');
+      assert.ok(checkReadmeAscii.stdout.includes('[SCAN] Deliverable Canonical Inspection:'));
+      assert.ok(checkReadmeAscii.stdout.includes('[OK] PASSED'));
+
+      const badJsonPath = path.join(ws, 'corrupt.json');
+      fs.writeFileSync(badJsonPath, '{broken_json', 'utf8');
+      const checkFailAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'check', badJsonPath, '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(checkFailAscii.status, 1);
+      assert.match(checkFailAscii.stdout, /^[\x00-\x7F]*$/, 'evo check failed deliverable --ascii leaked non-ASCII');
+      assert.ok(checkFailAscii.stdout.includes('[ERROR] FAILED'));
+
+      const initAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'init', '--targets', 'claude', '--no-ide', '--warmup', '--workspace', ws, '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(initAscii.status, 0, initAscii.stderr);
+      assert.match(initAscii.stdout, /^[\x00-\x7F]*$/, 'evo init --ascii leaked non-ASCII');
+      assert.ok(initAscii.stdout.includes('[NEXT] Next Steps:'));
+
+      const optDryAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'optimize', '--dry-run', '--workspace', ws, '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(optDryAscii.status, 0, optDryAscii.stderr);
+      assert.match(optDryAscii.stdout, /^[\x00-\x7F]*$/, 'evo optimize --dry-run --ascii leaked non-ASCII');
+
+      const exportHtmlPath = path.join(ws, 'ascii-export.html');
+      const uiExportAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'ui', '--export', exportHtmlPath, '--install-ide', '--workspace', ws, '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(uiExportAscii.status, 0, uiExportAscii.stderr);
+      assert.match(uiExportAscii.stdout, /^[\x00-\x7F]*$/, 'evo ui --export --install-ide --ascii leaked non-ASCII');
+      assert.ok(uiExportAscii.stdout.includes('[IDE] Mounting EvoKernel IDE extension'));
+      assert.ok(uiExportAscii.stdout.includes('[OK] EvoKernel Workbench exported to:'));
+      assert.strictEqual(fs.existsSync(exportHtmlPath), true);
+
+      // Live port-bound evo ui --port 0 --no-open --ascii startup banner & HTTP 200 check
+      const liveUiBanner = await new Promise<{ banner: string; url: string }>((resolve, reject) => {
+        const child = child_process.spawn(
+          process.execPath,
+          [cliEntry, 'ui', '--port', '0', '--no-open', '--workspace', ws, '--ascii'],
+          { env: cleanEnv, stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+        let out = '';
+        let err = '';
+        const timer = setTimeout(() => {
+          try { child.kill(); } catch {}
+          reject(new Error(`Timed out waiting for evo ui --ascii startup banner. stdout=${out} stderr=${err}`));
+        }, 8000);
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', (d: string) => { err += d; });
+        child.stdout.on('data', (d: string) => {
+          out += d;
+          const m = out.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/);
+          if (m && out.includes('Press Ctrl+C')) {
+            clearTimeout(timer);
+            fetch(m[0])
+              .then(async (res) => {
+                assert.strictEqual(res.status, 200, 'Live evo ui server must serve 200 on /');
+                try { child.kill(); } catch {}
+                resolve({ banner: out, url: m[0] });
+              })
+              .catch((e) => {
+                try { child.kill(); } catch {}
+                reject(e);
+              });
+          }
+        });
+      });
+      assert.match(liveUiBanner.banner, /^[\x00-\x7F]*$/, 'Live evo ui startup banner leaked non-ASCII');
+      assert.ok(liveUiBanner.banner.includes('EvoKernel Workbench started at:'));
+
+      // evo hook pre-commit --ascii (pass path & blocked cache staging path)
+      child_process.spawnSync('git', ['init'], { cwd: ws, stdio: 'ignore' });
+      const hookPassAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'hook', 'pre-commit', '--workspace', ws, '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(hookPassAscii.status, 0, hookPassAscii.stderr);
+      assert.match(hookPassAscii.stdout, /^[\x00-\x7F]*$/, 'evo hook pre-commit --ascii leaked non-ASCII');
+      assert.ok(hookPassAscii.stdout.includes('[OK] [EvoKernel Pre-Commit Hook]'));
+
+      fs.mkdirSync(path.join(ws, '.evo', '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(ws, '.evo', '.cache', 'leaked-cache.db'), 'dummy', 'utf8');
+      child_process.spawnSync('git', ['add', '-f', '.evo/.cache/leaked-cache.db'], { cwd: ws, stdio: 'ignore' });
+      const hookFailAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'hook', 'pre-commit', '--workspace', ws, '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(hookFailAscii.status, 1);
+      assert.match(hookFailAscii.stdout, /^[\x00-\x7F]*$/, 'Blocked evo hook pre-commit --ascii leaked non-ASCII');
+      assert.ok(
+        hookFailAscii.stdout.includes('[ERROR] [EvoKernel Pre-Commit Hook] COMMIT BLOCKED'),
+        `Unexpected pre-commit output: ${hookFailAscii.stdout}`
+      );
+      child_process.spawnSync('git', ['reset'], { cwd: ws, stdio: 'ignore' });
+      fs.rmSync(path.join(ws, '.evo', '.cache', 'leaked-cache.db'), { force: true });
+
+      const uninstallAscii = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'uninstall', '--workspace', ws, '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(uninstallAscii.status, 0, uninstallAscii.stderr);
+      assert.match(uninstallAscii.stdout, /^[\x00-\x7F]*$/, 'evo uninstall --ascii leaked non-ASCII');
+      assert.ok(uninstallAscii.stdout.includes('[CLEAN] Cleaned EvoKernel markers from:'));
+
+      // Error & version --ascii coverage (including leading flags + -v and subcommand -v)
+      for (const vArgs of [
+        ['--version', '--ascii'],
+        ['--ascii', '-v'],
+        ['optimize', '-v', '--workspace', path.join(ws, 'untouched-v-dir')],
+      ]) {
+        const verRes = child_process.spawnSync(process.execPath, [cliEntry, ...vArgs], {
+          encoding: 'utf8',
+          env: cleanEnv,
+        });
+        assert.strictEqual(verRes.status, 0, `Expected exit 0 for ${vArgs.join(' ')}: ${verRes.stderr}`);
+        assert.strictEqual(verRes.stdout.trim(), EVO_KERNEL_VERSION);
+        assert.match(verRes.stdout, /^[\x00-\x7F]*$/);
+      }
+      assert.strictEqual(
+        fs.existsSync(path.join(ws, 'untouched-v-dir')),
+        false,
+        'evo optimize -v must have zero side effects and must not run optimization'
+      );
+
+      for (const errArgs of [
+        ['score', '--unknown-opt', '--ascii'],
+        ['score', '--workspace', path.join(ws, 'missing-dir-xyz'), '--ascii'],
+        ['memory', 'invalid-subcmd', '--workspace', ws, '--ascii'],
+        ['check', '--workspace', ws, '--ascii'],
+        ['ui', '--port', '99999', '--workspace', ws, '--ascii'],
+        ['ui', '--host', '0.0.0.0', '--workspace', ws, '--ascii'],
+        ['unknown-top-cmd', '--ascii'],
+      ]) {
+        const errRes = child_process.spawnSync(process.execPath, [cliEntry, ...errArgs], {
+          encoding: 'utf8',
+          env: cleanEnv,
+        });
+        assert.strictEqual(errRes.status, 1, `Expected exit 1 for ${errArgs.join(' ')}`);
+        assert.match(
+          errRes.stderr,
+          /^[\x00-\x7F]*$/,
+          `Error stderr for "${errArgs.join(' ')}" leaked non-ASCII:\n${errRes.stderr}`
+        );
+        assert.ok(errRes.stderr.includes('[ERROR]'), `Expected [ERROR] tag in stderr for ${errArgs.join(' ')}`);
+      }
+
+      // (4) [MINOR-1 & MINOR-2] Unified optimize --help & boot-mcp.mjs / BOOT_MCP_STUB flag parity
+      const optHelpRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'optimize', '--help', '--ascii'],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(optHelpRes.status, 0);
+      assert.match(optHelpRes.stdout, /^[\x00-\x7F]*$/);
+      assert.strictEqual(optHelpRes.stdout.trim(), toAsciiOutput(renderOptimizeHelp()).trim());
+      assert.strictEqual(
+        optHelpRes.stdout.includes('-k, --rounds'),
+        false,
+        'optimize --help must NOT conflate -k (candidates per round) with --rounds (number of rounds)'
+      );
+      for (const validFlag of COMMAND_VALID_FLAGS.optimize) {
+        assert.ok(
+          renderOptimizeHelp().includes(validFlag),
+          `renderOptimizeHelp() is missing valid optimize flag "${validFlag}"`
+        );
+      }
+
+      const extractValueFlags = (src: string, label: string): string[] => {
+        const m = src.match(/const VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\);/);
+        assert.ok(m, `Must locate VALUE_FLAGS Set in ${label}`);
+        return Array.from(m![1].matchAll(/'([^']+)'/g), (hit) => hit[1]).sort();
+      };
+      const bootMcpSrc = fs.readFileSync(path.join(repoRoot, 'scripts', 'boot-mcp.mjs'), 'utf8');
+      const expectedValueFlags = Array.from(VALUE_TAKING_FLAGS).sort();
+      assert.deepStrictEqual(
+        extractValueFlags(bootMcpSrc, 'scripts/boot-mcp.mjs'),
+        expectedValueFlags,
+        'scripts/boot-mcp.mjs VALUE_FLAGS must match src/cli/index.ts VALUE_TAKING_FLAGS'
+      );
+      assert.deepStrictEqual(
+        extractValueFlags(BOOT_MCP_STUB, 'BOOT_MCP_STUB'),
+        expectedValueFlags,
+        'BOOT_MCP_STUB VALUE_FLAGS must match src/cli/index.ts VALUE_TAKING_FLAGS'
+      );
+
+      const bootForwardRes = child_process.spawnSync(
+        process.execPath,
+        [path.join(repoRoot, 'scripts', 'boot-mcp.mjs'), '--rounds', '2', 'optimize', '--dry-run', '--ascii', '--workspace', ws],
+        { encoding: 'utf8', env: cleanEnv }
+      );
+      assert.strictEqual(bootForwardRes.status, 0, bootForwardRes.stderr);
+      assert.match(bootForwardRes.stdout, /^[\x00-\x7F]*$/);
+      assert.ok(bootForwardRes.stdout.includes('EvoKernel Optimize'));
+
+      // Verify boot-mcp.mjs preserves --workspace mcp (directory literally named "mcp") without stripping flag value
+      const mcpNamedDir = path.join(ws, 'mcp');
+      fs.mkdirSync(mcpNamedDir, { recursive: true });
+      const bootMcpNamedWsProbe = probeMcpServerStdioSync(
+        ws,
+        {
+          source: 'test',
+          command: process.execPath,
+          args: [path.join(repoRoot, 'scripts', 'boot-mcp.mjs'), '--workspace', 'mcp'],
+          isWorkspace: true,
+        },
+        5000
+      );
+      assert.strictEqual(
+        bootMcpNamedWsProbe.reachable,
+        true,
+        `boot-mcp.mjs --workspace mcp must preserve directory name "mcp" and complete MCP handshake: ${JSON.stringify(bootMcpNamedWsProbe)}`
+      );
+
+      // (5) [BLOCK-4] assets/terminal-score-xray.svg reflects post-refresh VERIFIED & Zero Stale Drift
+      const xraySvg = fs.readFileSync(path.join(repoRoot, 'assets', 'terminal-score-xray.svg'), 'utf8');
+      assert.ok(xraySvg.includes('VERIFIED'), 'terminal-score-xray.svg must display VERIFIED memory badge');
+      assert.ok(
+        xraySvg.includes('Zero Stale Drift'),
+        `terminal-score-xray.svg must show "Zero Stale Drift" (regenerate after memory refresh)`
+      );
+      assert.strictEqual(
+        /\b[1-9]\d*\s+Stale\)/i.test(xraySvg),
+        false,
+        'terminal-score-xray.svg must not contain non-zero Stale memory count'
+      );
+    } finally {
+      safeCleanup(ws);
+      safeCleanup(fakeHome);
     }
   });
 

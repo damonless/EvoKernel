@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { EvoStorage, estimateTokens } from '../core/storage.js';
+import { EVO_KERNEL_VERSION, EvoStorage, estimateTokens } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { resolveGitPaths } from '../core/memory.js';
 import {
@@ -14,11 +14,20 @@ import {
   HARNESS_RULE_TARGETS,
   SLASH_COMMAND_DEFINITIONS,
   detectCascadedTargets,
+  extractCodexTomlEvoEntry,
+  hasStaleNpxMcpEntry,
+  isPluginBootstrapEntry,
   parseHarnessTargets,
+  parseJsonc,
   pruneEmptyDirs,
   removeMarkerBlock,
+  resolveEvoMcpLaunchConfig,
+  resolveGlobalEvoMcpLaunchConfig,
   syncDeclaredPreToolHooks,
+  upsertCodexToml,
   upsertMarkerBlock,
+  upsertMcpJson,
+  upsertOpenCode,
 } from './harness.js';
 
 export {
@@ -55,6 +64,7 @@ export interface InitResult {
   initializedHarnesses: string[];
   updatedFiles: string[];
   mcpConfigFiles: string[];
+  healedGlobalMcpConfigFiles?: string[];
   commandFiles?: string[];
   stealthExcluded?: string[];
   linkedSharedEvoDir?: string;
@@ -71,6 +81,7 @@ export interface InitOptions {
   noIde?: boolean;
   ide?: string[];
   forceCopy?: boolean;
+  globalHomeDir?: string;
 }
 
 export const MAX_TOOLS_CATALOG_TOKENS = 350;
@@ -591,9 +602,11 @@ export function removeGitInfoExclude(workspaceRoot: string, patterns?: string[])
 
 export function parseInitTargets(
   rawTargets: string | string[] | undefined,
-  workspaceRoot: string
+  workspaceRoot: string,
+  env: Record<string, string | undefined> = process.env,
+  homeDir: string = os.homedir()
 ): string[] {
-  return parseHarnessTargets(rawTargets, workspaceRoot);
+  return parseHarnessTargets(rawTargets, workspaceRoot, env, homeDir);
 }
 
 export const BOOT_MCP_STUB = `#!/usr/bin/env node
@@ -662,12 +675,15 @@ if (!entry) {
 }
 const rawArgs = process.argv.slice(2);
 const VALUE_FLAGS = new Set([
-  '--workspace', '-w', '--port', '--token', '--export', '--svg', '--html',
+  '--workspace', '-w', '--port', '-p', '--host', '--token', '--export', '--svg', '--html',
   '--targets', '--link', '--ide', '--max-commits', '--token-budget',
-  '--skill-budget', '--dim', '-k', '--proposer-cmd', '--probe-cmd',
+  '--skill-budget', '--dim', '-k', '--k', '--rounds', '--proposer-cmd', '--probe-cmd',
+  '--worktree-setup-cmd', '--task', '--task-file', '--trajectory', '--trajectories',
+  '--deliverable', '--deliverables', '--leak-glob',
   '--payload', '--harness', '--event', '--tool', '--file',
 ]);
 let firstPositional = '';
+let firstPositionalIdx = -1;
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
   if (a.startsWith('-')) {
@@ -677,6 +693,7 @@ for (let i = 0; i < rawArgs.length; i++) {
     continue;
   }
   firstPositional = a.toLowerCase();
+  firstPositionalIdx = i;
   break;
 }
 const hasExplicitCliIntent =
@@ -687,18 +704,21 @@ const hasExplicitCliIntent =
   });
 const forwardedArgs = hasExplicitCliIntent
   ? rawArgs
-  : ['mcp', ...rawArgs.filter((arg) => arg.toLowerCase() !== 'mcp')];
+  : [
+      'mcp',
+      ...rawArgs.filter((_, idx) => !(idx === firstPositionalIdx && firstPositional === 'mcp')),
+    ];
 
 if (!entry) {
   if (process.env.EVO_DISABLE_NPX_FALLBACK !== '1') {
     try {
-      const npxArgs = ['-y', 'evo-kernel', ...forwardedArgs];
+      const npxArgs = ['-y', 'evo-kernel@${EVO_KERNEL_VERSION}', ...forwardedArgs];
       const res =
         process.platform === 'win32'
           ? (() => {
               const quoteWinArg = (arg) => {
                 const s = String(arg);
-                if (!/[\\s"&|<>^()]/.test(s)) return s;
+                if (!/[\\s"&|<>^()%]/.test(s)) return s;
                 const crt = '"' + s.replace(/(\\\\*)"/g, '$1$1\\\\"').replace(/(\\\\+)$/, '$1$1') + '"';
                 let out = '';
                 let inCmdQuote = false;
@@ -707,6 +727,8 @@ if (!entry) {
                   if (ch === '"') {
                     inCmdQuote = !inCmdQuote;
                     out += ch;
+                  } else if (ch === '%') {
+                    out += inCmdQuote ? '"^%"' : '^%';
                   } else if (!inCmdQuote && /[&|<>^()]/.test(ch)) {
                     out += '^^^' + ch;
                   } else {
@@ -736,6 +758,173 @@ process.argv = [process.argv[0], entry, ...forwardedArgs];
 await import(url.pathToFileURL(entry).href);
 `;
 
+function healStaleWorkspaceMcpConfigs(
+  workspaceRoot: string,
+  managedBlock: string,
+  globalHomeDir?: string
+): { workspaceHealed: string[]; globalHealed: string[] } {
+  const workspaceHealed: string[] = [];
+  const globalHealed: string[] = [];
+  const jsonMcpRelPaths = [
+    '.mcp.json',
+    '.cursor/mcp.json',
+    '.vscode/mcp.json',
+    '.gemini/settings.json',
+    '.windsurf/mcp.json',
+    '.windsurf/mcp_config.json',
+    '.cline/mcp.json',
+    '.roo/mcp.json',
+    'mcp_config.json',
+  ];
+  for (const rel of jsonMcpRelPaths) {
+    const full = path.join(workspaceRoot, rel);
+    if (!fs.existsSync(full)) continue;
+    try {
+      const parsed = parseJsonc(fs.readFileSync(full, 'utf8'), full);
+      const evoEntry = parsed?.mcpServers?.['evo-kernel'] ?? parsed?.servers?.['evo-kernel'];
+      if (evoEntry && hasStaleNpxMcpEntry(evoEntry, workspaceRoot)) {
+        upsertMcpJson(full, workspaceRoot);
+        workspaceHealed.push(rel);
+      }
+    } catch {
+      // Ignore unparseable user files
+    }
+  }
+
+  const openCodePath = path.join(workspaceRoot, 'opencode.json');
+  if (fs.existsSync(openCodePath)) {
+    try {
+      const parsed = parseJsonc(fs.readFileSync(openCodePath, 'utf8'), openCodePath);
+      const evoEntry = parsed?.mcp?.['evo-kernel'];
+      if (evoEntry && hasStaleNpxMcpEntry(evoEntry, workspaceRoot)) {
+        upsertOpenCode(openCodePath, workspaceRoot, managedBlock);
+        workspaceHealed.push('opencode.json');
+      }
+    } catch {
+      // Ignore unparseable user files
+    }
+  }
+
+  const codexTomlPath = path.join(workspaceRoot, '.codex', 'config.toml');
+  if (fs.existsSync(codexTomlPath)) {
+    try {
+      const rawToml = fs.readFileSync(codexTomlPath, 'utf8');
+      const codexEntry = extractCodexTomlEvoEntry(rawToml);
+      if (
+        codexEntry &&
+        (hasStaleNpxMcpEntry({ command: codexEntry.command, args: codexEntry.args }, workspaceRoot) ||
+          hasStaleNpxMcpEntry(codexEntry.rawSection, workspaceRoot))
+      ) {
+        upsertCodexToml(codexTomlPath, workspaceRoot);
+        workspaceHealed.push('.codex/config.toml');
+      }
+    } catch {
+      // Ignore unparseable user files
+    }
+  }
+
+  // Also heal stale _npx evo-kernel entries in existing global host MCP configs
+  const homeDir = path.resolve(globalHomeDir || os.homedir());
+  const globalLaunch = resolveGlobalEvoMcpLaunchConfig();
+  const wsResolved = path.resolve(workspaceRoot);
+  const normWs = wsResolved.toLowerCase().replace(/\\/g, '/');
+
+  const globalJsonTargets: Array<{ label: string; fullPath: string; isClaudeGlobal?: boolean }> = [
+    { label: '~/.claude.json', fullPath: path.join(homeDir, '.claude.json'), isClaudeGlobal: true },
+    { label: '~/.cursor/mcp.json', fullPath: path.join(homeDir, '.cursor', 'mcp.json') },
+    { label: '~/.gemini/settings.json', fullPath: path.join(homeDir, '.gemini', 'settings.json') },
+    {
+      label: '~/.gemini/antigravity/mcp_config.json',
+      fullPath: path.join(homeDir, '.gemini', 'antigravity', 'mcp_config.json'),
+    },
+    {
+      label: '~/.codeium/windsurf/mcp_config.json',
+      fullPath: path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'),
+    },
+  ];
+
+  const evoKeys = ['evo-kernel', 'evo', 'evokernel'] as const;
+
+  for (const target of globalJsonTargets) {
+    if (!fs.existsSync(target.fullPath)) continue;
+    try {
+      const raw = fs.readFileSync(target.fullPath, 'utf8');
+      if (!raw.trim()) continue;
+      const parsed = parseJsonc(raw, target.fullPath) as Record<string, any>;
+      if (!parsed || typeof parsed !== 'object') continue;
+      const cfgDir = path.dirname(target.fullPath);
+      const isAntigravityMcp = path.basename(target.fullPath) === 'mcp_config.json';
+      let modified = false;
+
+      const healBucket = (bucket: Record<string, any> | undefined, rootForCheck: string, launchObj: { command: string; args: string[] }, isVsCodeStyle = false) => {
+        if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) return;
+        for (const key of evoKeys) {
+          const existing = bucket[key];
+          if (!existing || typeof existing !== 'object') continue;
+          if (isAntigravityMcp && isPluginBootstrapEntry(existing)) continue;
+          if (hasStaleNpxMcpEntry(existing, rootForCheck)) {
+            const preservedEnv =
+              existing.env && typeof existing.env === 'object' ? { env: existing.env } : {};
+            bucket[key] = isVsCodeStyle
+              ? { type: 'stdio', ...launchObj, ...preservedEnv }
+              : { ...launchObj, ...preservedEnv };
+            modified = true;
+          }
+        }
+      };
+
+      healBucket(parsed.mcpServers, cfgDir, globalLaunch, false);
+      healBucket(parsed.mcp_servers, cfgDir, globalLaunch, false);
+      healBucket(parsed.servers, cfgDir, globalLaunch, true);
+      if (parsed.mcp && typeof parsed.mcp === 'object') {
+        if (parsed.mcp.servers && typeof parsed.mcp.servers === 'object') {
+          healBucket(parsed.mcp.servers, cfgDir, globalLaunch, false);
+        } else {
+          healBucket(parsed.mcp, cfgDir, globalLaunch, false);
+        }
+      }
+
+      if (target.isClaudeGlobal && parsed.projects && typeof parsed.projects === 'object') {
+        for (const [projPath, projVal] of Object.entries(parsed.projects as Record<string, any>)) {
+          if (!projVal || typeof projVal !== 'object' || !projVal.mcpServers) continue;
+          const isCurrentWs = projPath.toLowerCase().replace(/\\/g, '/') === normWs;
+          const projRoot = isCurrentWs ? wsResolved : projPath;
+          const projLaunch = isCurrentWs ? resolveEvoMcpLaunchConfig(wsResolved) : globalLaunch;
+          healBucket(projVal.mcpServers, projRoot, projLaunch, false);
+        }
+      }
+
+      if (modified) {
+        fs.writeFileSync(target.fullPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+        globalHealed.push(target.label);
+      }
+    } catch {
+      // Ignore unparseable global config files
+    }
+  }
+
+  const globalCodexTomlPath = path.join(homeDir, '.codex', 'config.toml');
+  if (fs.existsSync(globalCodexTomlPath)) {
+    try {
+      const rawToml = fs.readFileSync(globalCodexTomlPath, 'utf8');
+      const codexEntry = extractCodexTomlEvoEntry(rawToml);
+      const cfgDir = path.dirname(globalCodexTomlPath);
+      if (
+        codexEntry &&
+        (hasStaleNpxMcpEntry({ command: codexEntry.command, args: codexEntry.args }, cfgDir) ||
+          hasStaleNpxMcpEntry(codexEntry.rawSection, cfgDir))
+      ) {
+        upsertCodexToml(globalCodexTomlPath, globalLaunch.command, globalLaunch.args);
+        globalHealed.push('~/.codex/config.toml');
+      }
+    } catch {
+      // Ignore unparseable global config files
+    }
+  }
+
+  return { workspaceHealed, globalHealed };
+}
+
 export function runInit(
   workspaceRoot: string,
   targetsOrOptions?: string[] | InitOptions
@@ -744,9 +933,33 @@ export function runInit(
     ? { targets: targetsOrOptions, stealth: false }
     : targetsOrOptions || {};
 
-  const targets = opts.targets !== undefined
-    ? parseInitTargets(opts.targets, workspaceRoot)
-    : detectCascadedTargets(workspaceRoot);
+  const isAutoDetect =
+    opts.targets === undefined ||
+    (typeof opts.targets === 'string' && opts.targets.trim().toLowerCase() === 'auto') ||
+    (Array.isArray(opts.targets) &&
+      opts.targets.length === 1 &&
+      String(opts.targets[0]).trim().toLowerCase() === 'auto');
+
+  const effectiveHomeDir = opts.globalHomeDir || os.homedir();
+  const rawTargets = opts.targets !== undefined
+    ? parseInitTargets(opts.targets, workspaceRoot, process.env, effectiveHomeDir)
+    : detectCascadedTargets(workspaceRoot, process.env, effectiveHomeDir);
+
+  const preHadGeminiMd = fs.existsSync(path.join(workspaceRoot, 'GEMINI.md'));
+  const preHadAgentsMd = fs.existsSync(path.join(workspaceRoot, 'AGENTS.md'));
+  const targetsAgentsMd =
+    preHadAgentsMd ||
+    rawTargets.some((t) => t === 'agents' || t === 'codex' || t === 'opencode');
+  const skipRedundantGeminiMd =
+    isAutoDetect && targetsAgentsMd && !preHadGeminiMd;
+
+  const targets = [...rawTargets];
+  if (skipRedundantGeminiMd) {
+    if (!targets.some((t) => t === 'agents' || t === 'codex' || t === 'opencode')) {
+      targets.push('agents');
+    }
+  }
+
   const stealth = Boolean(opts.stealth);
 
   let linkedSharedEvoDir: string | undefined;
@@ -777,12 +990,15 @@ export function runInit(
   const config = storage.ensureInitialized();
   if (!stealth) {
     const evoBootPath = path.join(workspaceRoot, '.evo', 'boot-mcp.mjs');
-    if (!fs.existsSync(evoBootPath)) {
-      try {
+    try {
+      const existingBoot = fs.existsSync(evoBootPath)
+        ? fs.readFileSync(evoBootPath, 'utf8')
+        : '';
+      if (existingBoot !== BOOT_MCP_STUB) {
         fs.writeFileSync(evoBootPath, BOOT_MCP_STUB, 'utf8');
-      } catch {
-        // Ignore read-only errors
       }
+    } catch {
+      // Ignore read-only errors
     }
   }
   const telemetry = new EvoTelemetry(storage);
@@ -801,7 +1017,9 @@ export function runInit(
   for (const target of targets) {
     const adapter = ALL_HARNESS_ADAPTERS[target];
     if (!adapter) continue;
-    const res = adapter.install(workspaceRoot, managedBlock);
+    const res = adapter.install(workspaceRoot, managedBlock, {
+      skipGeminiMd: skipRedundantGeminiMd,
+    });
     updatedFilesList.push(...res.updatedFiles);
     mcpConfigFilesList.push(...res.mcpConfigFiles);
     if (res.commandFiles) {
@@ -809,6 +1027,13 @@ export function runInit(
     }
     activeDirs.push(...adapter.dirs);
   }
+
+  const healedMcp = healStaleWorkspaceMcpConfigs(
+    workspaceRoot,
+    managedBlock,
+    opts.globalHomeDir
+  );
+  mcpConfigFilesList.push(...healedMcp.workspaceHealed);
 
   const pluginRulesAgents = path.join(workspaceRoot, 'rules', 'AGENTS.md');
   if (fs.existsSync(pluginRulesAgents)) {
@@ -831,6 +1056,7 @@ export function runInit(
   const updatedFiles = Array.from(new Set(updatedFilesList));
   const mcpConfigFiles = Array.from(new Set(mcpConfigFilesList));
 
+  config.version = EVO_KERNEL_VERSION;
   config.enabledHarnesses = Array.from(new Set([...config.enabledHarnesses, ...targets]));
   storage.saveConfig(config);
 
@@ -874,6 +1100,8 @@ export function runInit(
     initializedHarnesses: targets,
     updatedFiles,
     mcpConfigFiles,
+    healedGlobalMcpConfigFiles:
+      healedMcp.globalHealed.length > 0 ? healedMcp.globalHealed : undefined,
     commandFiles: Array.from(new Set(commandFilesList)),
     stealthExcluded,
     linkedSharedEvoDir,

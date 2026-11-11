@@ -1402,7 +1402,7 @@ Widget issue
     assert.ok(openWorkbenchFn);
     await openWorkbenchFn!();
     assert.ok(createdPanel, 'WebviewPanel must be created');
-    assert.equal(createdPanel.title, 'EvoKernel Workbench 2.0');
+    assert.equal(createdPanel.title, 'EvoKernel Workbench');
     assert.ok(createdPanel.webview.html.includes('id="workbench-root"'));
     assert.equal(ext.getActivePanel(), createdPanel);
 

@@ -6,8 +6,8 @@ EvoKernel (`evo-kernel`) is engineered with **0 third-party runtime dependencies
 
 ## Built-In Security Boundaries
 
-- **4-Stage Deterministic Gatekeeper**: Every proposed rule, skill, micro-tool, or memory is scanned for hardcoded secrets, dangerous shell patterns, and unsafe regexes before commit.
-- **Local Cockpit UI (`evo ui`) Isolation**:
+- **6-Stage Deterministic Gatekeeper**: Every proposed rule, skill, micro-tool, or memory is scanned for hardcoded secrets, dangerous shell patterns, and unsafe regexes before commit.
+- **Local EvoKernel Workbench UI (`evo ui`) Isolation**:
   - Binds strictly to `127.0.0.1` (loopback only).
   - Enforces `Host` header validation and blocks `Sec-Fetch-Site: cross-site` requests (`HTTP 403`).
   - Requires per-session cryptographic `X-Evo-UI-Token` authentication for `/api/snapshot` and `/api/events`.

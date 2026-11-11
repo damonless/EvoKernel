@@ -33,14 +33,14 @@
   <text x="323" y="87" text-anchor="middle" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" font-weight="700">CONTEXT OS FOR CODING AGENTS</text>
 
   <text x="64" y="168" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="68" font-weight="900">🧬 EvoKernel</text>
-  <text x="64" y="222" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="28" font-weight="700">Deterministic Self-Evolving Meta-Kernel</text>
-  <text x="64" y="260" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="24" font-weight="500">&amp; AST Cognitive Memory for AI Coding Agents</text>
+  <text x="64" y="222" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="28" font-weight="700">Stop Repeating the Same Bug Across Sessions</text>
+  <text x="64" y="260" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="23" font-weight="500">AST Cognitive Memory, Recall Receipts &amp; 6-Stage Gatekeeper</text>
 
   <!-- 3 Metric Pills -->
   <g transform="translate(64, 304)">
     <rect x="0" y="0" width="210" height="96" rx="12" fill="#0b1324" stroke="#1e293b" stroke-width="2"/>
-    <text x="24" y="46" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="36" font-weight="800">-94.4%</text>
-    <text x="24" y="74" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">MCP Schema Tax</text>
+    <text x="24" y="46" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="36" font-weight="800">-88.7%</text>
+    <text x="24" y="74" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">Session-Start Tax</text>
 
     <rect x="228" y="0" width="210" height="96" rx="12" fill="#0b1324" stroke="#1e293b" stroke-width="2"/>
     <text x="252" y="46" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="36" font-weight="800">100%</text>
@@ -51,27 +51,28 @@
     <text x="480" y="74" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">Meta-MCP Gateway</text>
   </g>
 
-  <!-- Terminal Callout Box -->
+  <!-- Terminal Callout Box (666px width: x=64..730; font-size=15.5 stays well inside) -->
   <rect x="64" y="426" width="666" height="146" rx="12" fill="#090d16" stroke="#334155" stroke-width="2"/>
   <circle cx="92" cy="454" r="6" fill="#f87171"/>
   <circle cx="112" cy="454" r="6" fill="#fbbf24"/>
   <circle cx="132" cy="454" r="6" fill="#34d399"/>
-  <text x="156" y="459" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">zsh — 30-Second Zero-Install X-Ray &amp; Setup</text>
-  <text x="88" y="498" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="19" font-weight="700">$ npx -y evo-kernel score</text>
-  <text x="88" y="536" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="19" font-weight="700">$ npx -y evo-kernel init --stealth &amp;&amp; npx -y evo-kernel doctor</text>
+  <text x="156" y="459" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">zsh — 30-Second Zero-Install X-Ray &amp; Safe Trial</text>
+  <text x="88" y="497" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15.5" font-weight="700">$ npx -y evo-kernel score</text>
+  <text x="88" y="531" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15.5" font-weight="700">$ npx -y evo-kernel init --stealth &amp;&amp; npx -y evo-kernel doctor</text>
+  <text x="88" y="558" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13.5">$ npx -y evo-kernel ui</text>
 
   <!-- Right Card: Live Score & Constellation Preview -->
   <rect x="766" y="64" width="450" height="508" rx="16" fill="#0b1324" stroke="#1e293b" stroke-width="2"/>
-  <text x="798" y="110" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="800">⚡ CONTEXT HEALTH X-RAY</text>
+  <text x="798" y="110" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" font-weight="800">⚡ EVOKERNEL WORKBENCH</text>
   <rect x="1084" y="88" width="100" height="30" rx="15" fill="#064e3b" stroke="#34d399"/>
   <text x="1134" y="108" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="800">GRADE A+</text>
 
-  <text x="798" y="186" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="68" font-weight="900">96<tspan font-size="28" fill="#64748b">/100</tspan></text>
-  <text x="798" y="220" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">• 10/10 Fragile Hotspots AST-Guarded</text>
-  <text x="798" y="248" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">• 34/34 Memories [VERIFIED] (~0.32ms)</text>
-  <text x="798" y="276" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">• 306+ Tests Passed | 11 Suites</text>
+  <text x="798" y="184" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="64" font-weight="900">96<tspan font-size="26" fill="#94a3b8">/100</tspan></text>
+  <text x="798" y="218" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14.5">• Saved 88.7% · 27.2k → 3.1k tok/turn</text>
+  <text x="798" y="246" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14.5">• 100% AST* Memories [VERIFIED]</text>
+  <text x="798" y="274" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14.5">• 325+ Tests Passed | 11 Suites</text>
 
-  <!-- Mini Constellation Graphic -->
+  <!-- Mini Topology Graphic -->
   <rect x="798" y="304" width="386" height="236" rx="10" fill="#070b14" stroke="#1e293b"/>
   <ellipse cx="991" cy="422" rx="140" ry="82" fill="none" stroke="#1e293b" stroke-dasharray="4 4"/>
   <ellipse cx="991" cy="422" rx="82" ry="48" fill="none" stroke="#1e293b" stroke-dasharray="4 4"/>
@@ -91,5 +92,5 @@
   <circle cx="1064" cy="466" r="9" fill="#064e3b" stroke="#34d399" stroke-width="2"/>
   <circle cx="854" cy="352" r="7" fill="#0c4a6e" stroke="#38bdf8" stroke-width="2"/>
   <circle cx="1130" cy="350" r="7" fill="#0c4a6e" stroke="#38bdf8" stroke-width="2"/>
-  <text x="991" y="524" text-anchor="middle" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">AST Memory Constellation • Claude / Cursor / Gemini / Codex</text>
+  <text x="991" y="524" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">AST* Memory Topology • Claude / Cursor / Codex / Gemini</text>
 </svg>

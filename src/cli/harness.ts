@@ -22,7 +22,11 @@ export interface HarnessAdapter {
   detectWorkspace(workspaceRoot: string): boolean;
   detectEnv(env: Record<string, string | undefined>): boolean;
   detectGlobal(homeDir: string): boolean;
-  install(workspaceRoot: string, managedBlock: string): HarnessInstallResult;
+  install(
+    workspaceRoot: string,
+    managedBlock: string,
+    options?: { skipGeminiMd?: boolean }
+  ): HarnessInstallResult;
   uninstall(workspaceRoot: string): string[];
 }
 
@@ -149,7 +153,7 @@ export function cleanSlashCommands(commandsDir: string): string[] {
 // JSON MCP Config Utilities
 // ============================================================================
 
-function isPluginBootstrapEntry(entry: unknown): boolean {
+export function isPluginBootstrapEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== 'object') return false;
   const args = (entry as Record<string, unknown>).args;
   return Array.isArray(args) && args[0] === '-e';
@@ -159,22 +163,35 @@ export function isEphemeralNpxCachePath(p: string): boolean {
   if (!p || typeof p !== 'string') return false;
   if (process.env.EVO_ALLOW_NPX_CACHE_ROOT === '1') return false;
   const norm = p.replace(/\\/g, '/');
-  return norm.includes('/_npx/') || norm.includes('/npx-');
+  return /\/_npx\//i.test(norm) || /\/npx-/i.test(norm) || /npx-cache/i.test(norm);
 }
 
-export function hasStaleNpxMcpEntry(entry: unknown): boolean {
+export function hasStaleNpxMcpEntry(entry: unknown, workspaceRoot?: string): boolean {
   if (!entry) return false;
 
+  const isAnyAbsolutePath = (p: string): boolean =>
+    path.isAbsolute(p) || /^[A-Za-z]:[/\\]/.test(p);
+  const isNpxPath = (p: string): boolean =>
+    /[\\/]_npx[\\/]/i.test(p) || /npx-cache/i.test(p) || /[\\/]npx-[^\\/]+[\\/]/i.test(p);
+  const pathExistsOnDisk = (p: string): boolean => {
+    if (p.startsWith('.') && workspaceRoot) {
+      return fs.existsSync(path.resolve(workspaceRoot, p));
+    }
+    return fs.existsSync(p);
+  };
+
+  let found = false;
   const stringsToCheck: string[] = [];
 
   const collectStrings = (obj: unknown) => {
+    if (found) return;
     if (typeof obj === 'string') {
       const trimmed = obj.trim().replace(/^["']|["']$/g, '');
       if (!trimmed) return;
-      if ((path.isAbsolute(trimmed) || trimmed.startsWith('.')) && fs.existsSync(trimmed)) {
+      if (isNpxPath(trimmed)) {
+        found = true;
         return;
       }
-      stringsToCheck.push(trimmed);
       if (
         trimmed.includes(' ') &&
         /^(?:node|npx(?:\.cmd)?|cmd(?:\.exe)?|sh|bash|pwsh|powershell)\b/i.test(trimmed)
@@ -182,9 +199,21 @@ export function hasStaleNpxMcpEntry(entry: unknown): boolean {
         const matches = trimmed.match(/"[^"]+"|'[^']+'|\S+/g) || [];
         for (const m of matches) {
           const tok = m.replace(/^["']|["']$/g, '');
-          if (tok) stringsToCheck.push(tok);
+          if (!tok) continue;
+          if (isNpxPath(tok)) {
+            found = true;
+            return;
+          }
+          stringsToCheck.push(tok);
         }
       }
+      if (
+        (isAnyAbsolutePath(trimmed) || (trimmed.startsWith('.') && Boolean(workspaceRoot))) &&
+        pathExistsOnDisk(trimmed)
+      ) {
+        return;
+      }
+      stringsToCheck.push(trimmed);
     } else if (Array.isArray(obj)) {
       for (const item of obj) {
         collectStrings(item);
@@ -197,14 +226,19 @@ export function hasStaleNpxMcpEntry(entry: unknown): boolean {
   };
 
   collectStrings(entry);
+  if (found) return true;
 
   for (const raw of stringsToCheck) {
     const clean = raw.trim().replace(/^["']|["']$/g, '');
     if (!clean) continue;
+    if (isNpxPath(clean)) {
+      return true;
+    }
     const norm = clean.replace(/\\/g, '/');
 
     const hasNpxIndicator = norm.includes('/_npx/') || norm.includes('/npx-') || norm.includes('_npx');
-    if (hasNpxIndicator && (path.isAbsolute(clean) || clean.startsWith('.')) && !fs.existsSync(clean)) {
+    const canResolveOnDisk = isAnyAbsolutePath(clean) || (clean.startsWith('.') && Boolean(workspaceRoot));
+    if (hasNpxIndicator && canResolveOnDisk && !pathExistsOnDisk(clean)) {
       return true;
     }
 
@@ -212,7 +246,7 @@ export function hasStaleNpxMcpEntry(entry: unknown): boolean {
       norm.endsWith('dist/cli/index.js') ||
       norm.endsWith('boot-mcp.mjs') ||
       norm.endsWith('scripts/boot-mcp.mjs');
-    if (path.isAbsolute(clean) && isEvoTargetScript && !fs.existsSync(clean)) {
+    if (canResolveOnDisk && isEvoTargetScript && !pathExistsOnDisk(clean)) {
       return true;
     }
   }
@@ -277,6 +311,24 @@ export function resolveEvoMcpLaunchConfig(workspaceRoot: string): {
     }
   }
 
+  return { command: 'npx', args: ['-y', 'evo-kernel', 'mcp'] };
+}
+
+export function resolveGlobalEvoMcpLaunchConfig(): {
+  command: string;
+  args: string[];
+} {
+  const installedRoot = resolveInstalledEvoKernelRoot();
+  if (installedRoot) {
+    const extBoot = path.join(installedRoot, 'scripts', 'boot-mcp.mjs');
+    if (fs.existsSync(extBoot)) {
+      return { command: 'node', args: [extBoot.replace(/\\/g, '/'), 'mcp'] };
+    }
+    const extDist = path.join(installedRoot, 'dist', 'cli', 'index.js');
+    if (fs.existsSync(extDist)) {
+      return { command: 'node', args: [extDist.replace(/\\/g, '/'), 'mcp'] };
+    }
+  }
   return { command: 'npx', args: ['-y', 'evo-kernel', 'mcp'] };
 }
 
@@ -548,7 +600,7 @@ function locateCodexEvoSection(
   const lines = content.split(/\r?\n/);
   let startLine = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (/^[ \t]*\[mcp_servers\.evo-kernel\][ \t]*(?:#.*)?$/.test(lines[i])) {
+    if (/^[ \t]*\[mcp_servers\.(?:evo-kernel|"evo-kernel"|'evo-kernel')\][ \t]*(?:#.*)?$/.test(lines[i])) {
       startLine = i;
       break;
     }
@@ -572,6 +624,98 @@ function locateCodexEvoSection(
   }
 
   return { startLine, endLine, lines };
+}
+
+function extractBalancedTomlArray(sectionBody: string, keyName: string): string | null {
+  const keyRegex = new RegExp(`^[ \\t]*${keyName}[ \\t]*=[ \\t]*\\[`, 'm');
+  const match = keyRegex.exec(sectionBody);
+  if (!match) return null;
+  const openIdx = match.index + match[0].length - 1;
+  let depth = 0;
+  let inDouble = false;
+  let inSingle = false;
+  let inComment = false;
+  let escaped = false;
+  let stripped = '';
+
+  for (let i = openIdx; i < sectionBody.length; i++) {
+    const ch = sectionBody[i];
+    if (inComment) {
+      if (ch === '\n') {
+        inComment = false;
+        stripped += ch;
+      }
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      stripped += ch;
+      continue;
+    }
+    if (inDouble) {
+      stripped += ch;
+      if (ch === '\\') escaped = true;
+      else if (ch === '"') inDouble = false;
+      continue;
+    }
+    if (inSingle) {
+      stripped += ch;
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (ch === '#') {
+      inComment = true;
+      continue;
+    }
+    stripped += ch;
+    if (ch === '"') inDouble = true;
+    else if (ch === "'") inSingle = true;
+    else if (ch === '[') depth++;
+    else if (ch === ']') {
+      depth--;
+      if (depth === 0) return stripped;
+    }
+  }
+  return null;
+}
+
+export function extractCodexTomlEvoEntry(
+  content: string
+): { command?: string; args?: string[]; rawSection: string } | null {
+  const loc = locateCodexEvoSection(content);
+  if (!loc) return null;
+  const sectionLines = loc.lines.slice(loc.startLine, loc.endLine);
+  const rawSection = sectionLines.join('\n');
+  let command: string | undefined;
+  let args: string[] | undefined;
+  for (const line of sectionLines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const cmdMatch = trimmed.match(/^command\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^']*)')/);
+    if (cmdMatch) {
+      command =
+        cmdMatch[1] !== undefined
+          ? cmdMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+          : cmdMatch[2];
+    }
+  }
+  const argsArrayRaw = extractBalancedTomlArray(rawSection, 'args');
+  if (argsArrayRaw) {
+    try {
+      const parsed = parseJsonc(argsArrayRaw);
+      if (Array.isArray(parsed)) {
+        args = parsed.map(String);
+      }
+    } catch {
+      const strTokens = argsArrayRaw.match(/"(?:\\.|[^"\\])*"|'[^']*'/g) || [];
+      args = strTokens.map((t) =>
+        t.startsWith('"')
+          ? t.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+          : t.slice(1, -1)
+      );
+    }
+  }
+  return { command, args, rawSection };
 }
 
 export function upsertCodexToml(
@@ -1833,13 +1977,21 @@ export class GeminiAdapter implements HarnessAdapter {
     return fs.existsSync(path.join(home, '.gemini'));
   }
 
-  install(ws: string, managedBlock: string): HarnessInstallResult {
-    const rulePath = path.join(ws, 'GEMINI.md');
-    let existing = '';
-    if (fs.existsSync(rulePath)) {
-      existing = fs.readFileSync(rulePath, 'utf8');
+  install(
+    ws: string,
+    managedBlock: string,
+    options?: { skipGeminiMd?: boolean }
+  ): HarnessInstallResult {
+    const updatedFiles: string[] = [];
+    if (!options?.skipGeminiMd) {
+      const rulePath = path.join(ws, 'GEMINI.md');
+      let existing = '';
+      if (fs.existsSync(rulePath)) {
+        existing = fs.readFileSync(rulePath, 'utf8');
+      }
+      fs.writeFileSync(rulePath, upsertMarkerBlock(existing, managedBlock), 'utf8');
+      updatedFiles.push('GEMINI.md');
     }
-    fs.writeFileSync(rulePath, upsertMarkerBlock(existing, managedBlock), 'utf8');
 
     const mcpPath = path.join(ws, '.gemini', 'settings.json');
     upsertMcpJson(mcpPath, ws);
@@ -1847,7 +1999,7 @@ export class GeminiAdapter implements HarnessAdapter {
     const commandFiles = upsertSlashCommands(path.join(ws, '.gemini', 'commands'));
 
     return {
-      updatedFiles: ['GEMINI.md'],
+      updatedFiles,
       mcpConfigFiles: ['.gemini/settings.json'],
       commandFiles: commandFiles.map((f) => path.relative(ws, f).replace(/\\/g, '/')),
     };
@@ -1970,13 +2122,21 @@ export class AntigravityAdapter implements HarnessAdapter {
     return fs.existsSync(path.join(home, '.gemini', 'antigravity'));
   }
 
-  install(ws: string, managedBlock: string): HarnessInstallResult {
-    const rulePath = path.join(ws, 'GEMINI.md');
-    let existing = '';
-    if (fs.existsSync(rulePath)) {
-      existing = fs.readFileSync(rulePath, 'utf8');
+  install(
+    ws: string,
+    managedBlock: string,
+    options?: { skipGeminiMd?: boolean }
+  ): HarnessInstallResult {
+    const updatedFiles: string[] = [];
+    if (!options?.skipGeminiMd) {
+      const rulePath = path.join(ws, 'GEMINI.md');
+      let existing = '';
+      if (fs.existsSync(rulePath)) {
+        existing = fs.readFileSync(rulePath, 'utf8');
+      }
+      fs.writeFileSync(rulePath, upsertMarkerBlock(existing, managedBlock), 'utf8');
+      updatedFiles.push('GEMINI.md');
     }
-    fs.writeFileSync(rulePath, upsertMarkerBlock(existing, managedBlock), 'utf8');
 
     const rootMcp = path.join(ws, '.mcp.json');
     upsertMcpJson(rootMcp, ws);
@@ -1984,7 +2144,7 @@ export class AntigravityAdapter implements HarnessAdapter {
     const hookFiles = upsertAntigravityHooks(ws);
 
     return {
-      updatedFiles: ['GEMINI.md', ...hookFiles],
+      updatedFiles: [...updatedFiles, ...hookFiles],
       mcpConfigFiles: ['.mcp.json'],
     };
   }

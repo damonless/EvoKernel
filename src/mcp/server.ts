@@ -1,6 +1,7 @@
 import * as readline from 'node:readline';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { EVO_KERNEL_VERSION } from '../core/storage.js';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from './handlers.js';
 
 export const MCP_INSTRUCTIONS =
@@ -165,7 +166,7 @@ export function startMcpStdioServer(
           },
           serverInfo: {
             name: 'evo-kernel',
-            version: '0.3.0',
+            version: EVO_KERNEL_VERSION,
           },
           instructions: MCP_INSTRUCTIONS,
         });

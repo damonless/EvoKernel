@@ -2,30 +2,30 @@
 
 # 🧬 EvoKernel (evo-kernel)
 
-### 削减 94.4% 的 MCP 工具 Schema 税（与 88.7% 常驻静态前缀税），保持 100% KV 缓存命中。在独立 Git Worktree 中自演进 AST 级防漂移记忆与受控沙盒微工具 —— 纯原生 0 外部依赖。
+### 让 AI 编程助手告别跨会话重复踩坑 —— AST 级防漂移认知记忆与 6 道确定性沙盒门禁，削减 88.7% 会话启动 Token 税，纯原生 0 外部依赖。
 
 **面向 AI 编程智能体的「确定性自演进元内核」与认知上下文操作系统**  
 *Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
 
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
-[![Workbench 2.0 Demo](https://img.shields.io/badge/Workbench_2.0-在线交互演示-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/)
+[![EvoKernel Workbench Demo](https://img.shields.io/badge/EvoKernel_Workbench-在线交互演示-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/demo/)
 [![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#-30-秒极速上手)
 [![Version](https://img.shields.io/badge/npm-v0.3.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#-零依赖原生架构)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#-核心架构5-个固定元工具原语)
-[![Tests](https://img.shields.io/badge/tests-306%2B%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
+[![Tests](https://img.shields.io/badge/tests-325%2B%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 
-**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 在线交互式工作台 (Workbench 2.0)](https://damonless.github.io/EvoKernel/) · [📊 基准评测 (Benchmarks)](benchmarks/README.md)**
+**[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 产品主页](https://damonless.github.io/EvoKernel/) · [🖥️ 在线交互式工作台 (EvoKernel Workbench)](https://damonless.github.io/EvoKernel/demo/) · [📊 基准评测 (Benchmarks)](benchmarks/README.md)**
 
 <br/>
 
-<a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-shotcraft.svg" alt="EvoKernel 三层渐进式上下文网关与基准遥测" width="100%" /></a>
+<a href="https://damonless.github.io/EvoKernel/"><img src="./assets/hero-shotcraft.svg" alt="EvoKernel 认知记忆、确定性沙盒门禁与基准遥测" width="100%" /></a>
 
 </div>
 
-> **EvoKernel 是什么？** EvoKernel 让你的 AI 编程助手不再跨会话重复踩同一个坑——将每次排障的根因与解法沉淀为绑定代码指纹的认知记忆与沙盒微工具，同时将臃肿的第三方 MCP 与规则折叠进 5 个固定元工具（**削减 88.7%–94.4% Prompt 税、100% KV 缓存命中、0 外部依赖**）。
+> **EvoKernel 是什么？** EvoKernel 为你的 AI 编程助手装备**跨会话 AST 级防漂移认知记忆、单行可见召回回执（`🛡️ EvoKernel Recall`）与 6 道确定性沙盒门禁**，让修过的 Bug 绝不在新会话中重演；同时将臃肿的第三方 MCP 工具定义与巨石规则文件折叠进 5 个固定元工具原语（**削减 88.7% 会话启动 Token 税：`27,150 → 3,066` tok/轮、100% KV 缓存命中、0 外部依赖**）。
 
 > [!NOTE]
 > **消歧说明：** EvoKernel (`evo-kernel`) 是面向 AI 编程智能体（Claude Code、Cursor、Windsurf、Codex、Gemini 等）的智能体架构与上下文工程框架，与同名的学术 ICML 论文/基准测试或 Linux 内核项目无关。
@@ -44,15 +44,19 @@ npx -y evo-kernel score
 npx -y evo-kernel init --stealth && npx -y evo-kernel doctor
 # (如需预览 MCP 虚拟化节省的 Token，可执行：npx -y evo-kernel virtualize --dry-run)
 
-# 3. 启动 Workbench 2.0 工业级工作台与规范交付物核检（支持 .xlsx, .docx, .pptx, .csv, .json, .md）
-npx -y evo-kernel ui --app
-npx -y evo-kernel check ./README.md
+# 3. 启动 EvoKernel Workbench 可视化工作台，检视能力树、AST 记忆与近 7 日召回实绩
+npx -y evo-kernel ui
 ```
 
 > 💡 **Node.js 18 / 20 免全局升级一键极速体验：**  
 > `npx -y -p node@22 evo-kernel score`  
 > *（注：`npx -p node@22` 仅推荐用于单次 CLI 体检；若需长期挂载后台 MCP 服务，请将系统 Node 升级至 `>= 22.5.0`：`nvm install 22 && nvm use 22` 或 `fnm use 22`，并推荐全局安装：`npm install -g evo-kernel`）*  
 > *为什么需要 Node.js >= 22.5.0？* EvoKernel 基于 Node 22 原生内置的 `node:sqlite`、`node:module` 与 `node:test` 构建，实现 **0 外部第三方 npm 依赖与 0 供应链安全投毒风险**。
+
+<details>
+<summary><b>🖥️ 可视化界面导览：3 步终端流水线、EvoKernel Workbench 工作台与 X-Ray 诊断卡 (点击展开)</b></summary>
+
+<br/>
 
 <div align="center">
   <img src="./assets/quickstart-shotcraft.svg" alt="EvoKernel 30 秒极速上手全流程" width="100%" />
@@ -63,8 +67,8 @@ npx -y evo-kernel check ./README.md
 <table>
 <tr>
 <td align="center" width="56%">
-  <b>EvoKernel Workbench 2.0 (<code>npx evo-kernel ui --app</code>)</b><br/>
-  <a href="https://damonless.github.io/EvoKernel/"><img src="./assets/workbench-showcase.svg" width="100%" alt="EvoKernel Workbench 2.0 Zinc Dark Cockpit and AST Topology" /></a>
+  <b>EvoKernel Workbench (<code>npx evo-kernel ui</code>)</b><br/>
+  <a href="https://damonless.github.io/EvoKernel/demo/"><img src="./assets/workbench-showcase.png" width="100%" alt="EvoKernel Workbench — 能力树、AST 认知记忆与 7 日召回实景" /></a>
 </td>
 <td align="center" width="44%">
   <b>终端矢量 X-Ray 诊断卡 (<code>npx evo-kernel score</code>)</b><br/>
@@ -73,8 +77,10 @@ npx -y evo-kernel check ./README.md
 </tr>
 </table>
 
+</details>
+
 <details>
-<summary><b>🛠️ 源码克隆构建与高级 CLI 流程 (点击展开)</b></summary>
+<summary><b>🛠️ 源码克隆构建、CI 交付物核检与高级 CLI 流程 (点击展开)</b></summary>
 
 ```bash
 # 从源码克隆并编译（编译耗时 <50ms，无需任何 npm install）
@@ -91,12 +97,14 @@ node ./dist/cli/index.js bootstrap --max-commits=50
 # 运行离线 Git Worktree 能力演化优化循环
 node ./dist/cli/index.js optimize --dim both -k 3
 
-# 检查能力树结构、多分支 AST 记忆时效性与 ROI 遥测记账本
+# CI / 工程交付物规范核检（支持 .xlsx, .docx, .pptx, .csv, .json, .md）
+npx -y evo-kernel check ./README.md
+
+# 检查能力树结构、多分支 AST 记忆时效性与实时 MCP 握手体检
 node ./dist/cli/index.js tree
 node ./dist/cli/index.js memory verify
-node ./dist/cli/index.js stats
+node ./dist/cli/index.js doctor --roi
 node ./dist/cli/index.js audit --global
-node ./dist/cli/index.js doctor
 ```
 
 </details>
@@ -109,7 +117,7 @@ EvoKernel 从设计之初就坚持极低试错门槛、完全透明可审查与�
 
 ### 1. `evo init` 动了哪些文件与一键无损卸载还原
 执行 `npx evo-kernel init` 时，仅精准修改以下三处隔离边界：
-- **宿主 Agent 规则文件**：在检测到的宿主规则文件（`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/evo-kernel.mdc`）中插入由 `<!-- EVO:START -->` 与 `<!-- EVO:END -->` 严格包裹的受控元规则块。标记块之外的原有规则内容绝不触碰。
+- **宿主 Agent 规则文件**：在检测到的宿主规则文件（`CLAUDE.md`、`AGENTS.md`、`.cursor/rules/evo-kernel.mdc`，或在存在 `.gemini/` 目录时注入 `GEMINI.md`——自动检测模式下避免根目录重复注入相同块）中插入紧凑（<1,100 tok）、由 `<!-- EVO:START -->` 与 `<!-- EVO:END -->` 严格包裹的受控元规则块。标记块之外的原有规则内容绝不触碰。
 - **宿主 MCP 配置文件**：仅为宿主注册唯一的 `evo-kernel` stdio 元网关服务项（未执行虚拟化时绝不修改已有第三方 MCP 配置）。
 - **项目本地 `.evo/` 资产目录**：初始化局部能力树与情景记忆结构（`.evo/rules/`, `.evo/skills/`, `.evo/memories/`, `.evo/tools/`, `.evo/.cache/`）。
 
@@ -135,14 +143,13 @@ EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数
 
 | 核心指标 | 传统直连多 MCP + 巨石 `CLAUDE.md` | **🧬 EvoKernel 5-Tool 虚拟网关** | 推演/实测收益 |
 | :--- | :---: | :---: | :---: |
-| **暴露给模型的工具 Schema** | 77 个工具定义 | **5 个固定元工具原语** | **-93.5% Schema 体积** |
-| **MCP 工具 Schema 税 / 轮** | 27,150 tokens | **1,530 tokens** | **-94.4% MCP Schema 税** |
-| **8-Server 完整静态前缀税 / 轮** | 27,150 tokens | **3,066 tokens** | **-88.7% 静态前缀税削减** |
+| **暴露给模型的工具 Schema** | 77 个工具定义 (`14,700` tok) | **5 个固定元工具原语 (`1,916` tok)** | **-93.5% Schema 数量 (`-87.0%` 体积)** |
+| **会话启动静态前缀税 / 轮** | 27,150 tokens | **3,066 tokens** | **-88.7% 会话启动 Token 税削减** |
 | **中途演进引发的缓存击穿** | 3 次全量前缀重算 | **0 次（100% 命中缓存）** | **100% KV Cache 护盾** |
 | **50 轮累计输入 Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% 累计负载** |
 | **50 轮账单成本 (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **节省 70.4% API 成本** |
 | **50 轮账单成本 (Claude Opus 4.5)** | \$5.76 | **\$1.70** | **节省 70.4% API 成本** |
-| **本地引擎 AST 校验速率** | 无校验（重构后静默腐败） | **~0.32 ms / 条记忆** | **<11ms 批量校验 34 条记忆¹** |
+| **本地引擎 AST 校验速率** | 无校验（重构后静默腐败） | **~0.32 ms / 条记忆** | **<12ms 批量校验 36 条记忆¹** |
 
 > ¹ *术语说明：* AST 防漂移/符号指纹采用**零依赖词法-结构骨架指纹（Zero-Dep Lexical-Structural Skeleton Fingerprinting）**，无需外部重型编译器即可对注释修改、代码格式化和行号漂移天然免疫。
 
@@ -161,12 +168,17 @@ EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数
 **EvoKernel 用一套“离线工作区演化引擎 + 借脑宿主 + 确定性沙盒门禁 + 固定元路由网关 + 下游 MCP 虚拟化代理”彻底解决上述问题：**
 
 <div align="center">
-  <img src="./assets/gatekeeper-shotcraft.svg" alt="EvoKernel 4 道确定性沙盒门禁" width="100%" />
+  <img src="./assets/gatekeeper-shotcraft.svg" alt="EvoKernel 6 道确定性沙盒门禁" width="100%" />
 </div>
 
 ---
 
 ## 📊 行业同类项目全景对比矩阵
+
+<details>
+<summary><b>📊 展开 13 维同类方案全景对比矩阵（MemGPT / Letta、Aider、直通 MCP 代理、ECC、SkillClaw vs. EvoKernel）</b></summary>
+
+<br/>
 
 | 对比维度 | `MemGPT / Letta` | `Aider` | 传统 MCP 代理 (直通型) | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.3.0 (本项目)** |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -175,158 +187,41 @@ EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数
 | **运行依赖** | 笨重依赖（Postgres、Python、向量库） | Python pip 工具链 | Node / Python 复杂依赖 | 零依赖（纯 Markdown 文本） | Python FastAPI 守护进程 | **0 依赖（纯 Node.js `>= 22.5` 原生特性：`node:sqlite`, `node:module`, `node:test`）** |
 | **Prompt Cache 稳定性** | 频繁刷新全量上下文，缓存命中极低 | 随代码编辑频繁波动 | **破坏性**（暴露所有子工具，任何增删均导致前缀击穿） | 初始静态前缀偏大 | 中立 | **100% 字节级稳定：对宿主仅暴露恒定 5 个元工具原语** |
 | **下游 MCP 虚拟化** | 无 | 无 | 直通暴露（50+ 工具全量倾倒至提示词） | 无 | 无 | **零缓存击穿的 FTS5 索引 + 按需 stdio JSON-RPC 动态转发代理** |
-| **验证门禁机制** | 模型自评 | Git commit diff 与本地测试 | 无 | 手动人工 `/learn-eval` | 异步 LLM 评审 | **4 道确定性沙盒门禁（静态 AST 检查、沙盒 Exit 0、BM25 去重、1500-Token 阈值、防因果混淆）** |
+| **验证门禁机制** | 模型自评 | Git commit diff 与本地测试 | 无 | 手动人工 `/learn-eval` | 异步 LLM 评审 | **6 道确定性沙盒门禁（静态安全审查、词法去符号化、沙盒 Exit 0、BM25 去重、1500-Token 阈值、防因果混淆）** |
 | **离线工作区演化** | 无 | 无 | 无 | 无 | 云端 LLM 离线评测 | **`evo optimize`：瞬态 Git Worktree 隔离运行、`inv`/`dom` 双正交演化、自动探针评测与回归熔断回滚** |
 | **交付物规范消费检查** | 无 | 无 | 无 | 无 | 无 | **内置零依赖通用规范核检器（覆盖 `.xlsx`, `.docx`, `.pptx`, CSV, JSON/JSONL, Markdown）** |
 | **情景记忆与防漂移** | 语义向量近似检索（重构后易幻觉） | 依赖符号跳转图谱 | 无 | 无（纯静态指南） | 无 AST 验证 | **零依赖词法/结构符号指纹（快速 AST 哈希、自动 `[STALE]` 降级、Stage-3 拓扑穿透锚点）** |
-| **工作台与诊断体检** | 独立 Web + Postgres 服务 | 无 | 无 | 无 | Web 界面 | **`evo score`（<25ms 极速体检卡）与 `evo ui`（0 依赖 Workbench 2.0 工业级工作台、双模态原生微窗口、SSE 实时同步、严格 CSP、单文件导出）** |
+| **工作台与诊断体检** | 独立 Web + Postgres 服务 | 无 | 无 | 无 | Web 界面 | **`evo score`（<25ms 零写入体检卡）与 `evo ui`（0 依赖 EvoKernel Workbench 工业级工作台、双模态原生微窗口、SSE 实时同步、严格 CSP、单文件导出）** |
 | **因果遥测与成效归因** | 无 | Git 变更行数 | 无 | 无 | 胜率计数器 | **细粒度成效记账本（`helped` / `hurt` / `contested`）与 `ERR_CONFOUNDED_CAUSATION` 防混淆** |
 | **多 Agent 宿主矩阵支持** | 仅独立模式 | 仅独立模式 | 通用 MCP 客户端 | 仅限 Claude Code / Cursor | 通用反代 | **原生支持 10 款主流编码环境（Claude, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, Antigravity）** |
 | **冷启动仓库基因挖掘** | 初始为空，依赖会话积累 | Git 仓库扫描 | 初始为空 | 静态合集 | 初始为空 | **`evo bootstrap`：10 秒内自动挖掘项目多栈基因与 Git 历史 Bug 修复沉淀** |
-
----
-
-## 🚀 离线 Git Worktree 演进优化引擎 (`evo optimize`)
-
-EvoKernel v0.3.0 引入了全自主离线能力优化循环。该机制在**完全隔离的瞬态 Git 工作树（Worktree）**中并行展开能力演进实验，绝不干扰当前工作区的未提交代码：
-
-```bash
-# 同时在架构不变式 (inv) 与垂直业务域 (dom) 两个维度展开离线优化
-evo optimize --dim both -k 3
-
-# 针对指定会话轨迹与交付物核检规则进行靶向定向演进
-evo optimize --trajectory session.jsonl --deliverable report.xlsx --apply
-```
-
-### 核心工程特性：
-- **零脏状态污染**：工作树临时创建于 `.evo/.cache/optimize/worktrees/opt-...` 路径下，评测结束后毫秒级自动清理。
-- **正交双维度解耦演进**：
-  - **不变式维度 (`inv`)**：演化跨模块架构守卫规约与防因果混淆门禁。
-  - **垂直业务维度 (`dom`)**：演化特定业务场景的情景排障记忆与 SOP 战术技能手册。
-- **多宿主真实会话轨迹解析**：
-  - 原生支持 **Antigravity** (`transcript.jsonl`，含双重 JSON 转义自动解包)、**Codex CLI** (`thread-item`)、**OpenCode** (事件流) 与 **Claude Code** (`stream-json`)。
-- **自动化 Proposer 脚本与隔离 Probe 探针验证**：
-  - 在隔离工作树中运行提议脚本生成候选规则。
-  - 执行独立 Probe 命令对比基线得分。
-  - 一旦候选版本出现回归或未能通过 4 道沙盒门禁，强制执行 `KEEP_BASE` 熔断回滚。
-
----
-
-## 📑 零依赖交付物规范消费核检器 (`deliverable-canonical-inspector`)
-
-<a id="-零依赖原生架构"></a>
-AI 编程智能体在生成 `.xlsx`、`.docx`、`.pptx`、CSV、JSON 等结构化交付文件时，常常出现表面看起来正常但在下游工具中解析崩溃的隐蔽缺陷。EvoKernel 内置了开箱即用的零依赖规范消费检验器：
-
-```bash
-# 通过顶级 CLI 命令直接核检任意交付文件：
-npx evo-kernel check report.xlsx
-
-# 输出机器友好的结构化 JSON（便于 CI 流水线集成）：
-npx evo-kernel check report.xlsx --json
-
-# 顶级 CLI 别名命令：
-npx evo-kernel inspect report.xlsx
-```
-
-<details>
-<summary><b>📋 支持的交付物格式与核检规则（点击展开）</b></summary>
-
-### 完备格式解析与质检能力：
-- **XLSX (.xlsx)**：
-  - 纯原生 IEEE 802.3 CRC32 + ZIP Central Directory 解压引擎。
-  - 自动正规化 openpyxl 生成的开首斜杠路径（`/xl/worksheets/sheet1.xml`）。
-  - 提取单元格文本前剔除拼音注音标签（`<rPh>`）。
-  - 正确保留自闭合 XML 节点（`<c .../>`）后续的兄弟单元格，防止数据被吞噬。
-  - 识别共享公式跟随节点，精确捕获公式错误值（`#REF!`, `#DIV/0!`, `#VALUE!`, `t="e"`）。
-  - 校验空工作表并验证表格表头维度。
-- **DOCX (.docx)**：
-  - 规范提取段落、带空格的层级标题（`Heading 1`, `Heading 2`, `Title`）与表格矩阵。
-  - 拦截并标记 `EMPTY_DOCUMENT` 空文档缺陷。
-- **PPTX (.pptx)**：
-  - 按数字自然序对幻灯片排序并格式化为标准 `## Slide N` 结构。
-  - 警示单张幻灯片内容缺失并拦截 `EMPTY_PRESENTATION` 纯空演示文稿。
-- **CSV 与 JSON / JSONL**：
-  - 严格符合 RFC-4180 标准的 CSV 解析器，正确处理转义引号与多行字段。
-  - 支持逐行校验 `requiredKeys` 与 `strictKeys`，拦截 `RAGGED_COLUMNS` 锯齿列。
-- **Markdown (.md)**：
-  - 检测 `UNCLOSED_CODE_FENCE` 代码块未闭合语法错误。
-  - 拦截代码围栏外的模板占位符泄漏：
-    ```markdown
-    {{VARIABLE}}
-    ```
-    并安全允许代码块内部的合法变量示范。
 
 </details>
 
 ---
 
-## 🛡️ 因果成效归因与防混淆门禁
+<a id="-零依赖原生架构"></a>
+<a id="-核心架构5-个固定元工具原语"></a>
+## 🧠 核心架构与深度子系统手册
 
-大多数智能体系统存在严重的主观迷信学习：智能体在一系列复杂操作后修好了代码，就把功劳归咎于刚刚随手添加的一条规则，即使真正的根因是一个毫无关联的文件修改。
+EvoKernel 在 `stdio` 上仅暴露 **5 个不可变元工具原语**（`evo_search`、`evo_inspect`、`evo_run`、`evo_propose`、`evo_compact`）以确保 100% KV 缓存命中，底层配套离线 Git Worktree 演化引擎、零依赖交付物规范消费核检器、确定性因果归因与 10 大宿主无损适配器。
 
-EvoKernel 通过**确定性因果归因引擎**彻底解决此问题：
-- **成效账本**：会话中被检索调用的每项能力都在 SQLite 遥测中明确归因：
-  - `helped`：直接促成测试通过且无任何功能回归。
-  - `hurt`：被调用的会话导致失败或引发了 Git 代码撤销。
-  - `contested`：在多次试错与多个变量同时改动的排障过程中被调用。
-- **防因果混淆门禁 (`ERR_CONFOUNDED_CAUSATION`)**：
-  - 当一个排障周期内同时命中了多条能力时，EvoKernel 自动阻断单一变量的抢功归因。
-  - 提议者必须提供对比性证据或 Stage-3 **拓扑穿透锚点**（精确到行号、调用者链与反向死胡同案例）证明实际因果。
+<details>
+<summary><b>🧠 5 个固定元工具原语、下游 MCP 代理虚拟化与生命周期 Hook 路由（点击展开）</b></summary>
 
----
+<br/>
 
-## 🎯 10 款主流智能体宿主适配矩阵与静默失败防御
+### 5 个不可变元工具原语（`stdio` JSON-RPC 2.0）
 
-EvoKernel 与主流 AI 编程环境无缝兼容，支持标记块原地无损更新与 Git 隐身模式：
+| 元工具名称 | 层级 | 功能职责 |
+| :--- | :--- | :--- |
+| `evo_search` | **L0** | FTS5 BM25 检索规则、技能、微工具、虚拟化外部工具与情景记忆。执行实时的 Stage-2 AST 符号校验，自动将失效记忆标记为 `[STALE]`。 |
+| `evo_inspect` | **L1 / L2** | 渐进披露加载器。提供故障症状/根因/方案三元组、虚拟化工具的完整 JSON Schema 以及 **Stage-3 拓扑穿透锚点**（真实代码行号、调用链与负面死胡同）。 |
+| `evo_run` | **执行** | 在本地沙盒中执行微工具（`.mjs`, `.py`, `.ps1`, `.sh`）或通过 `McpProxyManager` 动态代理调用下游 MCP 服务。 |
+| `evo_propose` | **演化** | 提交候选规则、技能、微工具或情景记忆，必须严格通过 6 道确定性沙盒门禁（静态安全审查、词法去符号化、沙盒 Dry-Run 自测、BM25 去重、1,500 Token 预算硬顶、因果混淆防护）。 |
+| `evo_compact` | **GC** | 原子级合并零碎规则，或将已失效的 `[STALE]` 记忆归档至 `.evo/archive/`，确保核心 Token 占用严格收敛在 1,500 Token 红线内。 |
 
-| 智能体 / 宿主 | 规则注入目标 | MCP 网关挂载目标 | 自动识别特征 | 隐身模式 (`.git/info/exclude`) |
-| :--- | :--- | :--- | :--- | :---: |
-| **Claude Code** | `CLAUDE.md` | `.mcp.json` + `.claude/settings.json` | `CLAUDE.md`, `.claude/`, `CLAUDE_CONFIG_DIR`, `~/.claude` | ✅ |
-| **Cursor** | `.cursor/rules/evo-kernel.mdc` | `.cursor/mcp.json` | `.cursor/`, `.cursorrules`, `CURSOR_AGENT`, `~/.cursor` | ✅ |
-| **Windsurf** | `.windsurfrules` | `.windsurf/mcp.json` | `.windsurf/`, `.windsurfrules`, `WINDSURF_DIR`, `~/.windsurf` | ✅ |
-| **Cline** | `.clinerules` | `.cline/mcp.json` | `.clinerules`, `.cline/`, `CLINE_DIR`, `~/.cline` | ✅ |
-| **Roo Code** | `.roo/rules/evo-kernel.md` | `.roo/mcp.json` | `.roo/`, `.roorules`, `ROO_DIR`, `~/.roo` | ✅ |
-| **GitHub Copilot / VS Code** | `.github/copilot-instructions.md` | `.vscode/mcp.json` | `.github/copilot-instructions.md`, `.vscode/`, `VSCODE_PID` | ✅ |
-| **Codex CLI** | `AGENTS.md` | `.codex/config.toml` | `.codex/`, `CODEX_HOME`, `~/.codex` | ✅ |
-| **OpenCode** | `opencode.json` + `AGENTS.md` | `opencode.json` | `opencode.json`, `.opencode/`, `OPENCODE_CONFIG` | ✅ |
-| **Gemini CLI** | `GEMINI.md` | `.gemini/settings.json` | `GEMINI.md`, `.gemini/`, `GEMINI_CLI_HOME`, `~/.gemini` | ✅ |
-| **Antigravity** | `GEMINI.md` | `mcp_config.json` + `.mcp.json` | `mcp_config.json`, `ANTIGRAVITY_AGENT`, `~/.antigravity` | ✅ |
-
-### 静默失败表面防御：
-- **UTF-8 BOM 防御**：所有 JSON/Markdown 解析器自动剥离并防范字节顺序标记（`0xFEFF`），杜绝因编码隐蔽损坏配置文件。
-- **保留注释的无损配置合并**：在合并 TOML（`.codex/config.toml`）与 JSON 配置时，完整保留开发者的原有注释与既有服务器配置。
-- **零编译平滑降级执行**：通过 `scripts/boot-mcp.mjs` 原生 TypeScript 快速剥离，即便在未预编译 `dist/` 的环境下也能立即拉起。
-- **空闲管道 Stdin 阻塞防护**：异步非阻塞标准输入监听（50ms 优雅超时），防止在非 TTY 挂载时进程挂起。
-
----
-
-## 🪝 通用生命周期 Hook 路由与单行 JSON 门禁 Hook
-
-EvoKernel 提供统一的 CLI Hook 路由器（`evo hook <event>`），支持主流智能体生命周期深度集成：
-
-```bash
-# 1. Post-Tool Hook：监控文件修改、排障会话诊断识别（>=10 次读取）并自动召回局部规则
-evo hook post-tool --tool Edit --file src/core/storage.ts
-
-# 2. Stop Hook：会话结束提示沉淀经验，并在未经验证修改代码时触发防投毒警示
-evo hook stop
-
-# 3. Pre-Commit Guard：在 git commit 前拦截泄露的内部缓存与超出 1500-Token 的超额规约
-evo hook pre-commit
-
-# 4. Error Recovery Marker：在命令执行报错时记录错误自愈遥测指标
-evo hook mark-recovery
-```
-
-- **单行 JSON 标准输出**：输出结构化 Hook 指令（`hook_trigger`），完全兼容主流 Agent 宿主规范。
-- **只读排障诊断与反诘探测**：当检测到只读诊断排障会话（`>= 10` 次读取且 `< 4` 次修改）或用户纠错反问时，主动提示经验沉淀。
-- **反污染告警**：在能力沉淀后若源码又发生了未经校验的修改，即时给出告警。
-
----
-
-## 🔌 下游 MCP 代理虚拟化网关
-
-EvoKernel 通过其**恒定 5 元工具网关**彻底虚拟化所有下游 MCP 服务器。大模型仅需看到 5 个元工具，数百个业务工具即可按需检索、渐进披露与动态执行：
+### 下游 MCP 代理虚拟化网关（`evo virtualize`）
 
 ```text
 Host Coding Agent (Claude / Cursor / Copilot / etc.)
@@ -351,30 +246,81 @@ Host Coding Agent (Claude / Cursor / Copilot / etc.)
 ```
 
 ```bash
-# 演练预览：查看折叠下游 MCP 后可节省的 Token 数量
-evo virtualize --dry-run
-
-# 一键将所有第三方 stdio MCP 服务折叠接入 EvoKernel 动态代理池
-evo virtualize
-
-# 无损还原：随时将虚拟化的 MCP 配置写回原本的宿主配置文件
-evo virtualize --restore
+evo virtualize --dry-run   # 演练预览：查看折叠下游 MCP 后可节省的 Token 数量
+evo virtualize             # 一键将第三方 stdio MCP 服务折叠接入 EvoKernel 动态代理池
+evo virtualize --restore   # 无损还原：随时将虚拟化的 MCP 配置写回原宿主配置文件
 ```
 
----
+### 通用生命周期 Hook 路由（`evo hook <event>`）
 
-<a id="-核心架构5-个固定元工具原语"></a>
-## 🧠 核心架构：5 个固定元工具原语
+```bash
+evo hook post-tool --tool Edit --file src/core/storage.ts   # 监控文件修改、只读排障诊断 (>=10 次读取) 并召回局部规则
+evo hook stop                                               # 会话结束提示沉淀经验并触发反污染脏文件告警
+evo hook pre-commit                                         # 在 git commit 前拦截内部缓存与超出 1500-Token 的超额规约
+evo hook mark-recovery                                      # 在命令执行报错后记录错误自愈遥测指标
+```
 
-EvoKernel 在 `stdio` 上**仅暴露恒定的 5 个不可变元工具**，以此确保 100% 的 Prompt Cache 命中率：
+</details>
 
-| 元工具名称 | 层级 | 功能职责 |
-| :--- | :--- | :--- |
-| `evo_search` | **L0** | FTS5 BM25 检索规则、技能、微工具、虚拟化外部工具与情景记忆。执行实时的 Stage-2 AST 符号校验，自动将失效记忆标记为 `[STALE]`。 |
-| `evo_inspect` | **L1 / L2** | 渐进披露加载器。提供故障症状/根因/方案三元组、虚拟化工具的完整 JSON Schema 以及 **Stage-3 拓扑穿透锚点**（真实代码行号、调用链与负面死胡同）。 |
-| `evo_run` | **执行** | 在本地沙盒中执行微工具（`.mjs`, `.py`, `.ps1`, `.sh`）或通过 `McpProxyManager` 动态代理调用下游 MCP 服务。 |
-| `evo_propose` | **演化** | 提交候选规则、技能、微工具或情景记忆，必须严格通过 4 道确定性沙盒门禁（静态 AST 安全审查、沙盒 Dry-Run 自测、BM25 去重、1,500 Token 预算硬顶、因果混淆防护）。 |
-| `evo_compact` | **GC** | 原子级合并零碎规则，或将已失效的 `[STALE]` 记忆归档至 `.evo/archive/`，确保核心 Token 占用严格收敛在 1,500 Token 红线内。 |
+<details>
+<summary><b>🚀 离线 Git Worktree 演进优化引擎 (<code>evo optimize</code>) 与确定性因果归因（点击展开）</b></summary>
+
+<br/>
+
+```bash
+# 同时在架构不变式 (inv) 与垂直业务域 (dom) 两个维度展开离线优化
+evo optimize --dim both -k 3
+
+# 针对指定会话轨迹与交付物核检规则进行靶向定向演进
+evo optimize --trajectories session.jsonl --deliverables report.xlsx --apply
+```
+
+- **零脏状态污染**：工作树临时创建于 `.evo/.cache/optimize/worktrees/opt-...`，评测结束后自动清理。
+- **正交双维度解耦演进**：跨模块架构不变式（`inv`）与业务情景记忆/SOP 手册（`dom`）正交演化。
+- **多宿主真实会话轨迹解析**：原生支持 **Antigravity**、**Codex CLI**、**OpenCode** 与 **Claude Code**，候选版本一旦违反 6 道沙盒门禁即强制执行 `KEEP_BASE` 熔断回滚。
+- **防因果混淆门禁 (`ERR_CONFOUNDED_CAUSATION`)**：在 SQLite 中细粒度记录 `helped`、`hurt`、`contested` 成效账本；当单次排障周期内多条能力同时命中时自动阻断单一变量抢功，要求提供 Stage-3 **拓扑穿透锚点**证明真实因果。
+
+</details>
+
+<details>
+<summary><b>📑 零依赖交付物规范消费核检器 (<code>evo check</code> / <code>deliverable-canonical-inspector</code>)（点击展开）</b></summary>
+
+<br/>
+
+内置开箱即用的零依赖规范消费检验器，拦截表面正常但在下游工具中解析崩溃的交付物缺陷：
+
+```bash
+npx evo-kernel check report.xlsx          # 终端直观核检报告
+npx evo-kernel check report.xlsx --json   # 面向 CI 流水线的结构化 JSON 输出
+```
+
+- **XLSX (`.xlsx`)**：纯原生 IEEE 802.3 CRC32 + ZIP Central Directory 解压引擎；正规化开首斜杠路径、剔除 `<rPh>` 拼音注音、保留 `<c .../>` 自闭合节点后的兄弟单元格，并精准拦截 `#REF!`、`#DIV/0!`、`#VALUE!`、`t="e"` 公式错误与空工作表。
+- **DOCX (`.docx`) 与 PPTX (`.pptx`)**：规范提取层级标题、段落、表格矩阵与按自然序排列的 `## Slide N` 结构，拦截 `EMPTY_DOCUMENT` 与 `EMPTY_PRESENTATION`。
+- **CSV、JSON/JSONL 与 Markdown (`.md`)**：RFC-4180 CSV 解析（拦截 `RAGGED_COLUMNS`）、逐行 `requiredKeys`/`strictKeys` 校验、`UNCLOSED_CODE_FENCE` 未闭合代码块检测以及代码围栏外的 `{{VARIABLE}}` 模板占位符泄漏拦截。
+
+</details>
+
+<details>
+<summary><b>🎯 10 款主流智能体宿主适配矩阵与静默失败防御（点击展开）</b></summary>
+
+<br/>
+
+| 智能体 / 宿主 | 规则注入目标 | MCP 网关挂载目标 | 自动识别特征 | 隐身模式 (`.git/info/exclude`) |
+| :--- | :--- | :--- | :--- | :---: |
+| **Claude Code** | `CLAUDE.md` | `.mcp.json` + `.claude/settings.json` | `CLAUDE.md`, `.claude/`, `CLAUDE_CONFIG_DIR`, `~/.claude` | ✅ |
+| **Cursor** | `.cursor/rules/evo-kernel.mdc` | `.cursor/mcp.json` | `.cursor/`, `.cursorrules`, `CURSOR_AGENT`, `~/.cursor` | ✅ |
+| **Windsurf** | `.windsurfrules` | `.windsurf/mcp.json` | `.windsurf/`, `.windsurfrules`, `WINDSURF_DIR`, `~/.windsurf` | ✅ |
+| **Cline** | `.clinerules` | `.cline/mcp.json` | `.clinerules`, `.cline/`, `CLINE_DIR`, `~/.cline` | ✅ |
+| **Roo Code** | `.roo/rules/evo-kernel.md` | `.roo/mcp.json` | `.roo/`, `.roorules`, `ROO_DIR`, `~/.roo` | ✅ |
+| **GitHub Copilot / VS Code** | `.github/copilot-instructions.md` | `.vscode/mcp.json` | `.github/copilot-instructions.md`, `.vscode/`, `VSCODE_PID` | ✅ |
+| **Codex CLI** | `AGENTS.md` | `.codex/config.toml` | `.codex/`, `CODEX_HOME`, `~/.codex` | ✅ |
+| **OpenCode** | `opencode.json` + `AGENTS.md` | `opencode.json` | `opencode.json`, `.opencode/`, `OPENCODE_CONFIG` | ✅ |
+| **Gemini CLI** | `GEMINI.md` *（当 `AGENTS.md` 共存时自动跳过）* | `.gemini/settings.json` | `GEMINI.md`, `.gemini/`, `GEMINI_CLI_HOME`, `~/.gemini` | ✅ |
+| **Antigravity** | `AGENTS.md` | `mcp_config.json` + `.mcp.json` | `mcp_config.json`, `ANTIGRAVITY_AGENT`, `~/.gemini/antigravity` | ✅ |
+
+- **静默失败表面防御**：UTF-8 BOM（`0xFEFF`）自动剥离、保留注释的无损 TOML/JSON 合并、`scripts/boot-mcp.mjs` 原生 TypeScript 平滑降级、自动修复工作区与全局宿主配置中陈旧的 `_npx` 缓存路径、以及 50ms 非阻塞 Stdin 超时防护。
+
+</details>
 
 <details>
 <summary><b>🌳 查看 ASCII 自演进能力树 (.evo/) 结构展示（点击展开）</b></summary>
@@ -384,39 +330,33 @@ EvoKernel 在 `stdio` 上**仅暴露恒定的 5 个不可变元工具**，以此
 │ 🧬 EvoKernel — Self-Evolving Capability Tree (.evo/)                     │
 ╰──────────────────────────────────────────────────────────────────────────╯
 📦 Workspace: /path/to/your-repo
-├── 🛡️  Rules (5 active | Core Token Budget: 286/1500 tokens)
+├── 🛡️  Rules (5 active | Core Token Budget: 132/1500 tokens)
 │   ├── [CORE] gatekeeper-self-test-invariant (132 tok | hits: 4) — Every evolved Micro-Tool script must handle --self-test and exit 0.
-│   ├── [CORE] esm-typescript-imports (154 tok | hits: 7) — Always use explicit .js extensions on relative imports in ESM TypeScript.
+│   ├── [SCOPED] esm-typescript-imports (154 tok | hits: 7) — Always use explicit .js extensions on relative imports in ESM TypeScript.
 │   ├── [SCOPED] core-architecture-and-ast-invariants-guard (728 tok) — Dry-run compaction, comment-stripped AST matching & Git lookups.
 │   ├── [SCOPED] multi-harness-config-and-proxy-isolation (906 tok) — Lossless config merge/restore, fail-closed user configs & proxy roots.
 │   └── [SCOPED] workspace-isolation-and-fts5-guard (537 tok) — Isolate uninitialized fallback, parent Git detection & FTS5 search.
 ├── ⚡ Skills (2 verified L0/L1/L2 playbooks)
 │   ├── [SOP] bug-to-guardrail-sop (hits: 3 | tags: debugging,evolution) — Standard workflow to turn a resolved root cause into a Rule.
-│   └── [SOP] evo-rule-architect (hits: 2 | tags: refactor,rules) — 4-stage rule decoupling and budget refactoring workflow.
+│   └── [SOP] evo-rule-architect (hits: 2 | tags: refactor,rules) — Rule decoupling and token budget refactoring workflow.
 ├── 🔧 Micro-Tools (4 sandboxed scripts | Fixed Meta-MCP Routed)
 │   ├── [NODE] agy-config-auditor (runs: 55 | pass: 100%) — Audits host rule budgets and memory AST symbols.
 │   ├── [NODE] deliverable-canonical-inspector (runs: 18 | pass: 100%) — Zero-dep validator for .xlsx, .docx, .pptx, CSV, JSON, MD.
 │   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
 │   └── [NODE] workspace-metrics-scanner (runs: 13 | pass: 100%) — Scans file counts, LOC, and extension distribution.
-└── 🧠 Episodic Memories (18 fault cases | 18 VERIFIED · 0 STALE)
+└── 🧠 Episodic Memories (36 fault cases | 36 VERIFIED · 0 STALE)
     ├── [VERIFIED] audit-broken-refs-and-hook-param-fix (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] cli-help-zero-side-effect-isolation (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] codex-hooks-corrupt-file-unlink (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] generic-angle-semicolon-multiline-drift (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] ghost-workspace-resurrection-and-sqlite-handle-lock (confidence: HIGH | symbols: 5/5 fresh)
-    ├── [VERIFIED] git-fix-387153f (confidence: HIGH | symbols: 3/3 fresh)
-    ├── [VERIFIED] git-fix-d0d4e13 (confidence: HIGH | symbols: 3/3 fresh)
     ├── [VERIFIED] harness-hook-filter-preserve-untouched-entries (confidence: HIGH | symbols: 3/3 fresh)
-    ├── [VERIFIED] issue-20-global-isolation-and-concept-overlap-fix (confidence: HIGH | symbols: 4/4 fresh)
-    ├── [VERIFIED] issue-8-workspace-isolation-and-atomic-compact (confidence: HIGH | symbols: 5/5 fresh)
-    ├── [VERIFIED] issues-10-11-12-audit-hook-and-cross-lang-recall (confidence: HIGH | symbols: 7/7 fresh)
-    ├── [VERIFIED] memory-verification-inprocess-stat-caching (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] issue-25-lexical-ast-sandbox-and-attribution-hardening (confidence: HIGH | symbols: 6/6 fresh)
+    ├── [VERIFIED] issues-28-29-red-team-audit-and-cli-routing (confidence: HIGH | symbols: 5/5 fresh)
     ├── [VERIFIED] multi-harness-cascaded-detection-and-reversible-teardown (confidence: HIGH | symbols: 8/8 fresh)
-    ├── [VERIFIED] open-idle-pipe-stdin-hang-fix (confidence: HIGH | symbols: 2/2 fresh)
-    ├── [VERIFIED] score-and-ui-zero-write-csp-and-pool-dedup (confidence: HIGH | symbols: 6/6 fresh)
-    ├── [VERIFIED] ui-cli-flags-port-validation-and-powershell-escaping (confidence: HIGH | symbols: 2/2 fresh)
-    ├── [VERIFIED] ui-shotcraft-modal-csp-invariant (confidence: HIGH | symbols: 3/3 fresh)
-    └── [VERIFIED] worktree-probe-score-improvement (confidence: HIGH | symbols: 2/2 fresh)
+    ├── [VERIFIED] s0-s1-ux-trust-onboarding-and-cli-hardening (confidence: HIGH | symbols: 5/5 fresh)
+    ├── [VERIFIED] s1-s3-workbench-ci-and-anon-parity (confidence: HIGH | symbols: 4/4 fresh)
+    └── ... (+25 additional AST-verified fault cases)
 ```
 
 </details>
@@ -432,7 +372,7 @@ EvoKernel 配备了基于 Node 原生测试运行器（`node:test`）的零外�
 node ./scripts/test.mjs
 ```
 
-**306+ 项单元与集成测试、11 个测试套件，在 ~21 秒内 100% 通过（0 失败）：**
+**325+ 项单元与集成测试、11 个测试套件，在 ~21 秒内 100% 通过（0 失败）：**
 
 <details>
 <summary><b>🔍 查看全部 11 个验证测试套件清单（点击展开）</b></summary>
@@ -448,8 +388,8 @@ node ./scripts/test.mjs
 | 7 | `dist/tests/mcp-proxy.test.js` | 下游 MCP 代理与动态虚拟化测试套件 | 10 tests |
 | 8 | `dist/tests/multi-harness.test.js` | 10 款智能体宿主多环境级联探测与安装测试套件 | 14 tests |
 | 9 | `dist/tests/optimize.test.js` | 离线 Git Worktree 能力演进优化循环测试套件 | 21 tests |
-| 10 | `dist/tests/score-and-ui.test.js` | 体检评分、Workbench 2.0 工作台与交互 API、热身与快捷指令套件 | 28 tests |
-| 11 | `dist/tests/surface-audit-and-hardening.test.js` | 多宿主静默失败表面审计矩阵与全链路加固测试套件 | 50 tests |
+| 10 | `dist/tests/score-and-ui.test.js` | 体检评分、EvoKernel Workbench 工作台与交互 API、热身与快捷指令套件 | 28 tests |
+| 11 | `dist/tests/surface-audit-and-hardening.test.js` | 多宿主静默失败表面审计矩阵与 S0-S3 全链路加固测试套件 | 70+ tests |
 
 </details>
 
@@ -461,7 +401,7 @@ EvoKernel 是一个从零自主设计的开源工程运行时，基于 Node.js 2
 
 - **渐进式披露与上下文工程**：5 个固定元工具原语（`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`）与 L0/L1/L2 渐进加载模型，深度汲取了 Anthropic 关于上下文经济学、Prompt Cache 保持与技能渐进披露的设计理念。
 - **离线工作区演进与正交优化探索**：`evo optimize` 的离线 Git Worktree 沙盒循环、不变式（`inv`）与领域（`dom`）正交拆解、以及规范交付物消费验证，受到最新智能体评测基准与轨迹回放优化的启发。
-- **EvoKernel 原创贡献**：4 道确定性沙盒门禁（静态 AST 安全审查、沙盒 `--self-test` Dry-Run、BM25 查重、1,500 Token 预算硬顶与因果防混淆）、基于 Git 拓扑的 3 阶段 AST 防漂移认知记忆（`VERIFIED` / `OTHER_BRANCH` / `STALE`）以及 10 大宿主无损适配矩阵，均为 EvoKernel 的自主原创研发。
+- **EvoKernel 原创贡献**：6 道确定性沙盒门禁（静态安全审查、词法去符号化、沙盒 `--self-test` Dry-Run、BM25 查重、1,500 Token 预算硬顶与因果防混淆）、基于 Git 拓扑的 3 阶段 AST 防漂移认知记忆（`VERIFIED` / `OTHER_BRANCH` / `STALE`）以及 10 大宿主无损适配矩阵，均为 EvoKernel 的自主原创研发。
 
 ---
 

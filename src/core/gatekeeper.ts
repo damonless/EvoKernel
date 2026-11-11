@@ -1446,7 +1446,7 @@ export function captureWorkspaceMutationSignature(rootDir: string, maxFiles = 10
 
   if (hitLimit) {
     try {
-      const gitRes = spawnSync('git', ['status', '--porcelain', '-uall'], {
+      const gitRes = spawnSync('git', ['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'], {
         cwd: rootDir,
         encoding: 'utf8',
         timeout: 3000,
@@ -1498,7 +1498,7 @@ export function captureWorkspaceRollbackSnapshot(
   }
 
   try {
-    const gitRes = spawnSync('git', ['status', '--porcelain', '-uall'], {
+    const gitRes = spawnSync('git', ['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'], {
       cwd: rootDir,
       encoding: 'utf8',
       timeout: 3000,
@@ -1634,7 +1634,7 @@ export function captureWorkspaceRollbackSnapshot(
 export function restoreWorkspaceFromSnapshot(
   rootDir: string,
   preSnapshot: WorkspaceRollbackSnapshot,
-  postWorkspaceSig: Map<string, string>
+  postWorkspaceSig: Map<string, string> = captureWorkspaceMutationSignature(rootDir)
 ): { mutatedFiles: string[]; restoredFiles: string[] } {
   const mutatedFiles: string[] = [];
   const restoredFiles: string[] = [];

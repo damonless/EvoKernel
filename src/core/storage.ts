@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import type {
   ArchivedCapabilityEntry,
   ConfidenceLevel,
@@ -17,8 +18,44 @@ import type {
   SymbolFingerprint,
 } from './types.js';
 
+export const EVO_KERNEL_VERSION = '0.3.0';
+
+/**
+ * Measured token footprint of the immutable 5-tool Meta-MCP JSON Schema
+ * (`Math.ceil(JSON.stringify(META_MCP_TOOLS).length / 3.8)` = 1,916 tokens).
+ */
+export const META_MCP_5_TOOLS_TOKENS = 1916;
+
+/**
+ * Opens an existing SQLite database in read-only mode when supported (Node >=22.12),
+ * falling back safely to `new DatabaseSync(dbPath)` on Node 22.5–22.11 without creating new files.
+ */
+export function openSqliteReadOnly(
+  dbPath: string,
+  DbCtor: new (location: string, options?: Record<string, unknown>) => DatabaseSync = DatabaseSync as any
+): DatabaseSync {
+  if (!fs.existsSync(dbPath)) {
+    const missingErr: NodeJS.ErrnoException = new Error(`SQLite database does not exist: ${dbPath}`);
+    missingErr.code = 'ENOENT';
+    throw missingErr;
+  }
+  try {
+    return new DbCtor(dbPath, { readOnly: true });
+  } catch (err: any) {
+    const code = String(err?.code || '');
+    const isUnsupportedOption =
+      err instanceof TypeError ||
+      code.startsWith('ERR_INVALID_ARG') ||
+      /readonly|options|unknown|invalid/i.test(String(err?.message || ''));
+    if (!isUnsupportedOption) {
+      throw err;
+    }
+    return new DbCtor(dbPath);
+  }
+}
+
 export const DEFAULT_EVO_CONFIG: EvoConfig = {
-  version: '0.3.0',
+  version: EVO_KERNEL_VERSION,
   maxCoreRuleTokens: 1500,
   maxScopedRulesPerBucket: 3,
   maxTotalScopedRules: 12,

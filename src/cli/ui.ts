@@ -5,11 +5,17 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { buildScoreReport } from './score.js';
+import { buildScoreReport, computeGitBugHotspots } from './score.js';
 import type { ScoreReport } from './score.js';
-import { EvoStorage, estimateTokens, hasValidEvoStructure, parseFrontmatter, sanitizeId } from '../core/storage.js';
+import { EvoStorage, estimateTokens, hasValidEvoStructure, openSqliteReadOnly, parseFrontmatter, sanitizeId } from '../core/storage.js';
 import type { ConfidenceLevel, EvoKind, ProposalPayload, SymbolFingerprint } from '../core/types.js';
-import { EvoTelemetry, redactSensitiveDiagnostics } from '../core/telemetry.js';
+import {
+  type RecallWindowStats,
+  EvoTelemetry,
+  emptyRecallWindowStats,
+  readRecallWindowStatsFromDb,
+  redactSensitiveDiagnostics,
+} from '../core/telemetry.js';
 import {
   EvoGatekeeper,
   captureWorkspaceMutationSignature,
@@ -27,10 +33,12 @@ import {
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import { executeSandboxedScriptAsync } from '../core/sandbox.js';
 import { mountIdeExtensions, syncManagedRuleBlocks } from './init.js';
+import { formatTerminalOutput, isAsciiMode, isColorEnabled } from './term.js';
 import { isSubpathOf } from '../mcp/handlers.js';
 
 export interface UiSnapshot {
   score: ScoreReport;
+  window7d: RecallWindowStats;
   rules: any[];
   skills: any[];
   tools: any[];
@@ -39,10 +47,53 @@ export interface UiSnapshot {
   gatekeeperEvents: any[];
 }
 
+function scrubAnonTextValue(val: string, ws: string, relativePathReplacements?: Array<[RegExp, string]>): string {
+  let out = val;
+  if (ws) {
+    const escapedWs = ws
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/(?:\\\\|\\\/)+/g, '[\\\\/]+');
+    out = out.replace(new RegExp(`${escapedWs}(?:[\\\\/][^\\s"'<>|]*)?`, 'gi'), '<WORKSPACE>');
+  }
+  out = out.replace(/(?<![A-Za-z])[A-Za-z]:[\\/]+[^\s"'<>|]*/g, '<PATH>');
+  out = out.replace(/\/(?:Users|home|private\/var|var\/folders)\/[^\s"'<>|]*/g, '<HOME>');
+  out = redactSensitiveDiagnostics(out, ws);
+  out = out.replace(/<HOME>[\\/]+[^\s"'<>|]*/g, '<HOME>');
+  out = out.replace(/\b(?:ghp_[A-Za-z0-9_]*|sk-ant-[A-Za-z0-9_-]*|AKIA[0-9A-Z]*)/g, '[REDACTED]');
+  if (relativePathReplacements && relativePathReplacements.length > 0) {
+    for (const [re, replacement] of relativePathReplacements) {
+      out = out.replace(re, replacement);
+    }
+  }
+  return out;
+}
+
+function deepScrubAnonObject<T>(
+  input: T,
+  ws: string,
+  relativePathReplacements?: Array<[RegExp, string]>
+): T {
+  if (typeof input === 'string') {
+    return scrubAnonTextValue(input, ws, relativePathReplacements) as unknown as T;
+  }
+  if (Array.isArray(input)) {
+    return input.map((item) => deepScrubAnonObject(item, ws, relativePathReplacements)) as unknown as T;
+  }
+  if (input && typeof input === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+      out[k] = deepScrubAnonObject(v, ws, relativePathReplacements);
+    }
+    return out as T;
+  }
+  return input;
+}
+
 export function buildUiSnapshot(
   workspaceRoot: string,
-  options?: { anon?: boolean; cacheDb?: DatabaseSync }
+  optionsOrAnon?: boolean | { anon?: boolean; cacheDb?: DatabaseSync }
 ): UiSnapshot {
+  const options = typeof optionsOrAnon === 'boolean' ? { anon: optionsOrAnon } : optionsOrAnon;
   const ws = path.resolve(workspaceRoot);
   const storage = new EvoStorage(ws);
   const dbPath = path.join(storage.cacheDir, 'telemetry.db');
@@ -51,13 +102,14 @@ export function buildUiSnapshot(
 
   if (!db && fs.existsSync(dbPath)) {
     try {
-      db = new DatabaseSync(dbPath, { readOnly: true });
+      db = openSqliteReadOnly(dbPath);
       openedDb = true;
     } catch {}
   }
 
   try {
     const score = buildScoreReport(ws, { anon: options?.anon, cacheDb: db });
+    const window7d = db ? readRecallWindowStatsFromDb(db, 7) : emptyRecallWindowStats(7);
     const rules: any[] = [];
     const skills: any[] = [];
     const tools: any[] = [];
@@ -65,6 +117,92 @@ export function buildUiSnapshot(
     const archived: any[] = [];
     let gatekeeperEvents: any[] = [];
     const telemMap = new Map<string, { hit_count: number; attribution: string }>();
+
+    const anonPathMap = new Map<string, string>();
+    const relativePathReplacements: Array<[RegExp, string]> = [];
+    const genericBasenames = new Set([
+      'index.ts',
+      'index.js',
+      'main.ts',
+      'main.js',
+      'run.mjs',
+      'types.ts',
+      'utils.ts',
+      'config.json',
+      'package.json',
+      'agents.md',
+      'claude.md',
+      'gemini.md',
+      'skill.md',
+    ]);
+    const resolveAnonModulePath = (rawFilePath: string, fallbackExt = '.ts'): string => {
+      const cleanRel = String(rawFilePath || '')
+        .trim()
+        .replace(/\\/g, '/')
+        .replace(/^\.\//, '');
+      if (!cleanRel || /^src\/module-\d+\.[a-z0-9]+$/i.test(cleanRel)) {
+        return cleanRel || `src/module-1${fallbackExt}`;
+      }
+      const key = cleanRel.toLowerCase();
+      const existing = anonPathMap.get(key);
+      if (existing) return existing;
+      const ext = path.extname(cleanRel) || fallbackExt;
+      const mapped = `src/module-${anonPathMap.size + 1}${ext}`;
+      anonPathMap.set(key, mapped);
+      if (cleanRel.includes('/')) {
+        const escapedRel = cleanRel
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          .replace(/\//g, '[\\\\/]+');
+        relativePathReplacements.push([new RegExp(escapedRel, 'gi'), mapped]);
+      }
+      const base = path.basename(cleanRel);
+      if (
+        base.includes('.') &&
+        base.length >= 6 &&
+        !genericBasenames.has(base.toLowerCase()) &&
+        !/^module-\d+\./i.test(base)
+      ) {
+        const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        relativePathReplacements.push([new RegExp(`\\b${escapedBase}\\b`, 'gi'), mapped]);
+      }
+      return mapped;
+    };
+
+    if (options?.anon) {
+      for (const rawHs of computeGitBugHotspots(ws, 10)) {
+        resolveAnonModulePath(rawHs.filePath);
+      }
+    }
+
+    const isSelfEvoRepo =
+      fs.existsSync(path.join(ws, 'templates', 'seed-evo')) &&
+      fs.existsSync(path.join(ws, 'src', 'core', 'gatekeeper.ts'));
+    const seedAllowedIds = new Set([
+      'esm-typescript-imports',
+      'bug-to-guardrail-sop',
+      'evo-rule-architect',
+      'agy-config-auditor',
+      'deliverable-canonical-inspector',
+      'git-hotspot-analyzer',
+      'workspace-metrics-scanner',
+    ]);
+    const localOnlyIds = new Set([
+      'ceo-team-orchestrator',
+      'dual-agent-team',
+      'evo-dev-verification-sop',
+      'embedded-fsm-lookup-audit',
+      'evo-release-preflight',
+      'local-workflow-skill-isolation-guard',
+      'embedded-power-bms-guardrail',
+    ]);
+    const shouldIncludeAnonId = (id: string, origin?: string): boolean => {
+      if (!options?.anon) return true;
+      if (localOnlyIds.has(id)) return false;
+      if (isSelfEvoRepo) {
+        return origin === 'seed' || origin === 'demo' || seedAllowedIds.has(id);
+      }
+      return true;
+    };
 
     if (db) {
       try {
@@ -98,27 +236,23 @@ export function buildUiSnapshot(
       } catch {}
 
       try {
-        const localOnlyEventIds = new Set([
-          'ceo-team-orchestrator',
-          'dual-agent-team',
-          'evo-dev-verification-sop',
-          'embedded-fsm-lookup-audit',
-          'evo-release-preflight',
-          'local-workflow-skill-isolation-guard',
-          'embedded-power-bms-guardrail',
-        ]);
         const gRows = db.prepare(
           'SELECT id, timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics FROM gatekeeper_events ORDER BY id DESC LIMIT 200'
         ).all() as any[];
         gatekeeperEvents = gRows
-          .filter((r) => !options?.anon || !localOnlyEventIds.has(String(r.target_id || '')))
+          .filter((r) => shouldIncludeAnonId(String(r.target_id || ''), isSelfEvoRepo ? undefined : 'demo'))
           .map((r) => ({
             ...r,
+            target_id: options?.anon && !seedAllowedIds.has(String(r.target_id || '')) && isSelfEvoRepo
+              ? 'sanitized-capability'
+              : r.target_id,
             target_name: options?.anon
-              ? redactSensitiveDiagnostics(r.target_name || '', ws)
+              ? scrubAnonTextValue(r.target_name || '', ws)
               : r.target_name,
             passed: r.passed === 1,
-            diagnostics: redactSensitiveDiagnostics(r.diagnostics || '', ws),
+            diagnostics: options?.anon
+              ? scrubAnonTextValue(r.diagnostics || '', ws)
+              : redactSensitiveDiagnostics(r.diagnostics || '', ws),
           }));
       } catch {}
     }
@@ -130,10 +264,10 @@ export function buildUiSnapshot(
 
     if (hasValidEvoStructure(storage.evoDir)) {
       try {
-        const localOnlyIds = new Set(['ceo-team-orchestrator','dual-agent-team','evo-dev-verification-sop','embedded-fsm-lookup-audit','evo-release-preflight','local-workflow-skill-isolation-guard','embedded-power-bms-guardrail']);
-        const filterAnon = <T extends { id: string }>(items: T[]): T[] => options?.anon ? items.filter((item) => !localOnlyIds.has(item.id)) : items;
+        const filterAnon = <T extends { id: string; origin?: string }>(items: T[]): T[] =>
+          options?.anon ? items.filter((item) => shouldIncludeAnonId(item.id, item.origin)) : items;
         const scrubAnonText = (val: unknown) =>
-          options?.anon && typeof val === 'string' ? redactSensitiveDiagnostics(val, ws) : val;
+          options?.anon && typeof val === 'string' ? scrubAnonTextValue(val, ws) : val;
         rules.push(
           ...filterAnon(storage.listRules()).map((rule) => {
             const attached = attach(rule);
@@ -195,16 +329,124 @@ export function buildUiSnapshot(
           const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
           const attached = attach({ ...m, freshness: { ...v, callers } });
           if (options?.anon) {
-            attached.title = scrubAnonText(attached.title);
-            attached.l0_summary = scrubAnonText(attached.l0_summary);
-            attached.symptom = scrubAnonText(attached.symptom);
-            attached.root_cause = scrubAnonText(attached.root_cause);
-            attached.solution = scrubAnonText(attached.solution);
+            if (Array.isArray(attached.target_symbols)) {
+              attached.target_symbols = attached.target_symbols.map((sym: string) => {
+                const parts = String(sym).split('#');
+                const ext = path.extname(parts[0] || '') || '.ts';
+                const safeFile = resolveAnonModulePath(parts[0] || '', ext);
+                return parts[1] ? `${safeFile}#${parts[1]}` : safeFile;
+              });
+            }
+            if (attached.ast_fingerprints && typeof attached.ast_fingerprints === 'object') {
+              const sanitizedFps: Record<string, any> = {};
+              for (const [fpKey, fpVal] of Object.entries(attached.ast_fingerprints as Record<string, any>)) {
+                const parts = String(fpKey).split('#');
+                const rawFpFile = parts[0] || fpVal?.file_path || fpVal?.file || '';
+                const ext = path.extname(rawFpFile) || '.ts';
+                const newFile = resolveAnonModulePath(rawFpFile, ext);
+                const newKey = parts[1] ? `${newFile}#${parts[1]}` : newFile;
+                sanitizedFps[newKey] = {
+                  ...(fpVal || {}),
+                  file_path: newFile,
+                  file: undefined,
+                };
+              }
+              attached.ast_fingerprints = sanitizedFps;
+            }
+            if (attached.freshness && typeof attached.freshness === 'object') {
+              if (Array.isArray(attached.freshness.checks)) {
+                attached.freshness.checks = attached.freshness.checks.map(
+                  (chk: any) => {
+                    const rawSym = String(chk?.symbol || '');
+                    const parts = rawSym.split('#');
+                    const rawFile = parts[0] || chk?.recorded?.file_path || '';
+                    const ext = path.extname(rawFile) || '.ts';
+                    const safeFile = resolveAnonModulePath(rawFile, ext);
+                    const safeSym = parts[1] ? `${safeFile}#${parts[1]}` : safeFile;
+                    return {
+                      ...chk,
+                      symbol: safeSym,
+                      detail:
+                        typeof chk?.detail === 'string'
+                          ? scrubAnonTextValue(chk.detail, ws, relativePathReplacements).replace(
+                              /[A-Za-z0-9_./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|c|cpp|h|hpp)/g,
+                              safeFile
+                            )
+                          : chk?.detail,
+                      recorded: chk?.recorded
+                        ? {
+                            ...chk.recorded,
+                            file_path: safeFile,
+                            file: undefined,
+                            symbol: parts[1] || safeFile,
+                            signature:
+                              typeof chk.recorded.signature === 'string'
+                                ? chk.recorded.signature.includes('#')
+                                  ? safeSym
+                                  : scrubAnonTextValue(chk.recorded.signature, ws, relativePathReplacements).replace(
+                                      /[A-Za-z0-9_./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|c|cpp|h|hpp)/g,
+                                      safeFile
+                                    )
+                                : chk.recorded.signature,
+                          }
+                        : chk?.recorded,
+                      current: chk?.current
+                        ? {
+                            ...chk.current,
+                            file_path: safeFile,
+                            file: undefined,
+                            symbol: parts[1] || safeFile,
+                            signature:
+                              typeof chk.current.signature === 'string'
+                                ? chk.current.signature.includes('#')
+                                  ? safeSym
+                                  : scrubAnonTextValue(chk.current.signature, ws, relativePathReplacements).replace(
+                                      /[A-Za-z0-9_./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|c|cpp|h|hpp)/g,
+                                      safeFile
+                                    )
+                                : chk.current.signature,
+                          }
+                        : chk?.current,
+                    };
+                  }
+                );
+              }
+              if (Array.isArray(attached.freshness.callers)) {
+                attached.freshness.callers = attached.freshness.callers.map(
+                  (_c: string, cIdx: number) => `src/caller-${cIdx + 1}.ts:10`
+                );
+              }
+              if (Array.isArray(attached.freshness.topology_anchors)) {
+                attached.freshness.topology_anchors = attached.freshness.topology_anchors.map(
+                  (a: any) => {
+                    const rawSym = String(a?.symbol || '');
+                    const parts = rawSym.split('#');
+                    const rawAnchorFile = a?.file_path || parts[0] || '';
+                    const safeFile = resolveAnonModulePath(rawAnchorFile, path.extname(rawAnchorFile) || '.ts');
+                    const safeSym = parts[1] ? `${safeFile}#${parts[1]}` : safeFile;
+                    return {
+                      ...a,
+                      symbol: safeSym,
+                      file_path: safeFile,
+                      codegraph_hint: `view_file ${safeFile} (lines ${a?.lines || '1-1'})`,
+                      callers: Array.isArray(a?.callers)
+                        ? a.callers.map((_c: string, cIdx: number) => `src/caller-${cIdx + 1}.ts:10`)
+                        : [],
+                    };
+                  }
+                );
+              }
+            }
+            attached.title = scrubAnonTextValue(String(attached.title || ''), ws, relativePathReplacements);
+            attached.l0_summary = scrubAnonTextValue(String(attached.l0_summary || ''), ws, relativePathReplacements);
+            attached.symptom = scrubAnonTextValue(String(attached.symptom || ''), ws, relativePathReplacements);
+            attached.root_cause = scrubAnonTextValue(String(attached.root_cause || ''), ws, relativePathReplacements);
+            attached.solution = scrubAnonTextValue(String(attached.solution || ''), ws, relativePathReplacements);
           }
           memories.push(attached);
         }
         archived.push(
-          ...filterAnon(storage.listArchivedCapabilities()).map((item) => {
+          ...filterAnon(storage.listArchivedCapabilities() as any[]).map((item) => {
             if (!options?.anon) return item;
             return {
               ...item,
@@ -217,7 +459,17 @@ export function buildUiSnapshot(
       } catch {}
     }
 
-    return { score, rules, skills, tools, memories, archived, gatekeeperEvents };
+    const rawSnapshot: UiSnapshot = {
+      score,
+      window7d,
+      rules,
+      skills,
+      tools,
+      memories,
+      archived,
+      gatekeeperEvents,
+    };
+    return options?.anon ? deepScrubAnonObject(rawSnapshot, ws, relativePathReplacements) : rawSnapshot;
   } finally {
     if (openedDb && db) {
       try { db.close(); } catch {}
@@ -644,6 +896,11 @@ export async function startUiServer(
         res.end(renderUiClientHtml(snapshot, { token, anon: options.anon }));
         return;
       }
+      if (pathname === '/favicon.ico') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
 
       const headerToken = req.headers['x-evo-ui-token'];
       const queryToken = reqUrl.searchParams.get('token');
@@ -748,7 +1005,7 @@ export async function startUiServer(
             const dbPath = path.join(storage.cacheDir, 'telemetry.db');
             let cacheDb: DatabaseSync | undefined;
             try {
-              if (fs.existsSync(dbPath)) cacheDb = new DatabaseSync(dbPath, { readOnly: true });
+              if (fs.existsSync(dbPath)) cacheDb = openSqliteReadOnly(dbPath);
               const updatedItems = targetMemories.map((m) => {
                 const v = verifyMemoryFreshness(ws, m, { includeCallers: true, cacheDb });
                 const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
@@ -837,7 +1094,7 @@ export async function startUiServer(
             const cleanId = sanitizeId(rawId);
             const reason = typeof params.reason === 'string' && params.reason.trim()
               ? params.reason.trim()
-              : 'Archived via EvoKernel Workbench 2.0';
+              : 'Archived via EvoKernel Workbench';
             const archived = storage.archiveCapability(cleanId, rawKind as EvoKind, reason);
             if (!archived) {
               sendJsonResponse(res, 404, { ok: false, error: `Not Found: ${rawKind} "${cleanId}" not found` });
@@ -1517,7 +1774,7 @@ export async function startUiServer(
                 const dbPath = path.join(storage.cacheDir, 'telemetry.db');
                 let cacheDb: DatabaseSync | undefined;
                 try {
-                  if (fs.existsSync(dbPath)) cacheDb = new DatabaseSync(dbPath, { readOnly: true });
+                  if (fs.existsSync(dbPath)) cacheDb = openSqliteReadOnly(dbPath);
                   verifyMemoryFreshness(ws, updatedMem, { includeCallers: true, cacheDb });
                 } finally {
                   if (cacheDb) try { cacheDb.close(); } catch {}
@@ -1670,15 +1927,19 @@ function parseCliOption(args: string[], flag: string): { matched: boolean; value
 }
 
 export async function runUiCli(workspaceRoot: string, args: string[]): Promise<void> {
+  const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
+  const logUi = (line: string) => console.log(formatTerminalOutput(line, termOpts));
+  const errUi = (line: string) => console.error(formatTerminalOutput(line, termOpts));
+
   if (args.includes('--install-ide')) {
-    console.log('🔌 Mounting EvoKernel IDE extension into detected IDEs...');
+    logUi('🔌 Mounting EvoKernel IDE extension into detected IDEs...');
     const mountRes = mountIdeExtensions(workspaceRoot);
     if (mountRes.mounts && mountRes.mounts.length > 0) {
       for (const m of mountRes.mounts) {
-        console.log(`  ├─ ${m.name}: ${m.targetPath} (${m.method} - ${m.status})`);
+        logUi(`  ├─ ${m.name}: ${m.targetPath} (${m.method} - ${m.status})`);
       }
     } else {
-      console.log('  └─ (no supported IDE extensions directory detected)');
+      logUi('  └─ (no supported IDE extensions directory detected)');
     }
   }
 
@@ -1691,41 +1952,59 @@ export async function runUiCli(workspaceRoot: string, args: string[]): Promise<v
         ? path.resolve(exportOpt.value.trim())
         : path.join(path.resolve(workspaceRoot), 'evo-cockpit.html');
     exportUiHtml(workspaceRoot, out, { anon: isAnon });
-    console.log(`✅ EvoKernel Workbench 2.0 exported to: ${out}`);
+    logUi(`✅ EvoKernel Workbench exported to: ${out}`);
     return;
   }
 
-  const portOpt = parseCliOption(args, '--port');
+  const portLong = parseCliOption(args, '--port');
+  const portShort = parseCliOption(args, '-p');
+  const portOpt = portLong.matched ? portLong : portShort;
   let port: number | undefined;
   if (portOpt.matched) {
     if (!portOpt.value) {
-      console.error('❌ Missing value for --port. Please specify a port number (e.g. --port 4310).');
+      errUi('❌ Missing value for --port. Please specify a port number (e.g. --port 4310).');
       process.exit(1);
     }
     const parsed = parseInt(portOpt.value, 10);
     if (!Number.isFinite(parsed) || parsed < 0 || parsed > 65535) {
-      console.error(`❌ Invalid port "${portOpt.value}". Must be a valid port number between 0 and 65535.`);
+      errUi(`❌ Invalid port "${portOpt.value}". Must be a valid port number between 0 and 65535.`);
       process.exit(1);
     }
     port = parsed;
+  }
+
+  const hostOpt = parseCliOption(args, '--host');
+  if (hostOpt.matched) {
+    if (!hostOpt.value || !hostOpt.value.trim()) {
+      errUi('❌ Missing value for --host. Please specify a loopback host (e.g. --host 127.0.0.1).');
+      process.exit(1);
+    }
+    const normalizedHost = hostOpt.value.trim().toLowerCase();
+    if (normalizedHost !== '127.0.0.1' && normalizedHost !== 'localhost') {
+      errUi(
+        `❌ Invalid --host "${hostOpt.value}". Only loopback addresses (127.0.0.1 or localhost) are permitted.`
+      );
+      process.exit(1);
+    }
   }
 
   const tokenOpt = parseCliOption(args, '--token');
   let token: string | undefined;
   if (tokenOpt.matched) {
     if (!tokenOpt.value || !tokenOpt.value.trim()) {
-      console.error('❌ Missing value for --token. Please specify a non-empty token string.');
+      errUi('❌ Missing value for --token. Please specify a non-empty token string.');
       process.exit(1);
     }
     token = tokenOpt.value.trim();
   }
 
   const instance = await startUiServer(workspaceRoot, { port, token, anon: isAnon });
-  console.log(`🧬 EvoKernel Workbench 2.0 started at: ${instance.url}`);
-  console.log('   Press Ctrl+C to terminate server.');
+  logUi(`🧬 EvoKernel Workbench started at: ${instance.url}`);
+  logUi('   Press Ctrl+C to terminate server.');
 
   const isAppMode = args.includes('--app') || args.includes('--desktop');
-  const shouldOpen = (args.includes('--open') || isAppMode) && !process.env.CI && !process.argv[1]?.includes('.test.');
+  const noOpen = args.includes('--no-open');
+  const shouldOpen = !noOpen && (args.includes('--open') || isAppMode) && !process.env.CI && !process.argv[1]?.includes('.test.');
 
   if (shouldOpen) {
     if (isValidLocalHttpUrl(instance.url)) {

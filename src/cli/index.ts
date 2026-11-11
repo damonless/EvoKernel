@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { findGitRoot, parseInitTargets, runInit, runUninstall } from './init.js';
-import { hasStaleNpxMcpEntry } from './harness.js';
+import { extractCodexTomlEvoEntry, hasStaleNpxMcpEntry, parseJsonc } from './harness.js';
 import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import * as child_process from 'node:child_process';
@@ -15,28 +15,49 @@ import {
   renderEvoTree,
   renderMemoryVerifyReport,
 } from './visualizer.js';
-import { formatCliInvocationPrefix, suggestClosestToken } from './term.js';
+import {
+  formatCliInvocationPrefix,
+  formatTerminalOutput,
+  isAsciiMode,
+  isColorEnabled,
+  suggestClosestToken,
+} from './term.js';
 
 const { spawnSync } = child_process;
 import { parseHookEvent, parseHookHarnessArg, parseHookPayloadArg, runHook } from './hook.js';
 import { renderVirtualizeReport, runVirtualize } from './virtualize.js';
-import { runOptimizeCli } from './optimize.js';
-import { runScoreCli } from './score.js';
+import { renderOptimizeHelp, runOptimizeCli } from './optimize.js';
+import { buildScoreReport, runScoreCli } from './score.js';
 import { runUiCli } from './ui.js';
 import { startMcpStdioServer } from '../mcp/server.js';
 import {
+  EVO_KERNEL_VERSION,
   EvoStorage,
   findNearestEvoWorkspace,
   hasValidEvoStructure,
   isHostGlobalConfigDir,
   isPluginOrExtensionInstallDir,
+  openSqliteReadOnly,
 } from '../core/storage.js';
-import { EvoTelemetry } from '../core/telemetry.js';
+import {
+  EvoTelemetry,
+  emptyRecallWindowStats,
+  readRecallWindowStatsFromDb,
+} from '../core/telemetry.js';
 import { refreshMemories, verifyMemoryFreshness } from '../core/memory.js';
 import { inspectDeliverableFile } from '../core/deliverable.js';
 
-export function printHookHelp(): void {
-  console.log(`
+export { EVO_KERNEL_VERSION };
+
+function logHelp(text: string, args?: string[]): void {
+  console.log(
+    formatTerminalOutput(text, { color: isColorEnabled(args), ascii: isAsciiMode(args) })
+  );
+}
+
+export function printHookHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo hook <event> [options]
 
@@ -54,32 +75,18 @@ Options:
   --workspace <path> Target workspace directory (default: current directory)
   --dry-run          Simulate hook execution without modifying telemetry or git state
   -h, --help         Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printOptimizeHelp(): void {
-  console.log(`
-Usage:
-  evo optimize [options]
-
-Offline Git worktree optimization cycle for autonomous capability evolution.
-
-Options:
-  --dim <inv|dom|both>      Target dimension: invariant, domain, or both (default: both)
-  -k, --rounds <N>          Maximum optimization rounds (default: 3)
-  --proposer-cmd <cmd>      Command to propose candidate rule/memory modifications
-  --probe-cmd <cmd>         Verification probe command to validate candidate worktrees
-  --trajectory <file>       Path to session transcript or trajectory JSONL file
-  --deliverable <file>      Target deliverable file for canonical defect inspection
-  --apply                   Automatically commit winning candidates to workspace
-  --json                    Output optimization summary in JSON format
-  --workspace <path>        Target workspace directory (default: current directory)
-  -h, --help                Show this help message
-`);
+export function printOptimizeHelp(args?: string[]): void {
+  logHelp(renderOptimizeHelp(), args);
 }
 
-export function printScoreHelp(): void {
-  console.log(`
+export function printScoreHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo score [options]
 
@@ -92,30 +99,39 @@ Options:
   --html <path>        Export score report as standalone HTML
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printUiHelp(): void {
-  console.log(`
+export function printUiHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo ui [options]
 
-Zero-dependency local cockpit UI for telemetry X-ray, budget treemap, and memory constellation.
+Zero-dependency local EvoKernel Workbench for telemetry X-ray, budget treemap, and memory constellation.
 
 Options:
-  --port <N>           Port to bind local cockpit UI server (default: 4310)
+  -p, --port <N>       Port to bind local Workbench server (default: 4310)
+  --host <addr>        Loopback address to bind (default: 127.0.0.1)
   --open               Automatically open browser after startup
+  --no-open            Do not open browser automatically
   --app, --desktop     Launch as native chromeless desktop window (1440x900)
   --token <str>        Pre-shared security token for UI authentication
-  --export <path>      Export complete static HTML snapshot without starting server
+  --export [path]      Export complete static HTML snapshot without starting server
+  --anon               Anonymize workspace paths and non-seed capabilities
   --install-ide        Mount IDE extension into detected IDEs before starting server
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printInitHelp(): void {
-  console.log(`
+export function printInitHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo init [options]
 
@@ -132,11 +148,14 @@ Options:
   --ide <targets>      Comma-separated list of target IDEs (vscode, cursor, windsurf, trae, antigravity, all)
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printUninstallHelp(): void {
-  console.log(`
+export function printUninstallHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo uninstall [options]
 
@@ -145,11 +164,14 @@ Cleanly remove EvoKernel marker blocks, rules, and MCP registrations from host c
 Options:
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printBootstrapHelp(): void {
-  console.log(`
+export function printBootstrapHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo bootstrap [options]
 
@@ -159,11 +181,14 @@ Options:
   --max-commits <N>    Maximum recent commits to inspect (default: 50, clamp: 1-500)
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printVirtualizeHelp(): void {
-  console.log(`
+export function printVirtualizeHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo virtualize [options]
 
@@ -175,11 +200,14 @@ Options:
   --global             Scan and virtualize global host configs (~/.claude, ~/.gemini, etc.)
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printMemoryHelp(): void {
-  console.log(`
+export function printMemoryHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo memory [verify|refresh] [options]
 
@@ -192,11 +220,14 @@ Subcommands:
 Options:
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printAuditHelp(): void {
-  console.log(`
+export function printAuditHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo audit [options]
 
@@ -209,11 +240,14 @@ Options:
   --json               Output audit report in JSON format
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printRefactorHelp(): void {
-  console.log(`
+export function printRefactorHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo refactor [options]
 
@@ -226,11 +260,14 @@ Options:
   --skill-budget <N>   Override per-skill token budget limit (default: 1000)
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printCheckHelp(): void {
-  console.log(`
+export function printCheckHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo check <file> [options]
   evo inspect <file> [options]
@@ -241,11 +278,14 @@ Options:
   --json               Output inspection results as structured JSON
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printTreeHelp(): void {
-  console.log(`
+export function printTreeHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo tree [options]
 
@@ -254,38 +294,50 @@ Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/).
 Options:
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printStatsHelp(): void {
-  console.log(`
+export function printStatsHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo stats [options]
 
-Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings (note: 'evo doctor' is the primary diagnostics command).
+Deprecated alias for 'evo doctor --roi': displays ROI Telemetry Ledger, Session-Start Tax, and Memory Freshness.
 
 Options:
+  --json               Output ROI & telemetry ledger in JSON format
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printDoctorHelp(): void {
-  console.log(`
+export function printDoctorHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo doctor [options]
 
-Verify Node runtime, SQLite FTS5 BM25 engine, AST Memory Anti-Drift, and telemetry ROI summary.
+Verify Node runtime, SQLite FTS5 BM25 engine, live MCP stdio handshake, seed/version parity, and AST Memory health.
 
 Options:
+  --roi                Include full ROI & session-start token tax breakdown (replaces 'evo stats')
+  --no-probe           Skip live 5,000ms stdio MCP handshake probe
   --json               Output diagnostics report in JSON format
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
-export function printMcpHelp(): void {
-  console.log(`
+export function printMcpHelp(args?: string[]): void {
+  logHelp(
+    `
 Usage:
   evo mcp [options]
 
@@ -294,7 +346,9 @@ Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools).
 Options:
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
-`);
+`,
+    args
+  );
 }
 
 export function readStdinTextWithTimeout(
@@ -361,9 +415,10 @@ export function readStdinTextWithTimeout(
   });
 }
 
-export const EVO_KERNEL_VERSION = '0.3.0';
-
-export function checkNodeRuntimeVersion(versionStr: string = process.versions.node || '0.0.0'): {
+export function checkNodeRuntimeVersion(
+  versionStr: string = process.versions.node || '0.0.0',
+  argsOrOpts?: string[] | { color?: boolean; ascii?: boolean }
+): {
   ok: boolean;
   major: number;
   minor: number;
@@ -376,56 +431,67 @@ export function checkNodeRuntimeVersion(versionStr: string = process.versions.no
   if (ok) {
     return { ok: true, major, minor };
   }
+  const termOpts = Array.isArray(argsOrOpts)
+    ? { color: isColorEnabled(argsOrOpts), ascii: isAsciiMode(argsOrOpts) }
+    : argsOrOpts ?? { color: isColorEnabled(), ascii: isAsciiMode() };
+  const rawMessage =
+    `❌ EvoKernel requires Node.js >= 22.5.0 (detected v${versionStr}).\n` +
+    `   Why: EvoKernel runs with 0 external dependencies using native node:sqlite and node:module.\n` +
+    `   Instant 1-liner (no global Node change): npx -y -p node@22 evo-kernel <command>\n` +
+    `   Fix: switch Node runtime via:\n` +
+    `     • nvm install 22 && nvm use 22\n` +
+    `     • fnm use 22\n` +
+    `     • volta install node@22`;
   return {
     ok: false,
     major,
     minor,
-    message:
-      `❌ EvoKernel requires Node.js >= 22.5.0 (detected v${versionStr}).\n` +
-      `   Why: EvoKernel runs with 0 external dependencies using native node:sqlite and node:module.\n` +
-      `   Instant 1-liner (no global Node change): npx -y -p node@22 evo-kernel <command>\n` +
-      `   Fix: switch Node runtime via:\n` +
-      `     • nvm install 22 && nvm use 22\n` +
-      `     • fnm use 22\n` +
-      `     • volta install node@22`,
+    message: formatTerminalOutput(rawMessage, termOpts),
   };
 }
 
-function printHelp(): void {
-  console.log(`
-🧬 EvoKernel v${EVO_KERNEL_VERSION} — Deterministic Self-Evolving Meta-Kernel & Cognitive Memory for AI Agents
+function printHelp(args?: string[]): void {
+  logHelp(
+    `
+🧬 EvoKernel v${EVO_KERNEL_VERSION} — AST-Verified Cognitive Memory & Deterministic Context OS for AI Agents
 
 Usage:
   evo <command> [options]
 
-Commands:
-  score [--json] [--badge] [--svg <path>] [--html <path>] [--workspace <path>]
-                      Instant 0-overhead diagnostic scoring for agent host tax, git bug hotspots, and memory coverage
-  ui [--port <N>] [--open] [--app] [--desktop] [--token <str>] [--export <path>] [--workspace <path>]
-                      Zero-dependency local cockpit UI for telemetry X-ray, budget treemap, and memory constellation
+Core Commands (6):
   init [--stealth] [--targets <list|auto>] [--warmup] [--install-ide]
-                      Detect and wire L0 Meta-Rule Seed + Single Meta-MCP + Slash Commands
-                      (--stealth uses .git/info/exclude; --targets filters claude,agents,gemini,cursor or auto)
+                      Wire L0 Meta-Rule Seed + Single 5-Tool Meta-MCP + Slash Commands into agent hosts
+  doctor [--roi] [--no-probe] [--json]
+                      Verify runtime, live MCP stdio handshake, seed/version parity, AST* memories & ROI
+  ui [-p <N>] [--open] [--app] [--desktop] [--export [path]] [--anon]
+                      Launch local EvoKernel Workbench (7d recall pulse, Needs Attention triage & topology)
+  score [--json] [--badge] [--svg <path>] [--html <path>] [--anon]
+                      Generate shareable X-Ray report of session-start token tax & git fragility hotspots
+  memory [verify|refresh]
+                      Verify or re-anchor 16-hex AST* structural fingerprints across Episodic Memories
+  audit [--global] [--json] [--token-budget <N>] [--skill-budget <N>]
+                      Audit workspace & global rule/skill files for domain leaks, duplicates, and bloat
+
+Advanced & Automation Commands:
   bootstrap [--max-commits <N>]
-                      Cold-start repo gene mining: extract verified initial Rules, Skills, Micro-Tools, and Episodic Memories (default: 50, up to 500)
+                      Cold-start repo gene mining: extract verified Rules, Skills, Micro-Tools & Memories
   virtualize [--dry-run] [--restore] [--global]
-                      One-click fold third-party stdio MCPs from host configs into .evo/mcp-pool.json (0 schema bloat)
-  memory [verify|refresh] Audit AST structural fingerprints and live topology anchors across all Episodic Memories (.evo/memories/)
-  audit [--global] [--json] [--token-budget <N>] [--skill-budget <N>]    Scan workspace & global (~/.gemini, ~/.claude, ~/.cursor) rules/skills for domain leaks, overlap, and budget bloat
-  refactor [--apply] [--token-budget <N>] [--skill-budget <N>]  Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect meta-skill
-  tree                Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/)
-  stats               Display the ROI Telemetry Ledger, Token Budget bar, Memory Freshness, and Prompt-Cache savings
-  mcp                 Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
-  hook <event> [--event <name>]
-                      Universal lifecycle hook router (pre-tool | post-tool | stop | pre-commit) for anti-forgetting evolution enforcement and git pre-commit audit
+                      Fold third-party stdio MCPs into .evo/mcp-pool.json (preview first with --dry-run)
+  refactor [--apply] [--local-only] [--token-budget <N>] [--skill-budget <N>]
+                      Decouple bloated rules/skills via built-in evo-rule-architect workflow
+  tree [--full] [--json]
+                      Render ASCII capability & cognitive memory tree (.evo/)
+  check <file> [--json]
+                      Canonical defect inspection for deliverables (.xlsx, .docx, .pptx, .csv, .json, .md)
   optimize [--dim inv|dom|both] [-k <N>] [--proposer-cmd <cmd>] [--probe-cmd <cmd>] [--apply]
-                      Offline Git worktree optimization cycle (trajectories & deliverables -> proposals -> isolated probe)
-  check <file> [--json] [--workspace <path>]
-                      Canonical defect inspection & format verification for deliverables (.xlsx, .docx, .pptx, .csv, .json, .md) (alias: inspect)
-  doctor [--json]     Primary diagnostics command: verify Node runtime, SQLite FTS5, AST Memory Anti-Drift & telemetry ROI
+                      Offline Git worktree optimization cycle with isolated probe verification
+  hook <event>        Lifecycle hook router (pre-tool | post-tool | stop | pre-commit)
+  mcp                 Start stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
   uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
   version, --version  Print EvoKernel CLI version
-`);
+`,
+    args
+  );
 }
 
 function copyDirNonOverwriting(
@@ -516,9 +582,17 @@ export function ensureGlobalFallbackSeeded(
 
 export function resolveWorkspaceRoot(
   args: string[],
-  allowGlobalFallback: boolean,
+  allowGlobalFallbackOrOpts: boolean | { allowGlobalFallback?: boolean; cwdOverride?: string },
   cwdOverride?: string
 ): string {
+  const allowGlobalFallback =
+    typeof allowGlobalFallbackOrOpts === 'object' && allowGlobalFallbackOrOpts !== null
+      ? allowGlobalFallbackOrOpts.allowGlobalFallback !== false
+      : Boolean(allowGlobalFallbackOrOpts);
+  const resolvedCwdOverride =
+    typeof allowGlobalFallbackOrOpts === 'object' && allowGlobalFallbackOrOpts !== null
+      ? allowGlobalFallbackOrOpts.cwdOverride ?? cwdOverride
+      : cwdOverride;
   const wsEq = args.find((a) => a.startsWith('--workspace='));
   if (wsEq) {
     const explicit = path.resolve(wsEq.slice('--workspace='.length));
@@ -542,7 +616,7 @@ export function resolveWorkspaceRoot(
     }
     return findNearestEvoWorkspace(envWs) || envWs;
   }
-  const cwd = path.resolve(cwdOverride || process.cwd());
+  const cwd = path.resolve(resolvedCwdOverride || process.cwd());
   if (isHostGlobalConfigDir(cwd)) {
     return ensureGlobalFallbackSeeded(resolveGlobalFallbackDir());
   }
@@ -647,53 +721,96 @@ export const VALID_COMMANDS = [
   'help',
 ];
 
-export const KNOWN_FLAGS = [
+const GLOBAL_COMMON_FLAGS = [
   '--workspace',
   '-w',
-  '--json',
   '--help',
   '-h',
   '--version',
   '-v',
   '--ascii',
   '--no-color',
-  '--full',
-  '--anon',
-  '--global',
-  '-g',
-  '--badge',
-  '--svg',
-  '--html',
-  '--port',
-  '--open',
-  '--app',
-  '--desktop',
-  '--token',
-  '--export',
-  '--stealth',
-  '--targets',
-  '--link',
-  '--warmup',
-  '--no-warmup',
-  '--install-ide',
-  '--no-ide',
-  '--ide',
-  '--max-commits',
-  '--dry-run',
-  '--restore',
-  '--refresh',
-  '--token-budget',
-  '--skill-budget',
-  '--local-only',
-  '--apply',
-  '--dim',
-  '-k',
-  '--proposer-cmd',
-  '--probe-cmd',
-  '--candidates',
-  '--trajectories',
-  '--deliverables',
 ];
+
+export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
+  score: [...GLOBAL_COMMON_FLAGS, '--json', '--badge', '--svg', '--html', '--anon', '--global', '-g'],
+  ui: [
+    ...GLOBAL_COMMON_FLAGS,
+    '--port',
+    '-p',
+    '--host',
+    '--open',
+    '--no-open',
+    '--app',
+    '--desktop',
+    '--token',
+    '--export',
+    '--anon',
+    '--install-ide',
+  ],
+  init: [
+    ...GLOBAL_COMMON_FLAGS,
+    '--stealth',
+    '--targets',
+    '--link',
+    '--warmup',
+    '--no-warmup',
+    '--install-ide',
+    '--no-ide',
+    '--ide',
+  ],
+  uninstall: [...GLOBAL_COMMON_FLAGS],
+  bootstrap: [...GLOBAL_COMMON_FLAGS, '--max-commits'],
+  virtualize: [...GLOBAL_COMMON_FLAGS, '--dry-run', '--restore', '--global', '-g'],
+  memory: [...GLOBAL_COMMON_FLAGS, '--refresh', '--json'],
+  memories: [...GLOBAL_COMMON_FLAGS, '--refresh', '--json'],
+  audit: [...GLOBAL_COMMON_FLAGS, '--global', '-g', '--token-budget', '--skill-budget', '--json'],
+  refactor: [
+    ...GLOBAL_COMMON_FLAGS,
+    '--apply',
+    '--local-only',
+    '--global',
+    '-g',
+    '--token-budget',
+    '--skill-budget',
+    '--json',
+  ],
+  tree: [...GLOBAL_COMMON_FLAGS, '--json', '--full'],
+  stats: [...GLOBAL_COMMON_FLAGS, '--json'],
+  doctor: [...GLOBAL_COMMON_FLAGS, '--json', '--roi', '--probe', '--no-probe'],
+  check: [...GLOBAL_COMMON_FLAGS, '--json'],
+  inspect: [...GLOBAL_COMMON_FLAGS, '--json'],
+  optimize: [
+    ...GLOBAL_COMMON_FLAGS,
+    '--dim',
+    '-k',
+    '--k',
+    '--rounds',
+    '--proposer-cmd',
+    '--probe-cmd',
+    '--worktree-setup-cmd',
+    '--task',
+    '--task-file',
+    '--trajectory',
+    '--trajectories',
+    '--deliverable',
+    '--deliverables',
+    '--leak-glob',
+    '--auto',
+    '--prepare',
+    '--apply',
+    '--dry-run',
+    '--json',
+    '--require-probe-improvement',
+    '--no-require-probe-improvement',
+  ],
+  version: [...GLOBAL_COMMON_FLAGS],
+  help: [...GLOBAL_COMMON_FLAGS],
+};
+
+export const KNOWN_FLAGS = Array.from(
+  new Set(Object.values(COMMAND_VALID_FLAGS).flat())
+);
 
 export const SUPPORTED_CHECK_EXTS = new Set([
   '.xlsx',
@@ -723,74 +840,187 @@ function handleExit(code: number): void {
   }
 }
 
+export interface McpLaunchTarget {
+  source: string;
+  command: string;
+  args: string[];
+  isWorkspace: boolean;
+}
+
 export interface McpInspection {
   registered: boolean;
   foundConfigs: string[];
   staleNpxPath: boolean;
+  launchConfig?: McpLaunchTarget;
+  workspaceLaunchConfig?: McpLaunchTarget;
 }
 
-export function checkMcpGatewayConfigs(workspaceRoot: string): McpInspection {
+export interface McpHandshakeProbeResult {
+  attempted: boolean;
+  skipped?: boolean;
+  reachable: boolean;
+  source?: string;
+  serverVersion?: string;
+  toolCount: number;
+  latencyMs?: number;
+  error?: string;
+}
+
+function extractLaunchTargetFromEntry(
+  entry: any,
+  source: string,
+  isWorkspace: boolean
+): McpLaunchTarget | undefined {
+  if (!entry || typeof entry !== 'object') return undefined;
+  if (typeof entry.command === 'string' && entry.command.trim()) {
+    return {
+      source,
+      command: entry.command.trim(),
+      args: Array.isArray(entry.args) ? entry.args.map(String) : [],
+      isWorkspace,
+    };
+  }
+  if (Array.isArray(entry.command) && entry.command.length > 0 && typeof entry.command[0] === 'string') {
+    return {
+      source,
+      command: entry.command[0].trim(),
+      args: entry.command.slice(1).map(String),
+      isWorkspace,
+    };
+  }
+  return undefined;
+}
+
+export function checkMcpGatewayConfigs(
+  workspaceRoot: string,
+  globalHomeDir?: string
+): McpInspection {
+  const ws = path.resolve(workspaceRoot);
   const wsConfigs = [
-    { name: '.mcp.json', path: path.join(workspaceRoot, '.mcp.json') },
-    { name: '.cursor/mcp.json', path: path.join(workspaceRoot, '.cursor', 'mcp.json') },
-    { name: '.vscode/mcp.json', path: path.join(workspaceRoot, '.vscode', 'mcp.json') },
-    { name: '.codex/config.toml', path: path.join(workspaceRoot, '.codex', 'config.toml') },
-    { name: 'opencode.json', path: path.join(workspaceRoot, 'opencode.json') },
-    { name: '.gemini/settings.json', path: path.join(workspaceRoot, '.gemini', 'settings.json') },
+    { name: '.mcp.json', path: path.join(ws, '.mcp.json'), isWorkspace: true },
+    { name: '.cursor/mcp.json', path: path.join(ws, '.cursor', 'mcp.json'), isWorkspace: true },
+    { name: '.vscode/mcp.json', path: path.join(ws, '.vscode', 'mcp.json'), isWorkspace: true },
+    { name: '.codex/config.toml', path: path.join(ws, '.codex', 'config.toml'), isWorkspace: true },
+    { name: 'opencode.json', path: path.join(ws, 'opencode.json'), isWorkspace: true },
+    { name: '.gemini/settings.json', path: path.join(ws, '.gemini', 'settings.json'), isWorkspace: true },
+    { name: '.windsurf/mcp.json', path: path.join(ws, '.windsurf', 'mcp.json'), isWorkspace: true },
+    { name: '.windsurf/mcp_config.json', path: path.join(ws, '.windsurf', 'mcp_config.json'), isWorkspace: true },
+    { name: '.cline/mcp.json', path: path.join(ws, '.cline', 'mcp.json'), isWorkspace: true },
+    { name: '.roo/mcp.json', path: path.join(ws, '.roo', 'mcp.json'), isWorkspace: true },
+    { name: 'mcp_config.json', path: path.join(ws, 'mcp_config.json'), isWorkspace: true },
   ];
 
-  const homeDir = os.homedir();
+  const homeDir = path.resolve(globalHomeDir || os.homedir());
   const globalConfigs = [
     {
       name: '~/.gemini/antigravity/mcp_config.json',
       path: path.join(homeDir, '.gemini', 'antigravity', 'mcp_config.json'),
+      isWorkspace: false,
     },
-    { name: '~/.claude.json', path: path.join(homeDir, '.claude.json') },
-    { name: '~/.cursor/mcp.json', path: path.join(homeDir, '.cursor', 'mcp.json') },
+    {
+      name: '~/.gemini/settings.json',
+      path: path.join(homeDir, '.gemini', 'settings.json'),
+      isWorkspace: false,
+    },
+    { name: '~/.claude.json', path: path.join(homeDir, '.claude.json'), isWorkspace: false },
+    { name: '~/.cursor/mcp.json', path: path.join(homeDir, '.cursor', 'mcp.json'), isWorkspace: false },
+    { name: '~/.codex/config.toml', path: path.join(homeDir, '.codex', 'config.toml'), isWorkspace: false },
+    {
+      name: '~/.codeium/windsurf/mcp_config.json',
+      path: path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'),
+      isWorkspace: false,
+    },
   ];
 
   const allConfigs = [...wsConfigs, ...globalConfigs];
   const foundConfigs: string[] = [];
   let staleNpxPath = false;
+  let launchConfig: McpLaunchTarget | undefined;
+  let workspaceLaunchConfig: McpLaunchTarget | undefined;
 
   for (const cfg of allConfigs) {
     if (!fs.existsSync(cfg.path)) continue;
     try {
       const content = fs.readFileSync(cfg.path, 'utf8');
-      if (content.includes('evo-kernel') || content.includes('evo')) {
-        let isConfigured = false;
+      if (!content.includes('evo-kernel') && !content.includes('evo')) continue;
+
+      let isConfigured = false;
+      const cfgRoot = cfg.isWorkspace ? ws : path.dirname(cfg.path);
+
+      if (cfg.path.endsWith('.toml')) {
+        const tomlEntry = extractCodexTomlEvoEntry(content);
+        if (tomlEntry) {
+          isConfigured = true;
+          if (
+            hasStaleNpxMcpEntry({ command: tomlEntry.command, args: tomlEntry.args }, cfgRoot) ||
+            hasStaleNpxMcpEntry(tomlEntry.rawSection, cfgRoot)
+          ) {
+            staleNpxPath = true;
+          }
+          const target = extractLaunchTargetFromEntry(
+            { command: tomlEntry.command, args: tomlEntry.args },
+            cfg.name,
+            cfg.isWorkspace
+          );
+          if (target) {
+            if (cfg.isWorkspace && !workspaceLaunchConfig) workspaceLaunchConfig = target;
+            if (!launchConfig) launchConfig = target;
+          }
+        }
+      } else {
         try {
-          const parsed = JSON.parse(content);
-          const servers =
-            parsed.mcpServers ||
-            parsed.servers ||
-            parsed.mcp?.servers ||
-            (parsed['evo-kernel'] ? { 'evo-kernel': parsed['evo-kernel'] } : null);
-          if (servers && (servers['evo-kernel'] || servers.evo || servers.evokernel)) {
-            isConfigured = true;
-            const entry = servers['evo-kernel'] || servers.evo || servers.evokernel;
-            if (hasStaleNpxMcpEntry(entry)) {
-              staleNpxPath = true;
+          const parsed = parseJsonc(content);
+          if (parsed && typeof parsed === 'object') {
+            const buckets: Record<string, any>[] = [];
+            if (parsed.mcpServers && typeof parsed.mcpServers === 'object') buckets.push(parsed.mcpServers);
+            if (parsed.mcp_servers && typeof parsed.mcp_servers === 'object') buckets.push(parsed.mcp_servers);
+            if (parsed.servers && typeof parsed.servers === 'object') buckets.push(parsed.servers);
+            if (parsed.mcp && typeof parsed.mcp === 'object') {
+              if (parsed.mcp.servers && typeof parsed.mcp.servers === 'object') {
+                buckets.push(parsed.mcp.servers);
+              } else if (!Array.isArray(parsed.mcp)) {
+                buckets.push(parsed.mcp);
+              }
+            }
+            if (parsed['evo-kernel'] && typeof parsed['evo-kernel'] === 'object') {
+              buckets.push({ 'evo-kernel': parsed['evo-kernel'] });
+            }
+            if (parsed.projects && typeof parsed.projects === 'object') {
+              const normWs = ws.toLowerCase().replace(/\\/g, '/');
+              for (const [pKey, pVal] of Object.entries(parsed.projects as Record<string, any>)) {
+                if (pKey.toLowerCase().replace(/\\/g, '/') === normWs && pVal?.mcpServers) {
+                  buckets.push(pVal.mcpServers);
+                }
+              }
+            }
+
+            for (const servers of buckets) {
+              const entry = servers['evo-kernel'] || servers.evo || servers.evokernel;
+              if (entry && typeof entry === 'object') {
+                isConfigured = true;
+                if (hasStaleNpxMcpEntry(entry, cfgRoot)) {
+                  staleNpxPath = true;
+                }
+                const target = extractLaunchTargetFromEntry(entry, cfg.name, cfg.isWorkspace);
+                if (target) {
+                  if (cfg.isWorkspace && !workspaceLaunchConfig) workspaceLaunchConfig = target;
+                  if (!launchConfig) launchConfig = target;
+                }
+              }
             }
           }
         } catch {
           if (content.includes('evo-kernel')) {
             isConfigured = true;
-            if (content.includes('_npx')) {
-              const matches = content.match(/"[^"]*_npx[^"]*"|'[^']*_npx[^']*'|[^\s"',]+\b_npx[^\s"',]*/g) || [];
-              for (const rawMatch of matches) {
-                const m = rawMatch.replace(/^["']|["']$/g, '');
-                if (m && !fs.existsSync(m)) {
-                  staleNpxPath = true;
-                }
-              }
+            if (hasStaleNpxMcpEntry(content, cfgRoot)) {
+              staleNpxPath = true;
             }
           }
         }
+      }
 
-        if (isConfigured && !foundConfigs.includes(cfg.name)) {
-          foundConfigs.push(cfg.name);
-        }
+      if (isConfigured && !foundConfigs.includes(cfg.name)) {
+        foundConfigs.push(cfg.name);
       }
     } catch {}
   }
@@ -799,7 +1029,191 @@ export function checkMcpGatewayConfigs(workspaceRoot: string): McpInspection {
     registered: foundConfigs.length > 0,
     foundConfigs,
     staleNpxPath,
+    launchConfig: workspaceLaunchConfig || launchConfig,
+    workspaceLaunchConfig,
   };
+}
+
+const MCP_STDIO_PROBE_SCRIPT = `
+const { spawn } = require('node:child_process');
+const cfg = JSON.parse(process.env.EVO_MCP_PROBE_CFG || '{}');
+const t0 = Date.now();
+const isWin = process.platform === 'win32';
+let cmd = cfg.command || '';
+let cArgs = Array.isArray(cfg.args) ? cfg.args : [];
+if (/^node(?:\\.exe)?$/i.test(cmd)) {
+  cmd = process.execPath;
+}
+let child;
+try {
+  if (isWin && /^(?:npx|npm|pnpm|yarn)(?:\\.cmd)?$/i.test(cmd)) {
+    const q = (arg) => {
+      const s = String(arg);
+      if (!/[\\s"&|<>^()%]/.test(s)) return s;
+      const crt = '"' + s.replace(/(\\\\*)"/g, '$1$1\\\\"').replace(/(\\\\+)$/, '$1$1') + '"';
+      let out = '';
+      let inCmdQuote = false;
+      for (let i = 0; i < crt.length; i++) {
+        const ch = crt[i];
+        if (ch === '"') {
+          inCmdQuote = !inCmdQuote;
+          out += ch;
+        } else if (ch === '%') {
+          out += inCmdQuote ? '"^%"' : '^%';
+        } else if (!inCmdQuote && /[&|<>^()]/.test(ch)) {
+          out += '^^^' + ch;
+        } else {
+          out += ch;
+        }
+      }
+      return out;
+    };
+    const full = [q(/\\.cmd$/i.test(cmd) ? cmd : cmd + '.cmd'), ...cArgs.map(q)].join(' ');
+    child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', '"' + full + '"'], {
+      cwd: cfg.cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsVerbatimArguments: true,
+      env: { ...process.env, EVO_WORKSPACE: cfg.cwd },
+    });
+  } else {
+    child = spawn(cmd, cArgs, {
+      cwd: cfg.cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, EVO_WORKSPACE: cfg.cwd },
+    });
+  }
+} catch (err) {
+  process.stdout.write(JSON.stringify({ reachable: false, toolCount: 0, error: String(err && err.message || err) }));
+  process.exit(0);
+}
+let settled = false;
+let initRes = null;
+let toolsRes = null;
+let outBuf = '';
+let errBuf = '';
+function finish(payload) {
+  if (settled) return;
+  settled = true;
+  try { child.kill(); } catch {}
+  process.stdout.write(JSON.stringify(payload));
+  process.exit(0);
+}
+const timer = setTimeout(() => {
+  finish({
+    reachable: false,
+    toolCount: 0,
+    latencyMs: Date.now() - t0,
+    error: 'Handshake timed out after ' + (cfg.timeoutMs || 5000) + 'ms',
+  });
+}, cfg.timeoutMs || 5000);
+child.on('error', (err) => {
+  clearTimeout(timer);
+  finish({ reachable: false, toolCount: 0, latencyMs: Date.now() - t0, error: String(err && err.message || err) });
+});
+child.stderr.on('data', (d) => {
+  if (errBuf.length < 1024) errBuf += d.toString('utf8');
+});
+child.stdout.on('data', (d) => {
+  outBuf += d.toString('utf8');
+  const lines = outBuf.split(/\\r?\\n/);
+  outBuf = lines.pop() || '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const msg = JSON.parse(trimmed);
+      if (msg.id === 1 && msg.result) initRes = msg.result;
+      if (msg.id === 2 && msg.result) toolsRes = msg.result;
+    } catch {}
+  }
+  if (initRes && toolsRes) {
+    clearTimeout(timer);
+    const tools = Array.isArray(toolsRes.tools) ? toolsRes.tools : [];
+    finish({
+      reachable: tools.length === 5,
+      serverVersion: initRes.serverInfo && initRes.serverInfo.version ? String(initRes.serverInfo.version) : undefined,
+      toolCount: tools.length,
+      latencyMs: Date.now() - t0,
+      error: tools.length === 5 ? undefined : 'Expected 5 meta-tools, received ' + tools.length,
+    });
+  }
+});
+child.on('close', (code) => {
+  clearTimeout(timer);
+  if (!settled) {
+    const snippet = errBuf.trim().split(/\\r?\\n/)[0] || ('Process exited with code ' + code);
+    finish({ reachable: false, toolCount: 0, latencyMs: Date.now() - t0, error: snippet });
+  }
+});
+try {
+  const initFrame = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'evo-doctor-probe', version: '1.0.0' },
+    },
+  });
+  const listFrame = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+  child.stdin.write(initFrame + '\\n' + listFrame + '\\n');
+  child.stdin.end();
+} catch (err) {
+  clearTimeout(timer);
+  finish({ reachable: false, toolCount: 0, error: String(err && err.message || err) });
+}
+`;
+
+export function probeMcpServerStdioSync(
+  workspaceRoot: string,
+  target: McpLaunchTarget,
+  timeoutMs = 5000
+): McpHandshakeProbeResult {
+  const ws = path.resolve(workspaceRoot);
+  try {
+    const res = spawnSync(process.execPath, ['-e', MCP_STDIO_PROBE_SCRIPT], {
+      cwd: ws,
+      encoding: 'utf8',
+      timeout: timeoutMs + 500,
+      env: {
+        ...process.env,
+        EVO_MCP_PROBE_CFG: JSON.stringify({
+          command: target.command,
+          args: target.args,
+          cwd: ws,
+          timeoutMs,
+        }),
+      },
+    });
+    if (res.stdout && res.stdout.trim()) {
+      const parsed = JSON.parse(res.stdout.trim());
+      return {
+        attempted: true,
+        reachable: Boolean(parsed.reachable),
+        source: target.source,
+        serverVersion: parsed.serverVersion,
+        toolCount: Number(parsed.toolCount || 0),
+        latencyMs: Number(parsed.latencyMs || 0),
+        error: parsed.error,
+      };
+    }
+    return {
+      attempted: true,
+      reachable: false,
+      source: target.source,
+      toolCount: 0,
+      error: res.error ? res.error.message : 'Handshake probe timed out or produced no output',
+    };
+  } catch (err: any) {
+    return {
+      attempted: true,
+      reachable: false,
+      source: target.source,
+      toolCount: 0,
+      error: err?.message || String(err),
+    };
+  }
 }
 
 export interface SeedInspection {
@@ -833,10 +1247,12 @@ export function checkSeedIntegrity(workspaceRoot: string): SeedInspection {
   return { present, valid, duplicateBlocks };
 }
 
-const VALUE_TAKING_FLAGS = new Set([
+export const VALUE_TAKING_FLAGS = new Set([
   '--workspace',
   '-w',
   '--port',
+  '-p',
+  '--host',
   '--token',
   '--export',
   '--svg',
@@ -849,8 +1265,18 @@ const VALUE_TAKING_FLAGS = new Set([
   '--skill-budget',
   '--dim',
   '-k',
+  '--k',
+  '--rounds',
   '--proposer-cmd',
   '--probe-cmd',
+  '--worktree-setup-cmd',
+  '--task',
+  '--task-file',
+  '--trajectory',
+  '--trajectories',
+  '--deliverable',
+  '--deliverables',
+  '--leak-glob',
   '--payload',
   '--harness',
   '--event',
@@ -871,7 +1297,7 @@ function normalizeLeadingFlags(rawArgs: string[]): string[] {
   while (i < rawArgs.length && rawArgs[i].startsWith('-')) {
     const flag = rawArgs[i];
     leadingFlags.push(flag);
-    if (VALUE_TAKING_FLAGS.has(flag) && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('-')) {
+    if (VALUE_TAKING_FLAGS.has(flag.toLowerCase()) && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('-')) {
       leadingFlags.push(rawArgs[i + 1]);
       i += 2;
     } else {
@@ -886,6 +1312,7 @@ function normalizeLeadingFlags(rawArgs: string[]): string[] {
 
 export function runCli(argv: string[]): void {
   const args = normalizeLeadingFlags(argv.slice(2));
+  const cliTermOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
   let cmd = (args[0] || '').toLowerCase();
   if (!cmd && process.stdout.isTTY && !process.env.CI) {
     cmd = 'score';
@@ -894,14 +1321,26 @@ export function runCli(argv: string[]): void {
   }
 
   // Early version interception: ZERO side-effects (no file reads/writes, no global seed, exit code 0)
+  let hasStandaloneVersionFlag = false;
+  if (cmd !== 'hook' && cmd !== 'mcp') {
+    for (let idx = 0; idx < args.length; idx++) {
+      const a = args[idx];
+      if (a === '--version' || a === '-v') {
+        hasStandaloneVersionFlag = true;
+        break;
+      }
+      if (a.startsWith('-') && VALUE_TAKING_FLAGS.has(a.toLowerCase()) && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
+        idx++;
+      }
+    }
+  }
   if (
     cmd === 'version' ||
     cmd === '--version' ||
     cmd === '-v' ||
-    args.includes('--version') ||
-    (args.length === 1 && args[0] === '-v')
+    hasStandaloneVersionFlag
   ) {
-    console.log(EVO_KERNEL_VERSION);
+    console.log(formatTerminalOutput(EVO_KERNEL_VERSION, cliTermOpts));
     return;
   }
 
@@ -920,7 +1359,7 @@ export function runCli(argv: string[]): void {
       for (let idx = 0; idx < args.length; idx++) {
         const a = args[idx];
         if (a.startsWith('-')) {
-          if (VALUE_TAKING_FLAGS.has(a) && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
+          if (VALUE_TAKING_FLAGS.has(a.toLowerCase()) && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
             idx++;
           }
           continue;
@@ -936,80 +1375,112 @@ export function runCli(argv: string[]): void {
 
     switch (targetSubcmd) {
       case 'hook':
-        printHookHelp();
+        printHookHelp(args);
         return;
       case 'optimize':
-        printOptimizeHelp();
+        printOptimizeHelp(args);
         return;
       case 'score':
-        printScoreHelp();
+        printScoreHelp(args);
         return;
       case 'ui':
-        printUiHelp();
+        printUiHelp(args);
         return;
       case 'init':
-        printInitHelp();
+        printInitHelp(args);
         return;
       case 'uninstall':
-        printUninstallHelp();
+        printUninstallHelp(args);
         return;
       case 'bootstrap':
-        printBootstrapHelp();
+        printBootstrapHelp(args);
         return;
       case 'virtualize':
-        printVirtualizeHelp();
+        printVirtualizeHelp(args);
         return;
       case 'memory':
       case 'memories':
-        printMemoryHelp();
+        printMemoryHelp(args);
         return;
       case 'audit':
-        printAuditHelp();
+        printAuditHelp(args);
         return;
       case 'refactor':
-        printRefactorHelp();
+        printRefactorHelp(args);
         return;
       case 'check':
       case 'inspect':
-        printCheckHelp();
+        printCheckHelp(args);
         return;
       case 'tree':
-        printTreeHelp();
+        printTreeHelp(args);
         return;
       case 'stats':
-        printStatsHelp();
+        printStatsHelp(args);
         return;
       case 'doctor':
-        printDoctorHelp();
+        printDoctorHelp(args);
         return;
       case 'mcp':
-        printMcpHelp();
+        printMcpHelp(args);
         return;
       default:
-        printHelp();
+        printHelp(args);
         return;
     }
   }
 
   if (cmd.startsWith('-')) {
-    args.unshift('score');
-    cmd = 'score';
+    const scoreExplicit =
+      args.includes('--json') ||
+      args.includes('--badge') ||
+      args.some(
+        (a) =>
+          a === '--svg' ||
+          a.startsWith('--svg=') ||
+          a === '--html' ||
+          a.startsWith('--html=') ||
+          a === '--anon' ||
+          a === '--global' ||
+          a === '-g'
+      );
+    const defaultCmd =
+      (process.stdout.isTTY && !process.env.CI) || scoreExplicit ? 'score' : 'help';
+    args.unshift(defaultCmd);
+    cmd = defaultCmd;
   }
 
-  if (cmd !== 'hook' && cmd !== 'mcp' && cmd !== 'ui') {
-    for (const arg of args.slice(1)) {
-      if (arg.startsWith('-')) {
-        const flag = arg.split('=')[0];
-        if (!KNOWN_FLAGS.includes(flag)) {
-          const suggestion = suggestClosestToken(flag, KNOWN_FLAGS);
-          console.error(
-            `⚠️ Warning: Unknown option '${flag}'.${
+  if (cmd !== 'hook' && cmd !== 'mcp' && VALID_COMMANDS.includes(cmd)) {
+    const allowedFlags = COMMAND_VALID_FLAGS[cmd] || KNOWN_FLAGS;
+    for (let idx = 1; idx < args.length; idx++) {
+      const arg = args[idx];
+      if (!arg.startsWith('-') || arg === '-') {
+        continue;
+      }
+      const flag = arg.split('=')[0];
+      if (!allowedFlags.includes(flag)) {
+        const suggestion =
+          suggestClosestToken(flag, allowedFlags) || suggestClosestToken(flag, KNOWN_FLAGS);
+        console.error(
+          formatTerminalOutput(
+            `❌ Error: Unknown option '${flag}' for '${cmd}'.${
               suggestion ? ` Did you mean '${suggestion}'?` : ''
-            }`
-          );
-        }
+            }`,
+            cliTermOpts
+          )
+        );
+        handleExit(1);
+        return;
+      }
+      if (VALUE_TAKING_FLAGS.has(flag) && !arg.includes('=') && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
+        idx++;
       }
     }
+  }
+
+  if (cmd === 'help') {
+    printHelp(args);
+    return;
   }
 
   let wsVal: string | undefined;
@@ -1026,7 +1497,12 @@ export function runCli(argv: string[]): void {
   if (wsVal && cmd !== 'mcp' && cmd !== 'hook') {
     const resolvedWs = path.resolve(wsVal);
     if (!fs.existsSync(resolvedWs)) {
-      console.error(`❌ Error: Workspace directory does not exist: ${resolvedWs}`);
+      console.error(
+        formatTerminalOutput(
+          `❌ Error: Workspace directory does not exist: ${resolvedWs}`,
+          cliTermOpts
+        )
+      );
       handleExit(1);
       return;
     }
@@ -1082,6 +1558,7 @@ export function runCli(argv: string[]): void {
       const installIde = args.includes('--install-ide') ? true : undefined;
       const noIde = args.includes('--no-ide');
       const ide = parseIdeTargetsArg(args);
+      const logInit = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
       const res = runInit(workspaceRoot, {
         stealth,
         targets,
@@ -1091,25 +1568,25 @@ export function runCli(argv: string[]): void {
         noIde,
         ide,
       });
-      console.log('🧬 EvoKernel initialized successfully!');
-      console.log(`  ├─ Harnesses wired : ${res.initializedHarnesses.join(', ')}`);
-      console.log(`  ├─ Rule seeds      : ${res.updatedFiles.join(', ')}`);
-      console.log(`  ├─ MCP gateways    : ${res.mcpConfigFiles.join(', ')}`);
+      logInit('🧬 EvoKernel initialized successfully!');
+      logInit(`  ├─ Harnesses wired : ${res.initializedHarnesses.join(', ')}`);
+      logInit(`  ├─ Rule seeds      : ${res.updatedFiles.join(', ')}`);
+      logInit(`  ├─ MCP gateways    : ${res.mcpConfigFiles.join(', ')}`);
       if (res.commandFiles && res.commandFiles.length > 0) {
-        console.log(`  ├─ Slash commands  : ${res.commandFiles.join(', ')}`);
+        logInit(`  ├─ Slash commands  : ${res.commandFiles.join(', ')}`);
       }
       if (res.linkedSharedEvoDir) {
-        console.log(`  ├─ Shared .evo     : ${res.linkedSharedEvoDir}`);
+        logInit(`  ├─ Shared .evo     : ${res.linkedSharedEvoDir}`);
       }
       if (res.ideMounts && res.ideMounts.length > 0) {
         const mountSummary = res.ideMounts
           .map((m) => `${m.name} (${m.method}: ${m.targetPath})`)
           .join(', ');
-        console.log(`  ├─ IDE Extensions  : ${mountSummary}`);
+        logInit(`  ├─ IDE Extensions  : ${mountSummary}`);
       } else if (noIde) {
-        console.log('  ├─ IDE Extensions  : skipped (--no-ide)');
+        logInit('  ├─ IDE Extensions  : skipped (--no-ide)');
       }
-      console.log(
+      logInit(
         `  └─ Git Exclude     : ${
           stealth || res.linkedSharedEvoDir
             ? `Stealth mode active (.git/info/exclude -> ${res.stealthExcluded?.join(', ') || 'already excluded'})`
@@ -1120,20 +1597,20 @@ export function runCli(argv: string[]): void {
         const boot = res.warmupReport.bootSummary;
         const score = res.warmupReport.scoreReport || res.warmupReport;
         console.log('');
-        console.log('⚡ Warmup & Cold-Start Gene Extraction:');
+        logInit('⚡ Warmup & Cold-Start Gene Extraction:');
         if (boot?.detectedStacks && boot.detectedStacks.length > 0) {
-          console.log(`  ├─ Detected Stacks : ${boot.detectedStacks.join(', ')}`);
+          logInit(`  ├─ Detected Stacks : ${boot.detectedStacks.join(', ')}`);
         }
         const totalEvolved =
           (boot?.rulesCreated?.length || 0) +
           (boot?.skillsCreated?.length || 0) +
           (boot?.toolsCreated?.length || 0) +
           (boot?.memoriesCreated?.length || 0);
-        console.log(
+        logInit(
           `  ├─ Capabilities    : ${totalEvolved} evolved (${boot?.rulesCreated?.length || 0} rules, ${boot?.memoriesCreated?.length || 0} memories)`
         );
         if (score?.mcpTax?.activeServers > 0) {
-          console.log(
+          logInit(
             `  └─ MCP Tax         : ${score.mcpTax.activeServers} active server(s) (~${score.mcpTax.activeTaxTokens} tok) ready for \`evo virtualize\``
           );
         } else {
@@ -1141,15 +1618,21 @@ export function runCli(argv: string[]): void {
             score?.overallScore !== undefined
               ? `Grade ${score.grade} (${score.overallScore}/100)`
               : '—';
-          console.log(`  └─ Context Health  : ${healthDisplay}`);
+          logInit(`  └─ Context Health  : ${healthDisplay}`);
         }
       }
       const cliPrefix = formatCliInvocationPrefix(argv);
       console.log('');
-      console.log('🚀 Next Steps:');
-      console.log('  1. Reload your IDE or Agent MCP gateway to activate the `evo-kernel` 5-tool server.');
-      console.log(`  2. Run \`${cliPrefix} doctor\` to verify MCP gateway readiness & memory health.`);
-      console.log(`  3. Run \`${cliPrefix} bootstrap\` (if not warmed up) to mine git fix history into AST memories.`);
+      logInit('🚀 Next Steps:');
+      logInit(
+        `  1. Run \`${cliPrefix} doctor\` to verify live MCP stdio handshake & AST memory health (reload your IDE if open).`
+      );
+      logInit(
+        `  2. Run \`${cliPrefix} ui\` to launch EvoKernel Workbench and inspect your capability tree.`
+      );
+      logInit(
+        `  3. Try a starter prompt in your IDE: "Search EvoKernel rules/memories for this repo before making edits" (tip: run \`${cliPrefix} bootstrap\` to mine git history).`
+      );
       break;
     }
 
@@ -1165,27 +1648,37 @@ export function runCli(argv: string[]): void {
         hasCommits = revCount.status === 0 && Number.parseInt(revCount.stdout?.trim(), 10) > 0;
       } catch {}
 
+      const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
       if (!hasCommits) {
         console.log(
-          '🔍 Initializing stack & seed capabilities (no git commit history found yet — skipping git fix mining)...'
+          formatTerminalOutput(
+            '🔍 Initializing stack & seed capabilities (no git commit history found yet — skipping git fix mining)...',
+            termOpts
+          )
         );
       } else {
         console.log(
-          `🔍 Scanning repository structure, build configs, and git fix history (maxCommits: ${maxCommits})...`
+          formatTerminalOutput(
+            `🔍 Scanning repository structure, build configs, and git fix history (maxCommits: ${maxCommits})...`,
+            termOpts
+          )
         );
       }
       const summary = runBootstrap(workspaceRoot, { maxCommits });
-      console.log('✅ Cold-start gene extraction complete (all capabilities passed 4-stage Gatekeeper):');
+      const bootLines: string[] = [
+        '✅ Cold-start gene extraction complete (all capabilities passed 6-stage Gatekeeper):',
+      ];
       if (summary.detectedStacks && summary.detectedStacks.length > 0) {
-        console.log(`  ├─ 📦 Detected Stacks     : ${summary.detectedStacks.join(', ')}`);
+        bootLines.push(`  ├─ 📦 Detected Stacks     : ${summary.detectedStacks.join(', ')}`);
       }
-      console.log(`  ├─ 🛡️  Rules evolved       : ${summary.rulesCreated.join(', ') || '(none)'}`);
-      console.log(`  ├─ ⚡ Skills evolved      : ${summary.skillsCreated.join(', ') || '(none)'}`);
-      console.log(`  ├─ 🔧 Micro-Tools evolved : ${summary.toolsCreated.join(', ') || '(none)'}`);
-      console.log(`  ├─ 🧠 Memories evolved    : ${summary.memoriesCreated.join(', ') || '(none)'}`);
+      bootLines.push(`  ├─ 🛡️  Rules evolved       : ${summary.rulesCreated.join(', ') || '(none)'}`);
+      bootLines.push(`  ├─ ⚡ Skills evolved      : ${summary.skillsCreated.join(', ') || '(none)'}`);
+      bootLines.push(`  ├─ 🔧 Micro-Tools evolved : ${summary.toolsCreated.join(', ') || '(none)'}`);
+      bootLines.push(`  ├─ 🧠 Memories evolved    : ${summary.memoriesCreated.join(', ') || '(none)'}`);
       if (summary.skippedOrDuplicate.length > 0) {
-        console.log(`  └─ ⏭️  Skipped existing    : ${summary.skippedOrDuplicate.join(', ')}`);
+        bootLines.push(`  └─ ⏭️  Skipped existing    : ${summary.skippedOrDuplicate.join(', ')}`);
       }
+      console.log(formatTerminalOutput(bootLines.join('\n'), termOpts));
       break;
     }
 
@@ -1193,35 +1686,76 @@ export function runCli(argv: string[]): void {
       const dryRun = args.includes('--dry-run');
       const restore = args.includes('--restore');
       const includeGlobal = args.includes('--global') || args.includes('-g');
+      const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
       const result = runVirtualize(workspaceRoot, { dryRun, restore, includeGlobal });
-      console.log(renderVirtualizeReport(result));
+      console.log(formatTerminalOutput(renderVirtualizeReport(result), termOpts));
       break;
     }
 
     case 'memory':
     case 'memories': {
-      if (args[1] && !args[1].startsWith('-') && args[1] !== 'verify' && args[1] !== 'refresh') {
+      const positionalArgs: string[] = [];
+      for (let i = 1; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--workspace' || a === '-w') {
+          i++;
+          continue;
+        }
+        if (a.startsWith('-')) continue;
+        positionalArgs.push(a);
+      }
+      const actionArg = positionalArgs[0];
+      if (actionArg && actionArg !== 'verify' && actionArg !== 'refresh') {
         console.error(
-          `❌ Error: Unknown memory action '${args[1]}'. Usage: evo memory [verify|refresh]`
+          formatTerminalOutput(
+            `❌ Error: Unknown memory action '${actionArg}'. Usage: evo memory [verify|refresh]`,
+            cliTermOpts
+          )
         );
         handleExit(1);
         return;
       }
-      if (args[1] === 'refresh' || args.includes('--refresh')) {
-        const targetIds = args.slice(1).filter((a) => !a.startsWith('-') && a !== 'refresh');
+      if (actionArg === 'refresh' || args.includes('--refresh')) {
+        const targetIds = positionalArgs.filter((a) => a !== 'refresh' && a !== 'verify');
         refreshMemories(workspaceRoot, targetIds.length > 0 ? targetIds : undefined);
       }
-      console.log(renderMemoryVerifyReport(workspaceRoot));
+      if (args.includes('--json')) {
+        const memStorage = new EvoStorage(workspaceRoot);
+        const memList = hasValidEvoStructure(memStorage.evoDir) ? memStorage.listMemories() : [];
+        const verifications = memList.map((m) => ({
+          id: m.id,
+          title: m.title,
+          ...verifyMemoryFreshness(workspaceRoot, m, { includeCallers: false }),
+        }));
+        console.log(
+          JSON.stringify(
+            {
+              workspaceRoot,
+              total: verifications.length,
+              verified: verifications.filter((v) => v.overall_status === 'VERIFIED').length,
+              otherBranch: verifications.filter((v) => v.overall_status === 'OTHER_BRANCH').length,
+              stale: verifications.filter((v) => v.overall_status === 'STALE' || v.overall_status === 'ORPHANED').length,
+              memories: verifications,
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
+        console.log(renderMemoryVerifyReport(workspaceRoot, termOpts));
+      }
       break;
     }
 
     case 'audit': {
       const includeGlobal = args.includes('--global') || args.includes('-g');
+      const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
       const report = runAudit(workspaceRoot, { includeGlobal, tokenBudgetLimit: parsePositiveIntFlag(args, '--token-budget'), skillBudgetLimit: parsePositiveIntFlag(args, '--skill-budget') });
       if (args.includes('--json')) {
         console.log(JSON.stringify(report, null, 2));
       } else {
-        console.log(renderAuditReport(report));
+        console.log(renderAuditReport(report, termOpts));
       }
       if (!report.healthy) {
         process.exit(1);
@@ -1232,8 +1766,13 @@ export function runCli(argv: string[]): void {
     case 'refactor': {
       const includeGlobal = !args.includes('--local-only');
       const apply = args.includes('--apply');
+      const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
       const result = runRefactor(workspaceRoot, { includeGlobal, apply, tokenBudgetLimit: parsePositiveIntFlag(args, '--token-budget'), skillBudgetLimit: parsePositiveIntFlag(args, '--skill-budget') });
-      console.log(renderRefactorReport(result));
+      if (args.includes('--json')) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(renderRefactorReport(result, termOpts));
+      }
       break;
     }
 
@@ -1241,16 +1780,30 @@ export function runCli(argv: string[]): void {
       if (args.includes('--json')) {
         console.log(JSON.stringify(buildEvoTreeJson(workspaceRoot), null, 2));
       } else {
-        console.log(renderEvoTree(workspaceRoot, { full: args.includes('--full') }));
+        const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
+        console.log(
+          renderEvoTree(workspaceRoot, {
+            full: args.includes('--full'),
+            color: termOpts.color,
+            ascii: termOpts.ascii,
+          })
+        );
       }
       break;
     }
 
     case 'stats': {
+      const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
+      console.error(
+        formatTerminalOutput(
+          "ℹ️ Note: 'evo stats' is deprecated; use 'evo doctor --roi' for ROI & session-start tax diagnostics.",
+          termOpts
+        )
+      );
       if (args.includes('--json')) {
         console.log(JSON.stringify(buildEvoStatsJson(workspaceRoot), null, 2));
       } else {
-        console.log(renderEvoStats(workspaceRoot));
+        console.log(renderEvoStats(workspaceRoot, termOpts));
       }
       break;
     }
@@ -1263,7 +1816,7 @@ export function runCli(argv: string[]): void {
         args[1] === '--help' ||
         args[1] === '-h'
       ) {
-        printHookHelp();
+        printHookHelp(args);
         break;
       }
       const event = parseHookEvent(args);
@@ -1272,6 +1825,8 @@ export function runCli(argv: string[]): void {
 
       const isTestProcess = Boolean(process.argv[1]?.includes('.test.'));
 
+      const isHumanCliHook = event === 'pre-commit' || event === 'mark-recovery';
+
       if (!process.stdin.isTTY && !isTestProcess && !payload) {
         return readStdinTextWithTimeout().then((stdinData) => {
           const result = runHook(event, {
@@ -1279,9 +1834,12 @@ export function runCli(argv: string[]): void {
             payload,
             harness,
             stdinData: stdinData || undefined,
+            ...(isHumanCliHook ? cliTermOpts : {}),
           });
           if (result.output) {
-            console.log(result.output);
+            console.log(
+              isHumanCliHook ? formatTerminalOutput(result.output, cliTermOpts) : result.output
+            );
           }
           if (result.exitCode !== 0) {
             process.exit(result.exitCode);
@@ -1296,9 +1854,12 @@ export function runCli(argv: string[]): void {
         workspaceRoot,
         payload,
         harness,
+        ...(isHumanCliHook ? cliTermOpts : {}),
       });
       if (result.output) {
-        console.log(result.output);
+        console.log(
+          isHumanCliHook ? formatTerminalOutput(result.output, cliTermOpts) : result.output
+        );
       }
       if (result.exitCode !== 0) {
         process.exit(result.exitCode);
@@ -1314,7 +1875,7 @@ export function runCli(argv: string[]): void {
         args[1] === '--help' ||
         args[1] === '-h'
       ) {
-        printOptimizeHelp();
+        printOptimizeHelp(args);
         break;
       }
       runOptimizeCli(args, workspaceRoot);
@@ -1324,6 +1885,9 @@ export function runCli(argv: string[]): void {
     case 'doctor': {
       const storage = new EvoStorage(workspaceRoot);
       const hasEvo = hasValidEvoStructure(storage.evoDir);
+      const showRoi = args.includes('--roi');
+      const noProbe = args.includes('--no-probe');
+      const forceProbe = args.includes('--probe');
       let ftsEnabled = false;
       try {
         const memDb = new DatabaseSync(':memory:');
@@ -1351,6 +1915,22 @@ export function runCli(argv: string[]): void {
       let toolsCount = 0;
       let coreRuleTokens = 0;
       let maxCoreRuleTokens = 1500;
+      let evoConfigVersion: string | undefined;
+      let window7d = emptyRecallWindowStats(7);
+
+      const mcpInfo = checkMcpGatewayConfigs(workspaceRoot);
+      const seedInfo = checkSeedIntegrity(workspaceRoot);
+      const mcpRegistered = mcpInfo.registered;
+      const staleNpxPath = mcpInfo.staleNpxPath;
+
+      let sessionStartSavings = {
+        beforeTokens: 0,
+        afterTokens: 0,
+        savedTokens: 0,
+        savingsPercent: 0,
+        userStaticRuleTokens: 0,
+        evoSeedTokens: 0,
+      };
 
       if (hasEvo) {
         const rules = storage.listRules();
@@ -1361,12 +1941,15 @@ export function runCli(argv: string[]): void {
         skillsCount = skills.length;
         toolsCount = tools.length;
         totalMemories = memories.length;
-        maxCoreRuleTokens = storage.getConfig().maxCoreRuleTokens || 1500;
+        const cfg = storage.getConfig();
+        maxCoreRuleTokens = cfg.maxCoreRuleTokens || 1500;
+        evoConfigVersion = cfg.version;
         coreRuleTokens = storage.getCoreRulesTokenUsage().totalTokens;
         let docCacheDb: DatabaseSync | undefined = undefined;
         if (fs.existsSync(storage.telemetryDbPath)) {
           try {
-            docCacheDb = new DatabaseSync(storage.telemetryDbPath, { readOnly: true });
+            docCacheDb = openSqliteReadOnly(storage.telemetryDbPath);
+            window7d = readRecallWindowStatsFromDb(docCacheDb, 7);
             const row = docCacheDb
               .prepare(
                 'SELECT SUM(hit_count) AS hits, SUM(tokens_saved) AS saved, SUM(helped_count) AS helped FROM telemetry'
@@ -1387,114 +1970,242 @@ export function runCli(argv: string[]): void {
             else if (status === 'OTHER_BRANCH') otherBranchMems++;
             else staleMems++;
           }
+          const scoreRep = buildScoreReport(workspaceRoot, {
+            includeGlobal: false,
+            cacheDb: docCacheDb,
+          });
+          sessionStartSavings = scoreRep.contextSavings;
         } finally {
           if (docCacheDb) {
             try { docCacheDb.close(); } catch {}
           }
         }
+      } else if (mcpRegistered) {
+        try {
+          const scoreRep = buildScoreReport(workspaceRoot, { includeGlobal: false });
+          sessionStartSavings = scoreRep.contextSavings;
+        } catch {}
       }
 
-      const estimatedTokensSaved = hasEvo
-        ? toolsCount * 1200 + totalMemories * 650 + totalTokensSaved
-        : 0;
+      const probeTarget = mcpInfo.workspaceLaunchConfig || mcpInfo.launchConfig;
+      const shouldRunHandshake =
+        !noProbe &&
+        Boolean(probeTarget) &&
+        (Boolean(mcpInfo.workspaceLaunchConfig) || hasEvo || forceProbe);
 
-      const mcpInfo = checkMcpGatewayConfigs(workspaceRoot);
-      const seedInfo = checkSeedIntegrity(workspaceRoot);
-      const mcpRegistered = mcpInfo.registered;
-      const staleNpxPath = mcpInfo.staleNpxPath;
+      const probeResult: McpHandshakeProbeResult = shouldRunHandshake && probeTarget
+        ? probeMcpServerStdioSync(workspaceRoot, probeTarget, 5000)
+        : {
+            attempted: false,
+            skipped: noProbe || !probeTarget || !shouldRunHandshake,
+            reachable: false,
+            toolCount: 0,
+          };
+
+      const versionDriftReasons: string[] = [];
+      if (hasEvo && evoConfigVersion && evoConfigVersion !== EVO_KERNEL_VERSION) {
+        versionDriftReasons.push(`.evo/config.json is v${evoConfigVersion} (CLI is v${EVO_KERNEL_VERSION})`);
+      }
+      if (
+        probeResult.attempted &&
+        probeResult.reachable &&
+        probeResult.serverVersion &&
+        probeResult.serverVersion !== EVO_KERNEL_VERSION
+      ) {
+        versionDriftReasons.push(
+          `MCP server reported v${probeResult.serverVersion} (CLI is v${EVO_KERNEL_VERSION})`
+        );
+      }
+      const bootStubPath = path.join(workspaceRoot, '.evo', 'boot-mcp.mjs');
+      if (hasEvo && fs.existsSync(bootStubPath)) {
+        try {
+          const stubTxt = fs.readFileSync(bootStubPath, 'utf8');
+          if (!stubTxt.includes(`evo-kernel@${EVO_KERNEL_VERSION}`)) {
+            versionDriftReasons.push(`.evo/boot-mcp.mjs fallback pin differs from v${EVO_KERNEL_VERSION}`);
+          }
+        } catch {}
+      }
+      for (const vf of seedInfo.valid) {
+        try {
+          const rawSeed = fs.readFileSync(path.join(workspaceRoot, vf), 'utf8');
+          if (rawSeed.includes('EvoKernel 演进回执') || !rawSeed.includes('EvoKernel Recall:')) {
+            versionDriftReasons.push(`${vf} L0 seed block is from an older schema`);
+            break;
+          }
+        } catch {}
+      }
+      const hasVersionDrift = versionDriftReasons.length > 0;
+      const duplicateRootSeeds =
+        seedInfo.valid.includes('AGENTS.md') && seedInfo.valid.includes('GEMINI.md');
 
       if (args.includes('--json')) {
-        console.log(
-          JSON.stringify(
-            {
-              ok: true,
-              workspaceRoot,
-              nodeVersion: process.version,
-              execPath: process.execPath,
-              sqliteFts5Enabled: ftsEnabled,
-              hasEvo,
-              evoDir: hasEvo ? storage.evoDir : null,
-              mcpRegistered,
-              mcpConfigs: mcpInfo.foundConfigs,
-              staleNpxPath,
-              seeds: seedInfo,
-              capabilities: {
-                rules: rulesCount,
-                skills: skillsCount,
-                tools: toolsCount,
-                memories: totalMemories,
-                coreRuleTokens,
-                maxCoreRuleTokens,
-              },
-              memories: {
-                total: totalMemories,
-                verified: verifiedMems,
-                otherBranch: otherBranchMems,
-                stale: staleMems,
-              },
-              telemetry: {
-                totalHits,
-                helpedCount: totalHelped,
-                recordedTokensSaved: totalTokensSaved,
-                estimatedTokensSaved,
-              },
-            },
-            null,
-            2
-          )
-        );
+        const doctorJson: Record<string, unknown> = {
+          ok: true,
+          cliVersion: EVO_KERNEL_VERSION,
+          workspaceRoot,
+          nodeVersion: process.version,
+          execPath: process.execPath,
+          sqliteFts5Enabled: ftsEnabled,
+          hasEvo,
+          evoDir: hasEvo ? storage.evoDir : null,
+          mcpRegistered,
+          mcpConfigs: mcpInfo.foundConfigs,
+          staleNpxPath,
+          mcpProbe: probeResult,
+          seeds: {
+            ...seedInfo,
+            duplicateRootSeeds,
+          },
+          versionDrift: {
+            drifted: hasVersionDrift,
+            reasons: versionDriftReasons,
+            fixCommand: 'npx -y evo-kernel init',
+          },
+          capabilities: {
+            rules: rulesCount,
+            skills: skillsCount,
+            tools: toolsCount,
+            memories: totalMemories,
+            coreRuleTokens,
+            maxCoreRuleTokens,
+          },
+          memories: {
+            total: totalMemories,
+            verified: verifiedMems,
+            otherBranch: otherBranchMems,
+            stale: staleMems,
+          },
+          sessionStartTax: sessionStartSavings,
+          window7d,
+          telemetry: {
+            totalHits,
+            helpedCount: totalHelped,
+            recordedTokensSaved: totalTokensSaved,
+            sessionStartSavedTokens: sessionStartSavings.savedTokens,
+          },
+        };
+        if (showRoi) {
+          doctorJson.roi = buildEvoStatsJson(workspaceRoot);
+        }
+        console.log(JSON.stringify(doctorJson, null, 2));
         break;
       }
+
+      const doctorTermOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
+      const logDoctor = (line: string) => console.log(formatTerminalOutput(line, doctorTermOpts));
 
       const nodeIcon = '[✓]';
       const sqliteIcon = ftsEnabled ? '[✓]' : '[!]';
       const memoryIcon = !hasEvo ? '[!]' : staleMems > 0 ? '[!]' : '[✓]';
       const telemetryIcon = hasEvo ? '[✓]' : '[!]';
       const storageIcon = hasEvo ? '[✓]' : '[!]';
+      const seedIcon =
+        seedInfo.valid.length === 0
+          ? '[!]'
+          : seedInfo.duplicateBlocks > 0 || duplicateRootSeeds || hasVersionDrift
+            ? '[!]'
+            : '[✓]';
       const mcpIcon = staleNpxPath ? '[✗]' : mcpRegistered ? '[✓]' : '[!]';
+      const probeIcon = !probeResult.attempted
+        ? '[!]'
+        : probeResult.reachable
+          ? '[✓]'
+          : '[✗]';
 
-      console.log('🩺 EvoKernel Doctor — Diagnostics Check');
-      console.log(`  ├─ ${nodeIcon} Node.js Runtime       : ${process.version} (${process.execPath})`);
-      console.log(
+      logDoctor(`🩺 EvoKernel Doctor v${EVO_KERNEL_VERSION} — Diagnostics Check`);
+      logDoctor(`  ├─ ${nodeIcon} Node.js Runtime       : ${process.version} (${process.execPath})`);
+      logDoctor(
         `  ├─ ${sqliteIcon} Native node:sqlite    : ${
           ftsEnabled
             ? 'Operational (FTS5 BM25 enabled)'
             : 'Operational (JS BM25 Fallback active — upgrade to Node >=22.16 / 22.23+ or 24+ for native FTS5)'
         }`
       );
-      console.log(
-        `  ├─ ${memoryIcon} Cognitive Memory AST  : ${
+      logDoctor(
+        `  ├─ ${memoryIcon} Cognitive Memory AST* : ${
           hasEvo
             ? `${verifiedMems}/${totalMemories} VERIFIED (${otherBranchMems} OTHER_BRANCH, ${staleMems} STALE)`
             : 'Not initialized (run `evo init` to activate)'
         }`
       );
-      console.log(
-        `  ├─ ${telemetryIcon} Telemetry & ROI       : ${
+      logDoctor(
+        `  ├─ ${telemetryIcon} Session Tax & 7d ROI  : ${
           hasEvo
-            ? `${totalHits} capability hits · ~${estimatedTokensSaved.toLocaleString()} est. tokens saved (measured recalls: ${totalTokensSaved.toLocaleString()} tok · ${totalHelped} verified helped | Core Budget: ${coreRuleTokens}/${maxCoreRuleTokens} tok)`
-            : 'No telemetry yet'
+            ? `Saved ${sessionStartSavings.savingsPercent}% (${sessionStartSavings.beforeTokens.toLocaleString()} → ${sessionStartSavings.afterTokens.toLocaleString()} tok/turn) · 7d: ${window7d.searchEvents} searches, ${window7d.adoptedCount} adopted, ${window7d.helpedCount} helped · ${totalHits} all-time hits (${totalTokensSaved.toLocaleString()} tok reclaimed | Core: ${coreRuleTokens}/${maxCoreRuleTokens} tok)`
+            : 'No telemetry yet (0 recalls)'
         }`
       );
-      console.log(`  ├─ ${storageIcon} .evo/ Storage Tree    : ${hasEvo ? storage.evoDir : 'Not present'}`);
+      logDoctor(`  ├─ ${storageIcon} .evo/ Storage Tree    : ${hasEvo ? storage.evoDir : 'Not present'}`);
+
+      let seedDesc = 'No root L0 seed block detected (run `npx -y evo-kernel init`)';
+      if (seedInfo.valid.length > 0) {
+        seedDesc = `Synced (${seedInfo.valid.join(', ')})`;
+        if (seedInfo.duplicateBlocks > 0) {
+          seedDesc += ` · ⚠️ ${seedInfo.duplicateBlocks} duplicate block(s) inside file`;
+        }
+        if (duplicateRootSeeds) {
+          seedDesc += ' · ⚠️ AGENTS.md and GEMINI.md both contain root seed blocks (run `evo audit`)';
+        }
+      } else if (seedInfo.present.length > 0) {
+        seedDesc = `Present (${seedInfo.present.join(', ')}) without valid EVO:START/END block`;
+      }
+      logDoctor(`  ├─ ${seedIcon} L0 Meta-Rule Seed     : ${seedDesc}`);
+
+      if (hasVersionDrift) {
+        logDoctor(
+          `  ├─ [!] Version Sync          : Drift detected (${versionDriftReasons.join('; ')}) — fix: \`npx -y evo-kernel init\``
+        );
+      }
+
       const mcpConfigDesc = staleNpxPath
-        ? `Stale _npx path detected in ${mcpInfo.foundConfigs.join(', ') || 'MCP config'} — run \`evo init\` to repair`
+        ? `Stale _npx path detected in ${mcpInfo.foundConfigs.join(', ') || 'MCP config'} — run \`npx -y evo-kernel init\` to repair`
         : mcpRegistered
           ? `Registered (${mcpInfo.foundConfigs.join(', ')})`
-          : 'Not configured — run \`evo init\` to register';
-      console.log(`  └─ ${mcpIcon} Meta-MCP Config       : ${mcpConfigDesc}`);
+          : 'Not configured — run `npx -y evo-kernel init` to register';
+      logDoctor(`  ├─ ${mcpIcon} Meta-MCP Config       : ${mcpConfigDesc}`);
+
+      let probeDesc = noProbe
+        ? 'Skipped (--no-probe)'
+        : !mcpRegistered
+          ? 'Skipped (no MCP gateway configured)'
+          : 'Skipped (uninitialized workspace — pass --probe to test global gateway)';
+      if (probeResult.attempted) {
+        probeDesc = probeResult.reachable
+          ? `Reachable in ${probeResult.latencyMs ?? 0}ms (v${probeResult.serverVersion || 'unknown'} · ${probeResult.toolCount}/5 meta-tools verified via ${probeResult.source})`
+          : `Handshake failed via ${probeResult.source} (${probeResult.error || 'unreachable'}) — run \`npx -y evo-kernel init\``;
+      }
+      logDoctor(`  └─ ${probeIcon} MCP Live Handshake    : ${probeDesc}`);
+      if (!showRoi) {
+        logDoctor('  * AST = zero-dep lexical-structural skeleton & call-anchor fingerprinting');
+      }
+
+      if (showRoi) {
+        console.log('');
+        console.log(renderEvoStats(workspaceRoot, doctorTermOpts));
+      }
 
       console.log('');
-      if (hasEvo && mcpRegistered && !staleNpxPath && staleMems === 0) {
-        console.log('  ✅ Verdict: Context OS is healthy and ready.');
+      if (
+        hasEvo &&
+        mcpRegistered &&
+        !staleNpxPath &&
+        staleMems === 0 &&
+        (!probeResult.attempted || probeResult.reachable) &&
+        !hasVersionDrift
+      ) {
+        logDoctor('  ✅ Verdict: Context OS is healthy and ready.');
       } else if (!hasEvo || !mcpRegistered) {
-        console.log('  ⚠️  Verdict: Run `evo init` to wire local workspace');
+        logDoctor('  ⚠️  Verdict: Run `npx -y evo-kernel init` to wire local workspace');
       } else if (staleNpxPath) {
-        console.log('  ⚠️  Verdict: Stale _npx path detected in MCP config — run `evo init` to repair');
+        logDoctor('  ⚠️  Verdict: Stale _npx path detected in MCP config — run `npx -y evo-kernel init` to repair');
+      } else if (probeResult.attempted && !probeResult.reachable) {
+        logDoctor('  ⚠️  Verdict: MCP stdio handshake failed — run `npx -y evo-kernel init` and reload your IDE');
+      } else if (hasVersionDrift) {
+        logDoctor('  ⚠️  Verdict: Workspace version/seed drift detected — run `npx -y evo-kernel init` to sync');
       } else if (staleMems > 0) {
-        console.log(`  ⚠️  Verdict: ${staleMems} stale memory(s) detected — run \`evo memory verify\``);
+        logDoctor(`  ⚠️  Verdict: ${staleMems} stale memory(s) detected — run \`evo memory verify\``);
       } else {
-        console.log('  ⚠️  Verdict: Run `evo doctor` or `evo init` to verify setup');
+        logDoctor('  ⚠️  Verdict: Run `evo doctor` or `npx -y evo-kernel init` to verify setup');
       }
       break;
     }
@@ -1516,7 +2227,12 @@ export function runCli(argv: string[]): void {
         break;
       }
       if (!fileArg) {
-        console.error('❌ Error: Missing target deliverable file path.\n   Usage: evo check <file> [--json]');
+        console.error(
+          formatTerminalOutput(
+            '❌ Error: Missing target deliverable file path.\n   Usage: evo check <file> [--json]',
+            cliTermOpts
+          )
+        );
         const isTestProcess = Boolean(process.argv[1]?.includes('.test.'));
         if (!isTestProcess) {
           process.exit(1);
@@ -1560,6 +2276,7 @@ export function runCli(argv: string[]): void {
       if (isJson) {
         console.log(JSON.stringify(result, null, 2));
       } else {
+        const logCheck = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
         let displayTarget = path.relative(workspaceRoot, targetPath).replace(/\\/g, '/') || fileArg;
         if (displayTarget.startsWith('..')) {
           displayTarget =
@@ -1567,24 +2284,24 @@ export function runCli(argv: string[]): void {
               ? fs.realpathSync.native(targetPath)
               : path.resolve(targetPath);
         }
-        console.log(`🔍 Deliverable Canonical Inspection: ${displayTarget}`);
-        console.log(`  ├─ Format  : ${result.format.toUpperCase()}`);
-        console.log(`  ├─ Status  : ${passed ? '✅ PASSED' : '❌ FAILED'}`);
+        logCheck(`🔍 Deliverable Canonical Inspection: ${displayTarget}`);
+        logCheck(`  ├─ Format  : ${result.format.toUpperCase()}`);
+        logCheck(`  ├─ Status  : ${passed ? '✅ PASSED' : '❌ FAILED'}`);
         const statEntries = Object.entries(result.stats || {});
         if (statEntries.length > 0) {
           const statsStr = statEntries.map(([k, v]) => `${k}=${v}`).join(', ');
-          console.log(`  ├─ Metrics : ${statsStr}`);
+          logCheck(`  ├─ Metrics : ${statsStr}`);
         }
         if (result.defects.length === 0) {
-          console.log(`  └─ Defects : None (0)`);
+          logCheck(`  └─ Defects : None (0)`);
         } else {
-          console.log(`  └─ Defects (${result.defects.length}) :`);
+          logCheck(`  └─ Defects (${result.defects.length}) :`);
           for (let i = 0; i < result.defects.length; i++) {
             const d = result.defects[i];
             const isLast = i === result.defects.length - 1;
             const branch = isLast ? '     └─' : '     ├─';
             const sevBadge = d.severity === 'error' ? '[ERROR]' : '[WARN]';
-            console.log(`${branch} ${sevBadge} ${d.code} @ ${d.location}: ${d.message}`);
+            logCheck(`${branch} ${sevBadge} ${d.code} @ ${d.location}: ${d.message}`);
           }
         }
       }
@@ -1600,35 +2317,43 @@ export function runCli(argv: string[]): void {
 
     case 'uninstall': {
       const res = runUninstall(workspaceRoot);
-      console.log(`🧹 Cleaned EvoKernel markers from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`);
+      console.log(
+        formatTerminalOutput(
+          `🧹 Cleaned EvoKernel markers from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`,
+          cliTermOpts
+        )
+      );
       break;
     }
 
     case 'version':
     case '--version':
     case '-v': {
-      console.log(EVO_KERNEL_VERSION);
+      console.log(formatTerminalOutput(EVO_KERNEL_VERSION, cliTermOpts));
       break;
     }
 
     case 'help':
     case '--help':
     case '-h':
-      printHelp();
+      printHelp(args);
       break;
 
     default: {
       if (cmd && cmd !== 'help' && cmd !== '--help' && cmd !== '-h') {
         const suggestion = suggestClosestToken(cmd, VALID_COMMANDS);
         console.error(
-          `❌ Error: Unknown command '${args[0]}'.${
-            suggestion ? ` Did you mean '${suggestion}'?` : ''
-          } Run 'evo --help' for usage.`
+          formatTerminalOutput(
+            `❌ Error: Unknown command '${args[0]}'.${
+              suggestion ? ` Did you mean '${suggestion}'?` : ''
+            } Run 'evo --help' for usage.`,
+            cliTermOpts
+          )
         );
         handleExit(1);
         return;
       }
-      printHelp();
+      printHelp(args);
       break;
     }
   }

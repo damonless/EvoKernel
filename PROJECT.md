@@ -28,7 +28,7 @@
 | 7 | Center Orthogonal Card Topology | 3-column card topology (Rules -> Memories -> Files) replacing legacy radial radar | M2 | Issue #21 §3.2 |
 | 8 | Topology Focus Dimming | Hover/select dims unrelated nodes to 0.2 opacity and highlights connected paths | M2 | Issue #21 §3.2 |
 | 9 | Center Git Hotspots View | Fragility score table, fix commit counts, bound memory chips, jump-to-source | M2 | Issue #21 §3.2 |
-| 10 | Center Gatekeeper Audit Stream | 4-stage gatekeeper proposal audit timeline and diagnosis inspection | M2 | Issue #21 §3.2 |
+| 10 | Center Gatekeeper Audit Stream | 6-stage gatekeeper proposal audit timeline and diagnosis inspection | M2 | Issue #21 §3.2 |
 | 11 | Right Structured Inspector | Detailed inspector replacing `<pre>` drawer: actions, AST anchors, markdown/editor | M2 | Issue #21 §3.2 |
 | 12 | AST Anchor Code Jump | Clickable `filePath#symbol` anchors invoking editor jump | M2 | Issue #21 §3.2 |
 | 13 | Inspector Inline Editor | Inline textarea and save button to edit rules, memories, and skills markdown | M2 | Issue #21 §3.2 |

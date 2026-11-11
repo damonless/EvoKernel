@@ -7,6 +7,7 @@ import { EvoTelemetry } from '../core/telemetry.js';
 import { parseSymbolTarget } from '../core/memory.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { renderAuditReport, runAudit } from './audit.js';
+import { formatTerminalOutput } from './term.js';
 import type { CapabilityOutcome, RecalledCapabilityEntry } from '../core/types.js';
 
 export function isCapabilityRelevantToModifiedFiles(
@@ -138,6 +139,8 @@ export interface HookOptions {
   targetFile?: string;
   dryRun?: boolean;
   harness?: string;
+  color?: boolean;
+  ascii?: boolean;
 }
 
 export interface HookResult {
@@ -1179,8 +1182,13 @@ export function handleStop(
 export function handlePreCommit(
   workspaceRoot: string,
   _payload: Record<string, unknown>,
-  _options: HookOptions
+  options: HookOptions
 ): HookResult {
+  const termOpts =
+    options.color !== undefined || options.ascii !== undefined
+      ? { color: options.color, ascii: options.ascii }
+      : undefined;
+  const fmt = (s: string) => (termOpts ? formatTerminalOutput(s, termOpts) : s);
   const storage = new EvoStorage(workspaceRoot);
   const stagedFiles = getGitFiles(workspaceRoot, true);
   const forbiddenStaged = stagedFiles.filter((file) => {
@@ -1192,21 +1200,26 @@ export function handlePreCommit(
 
   if (forbiddenStaged.length > 0) {
     if (evoDirExists) {
-      const telemetry = new EvoTelemetry(storage);
       try {
-        const recalled = telemetry.getRecalledCapabilities();
-        const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
-        for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
+        const telemetry = new EvoTelemetry(storage);
+        try {
+          const recalled = telemetry.getRecalledCapabilities();
+          const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
+          for (const c of recalled) {
+            recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
+          }
+        } finally {
+          telemetry.close();
         }
-      } finally {
-        telemetry.close();
+      } catch {
+        // Never mask forbidden-staged block message if cache DB itself is corrupt/locked
       }
     }
-    const err =
+    const err = fmt(
       `❌ [EvoKernel Pre-Commit Hook] COMMIT BLOCKED: Forbidden internal cache or telemetry database file staged:\n` +
-      forbiddenStaged.map((f) => `  - ${f}`).join('\n') +
-      `\nRun \`git reset HEAD <file>\` and ensure it is excluded via \`evo init --stealth\`.`;
+        forbiddenStaged.map((f) => `  - ${f}`).join('\n') +
+        `\nRun \`git reset HEAD <file>\` and ensure it is excluded via \`evo init --stealth\`.`
+    );
     return {
       event: 'pre-commit',
       success: false,
@@ -1219,22 +1232,27 @@ export function handlePreCommit(
   const report = runAudit(workspaceRoot, { includeGlobal: false });
   if (!report.healthy) {
     if (evoDirExists) {
-      const telemetry = new EvoTelemetry(storage);
       try {
-        const recalled = telemetry.getRecalledCapabilities();
-        const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
-        for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
+        const telemetry = new EvoTelemetry(storage);
+        try {
+          const recalled = telemetry.getRecalledCapabilities();
+          const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
+          for (const c of recalled) {
+            recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
+          }
+        } finally {
+          telemetry.close();
         }
-      } finally {
-        telemetry.close();
+      } catch {
+        // Never mask audit failure report if cache DB is corrupt/locked
       }
     }
-    const rendered = renderAuditReport(report);
-    const err =
+    const rendered = renderAuditReport(report, termOpts);
+    const err = fmt(
       `${rendered}\n\n` +
-      `❌ [EvoKernel Pre-Commit Hook] COMMIT BLOCKED: Audit detected invariant violations.\n` +
-      `Resolve rule budget violations (>1500 tokens), domain leaks, or redundancies before committing.`;
+        `❌ [EvoKernel Pre-Commit Hook] COMMIT BLOCKED: Audit detected invariant violations.\n` +
+        `Resolve rule budget violations (>1500 tokens), domain leaks, or redundancies before committing.`
+    );
     return {
       event: 'pre-commit',
       success: false,
@@ -1266,7 +1284,9 @@ export function handlePreCommit(
     event: 'pre-commit',
     success: true,
     exitCode: 0,
-    output: `✅ [EvoKernel Pre-Commit Hook] All checks passed (healthy token budget, zero domain leaks, clean git staging). Commit allowed.`,
+    output: fmt(
+      `✅ [EvoKernel Pre-Commit Hook] All checks passed (healthy token budget, zero domain leaks, clean git staging). Commit allowed.`
+    ),
     auditPassed: true,
   };
 }

@@ -952,6 +952,14 @@ export class EvoMcpDispatcher {
         : '';
 
     if (hits.length === 0) {
+      if (hasLocalEvo && targetCtx.telemetry) {
+        targetCtx.telemetry.recordRecallEvent({
+          eventType: 'search',
+          capabilityId: '__zero_hit__',
+          kind: kind === 'all' ? 'rule' : kind,
+          tier: 'LOCAL',
+        });
+      }
       return {
         content: [
           {
@@ -960,6 +968,16 @@ export class EvoMcpDispatcher {
           },
         ],
       };
+    }
+
+    if (hasLocalEvo && targetCtx.telemetry) {
+      const topNonStale = hits.find((h) => h.memory_status !== 'STALE') || hits[0];
+      targetCtx.telemetry.recordRecallEvent({
+        eventType: 'search',
+        capabilityId: topNonStale ? topNonStale.id : '__zero_hit__',
+        kind: topNonStale ? topNonStale.kind : (kind === 'all' ? 'rule' : kind),
+        tier: topNonStale?.tier || 'LOCAL',
+      });
     }
 
     const teleMap = targetCtx.telemetry ? targetCtx.telemetry.getTelemetryMap() : new Map();
@@ -1073,17 +1091,25 @@ export class EvoMcpDispatcher {
       }
       if (extTool) {
         extTelemetry?.recordUsage(extTool.id, true, 300);
-        if (tier !== 'L1' && hasValidEvoStructure(this.storage.evoDir)) {
+        if (hasValidEvoStructure(this.storage.evoDir)) {
           if (!this.telemetry || this.telemetry.isClosed()) {
             const refreshed = this.getOrCreateContext(this.storage.rootDir);
             this.telemetry = refreshed.telemetry;
             this.gatekeeper = refreshed.gatekeeper;
           }
-          this.telemetry?.recordRecalledCapability({
-            id: extTool.id,
+          this.telemetry?.recordRecallEvent({
+            eventType: 'inspect',
+            capabilityId: extTool.id,
             kind: 'tool',
-            tier: extTelemetry !== this.telemetry ? 'GLOBAL' : 'LOCAL',
+            tier: tier,
           });
+          if (tier !== 'L1') {
+            this.telemetry?.recordRecalledCapability({
+              id: extTool.id,
+              kind: 'tool',
+              tier: extTelemetry !== this.telemetry ? 'GLOBAL' : 'LOCAL',
+            });
+          }
         }
         const stat = getTelemetryStat(extTool.id, extTelemetry);
         const body =
@@ -1108,7 +1134,7 @@ export class EvoMcpDispatcher {
     }
     if (rule) {
       activeTelemetry?.recordUsage(id, true, 250);
-      if (tier !== 'L1' && hasValidEvoStructure(storage.evoDir)) {
+      if (hasValidEvoStructure(storage.evoDir)) {
         if (!telemetry || telemetry.isClosed()) {
           const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
@@ -1119,11 +1145,19 @@ export class EvoMcpDispatcher {
             activeCtx.gatekeeper = refreshed.gatekeeper;
           }
         }
-        (telemetry || this.telemetry)?.recordRecalledCapability({
-          id: rule.id,
+        (telemetry || this.telemetry)?.recordRecallEvent({
+          eventType: 'inspect',
+          capabilityId: rule.id,
           kind: 'rule',
-          tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
+          tier,
         });
+        if (tier !== 'L1') {
+          (telemetry || this.telemetry)?.recordRecalledCapability({
+            id: rule.id,
+            kind: 'rule',
+            tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
+          });
+        }
       }
       const stat = getTelemetryStat(rule.id, activeTelemetry);
       const body =
@@ -1147,7 +1181,7 @@ export class EvoMcpDispatcher {
     }
     if (skill) {
       activeTelemetry?.recordUsage(id, true, 400);
-      if (tier !== 'L1' && hasValidEvoStructure(storage.evoDir)) {
+      if (hasValidEvoStructure(storage.evoDir)) {
         if (!telemetry || telemetry.isClosed()) {
           const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
@@ -1158,11 +1192,19 @@ export class EvoMcpDispatcher {
             activeCtx.gatekeeper = refreshed.gatekeeper;
           }
         }
-        (telemetry || this.telemetry)?.recordRecalledCapability({
-          id: skill.id,
+        (telemetry || this.telemetry)?.recordRecallEvent({
+          eventType: 'inspect',
+          capabilityId: skill.id,
           kind: 'skill',
-          tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
+          tier,
         });
+        if (tier !== 'L1') {
+          (telemetry || this.telemetry)?.recordRecalledCapability({
+            id: skill.id,
+            kind: 'skill',
+            tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
+          });
+        }
       }
       const stat = getTelemetryStat(skill.id, activeTelemetry);
       const body =
@@ -1186,7 +1228,7 @@ export class EvoMcpDispatcher {
     }
     if (tool) {
       activeTelemetry?.recordUsage(id, true, 300);
-      if (tier !== 'L1' && hasValidEvoStructure(storage.evoDir)) {
+      if (hasValidEvoStructure(storage.evoDir)) {
         if (!telemetry || telemetry.isClosed()) {
           const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
@@ -1197,11 +1239,19 @@ export class EvoMcpDispatcher {
             activeCtx.gatekeeper = refreshed.gatekeeper;
           }
         }
-        (telemetry || this.telemetry)?.recordRecalledCapability({
-          id: tool.id,
+        (telemetry || this.telemetry)?.recordRecallEvent({
+          eventType: 'inspect',
+          capabilityId: tool.id,
           kind: 'tool',
-          tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
+          tier,
         });
+        if (tier !== 'L1') {
+          (telemetry || this.telemetry)?.recordRecalledCapability({
+            id: tool.id,
+            kind: 'tool',
+            tier: activeTelemetry !== (telemetry || this.telemetry) ? 'GLOBAL' : 'LOCAL',
+          });
+        }
       }
       const stat = getTelemetryStat(tool.id, activeTelemetry);
       const body =
@@ -1218,7 +1268,7 @@ export class EvoMcpDispatcher {
         includeCallers: tier !== 'L1',
       });
       (telemetry || this.telemetry)?.recordUsage(id, report.overall_status !== 'STALE', 650);
-      if (tier !== 'L1' && hasValidEvoStructure(storage.evoDir)) {
+      if (hasValidEvoStructure(storage.evoDir)) {
         if (!telemetry || telemetry.isClosed()) {
           const refreshed = this.getOrCreateContext(storage.rootDir);
           this.telemetry = refreshed.telemetry;
@@ -1229,11 +1279,21 @@ export class EvoMcpDispatcher {
             activeCtx.gatekeeper = refreshed.gatekeeper;
           }
         }
-        (telemetry || this.telemetry)?.recordRecalledCapability({
-          id: memory.id,
-          kind: 'memory',
-          tier: 'LOCAL',
-        });
+        if (report.overall_status !== 'STALE') {
+          (telemetry || this.telemetry)?.recordRecallEvent({
+            eventType: 'inspect',
+            capabilityId: memory.id,
+            kind: 'memory',
+            tier,
+          });
+        }
+        if (tier !== 'L1') {
+          (telemetry || this.telemetry)?.recordRecalledCapability({
+            id: memory.id,
+            kind: 'memory',
+            tier: 'LOCAL',
+          });
+        }
       }
 
       const driftLines = report.checks.map((c) => {
@@ -1420,6 +1480,14 @@ export class EvoMcpDispatcher {
               kind: 'tool',
               tier: targetCtx !== initialCtx ? 'GLOBAL' : 'LOCAL',
             });
+            if (!res.isError) {
+              initialCtx.telemetry?.recordRecallEvent({
+                eventType: 'run',
+                capabilityId: canonicalExtId,
+                kind: 'tool',
+                tier: targetCtx !== initialCtx ? 'GLOBAL' : 'LOCAL',
+              });
+            }
           }
         } catch {
           // Ignore telemetry error if DB was closed concurrently
@@ -1503,6 +1571,14 @@ export class EvoMcpDispatcher {
             kind: 'tool',
             tier: isGlobalHit ? 'GLOBAL' : 'LOCAL',
           });
+          if (success) {
+            localTel?.recordRecallEvent({
+              eventType: 'run',
+              capabilityId: targetTool.id,
+              kind: 'tool',
+              tier: isGlobalHit ? 'GLOBAL' : 'LOCAL',
+            });
+          }
         }
       } catch {
         // Ignore telemetry error if DB was closed concurrently

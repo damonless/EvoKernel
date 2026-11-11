@@ -361,7 +361,7 @@ function resolveBaseSeedTokens(markerBlock = '') {
         .replace(/\n\n### 5\.[\s\S]*?(?=\n<!-- EVO:END -->)/, '') + '\n';
     return estimateTokens(seedOnly);
   }
-  return 1137;
+  return 920;
 }
 
 const tokenAudit = [];

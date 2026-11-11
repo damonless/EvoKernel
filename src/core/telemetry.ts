@@ -20,6 +20,72 @@ import {
   getCanonicalToken,
 } from './lexicon.js';
 
+export interface RecallWindowStats {
+  days: number;
+  searchEvents: number;
+  inspectEvents: number;
+  runEvents: number;
+  adoptedCount: number;
+  helpedCount: number;
+  uniqueCapabilities: number;
+}
+
+export function emptyRecallWindowStats(days = 7): RecallWindowStats {
+  return {
+    days,
+    searchEvents: 0,
+    inspectEvents: 0,
+    runEvents: 0,
+    adoptedCount: 0,
+    helpedCount: 0,
+    uniqueCapabilities: 0,
+  };
+}
+
+export function readRecallWindowStatsFromDb(db: DatabaseSync, days = 7): RecallWindowStats {
+  const safeDays = Math.max(1, Math.floor(Number(days) || 7));
+  const cutoffIso = new Date(Date.now() - safeDays * 86400000).toISOString();
+  try {
+    const row = db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN event_type = 'search' THEN 1 ELSE 0 END), 0) AS searchEvents,
+           COALESCE(SUM(CASE WHEN event_type = 'inspect' THEN 1 ELSE 0 END), 0) AS inspectEvents,
+           COALESCE(SUM(CASE WHEN event_type = 'run' THEN 1 ELSE 0 END), 0) AS runEvents,
+           COALESCE(SUM(CASE WHEN helped > 0 THEN 1 ELSE 0 END), 0) AS helpedCount,
+           COUNT(DISTINCT CASE WHEN capability_id != '' AND capability_id != '__zero_hit__' THEN capability_id ELSE NULL END) AS uniqueCapabilities
+         FROM recall_events
+         WHERE timestamp >= ?`
+      )
+      .get(cutoffIso) as
+      | {
+          searchEvents?: number;
+          inspectEvents?: number;
+          runEvents?: number;
+          helpedCount?: number;
+          uniqueCapabilities?: number;
+        }
+      | undefined;
+    if (!row) return emptyRecallWindowStats(safeDays);
+    const searchEvents = Number(row.searchEvents || 0);
+    const inspectEvents = Number(row.inspectEvents || 0);
+    const runEvents = Number(row.runEvents || 0);
+    const helpedCount = Number(row.helpedCount || 0);
+    const uniqueCapabilities = Number(row.uniqueCapabilities || 0);
+    return {
+      days: safeDays,
+      searchEvents,
+      inspectEvents,
+      runEvents,
+      adoptedCount: inspectEvents + runEvents,
+      helpedCount,
+      uniqueCapabilities,
+    };
+  } catch {
+    return emptyRecallWindowStats(safeDays);
+  }
+}
+
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -629,6 +695,18 @@ export class EvoTelemetry {
         cached_at TEXT NOT NULL,
         has_callers INTEGER NOT NULL DEFAULT 0
       );
+
+      CREATE TABLE IF NOT EXISTS recall_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        capability_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        tier TEXT,
+        helped INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_recall_events_ts ON recall_events(timestamp);
     `);
 
     try {
@@ -1659,6 +1737,75 @@ export class EvoTelemetry {
         // Ignore fallback insert collision
       }
     }
+
+    if (outcome === 'helped') {
+      try {
+        const recentCutoff = new Date(Date.now() - 86400000).toISOString();
+        const upd = this.db
+          .prepare(
+            `UPDATE recall_events
+             SET helped = 1
+             WHERE id = (
+               SELECT id FROM recall_events
+               WHERE (capability_id = ? OR capability_id = ?)
+                 AND helped = 0
+                 AND timestamp >= ?
+               ORDER BY id DESC
+               LIMIT 1
+             )`
+          )
+          .run(rawId, cleanId, recentCutoff);
+        if (upd.changes === 0) {
+          const rule = this.storage.getRule(cleanId);
+          const skill = this.storage.getSkill(cleanId);
+          const tool = this.storage.getTool(cleanId);
+          const memory = this.storage.getMemory(cleanId);
+          const kind = rule ? 'rule' : skill ? 'skill' : tool ? 'tool' : memory ? 'memory' : 'rule';
+          this.db
+            .prepare(
+              `INSERT INTO recall_events (timestamp, event_type, capability_id, kind, tier, helped)
+               VALUES (?, 'outcome', ?, ?, 'LOCAL', 1)`
+            )
+            .run(new Date().toISOString(), cleanId, kind);
+        }
+      } catch {
+        // Ignore if DB is read-only or closed
+      }
+    }
+  }
+
+  public recordRecallEvent(event: {
+    eventType: 'search' | 'inspect' | 'run';
+    capabilityId: string;
+    kind: string;
+    tier?: string;
+    helped?: boolean;
+  }): void {
+    if (this.closed) return;
+    const capId = String(event.capabilityId || '').trim();
+    if (!capId) return;
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO recall_events (timestamp, event_type, capability_id, kind, tier, helped)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          new Date().toISOString(),
+          event.eventType,
+          capId,
+          String(event.kind || 'rule'),
+          event.tier ? String(event.tier) : null,
+          event.helped ? 1 : 0
+        );
+    } catch {
+      // Ignore write failures
+    }
+  }
+
+  public getWindowStats(days = 7): RecallWindowStats {
+    if (this.closed) return emptyRecallWindowStats(days);
+    return readRecallWindowStatsFromDb(this.db, days);
   }
 
   public setSessionFlag(key: string, value: string): void {

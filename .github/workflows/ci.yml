@@ -47,3 +47,47 @@ jobs:
         run: |
           node ./dist/cli/index.js score --json
           node ./dist/cli/index.js ui --export ./evo-cockpit.html
+
+      - name: "Verify npm Tarball Allowlist (npm pack --dry-run --json)"
+        shell: bash
+        run: |
+          PACK_JSON_OUT="${RUNNER_TEMP:-/tmp}/evo-pack-dry-run.json"
+          npm pack --dry-run --json > "$PACK_JSON_OUT"
+          PACK_JSON_OUT="$PACK_JSON_OUT" node -e '
+            const fs = require("node:fs");
+            const packFile = process.env.PACK_JSON_OUT;
+            const raw = fs.readFileSync(packFile, "utf8");
+            const jsonStart = raw.search(/\[\s*\{/);
+            const jsonEnd = raw.lastIndexOf("]");
+            if (jsonStart === -1 || jsonEnd <= jsonStart) {
+              throw new Error("Invalid npm pack JSON output:\n" + raw);
+            }
+            const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
+            const paths = (parsed[0]?.files || []).map((f) => String(f.path).replace(/\\/g, "/"));
+            for (const reqPath of [
+              "bin/evo.mjs",
+              "dist/index.js",
+              "dist/cli/index.js",
+              "scripts/antigravity_hook.mjs",
+              "scripts/boot-mcp.mjs",
+              "scripts/build.mjs",
+            ]) {
+              if (!paths.includes(reqPath)) {
+                throw new Error("Missing required runtime file in tarball (" + reqPath + "): " + JSON.stringify(paths));
+              }
+            }
+            const forbidden = paths.filter((p) =>
+              p.startsWith("dist/tests/") ||
+              p.startsWith("public/") ||
+              p.startsWith("benchmarks/") ||
+              p === "scripts/build-pages.mjs" ||
+              p === "scripts/render-promo-assets.mjs" ||
+              p === "scripts/test.mjs" ||
+              p === "scripts/demo.tape"
+            );
+            if (forbidden.length > 0) {
+              throw new Error("Forbidden dev/test files leaked into npm tarball: " + forbidden.join(", "));
+            }
+            try { fs.unlinkSync(packFile); } catch {}
+            console.log("Verified clean npm tarball (" + paths.length + " files, 0 test/promo leaks).");
+          '

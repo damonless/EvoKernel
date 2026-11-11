@@ -131,7 +131,7 @@
     <g transform="translate(754, 0)">
       <rect width="350" height="32" rx="7" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)" class="tab-3-box"/>
       <circle cx="16" cy="16" r="4" fill="#10b981"/>
-      <text x="28" y="20" fill="#f8fafc">03 · DELIVERABLE &amp; COCKPIT <tspan fill="#64748b" font-weight="500">(:4310 UI)</tspan></text>
+      <text x="28" y="20" fill="#f8fafc">03 · EVOKERNEL WORKBENCH <tspan fill="#64748b" font-weight="500">(:4310 UI)</tspan></text>
     </g>
   </g>
 
@@ -192,10 +192,10 @@
           <g transform="translate(358, 0)">
             <rect width="340" height="156" rx="10" fill="rgba(56,189,248,0.07)" stroke="rgba(56,189,248,0.3)"/>
             <text x="18" y="28" class="mono" font-size="11" font-weight="700" fill="#38bdf8">02 · PROMPT TAX SAVED</text>
-            <text x="18" y="68" class="mono" font-size="34" font-weight="900" fill="#38bdf8">-89%</text>
-            <text x="136" y="62" class="mono" font-size="13" font-weight="700" fill="#94a3b8">SAVINGS</text>
-            <text x="18" y="104" class="sans" font-size="12" fill="#cbd5e1">1,531 tok L0 vs 13,672 tok Eager</text>
-            <text x="18" y="124" class="mono" font-size="10.5" fill="#38bdf8">✓ 12,141 tok/turn returned to LLM</text>
+            <text x="18" y="68" class="mono" font-size="34" font-weight="900" fill="#38bdf8">-88.7%</text>
+            <text x="172" y="62" class="mono" font-size="13" font-weight="700" fill="#94a3b8">SAVINGS</text>
+            <text x="18" y="104" class="sans" font-size="12" fill="#cbd5e1">3,066 tok L0 vs 27,150 tok Eager</text>
+            <text x="18" y="124" class="mono" font-size="10.5" fill="#38bdf8">✓ 24,084 tok/turn returned to LLM</text>
           </g>
 
           <!-- Card 3: AST Memory Protection -->
@@ -204,8 +204,8 @@
             <text x="18" y="28" class="mono" font-size="11" font-weight="700" fill="#cbd5e1">03 · AST MEMORY GUARD</text>
             <text x="18" y="68" class="mono" font-size="34" font-weight="900" fill="#ffffff">10<tspan font-size="18" fill="#34d399">/10</tspan></text>
             <text x="100" y="62" class="mono" font-size="12" font-weight="700" fill="#34d399">HOTSPOTS</text>
-            <text x="18" y="104" class="sans" font-size="12" fill="#cbd5e1">16/16 AST Memories [VERIFIED]</text>
-            <text x="18" y="124" class="mono" font-size="10.5" fill="#34d399">✓ 0 Stale Anchors · &lt;0.05ms Recall</text>
+            <text x="18" y="104" class="sans" font-size="12" fill="#cbd5e1">36/36 AST* Memories [VERIFIED]</text>
+            <text x="18" y="124" class="mono" font-size="10.5" fill="#34d399">✓ 0 Stale Anchors · &lt;0.35ms/mem</text>
           </g>
 
           <!-- Benchmark Execution Footer -->
@@ -251,7 +251,7 @@
             <!-- Harness 3 -->
             <rect x="536" y="0" width="252" height="42" rx="7" fill="rgba(16,185,129,0.12)" stroke="#10b981"/>
             <text x="550" y="26" fill="#ffffff" font-weight="700">✓ Codex CLI</text>
-            <text x="668" y="26" fill="#34d399" font-size="9.5">.codex/rules</text>
+            <text x="652" y="26" fill="#34d399" font-size="9">.codex/config.toml</text>
 
             <!-- Harness 4 -->
             <rect x="804" y="0" width="252" height="42" rx="7" fill="rgba(56,189,248,0.12)" stroke="#38bdf8"/>
@@ -265,7 +265,7 @@
               <rect width="520" height="88" rx="8" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.09)"/>
               <text x="16" y="24" class="sans" font-size="12" font-weight="700" fill="#38bdf8">📦 MCP Virtualization Pool (.evo/mcp-pool.json)</text>
               <text x="16" y="46" class="mono" font-size="11" fill="#cbd5e1">Folded 8 third-party MCPs into 5 meta-tools (77 tools virtualized)</text>
-              <text x="16" y="68" class="mono" font-size="10" fill="#94a3b8">github • postgres • playwright • docker • sentry • slack • memory</text>
+              <text x="16" y="68" class="mono" font-size="9.5" fill="#94a3b8">github • playwright • kubernetes • docker • linear • postgres • sentry • context7</text>
             </g>
 
             <g transform="translate(536, 0)">
@@ -293,43 +293,43 @@
             <tspan fill="#10b981">developer@workstation</tspan><tspan fill="#64748b">:</tspan><tspan fill="#38bdf8">~/my-project</tspan><tspan fill="#ffffff">$ </tspan>
           </text>
           <g clip-path="url(#clipType3)">
-            <text x="290" y="0" class="mono" font-size="12" font-weight="700" fill="#ffffff">npx -y evo-kernel check ./report.xlsx &amp;&amp; npx -y evo-kernel ui --open</text>
+            <text x="290" y="0" class="mono" font-size="12" font-weight="700" fill="#ffffff">npx -y evo-kernel ui</text>
           </g>
           <g>
-            <animateTransform attributeName="transform" type="translate" values="-476 0; -476 0; 0 0; 0 0" keyTimes="0; 0.66; 0.74; 1" dur="12s" repeatCount="indefinite"/>
-            <rect x="766" y="-12" width="8" height="15" fill="#10b981" class="cursor"/>
+            <animateTransform attributeName="transform" type="translate" values="-160 0; -160 0; 0 0; 0 0" keyTimes="0; 0.66; 0.74; 1" dur="12s" repeatCount="indefinite"/>
+            <rect x="450" y="-12" width="8" height="15" fill="#10b981" class="cursor"/>
           </g>
         </g>
 
         <!-- Act 3 Results -->
         <g transform="translate(0, 46)">
-          <!-- Top Card: Canonical Deliverable Verification -->
+          <!-- Top Card: Live MCP Handshake & Recall Readiness -->
           <g transform="translate(0, 0)">
             <rect width="1056" height="88" rx="10" fill="rgba(16,185,129,0.08)" stroke="rgba(16,185,129,0.35)"/>
             <circle cx="28" cy="28" r="10" fill="#10b981"/>
             <text x="28" y="32" class="mono" font-size="12" font-weight="900" fill="#ffffff" text-anchor="middle">✓</text>
-            <text x="50" y="32" class="sans" font-size="14" font-weight="800" fill="#ffffff">Canonical Deliverable Inspection: <tspan fill="#34d399">PASSED (0 Defects)</tspan></text>
-            <text x="50" y="54" class="mono" font-size="11" fill="#cbd5e1">Target: ./report.xlsx (4 worksheets, 1,280 cells, zero formula drift)</text>
-            <text x="50" y="72" class="mono" font-size="10.5" fill="#94a3b8">Strict CSP active · Zero third-party script execution · Verified in 24ms</text>
+            <text x="50" y="32" class="sans" font-size="14" font-weight="800" fill="#ffffff">MCP Handshake &amp; AST Memory Guard: <tspan fill="#34d399">ACTIVE (5/5 Tools · Saved 88.7%)</tspan></text>
+            <text x="50" y="54" class="mono" font-size="11" fill="#cbd5e1">Session-Start Prefix: 27,150 → 3,066 tok/turn · Visible 🛡️ EvoKernel Recall Receipts</text>
+            <text x="50" y="72" class="mono" font-size="10.5" fill="#94a3b8">Strict SHA-256 CSP active · Zero external dependencies · 100% local SQLite</text>
           </g>
 
-          <!-- Bottom 2 Cards: Live Cockpit & SQLite -->
+          <!-- Bottom 2 Cards: Live EvoKernel Workbench & SQLite -->
           <g transform="translate(0, 102)">
             <g transform="translate(0, 0)">
               <rect width="520" height="106" rx="10" fill="rgba(56,189,248,0.08)" stroke="rgba(56,189,248,0.35)"/>
-              <text x="18" y="28" class="sans" font-size="13" font-weight="800" fill="#ffffff">🌐 Live Obsidian Cockpit Server</text>
+              <text x="18" y="28" class="sans" font-size="13" font-weight="800" fill="#ffffff">🖥️ EvoKernel Workbench</text>
               <rect x="18" y="40" width="310" height="26" rx="6" fill="#04060a" stroke="rgba(56,189,248,0.3)"/>
               <text x="28" y="57" class="mono" font-size="12" font-weight="700" fill="#38bdf8">http://127.0.0.1:4310</text>
               <rect x="340" y="40" width="160" height="26" rx="6" fill="rgba(16,185,129,0.2)"/>
-              <text x="420" y="57" class="mono" font-size="10.5" font-weight="700" fill="#34d399" text-anchor="middle">Watch 30s Film</text>
-              <text x="18" y="90" class="mono" font-size="10.5" fill="#94a3b8">Zero-write telemetry &amp; 2D token budget treemap</text>
+              <text x="420" y="57" class="mono" font-size="10.5" font-weight="700" fill="#34d399" text-anchor="middle">SSE Live Sync</text>
+              <text x="18" y="90" class="mono" font-size="10.5" fill="#94a3b8">AST Topology, 7-Day Recall &amp; Gatekeeper Audit</text>
             </g>
 
             <g transform="translate(536, 0)">
               <rect width="520" height="106" rx="10" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.09)"/>
               <text x="18" y="28" class="sans" font-size="13" font-weight="800" fill="#ffffff">📊 Native node:sqlite Telemetry Store</text>
               <text x="18" y="52" class="mono" font-size="11" fill="#cbd5e1">WAL Mode • FTS5 Full-Text • Causal ROI Tracker</text>
-              <text x="18" y="72" class="mono" font-size="10.5" fill="#34d399">✓ 16/16 AST Memories Verified in &lt;0.05ms</text>
+              <text x="18" y="72" class="mono" font-size="10.5" fill="#34d399">✓ 36/36 AST* Memories Verified (&lt;0.35ms/mem)</text>
               <text x="18" y="90" class="mono" font-size="10" fill="#64748b">Press 'q' or Ctrl+C in terminal to stop server</text>
             </g>
           </g>

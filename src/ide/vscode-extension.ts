@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { buildUiSnapshot } from '../cli/ui.js';
 import type { UiSnapshot } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { EvoStorage, estimateTokens, findNearestEvoWorkspace, parseFrontmatter, sanitizeId } from '../core/storage.js';
+import { EvoStorage, estimateTokens, findNearestEvoWorkspace, openSqliteReadOnly, parseFrontmatter, sanitizeId } from '../core/storage.js';
 import type { ConfidenceLevel, EvoKind, ProposalPayload, SymbolFingerprint } from '../core/types.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import {
@@ -308,7 +308,7 @@ export async function handleWebviewAction(
         const dbPath = path.join(storage.cacheDir, 'telemetry.db');
         let cacheDb: DatabaseSync | undefined;
         try {
-          if (fs.existsSync(dbPath)) cacheDb = new DatabaseSync(dbPath, { readOnly: true });
+          if (fs.existsSync(dbPath)) cacheDb = openSqliteReadOnly(dbPath);
           const updatedItems = targetMemories.map((m) => {
             const v = verifyMemoryFreshness(ws, m, { includeCallers: true, cacheDb });
             const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
@@ -384,7 +384,7 @@ export async function handleWebviewAction(
         const reason =
           typeof params.reason === 'string' && params.reason.trim()
             ? params.reason.trim()
-            : 'Archived via EvoKernel Workbench 2.0';
+            : 'Archived via EvoKernel Workbench';
 
         const storage = new EvoStorage(ws);
         const archived = storage.archiveCapability(cleanId, rawKind as EvoKind, reason);
@@ -980,7 +980,7 @@ export async function handleWebviewAction(
             const dbPath = path.join(storage.cacheDir, 'telemetry.db');
             let cacheDb: DatabaseSync | undefined;
             try {
-              if (fs.existsSync(dbPath)) cacheDb = new DatabaseSync(dbPath, { readOnly: true });
+              if (fs.existsSync(dbPath)) cacheDb = openSqliteReadOnly(dbPath);
               verifyMemoryFreshness(ws, updatedMem, { includeCallers: true, cacheDb });
             } finally {
               if (cacheDb) try { cacheDb.close(); } catch {}
@@ -1036,7 +1036,7 @@ export async function activate(
 
     const panel = vscode.window.createWebviewPanel(
       'evoWorkbench',
-      'EvoKernel Workbench 2.0',
+      'EvoKernel Workbench',
       vscode?.ViewColumn?.One ?? 1,
       {
         enableScripts: true,

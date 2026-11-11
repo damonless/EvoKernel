@@ -305,7 +305,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.match(treeOutput, /bug-to-guardrail-sop/);
 
       const statsOutput = renderEvoStats(ws);
-      assert.match(statsOutput, /100% \(Fixed 5-Tool Meta-MCP Signature\)/);
+      assert.match(statsOutput, /Fixed 5-Tool Meta-MCP/);
 
       const uninst = runUninstall(ws);
       assert.ok(uninst.cleanedFiles.includes('CLAUDE.md'));
@@ -1531,7 +1531,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       assert.equal(linkRes.linkedSharedEvoDir, path.join(masterClone, '.evo'));
       const agentsText = fs.readFileSync(path.join(siblingClone, 'AGENTS.md'), 'utf8');
-      assert.match(agentsText, /🧬 EvoKernel 演进回执/);
+      assert.match(agentsText, /🧬 EvoKernel Evolution Receipt/);
 
       const siblingStorage = new EvoStorage(siblingClone);
       assert.equal(siblingStorage.rootDir, path.resolve(siblingClone));
@@ -2848,7 +2848,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       // 2. Verify META-RULE-TOOL-CATALOG-3: AGENTS.md, GEMINI.md, CLAUDE.md contain Section 5 with `[tool] 3ku-hw-query`
       for (const rf of ['AGENTS.md', 'GEMINI.md', 'CLAUDE.md']) {
         const content = fs.readFileSync(path.join(ws, rf), 'utf8');
-        assert.match(content, /### 5\. 已注册受控微工具目录/);
+        assert.match(content, /### 5\. Registered Micro-Tools via `evo_run`/);
         assert.match(content, /`\[tool\] 3ku-hw-query`: Queries 3KU components/);
       }
 
@@ -3467,7 +3467,12 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     const repoRoot = path.resolve(import.meta.dirname, '..', '..');
     const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     assert.equal(pkg.scripts?.prepack, 'node ./scripts/build.mjs');
-    assert.ok(Array.isArray(pkg.files) && pkg.files.includes('dist') && pkg.files.includes('scripts'));
+    assert.ok(
+      Array.isArray(pkg.files) &&
+        pkg.files.includes('dist/cli') &&
+        pkg.files.includes('scripts/boot-mcp.mjs') &&
+        pkg.files.includes('scripts/build.mjs')
+    );
     assert.ok(fs.existsSync(path.join(repoRoot, 'scripts', 'boot-mcp.mjs')));
 
     const mockCloneDir = createTempWorkspace();

@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.3.0",
   "maxCoreRuleTokens": 1500,
   "maxL0SummaryChars": 140,
   "duplicateBm25Threshold": 0.68,

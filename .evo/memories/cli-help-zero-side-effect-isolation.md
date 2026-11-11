@@ -2,14 +2,14 @@
 id: cli-help-zero-side-effect-isolation
 title: "CLI Help Early Interception and Transient DB Protection"
 l0_summary: "CLI --help/-h must intercept before fallback seeding and mutating handlers"
-created_commit: "afda80b"
+created_commit: "4eee875"
 created_branch: "main"
 target_symbols: ["src/cli/index.ts#runCli","src/cli/ui.ts#buildUiSnapshot"]
-ast_fingerprints: {"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":887,"end_line":1635,"signature":"export function runCli(argv: string[]): void","ast_hash":"5000b80780fc1ce9"},"src/cli/ui.ts#buildUiSnapshot":{"symbol":"src/cli/ui.ts#buildUiSnapshot","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":42,"end_line":226,"signature":"export function buildUiSnapshot(","ast_hash":"e90113eb6c6449db"}}
+ast_fingerprints: {"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1313,"end_line":2360,"signature":"export function runCli(argv: string[]): void","ast_hash":"2f942e80ff6648ae"},"src/cli/ui.ts#buildUiSnapshot":{"symbol":"src/cli/ui.ts#buildUiSnapshot","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":92,"end_line":478,"signature":"export function buildUiSnapshot(","ast_hash":"fb0b88b1f5066e04"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-04T16:48:58.119Z"
-updated_at: "2026-11-10T17:54:29.873Z"
+updated_at: "2026-11-11T07:46:22.326Z"
 ---
 
 ## Symptom

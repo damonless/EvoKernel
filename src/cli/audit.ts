@@ -5,9 +5,11 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   EvoStorage,
   estimateTokens,
+  openSqliteReadOnly,
   parseFrontmatter,
   sanitizeId,
 } from '../core/storage.js';
+import { formatTerminalOutput } from './term.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import {
   EvoGatekeeper,
@@ -781,6 +783,35 @@ export function auditHarnessSurfaces(
     }
   }
 
+  // Warn specifically when both AGENTS.md and GEMINI.md contain <!-- EVO:START --> in the same workspace root.
+  // Note: CLAUDE.md (Claude Code) and AGENTS.md (Codex/Antigravity/OpenCode) serve disjoint hosts and do not collide.
+  const rootAgentsPath = path.join(root, 'AGENTS.md');
+  const rootGeminiPath = path.join(root, 'GEMINI.md');
+  if (fs.existsSync(rootAgentsPath) && fs.existsSync(rootGeminiPath)) {
+    try {
+      if (fs.statSync(rootAgentsPath).isFile() && fs.statSync(rootGeminiPath).isFile()) {
+        const agentsRaw = fs.readFileSync(rootAgentsPath, 'utf8');
+        const geminiRaw = fs.readFileSync(rootGeminiPath, 'utf8');
+        const hasAgentsSeed =
+          agentsRaw.includes('<!-- EVO:START -->') && agentsRaw.includes('<!-- EVO:END -->');
+        const hasGeminiSeed =
+          geminiRaw.includes('<!-- EVO:START -->') && geminiRaw.includes('<!-- EVO:END -->');
+        if (hasAgentsSeed && hasGeminiSeed) {
+          violations.push({
+            harness: 'gemini',
+            displayPath: 'GEMINI.md',
+            severity: 'warning',
+            code: 'DUPLICATE_WORKSPACE_ROOT_EVO_START',
+            message:
+              'Root rule file GEMINI.md duplicates the <!-- EVO:START --> seed block already present in AGENTS.md (AGENTS.md, GEMINI.md); hosts that ingest both root Markdown files double-load L0 seed tokens.',
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   return violations;
 }
 
@@ -1087,7 +1118,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   if (fs.existsSync(dbPath)) {
     let db: DatabaseSync | undefined;
     try {
-      db = new DatabaseSync(dbPath, { readOnly: true });
+      db = openSqliteReadOnly(dbPath);
       const stmt = db.prepare(`
         SELECT id, kind, helped_count, hurt_count, contested_count
         FROM telemetry
@@ -1145,7 +1176,10 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   };
 }
 
-export function renderAuditReport(report: AuditReport): string {
+export function renderAuditReport(
+  report: AuditReport,
+  options?: { color?: boolean; ascii?: boolean }
+): string {
   const lines: string[] = [];
   lines.push('╭──────────────────────────────────────────────────────────────────────────╮');
   lines.push('│ 🩺 EvoKernel Rule & Skill Architecture Audit (`evo audit`)               │');
@@ -1246,7 +1280,7 @@ export function renderAuditReport(report: AuditReport): string {
     );
   }
 
-  return lines.join('\n');
+  return formatTerminalOutput(lines.join('\n'), options);
 }
 
 export function ensureRuleArchitectSkill(workspaceRoot: string): EvoSkill {
@@ -1622,7 +1656,10 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
   };
 }
 
-export function renderRefactorReport(result: RefactorResult): string {
+export function renderRefactorReport(
+  result: RefactorResult,
+  options?: { color?: boolean; ascii?: boolean }
+): string {
   const lines: string[] = [];
   lines.push('╭──────────────────────────────────────────────────────────────────────────╮');
   lines.push('│ 🔧 EvoKernel 4-Stage Rule & Skill Decoupling Engine (`evo refactor`)     │');
@@ -1652,5 +1689,5 @@ export function renderRefactorReport(result: RefactorResult): string {
     );
   }
 
-  return lines.join('\n');
+  return formatTerminalOutput(lines.join('\n'), options);
 }

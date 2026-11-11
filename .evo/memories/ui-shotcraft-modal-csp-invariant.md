@@ -2,14 +2,14 @@
 id: ui-shotcraft-modal-csp-invariant
 title: "Interactive Theater Modal CSP & Constellation Cutout Invariants"
 l0_summary: "Interactive Theater Modal CSP & Constellation Cutout Scaling Invariant"
-created_commit: "afda80b"
+created_commit: "4eee875"
 created_branch: "main"
-target_symbols: ["src/templates/ui-client.ts#renderUiClientHtml","src/cli/score.ts#renderScoreSvg","scripts/render-promo-assets.mjs#constCutoutCss"]
-ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":4246,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"de9c5e8612edcdcb"},"src/cli/score.ts#renderScoreSvg":{"symbol":"src/cli/score.ts#renderScoreSvg","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":869,"end_line":997,"signature":"export function renderScoreSvg(report: ScoreReport): string","ast_hash":"836dbfe562cc3329"},"scripts/render-promo-assets.mjs#constCutoutCss":{"symbol":"scripts/render-promo-assets.mjs#constCutoutCss","file_path":"scripts/render-promo-assets.mjs","file":"scripts/render-promo-assets.mjs","kind":"variable","start_line":134,"end_line":189,"signature":"const constCutoutCss = `","ast_hash":"843b93003a643443"}}
+target_symbols: ["src/templates/ui-client.ts#renderUiClientHtml","src/cli/score.ts#renderScoreSvg","scripts/render-promo-assets.mjs#findBrowserExecutable"]
+ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":5769,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"f5a92b27b9f5d033"},"src/cli/score.ts#renderScoreSvg":{"symbol":"src/cli/score.ts#renderScoreSvg","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":999,"end_line":1128,"signature":"export function renderScoreSvg(report: ScoreReport): string","ast_hash":"31a2124f6b86b44c"},"scripts/render-promo-assets.mjs#findBrowserExecutable":{"symbol":"scripts/render-promo-assets.mjs#findBrowserExecutable","file_path":"scripts/render-promo-assets.mjs","file":"scripts/render-promo-assets.mjs","kind":"function","start_line":26,"end_line":42,"signature":"function findBrowserExecutable()","ast_hash":"c46a20bf576b248a"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-04T19:20:13.278Z"
-updated_at: "2026-11-10T17:54:30.870Z"
+updated_at: "2026-11-11T06:14:50.462Z"
 ---
 
 ## Symptom

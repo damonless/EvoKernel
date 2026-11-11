@@ -1,9 +1,17 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DEFAULT_EVO_CONFIG, EvoStorage, hasValidEvoStructure } from '../core/storage.js';
+import {
+  DEFAULT_EVO_CONFIG,
+  EvoStorage,
+  META_MCP_5_TOOLS_TOKENS,
+  hasValidEvoStructure,
+  openSqliteReadOnly,
+} from '../core/storage.js';
+import { emptyRecallWindowStats, readRecallWindowStatsFromDb } from '../core/telemetry.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
-import { truncateTerminalLine } from './term.js';
+import { buildScoreReport } from './score.js';
+import { formatTerminalOutput, truncateTerminalLine } from './term.js';
 
 interface ReadOnlyTelemetryStat {
   id: string;
@@ -16,12 +24,32 @@ interface ReadOnlyTelemetryStat {
   contested_count: number;
 }
 
+const WORKSPACE_MCP_CONFIG_REL_PATHS = [
+  '.mcp.json',
+  '.cursor/mcp.json',
+  '.vscode/mcp.json',
+  '.gemini/settings.json',
+  '.codex/config.toml',
+  'opencode.json',
+  '.windsurf/mcp.json',
+  '.windsurf/mcp_config.json',
+  '.cline/mcp.json',
+  '.roo/mcp.json',
+  'mcp_config.json',
+];
+
+function hasWorkspaceMcpConfig(workspaceRoot: string): boolean {
+  return WORKSPACE_MCP_CONFIG_REL_PATHS.some((rel) =>
+    fs.existsSync(path.join(workspaceRoot, rel))
+  );
+}
+
 function loadReadOnlyTelemetryMap(telemetryDbPath: string): Map<string, ReadOnlyTelemetryStat> {
   const map = new Map<string, ReadOnlyTelemetryStat>();
   if (!fs.existsSync(telemetryDbPath)) return map;
   let db: DatabaseSync | undefined;
   try {
-    db = new DatabaseSync(telemetryDbPath, { readOnly: true });
+    db = openSqliteReadOnly(telemetryDbPath);
     const rows = db
       .prepare(
         'SELECT id, hit_count, success_count, fail_count, tokens_saved, helped_count, hurt_count, contested_count FROM telemetry'
@@ -94,7 +122,7 @@ function probeWorkspaceHarnesses(workspaceRoot: string): string[] {
 
 export function renderEvoTree(
   workspaceRoot: string,
-  options?: { full?: boolean; maxCols?: number }
+  options?: { full?: boolean; maxCols?: number; color?: boolean; ascii?: boolean }
 ): string {
   const storage = new EvoStorage(workspaceRoot);
   const hasEvo = hasValidEvoStructure(storage.evoDir);
@@ -166,7 +194,7 @@ export function renderEvoTree(
   let treeCacheDb: DatabaseSync | undefined;
   if (hasEvo && fs.existsSync(cacheDbPath)) {
     try {
-      treeCacheDb = new DatabaseSync(cacheDbPath, { readOnly: true });
+      treeCacheDb = openSqliteReadOnly(cacheDbPath);
     } catch {}
   }
   let verifications: Array<{ memory: any; report: any }> = [];
@@ -211,12 +239,18 @@ export function renderEvoTree(
     });
   }
 
-  return lines
+  const formattedLines = lines.map((line) =>
+    formatTerminalOutput(line, { color: options?.color, ascii: options?.ascii })
+  );
+  return formattedLines
     .map((line) => truncateTerminalLine(line, options?.maxCols, options?.full))
     .join('\n');
 }
 
-export function renderEvoStats(workspaceRoot: string): string {
+export function renderEvoStats(
+  workspaceRoot: string,
+  options?: { color?: boolean; ascii?: boolean }
+): string {
   const storage = new EvoStorage(workspaceRoot);
   const hasEvo = hasValidEvoStructure(storage.evoDir);
   const tMap = hasEvo ? loadReadOnlyTelemetryMap(storage.telemetryDbPath) : new Map();
@@ -231,13 +265,25 @@ export function renderEvoStats(workspaceRoot: string): string {
 
   let verifiedMemories = 0;
   let branchMemories = 0;
+  let window7d = emptyRecallWindowStats(7);
   const statsCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
   let statsCacheDb: DatabaseSync | undefined;
   if (hasEvo && fs.existsSync(statsCacheDbPath)) {
     try {
-      statsCacheDb = new DatabaseSync(statsCacheDbPath, { readOnly: true });
+      statsCacheDb = openSqliteReadOnly(statsCacheDbPath);
+      window7d = readRecallWindowStatsFromDb(statsCacheDb, 7);
     } catch {}
   }
+
+  const hasMcpConfig = hasWorkspaceMcpConfig(workspaceRoot);
+
+  let sessionStartSavings = {
+    beforeTokens: 0,
+    afterTokens: 0,
+    savedTokens: 0,
+    savingsPercent: 0,
+  };
+
   try {
     for (const m of memories) {
       const rep = verifyMemoryFreshness(storage.rootDir, m, {
@@ -246,6 +292,13 @@ export function renderEvoStats(workspaceRoot: string): string {
       });
       if (rep.overall_status === 'VERIFIED') verifiedMemories++;
       else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
+    }
+    if (hasEvo || hasMcpConfig) {
+      const scoreRep = buildScoreReport(storage.rootDir, {
+        includeGlobal: false,
+        cacheDb: statsCacheDb,
+      });
+      sessionStartSavings = scoreRep.contextSavings;
     }
   } finally {
     if (statsCacheDb) {
@@ -270,9 +323,6 @@ export function renderEvoStats(workspaceRoot: string): string {
     totalHelped += rec.helped_count;
   }
 
-  // Prompt cache preservation savings estimate:
-  // Exposing N dynamic tools directly would bust prompt cache on every tool change (~4,500 tokens per turn).
-  const cacheProtectedTokens = tools.length * 1200 + memories.length * 650 + totalTokensSaved;
   const pctBudget = Math.min(100, Math.round((totalTokens / config.maxCoreRuleTokens) * 100));
   const filledBars = Math.round((pctBudget / 100) * 20);
   const progressBar = '█'.repeat(filledBars) + '░'.repeat(Math.max(0, 20 - filledBars));
@@ -282,14 +332,14 @@ export function renderEvoStats(workspaceRoot: string): string {
       ? `${((totalSuccess / (totalSuccess + totalFail)) * 100).toFixed(1)}%`
       : '— (0 runs)';
 
-  const hasMcpConfig =
-    fs.existsSync(path.join(workspaceRoot, '.mcp.json')) ||
-    fs.existsSync(path.join(workspaceRoot, '.cursor', 'mcp.json')) ||
-    fs.existsSync(path.join(workspaceRoot, '.vscode', 'mcp.json'));
-
   const promptCacheStability =
     hasEvo || hasMcpConfig
-      ? '100% (Fixed 5-Tool Meta-MCP Signature)'
+      ? `Fixed 5-Tool Meta-MCP (~${META_MCP_5_TOOLS_TOKENS.toLocaleString('en-US')} tok)`
+      : '— (not initialized)';
+
+  const sessionTaxSummary =
+    hasEvo || hasMcpConfig
+      ? `Saved ${sessionStartSavings.savingsPercent}% · ${sessionStartSavings.beforeTokens.toLocaleString()} → ${sessionStartSavings.afterTokens.toLocaleString()} tok/turn`
       : '— (not initialized)';
 
   let enabledHarnessesStr = 'none (run evo init)';
@@ -302,24 +352,30 @@ export function renderEvoStats(workspaceRoot: string): string {
     }
   }
 
-  return [
+  const rawOut = [
     '╭──────────────────────────────────────────────────────────────────────────╮',
     '│ 📊 EvoKernel ROI, Cognitive Memory & Telemetry Ledger                    │',
     '├──────────────────────────────────────────────────────────────────────────┤',
     `│ 🛡️  Core Rule Token Budget : [${progressBar}] ${totalTokens}/${config.maxCoreRuleTokens} (${pctBudget}%)`,
     `│ 📦 Active Capabilities    : ${rules.length} Rules · ${skills.length} Skills · ${tools.length} Micro-Tools · ${memories.length} Memories`,
-    `│ 🧠 Memory AST Anti-Drift  : ${verifiedMemories}/${memories.length} VERIFIED${branchMemories > 0 ? ` · ${branchMemories} OTHER_BRANCH` : ''} (${staleMemories} STALE) | 0 Core Budget Tokens`,
+    `│ 🧠 Memory AST* Anti-Drift : ${verifiedMemories}/${memories.length} VERIFIED${branchMemories > 0 ? ` · ${branchMemories} OTHER_BRANCH` : ''} (${staleMemories} STALE) | 0 Core Budget Tokens`,
     `│ 🗄️  GC Archived Versions   : ${archivedCount} historical snapshots in .evo/archive/`,
     `│ 🎯 Total Capability Hits  : ${totalHits} recalls (${passRate} verification/sandbox pass rate)`,
-    `│ 🛡️  Observable Recall Value: ${totalHits} recalls -> ${totalHelped} verified pitfall(s) avoided (local telemetry)`,
+    `│ 🛡️  7-Day Recall Value     : ${window7d.searchEvents} searches · ${window7d.adoptedCount} adopted · ${window7d.helpedCount} pitfall(s) avoided (${totalHelped} all-time)`,
     `│ ⚡ Prompt Cache Stability : ${promptCacheStability}`,
-    `│ 💰 Estimated Tokens Saved : ~${cacheProtectedTokens.toLocaleString()} tokens (measured recalls: ${totalTokensSaved.toLocaleString()} tok · est. schema shield: ${(tools.length * 1200 + memories.length * 650).toLocaleString()} tok)`,
+    `│ 📉 Session-Start Tax      : ${sessionTaxSummary}`,
+    `│ 💰 Measured Recall Savings: ${totalTokensSaved.toLocaleString()} tokens reclaimed across ${totalHits} recall(s)`,
     `│ 🔌 Enabled Harnesses      : ${enabledHarnessesStr}`,
     '╰──────────────────────────────────────────────────────────────────────────╯',
+    '  * AST = zero-dep lexical-structural skeleton & call-anchor fingerprinting',
   ].join('\n');
+  return formatTerminalOutput(rawOut, options);
 }
 
-export function renderMemoryVerifyReport(workspaceRoot: string): string {
+export function renderMemoryVerifyReport(
+  workspaceRoot: string,
+  options?: { color?: boolean; ascii?: boolean }
+): string {
   const storage = new EvoStorage(workspaceRoot);
   const hasEvo = hasValidEvoStructure(storage.evoDir);
   const memories = hasEvo ? storage.listMemories() : [];
@@ -337,14 +393,14 @@ export function renderMemoryVerifyReport(workspaceRoot: string): string {
     lines.push(
       '  (No episodic memories found in .evo/memories/. Run `evo bootstrap` or call `evo_propose(kind: "memory")`.)'
     );
-    return lines.join('\n');
+    return formatTerminalOutput(lines.join('\n'), options);
   }
 
   const reportCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
   let reportCacheDb: DatabaseSync | undefined;
   if (hasEvo && fs.existsSync(reportCacheDbPath)) {
     try {
-      reportCacheDb = new DatabaseSync(reportCacheDbPath, { readOnly: true });
+      reportCacheDb = openSqliteReadOnly(reportCacheDbPath);
     } catch {}
   }
   try {
@@ -383,7 +439,7 @@ export function renderMemoryVerifyReport(workspaceRoot: string): string {
     }
   }
 
-  return lines.join('\n');
+  return formatTerminalOutput(lines.join('\n'), options);
 }
 
 export function buildEvoTreeJson(workspaceRoot: string): object {
@@ -402,7 +458,7 @@ export function buildEvoTreeJson(workspaceRoot: string): object {
   let treeCacheDb: DatabaseSync | undefined;
   if (hasEvo && fs.existsSync(cacheDbPath)) {
     try {
-      treeCacheDb = new DatabaseSync(cacheDbPath, { readOnly: true });
+      treeCacheDb = openSqliteReadOnly(cacheDbPath);
     } catch {}
   }
 
@@ -504,13 +560,27 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
 
   let verifiedMemories = 0;
   let branchMemories = 0;
+  let window7d = emptyRecallWindowStats(7);
   const statsCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
   let statsCacheDb: DatabaseSync | undefined;
   if (hasEvo && fs.existsSync(statsCacheDbPath)) {
     try {
-      statsCacheDb = new DatabaseSync(statsCacheDbPath, { readOnly: true });
+      statsCacheDb = openSqliteReadOnly(statsCacheDbPath);
+      window7d = readRecallWindowStatsFromDb(statsCacheDb, 7);
     } catch {}
   }
+
+  const hasMcpConfig = hasWorkspaceMcpConfig(workspaceRoot);
+
+  let sessionStartSavings = {
+    beforeTokens: 0,
+    afterTokens: 0,
+    savedTokens: 0,
+    savingsPercent: 0,
+    userStaticRuleTokens: 0,
+    evoSeedTokens: 0,
+  };
+
   try {
     for (const m of memories) {
       const rep = verifyMemoryFreshness(storage.rootDir, m, {
@@ -519,6 +589,13 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
       });
       if (rep.overall_status === 'VERIFIED') verifiedMemories++;
       else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
+    }
+    if (hasEvo || hasMcpConfig) {
+      const scoreRep = buildScoreReport(storage.rootDir, {
+        includeGlobal: false,
+        cacheDb: statsCacheDb,
+      });
+      sessionStartSavings = scoreRep.contextSavings;
     }
   } finally {
     if (statsCacheDb) {
@@ -543,13 +620,7 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
     totalHelped += rec.helped_count;
   }
 
-  const cacheProtectedTokens = tools.length * 1200 + memories.length * 650 + totalTokensSaved;
   const pctBudget = Math.min(100, Math.round((totalTokens / config.maxCoreRuleTokens) * 100));
-
-  const hasMcpConfig =
-    fs.existsSync(path.join(workspaceRoot, '.mcp.json')) ||
-    fs.existsSync(path.join(workspaceRoot, '.cursor', 'mcp.json')) ||
-    fs.existsSync(path.join(workspaceRoot, '.vscode', 'mcp.json'));
 
   let enabledHarnessesStr = 'none (run evo init)';
   if (config.enabledHarnesses && config.enabledHarnesses.length > 0) {
@@ -564,6 +635,7 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
   return {
     workspace: storage.rootDir,
     hasEvo,
+    metaMcpTokens: META_MCP_5_TOOLS_TOKENS,
     budget: {
       coreRuleTokens: totalTokens,
       maxCoreRuleTokens: config.maxCoreRuleTokens,
@@ -582,6 +654,8 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
       otherBranch: branchMemories,
       stale: staleMemories,
     },
+    sessionStartTax: sessionStartSavings,
+    window7d,
     telemetry: {
       totalHits,
       totalSuccess,
@@ -589,7 +663,6 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
       passRate: totalSuccess + totalFail > 0 ? (totalSuccess / (totalSuccess + totalFail)) * 100 : null,
       helpedCount: totalHelped,
       recordedTokensSaved: totalTokensSaved,
-      estimatedTokensSaved: cacheProtectedTokens,
     },
     harnesses: {
       enabled: enabledHarnessesStr,

@@ -4,9 +4,38 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parseJsonc } from './harness.js';
-import { EvoStorage, estimateTokens, hasValidEvoStructure } from '../core/storage.js';
-import { redactSensitiveDiagnostics } from '../core/telemetry.js';
+import {
+  EvoStorage,
+  META_MCP_5_TOOLS_TOKENS,
+  estimateTokens,
+  hasValidEvoStructure,
+  openSqliteReadOnly,
+} from '../core/storage.js';
+import { formatTerminalOutput, isAsciiMode, isColorEnabled } from './term.js';
+
+export { META_MCP_5_TOOLS_TOKENS } from '../core/storage.js';
+import {
+  type RecallWindowStats,
+  emptyRecallWindowStats,
+  readRecallWindowStatsFromDb,
+  redactSensitiveDiagnostics,
+} from '../core/telemetry.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
+
+function formatCompactTok(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens < 0) return '0';
+  if (tokens >= 1000) {
+    return `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+  }
+  return String(Math.round(tokens));
+}
+
+function scrubAnonString(raw: string, ws?: string): string {
+  let out = redactSensitiveDiagnostics(raw || '', ws);
+  out = out.replace(/(?<![A-Za-z0-9_])[A-Za-z]:[\\/]+[^\s"'<>|]*/g, '<PATH>');
+  out = out.replace(/\/(?:Users|home)\/[^\s"'<>|]*/g, '<HOME>');
+  return out;
+}
 
 let _geminiCache: { dir: string; ts: number; entries: Set<string> } | null = null;
 function getHomeGeminiEntries(homeDir: string): Set<string> {
@@ -314,6 +343,12 @@ export function inspectMcpTaxSnapshot(
     inspectConfigFile(path.join(ws, '.mcp.json'), 'workspace:.mcp.json');
     inspectConfigFile(path.join(ws, '.cursor', 'mcp.json'), 'workspace:.cursor/mcp.json');
     inspectConfigFile(path.join(ws, '.vscode', 'mcp.json'), 'workspace:.vscode/mcp.json');
+    inspectConfigFile(path.join(ws, '.gemini', 'settings.json'), 'workspace:.gemini/settings.json');
+    inspectConfigFile(path.join(ws, '.windsurf', 'mcp.json'), 'workspace:.windsurf/mcp.json');
+    inspectConfigFile(path.join(ws, '.windsurf', 'mcp_config.json'), 'workspace:.windsurf/mcp_config.json');
+    inspectConfigFile(path.join(ws, '.cline', 'mcp.json'), 'workspace:.cline/mcp.json');
+    inspectConfigFile(path.join(ws, '.roo', 'mcp.json'), 'workspace:.roo/mcp.json');
+    inspectConfigFile(path.join(ws, 'mcp_config.json'), 'workspace:mcp_config.json');
     inspectConfigFile(path.join(ws, 'opencode.json'), 'workspace:opencode.json');
     inspectConfigFile(path.join(ws, '.codex', 'config.toml'), 'workspace:.codex/config.toml');
   }
@@ -609,6 +644,7 @@ export interface ScoreReport {
   hasEvo?: boolean;
   deductions?: string[];
   recallTelemetry?: { totalHits: number; helpedCount: number; measuredTokensSaved: number };
+  window7d?: RecallWindowStats;
 }
 
 export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions): ScoreReport {
@@ -621,15 +657,32 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
     globalOnly: mode === 'global',
   });
   if (options?.anon && Array.isArray(mcpTax.servers)) {
-    mcpTax.servers = mcpTax.servers.map((srv) => ({
-      ...srv,
-      id: redactSensitiveDiagnostics(srv.id || '', ws),
-      name: redactSensitiveDiagnostics(srv.name || '', ws),
-      source: redactSensitiveDiagnostics(srv.source || '', ws),
-    }));
+    mcpTax.servers = mcpTax.servers.map((srv, idx) => {
+      const norm = String(srv.name || srv.id || '').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+      const isEvoSelf = norm === 'evo-kernel' || norm === 'evo' || norm === 'evokernel';
+      const isExactPublicProfile = Object.keys(KNOWN_HEAVY_MCP_PROFILES).some((k) => norm === k);
+      const keepName = isEvoSelf || isExactPublicProfile;
+      const safeName = keepName ? scrubAnonString(srv.name || '', ws) : `custom-mcp-${idx + 1}`;
+      const safeId = keepName ? scrubAnonString(srv.id || '', ws) : `custom-mcp-${idx + 1}`;
+      return {
+        ...srv,
+        id: safeId,
+        name: safeName,
+        source: scrubAnonString(srv.source || '', ws),
+        tools: Array.isArray(srv.tools)
+          ? srv.tools.map((t, tIdx) => (keepName ? scrubAnonString(String(t), ws) : `tool_${tIdx + 1}`))
+          : srv.tools,
+      };
+    });
   }
 
-  const gitHotspots = mode === 'project' ? computeGitBugHotspots(ws, 10) : [];
+  const rawHotspots = mode === 'project' ? computeGitBugHotspots(ws, 10) : [];
+  const gitHotspots = options?.anon
+    ? rawHotspots.map((h, idx) => ({
+        ...h,
+        filePath: `src/module-${idx + 1}${path.extname(h.filePath) || '.ts'}`,
+      }))
+    : rawHotspots;
   const unprotectedHotspots = gitHotspots.filter((h) => h.unprotected).length;
 
   let rulesCount = 0;
@@ -639,6 +692,34 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
   let memoriesCount = 0;
   let verifiedMemoriesCount = 0;
   let totalRuleTokens = 0;
+  let totalSkillTokens = 0;
+  let totalToolTokens = 0;
+  let totalMemoryTokens = 0;
+
+  const measureFileTokensSafe = (filePath: string): number => {
+    try {
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        return estimateTokens(fs.readFileSync(filePath, 'utf8'));
+      }
+    } catch {}
+    return 0;
+  };
+
+  const measureDirMarkdownTokensSafe = (dirPath: string): number => {
+    let sum = 0;
+    try {
+      if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return 0;
+      for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+        const full = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          sum += measureDirMarkdownTokensSafe(full);
+        } else if (entry.isFile() && /\.(?:md|json|ya?ml|txt)$/i.test(entry.name)) {
+          sum += measureFileTokensSafe(full);
+        }
+      }
+    } catch {}
+    return sum;
+  };
 
   const evoDir = path.join(ws, '.evo');
   const hasEvo = mode === 'project' && hasValidEvoStructure(evoDir);
@@ -648,17 +729,47 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
       const activeRules = storage.listRules().filter((r) => r.enabled !== false);
       rulesCount = activeRules.length;
       scopedRulesCount = activeRules.filter((r) => !r.core).length;
-      totalRuleTokens = activeRules.reduce((acc, r) => acc + (r.tokens || estimateTokens(r.content)), 0);
+      for (const r of activeRules) {
+        const corePath = path.join(storage.rulesDir, `${r.id}.md`);
+        const scopedPath = path.join(storage.rulesDir, 'scoped', `${r.id}.md`);
+        const diskTok = measureFileTokensSafe(r.core ? corePath : scopedPath) || measureFileTokensSafe(corePath) || measureFileTokensSafe(scopedPath);
+        totalRuleTokens += diskTok > 0 ? diskTok : (r.tokens || estimateTokens(r.content));
+      }
 
       const activeSkills = storage.listSkills().filter((s) => s.enabled !== false);
       skillsCount = activeSkills.length;
+      for (const s of activeSkills) {
+        const skillDir = path.join(storage.skillsDir, s.id);
+        const diskTok = measureDirMarkdownTokensSafe(skillDir);
+        totalSkillTokens +=
+          diskTok > 0
+            ? diskTok
+            : estimateTokens(`${s.l0_summary || ''}\n${s.l1_contract || ''}\n${s.l2_sop || ''}`);
+      }
 
       const activeTools = storage.listTools().filter((t) => t.enabled !== false);
       toolsCount = activeTools.length;
+      for (const t of activeTools) {
+        const manifestPath = path.join(storage.toolsDir, t.id, 'manifest.json');
+        const manifestTok = measureFileTokensSafe(manifestPath);
+        const fallbackTok = t.script_path ? measureFileTokensSafe(t.script_path) : 0;
+        totalToolTokens +=
+          manifestTok > 0
+            ? manifestTok
+            : fallbackTok > 0
+              ? fallbackTok
+              : estimateTokens(`${t.title || ''}\n${t.l0_summary || ''}\n${JSON.stringify(t.input_schema || {})}`);
+      }
 
       const activeMemories = storage.listMemories().filter((m) => m.enabled !== false);
       memoriesCount = activeMemories.length;
       for (const m of activeMemories) {
+        const memPath = path.join(storage.memoriesDir, `${m.id}.md`);
+        const diskTok = measureFileTokensSafe(memPath);
+        totalMemoryTokens +=
+          diskTok > 0
+            ? diskTok
+            : estimateTokens(`${m.symptom || ''}\n${m.root_cause || ''}\n${m.solution || ''}`);
         try {
           const v = verifyMemoryFreshness(ws, m, { includeCallers: false, cacheDb: options?.cacheDb });
           if (v.overall_status === 'VERIFIED') verifiedMemoriesCount++;
@@ -668,10 +779,17 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
   }
 
   let recallTelemetry: { totalHits: number; helpedCount: number; measuredTokensSaved: number } | undefined;
+  let window7d: RecallWindowStats | undefined = hasEvo ? emptyRecallWindowStats(7) : undefined;
   const telemetryDbPath = path.join(evoDir, '.cache', 'telemetry.db');
-  if (hasEvo && fs.existsSync(telemetryDbPath)) {
+  if (hasEvo && (options?.cacheDb || fs.existsSync(telemetryDbPath))) {
+    let db: DatabaseSync | undefined = options?.cacheDb;
+    let openedLocal = false;
     try {
-      const db = new DatabaseSync(telemetryDbPath, { readOnly: true });
+      if (!db) {
+        db = openSqliteReadOnly(telemetryDbPath);
+        openedLocal = true;
+      }
+      window7d = readRecallWindowStatsFromDb(db, 7);
       try {
         const row = db.prepare('SELECT SUM(hit_count) AS hits, SUM(helped_count) AS helped, SUM(tokens_saved) AS saved FROM telemetry').get() as any;
         if (row && (row.hits !== null || row.helped !== null || row.saved !== null)) {
@@ -692,10 +810,12 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
             };
           }
         } catch {}
-      } finally {
-        db.close();
       }
-    } catch {}
+    } catch {} finally {
+      if (openedLocal && db) {
+        try { db.close(); } catch {}
+      }
+    }
   }
 
   // Measure host rule files (splitting user static vs evo managed seed)
@@ -744,17 +864,19 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
     }
   }
 
-  // Token savings computation (includes virtualized L1/L2 rules, skills, micro-tools, and 0-cost episodic memories)
+  // Token savings computation (measured from actual on-disk .evo/ capability files + unified 5-tool Meta-MCP constant)
   const virtualizedCapabilityTokens =
-    totalRuleTokens + skillsCount * 650 + toolsCount * 450 + memoriesCount * 400;
+    totalRuleTokens + totalSkillTokens + totalToolTokens + totalMemoryTokens;
   const beforeTokens =
     mcpTax.totalTaxTokens +
     userStaticRuleTokens +
     Math.max(virtualizedCapabilityTokens, evoSeedTokens);
+  const hasMetaMcpGateway =
+    mcpTax.totalServers > 0 || (hasEvo && virtualizedCapabilityTokens > META_MCP_5_TOOLS_TOKENS);
   const afterMcpTax =
     mcpTax.activeTaxTokens > 0
-      ? mcpTax.activeTaxTokens + 350
-      : (mcpTax.totalServers > 0 ? 350 : 0);
+      ? mcpTax.activeTaxTokens + META_MCP_5_TOOLS_TOKENS
+      : (hasMetaMcpGateway ? META_MCP_5_TOOLS_TOKENS : 0);
   const afterTokens = afterMcpTax + userStaticRuleTokens + Math.min(evoSeedTokens, 1500);
   const savedTokens = Math.max(0, beforeTokens - afterTokens);
   const savingsPercent =
@@ -793,7 +915,14 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
   else if (overallScore >= 55) grade = 'C';
   else if (overallScore >= 40) grade = 'D';
 
-  const activeMcpWaste = mcpTax.activeTaxTokens > 350 ? mcpTax.activeTaxTokens - 350 : (mcpTax.activeTaxTokens > 0 ? mcpTax.activeTaxTokens : 0);
+  const activeMcpWaste =
+    hasEvo || mcpTax.pooledServers > 0
+      ? mcpTax.activeTaxTokens
+      : mcpTax.activeTaxTokens > META_MCP_5_TOOLS_TOKENS
+        ? mcpTax.activeTaxTokens - META_MCP_5_TOOLS_TOKENS
+        : mcpTax.activeTaxTokens > 0
+          ? mcpTax.activeTaxTokens
+          : 0;
   const ruleWaste = userStaticRuleTokens > 1500 ? userStaticRuleTokens - 1500 : 0;
   const wasteTokensPerTurn = activeMcpWaste + ruleWaste;
   const wastedTokens100 = wasteTokensPerTurn * 100;
@@ -857,6 +986,7 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
     hasEvo,
     deductions: deductions.length > 0 ? deductions : undefined,
     recallTelemetry,
+    window7d,
   };
 }
 
@@ -951,8 +1081,8 @@ export function renderScoreSvg(report: ScoreReport): string {
   <circle cx="28" cy="28" r="5.5" fill="#ef4444" fill-opacity="0.8"/>
   <circle cx="46" cy="28" r="5.5" fill="#f59e0b" fill-opacity="0.8"/>
   <circle cx="64" cy="28" r="5.5" fill="#10b981" fill-opacity="0.8"/>
-  <text x="86" y="33" fill="#f8fafc" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16" font-weight="700" letter-spacing="-0.02em">EvoKernel Cockpit X-Ray</text>
-  <text x="285" y="33" fill="#64748b" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">workspace: ${wsName}  ·  npx evo-kernel score</text>
+  <text x="86" y="33" fill="#f8fafc" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16" font-weight="700" letter-spacing="-0.02em">EvoKernel Workbench X-Ray</text>
+  <text x="304" y="33" fill="#64748b" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">workspace: ${wsName}  ·  npx evo-kernel score</text>
   <rect x="786" y="15" width="124" height="26" rx="13" fill="rgba(16,185,129,0.12)" stroke="rgba(16,185,129,0.4)" stroke-width="1"/>
   <text x="848" y="32" text-anchor="middle" fill="#34d399" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700">GRADE ${escSvg(report.grade)}</text>
   <line x1="0" y1="54" x2="940" y2="54" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
@@ -968,8 +1098,8 @@ export function renderScoreSvg(report: ScoreReport): string {
     <text x="0" y="4" text-anchor="middle" fill="#ffffff" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" font-weight="800">${report.overallScore}/100</text>
   </g>
 
-  <text x="152" y="148" fill="#34d399" font-family="Inter, -apple-system, sans-serif" font-size="36" font-weight="800" letter-spacing="-0.03em">-${report.contextSavings.savingsPercent}%</text>
-  <text x="152" y="170" fill="#e2e8f0" font-family="Inter, -apple-system, sans-serif" font-size="13.5" font-weight="600">Net Prompt Token Tax Saved</text>
+  <text x="152" y="148" fill="#34d399" font-family="Inter, -apple-system, sans-serif" font-size="30" font-weight="800" letter-spacing="-0.03em">Saved ${report.contextSavings.savingsPercent}%</text>
+  <text x="152" y="170" fill="#e2e8f0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600">${formatCompactTok(report.contextSavings.beforeTokens)} &#8594; ${formatCompactTok(report.contextSavings.afterTokens)} tok/turn</text>
   <text x="152" y="190" fill="#8b9bb4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">${report.contextSavings.savedTokens.toLocaleString()} tok/turn reclaimed</text>
 
   <line x1="46" y1="216" x2="410" y2="216" stroke="rgba(255,255,255,0.06)"/>
@@ -980,9 +1110,10 @@ export function renderScoreSvg(report: ScoreReport): string {
   <rect x="46" y="284" width="364" height="10" rx="5" fill="rgba(255,255,255,0.06)"/>
   <rect class="savings-bar-fill" x="46" y="284" width="${barWidth}" height="10" rx="5" fill="url(#barGrad)"/>
 
-  <text x="46" y="324" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">Cache Shield: <tspan fill="#38bdf8" font-weight="700">${report.cacheShieldingScore}%</tspan>   ·   Hotspot Guard: <tspan fill="#34d399" font-weight="700">${report.fragileCodeScore}%</tspan></text>
-  <text x="46" y="348" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">AST Memories: <tspan fill="#f8fafc" font-weight="600">${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} VERIFIED</tspan> · <tspan fill="#f8fafc">${report.capabilities.skillsCount} skills, ${report.capabilities.toolsCount} tools</tspan></text>
-  <text x="46" y="382" fill="#38bdf8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11">github.com/damonless/EvoKernel · 0 Idle Core Token Cost</text>
+  <text x="46" y="320" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">Cache Shield: <tspan fill="#38bdf8" font-weight="700">${report.cacheShieldingScore}%</tspan>   ·   Hotspot Guard: <tspan fill="#34d399" font-weight="700">${report.fragileCodeScore}%</tspan></text>
+  <text x="46" y="343" fill="#94a3b8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11.5">AST* Memories: <tspan fill="#f8fafc" font-weight="600">${report.capabilities.verifiedMemoriesCount}/${report.capabilities.memoriesCount} VERIFIED</tspan> · <tspan fill="#f8fafc">${report.capabilities.skillsCount} skills, ${report.capabilities.toolsCount} tools</tspan></text>
+  <text x="46" y="368" fill="#64748b" font-family="JetBrains Mono, ui-monospace, monospace" font-size="8.2">* AST = zero-dep lexical-structural skeleton &amp; call-anchor fingerprinting</text>
+  <text x="46" y="390" fill="#38bdf8" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11">github.com/damonless/EvoKernel · 0 Idle Core Token Cost</text>
 
   <!-- Right Card: Fragile Hotspots & AST Memory Coverage -->
   <rect x="446" y="72" width="470" height="334" rx="12" fill="url(#cardSurface)" stroke="rgba(255,255,255,0.08)"/>
@@ -996,8 +1127,13 @@ export function renderScoreSvg(report: ScoreReport): string {
 </svg>\n`;
 }
 
-export function renderScoreAnsi(report: ScoreReport): string {
-  const noColor = Boolean(process.env.NO_COLOR) || process.env.EVO_ASCII === '1';
+export function renderScoreAnsi(
+  report: ScoreReport,
+  options?: { color?: boolean; ascii?: boolean; args?: string[] }
+): string {
+  const isAscii = options?.ascii ?? isAsciiMode(options?.args);
+  const colorEnabled = !isAscii && (options?.color ?? isColorEnabled(options?.args));
+  const noColor = !colorEnabled;
   const c = {
     reset: noColor ? '' : '\x1b[0m',
     bold: noColor ? '' : '\x1b[1m',
@@ -1010,10 +1146,10 @@ export function renderScoreAnsi(report: ScoreReport): string {
     red: noColor ? '' : '\x1b[31m',
   };
 
-  const isAscii = process.env.EVO_ASCII === '1';
-  const titleLine = isAscii
-    ? '║   EvoKernel Context Health & Fragility Score Report                ║'
-    : '║   🧬  EvoKernel Context Health & Fragility Score Report            ║';
+  const isAsciiBox = isAscii;
+  const titleLine = isAsciiBox
+    ? '║   EvoKernel Workbench -- Context Health & Fragility Score          ║'
+    : '║   🧬  EvoKernel Workbench — Context Health & Fragility Score       ║';
 
   const lines: string[] = [];
   lines.push('');
@@ -1046,8 +1182,9 @@ export function renderScoreAnsi(report: ScoreReport): string {
   lines.push(
     `  ├─ Virtualized Load: ${c.green}${report.contextSavings.afterTokens.toLocaleString()} tokens${c.reset} (after EvoKernel)`
   );
+  const arrowGlyph = isAscii ? '->' : '→';
   lines.push(
-    `  ├─ Virtualized Gain: ${c.bold}${c.green}${report.contextSavings.savedTokens.toLocaleString()} tokens saved (-${report.contextSavings.savingsPercent}% prompt tax)${c.reset}`
+    `  ├─ Virtualized Gain: ${c.bold}${c.green}Saved ${report.contextSavings.savingsPercent}% · ${formatCompactTok(report.contextSavings.beforeTokens)} ${arrowGlyph} ${formatCompactTok(report.contextSavings.afterTokens)} tok${c.reset} (${report.contextSavings.savedTokens.toLocaleString()} tokens saved)`
   );
   lines.push(
     `  ├─ 100-Turn Waste  : ${c.yellow}\$${report.waste100TurnsUsd.sonnetUsd.toFixed(2)}${c.reset} (Sonnet) / ${c.red}\$${report.waste100TurnsUsd.opusUsd.toFixed(2)}${c.reset} (Opus)`
@@ -1071,16 +1208,20 @@ export function renderScoreAnsi(report: ScoreReport): string {
     lines.push(
       `  ├─ Fragile Hotspots: ${report.totalHotspots} tracked, ${report.unprotectedHotspots === 0 ? c.green + '0 unprotected' : c.red + report.unprotectedHotspots + ' unprotected'}${c.reset}`
     );
+    const has7d = Boolean(report.window7d);
+    const hasRecall = Boolean(report.recallTelemetry && report.recallTelemetry.totalHits > 0);
+    lines.push(
+      `  ${has7d || hasRecall ? '├─' : '└─'} Capabilities    : ${report.capabilities.rulesCount} rules (${report.capabilities.scopedRulesCount} scoped), ${report.capabilities.memoriesCount} memories (${report.capabilities.verifiedMemoriesCount} verified AST*)`
+    );
+    if (report.window7d) {
+      const w = report.window7d;
+      lines.push(
+        `  ${hasRecall ? '├─' : '└─'} 7-Day Recall    : ${w.searchEvents} searches · ${w.adoptedCount} adopted · ${w.helpedCount} pitfalls avoided`
+      );
+    }
     if (report.recallTelemetry && report.recallTelemetry.totalHits > 0) {
       lines.push(
-        `  ├─ Capabilities    : ${report.capabilities.rulesCount} rules (${report.capabilities.scopedRulesCount} scoped), ${report.capabilities.memoriesCount} memories (${report.capabilities.verifiedMemoriesCount} verified AST)`
-      );
-      lines.push(
         `  └─ Recall Impact   : ${report.recallTelemetry.totalHits} recalls · ${report.recallTelemetry.helpedCount} verified pitfalls avoided (~${report.recallTelemetry.measuredTokensSaved.toLocaleString()} tok saved)`
-      );
-    } else {
-      lines.push(
-        `  └─ Capabilities    : ${report.capabilities.rulesCount} rules (${report.capabilities.scopedRulesCount} scoped), ${report.capabilities.memoriesCount} memories (${report.capabilities.verifiedMemoriesCount} verified AST)`
       );
     }
 
@@ -1121,10 +1262,13 @@ export function renderScoreAnsi(report: ScoreReport): string {
     `  ${c.bold}Action:${c.reset} ${c.cyan}${actionCmd}${c.reset}`
   );
   lines.push(
-    `${c.dim}Run \`${cliCmd} ui\` to inspect interactive X-Ray treemap & capability constellation.${c.reset}`
+    `${c.dim}Run \`${cliCmd} ui\` to launch EvoKernel Workbench (X-Ray treemap & capability constellation).${c.reset}`
+  );
+  lines.push(
+    `${c.dim}* AST = zero-dep lexical-structural skeleton & call-anchor fingerprinting${c.reset}`
   );
   lines.push('');
-  return lines.join('\n');
+  return formatTerminalOutput(lines.join('\n'), { color: colorEnabled, ascii: isAscii });
 }
 
 export async function runScoreCli(workspaceRoot: string, args: string[]): Promise<void> {
@@ -1132,6 +1276,8 @@ export async function runScoreCli(workspaceRoot: string, args: string[]): Promis
   const isBadge = args.includes('--badge');
   const isAnon = args.includes('--anon');
   const globalOnly = args.includes('--global') || args.includes('-g');
+  const ascii = isAsciiMode(args);
+  const color = isColorEnabled(args);
 
   const report = buildScoreReport(workspaceRoot, {
     anon: isAnon,
@@ -1148,31 +1294,40 @@ export async function runScoreCli(workspaceRoot: string, args: string[]): Promis
     return;
   }
 
+  const svgEqArg = args.find((a) => a.startsWith('--svg='));
   const svgIdx = args.indexOf('--svg');
-  if (svgIdx !== -1) {
+  if (svgEqArg || svgIdx !== -1) {
     const svgContent = renderScoreSvg(report);
-    const nextArg = args[svgIdx + 1];
+    const eqVal = svgEqArg ? svgEqArg.slice('--svg='.length).trim() : '';
+    const nextArg = eqVal || (svgIdx !== -1 ? args[svgIdx + 1] : undefined);
     if (nextArg && !nextArg.startsWith('-')) {
       const outSvg = path.resolve(nextArg);
       fs.mkdirSync(path.dirname(outSvg), { recursive: true });
       fs.writeFileSync(outSvg, svgContent, 'utf8');
-      console.log(`✅ Score SVG X-Ray card exported to: ${outSvg}`);
+      console.log(
+        formatTerminalOutput(`✅ Score SVG X-Ray card exported to: ${outSvg}`, { color, ascii })
+      );
     } else {
       process.stdout.write(svgContent);
     }
     return;
   }
 
+  const htmlEqArg = args.find((a) => a.startsWith('--html='));
   const htmlIdx = args.indexOf('--html');
-  if (htmlIdx !== -1) {
-    const outPath = args[htmlIdx + 1] && !args[htmlIdx + 1].startsWith('-')
-      ? path.resolve(args[htmlIdx + 1])
+  if (htmlEqArg || htmlIdx !== -1) {
+    const eqVal = htmlEqArg ? htmlEqArg.slice('--html='.length).trim() : '';
+    const candidatePath = eqVal || (htmlIdx !== -1 && args[htmlIdx + 1] && !args[htmlIdx + 1].startsWith('-') ? args[htmlIdx + 1] : undefined);
+    const outPath = candidatePath
+      ? path.resolve(candidatePath)
       : path.join(path.resolve(workspaceRoot), 'evo-score.html');
     const { exportUiHtml } = await import('./ui.js');
     exportUiHtml(workspaceRoot, outPath, { anon: isAnon });
-    console.log(`✅ Score HTML report exported to: ${outPath}`);
+    console.log(
+      formatTerminalOutput(`✅ Score HTML report exported to: ${outPath}`, { color, ascii })
+    );
     return;
   }
 
-  console.log(renderScoreAnsi(report));
+  console.log(renderScoreAnsi(report, { color, ascii, args }));
 }

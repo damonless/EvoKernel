@@ -16,10 +16,10 @@
 
   <!-- Ambient Backdrop -->
   <rect width="1200" height="680" fill="url(#bgGrad)"/>
-  <circle cx="600" cy="80" r="320" fill="#3b82f6" opacity="0.04" filter="blur(60px)"/>
-  <circle cx="1000" cy="500" r="260" fill="#10b981" opacity="0.03" filter="blur(50px)"/>
+  <circle cx="600" cy="80" r="320" fill="#38bdf8" opacity="0.035" filter="blur(60px)"/>
+  <circle cx="1000" cy="500" r="260" fill="#10b981" opacity="0.035" filter="blur(50px)"/>
 
-  <!-- Main Window Frame (Zinc 900) -->
+  <!-- Main Window Frame (Zinc 900: 1140x630 = 210 Rail + 580 Stage + 350 Inspector) -->
   <g transform="translate(30, 25)" filter="url(#cardShadow)">
     <rect width="1140" height="630" rx="12" fill="#0c0d11" stroke="#27272a" stroke-width="1.2"/>
 
@@ -34,232 +34,272 @@
     <circle cx="60" cy="22" r="5.5" fill="#10b981"/>
 
     <!-- App Brand -->
-    <text x="86" y="26" fill="#fafafa" font-size="13" font-weight="600" letter-spacing="-0.01em">EvoKernel</text>
-    <rect x="156" y="14" width="78" height="18" rx="4" fill="rgba(255,255,255,0.06)"/>
-    <text x="163" y="26.5" fill="#a1a1aa" font-size="10" font-family="'Cascadia Code', 'SF Mono', monospace">Workbench 2.0</text>
+    <text x="84" y="26" fill="#fafafa" font-size="13" font-weight="700" letter-spacing="-0.01em">EvoKernel Workbench</text>
+    <rect x="228" y="14" width="46" height="18" rx="4" fill="rgba(16,185,129,0.14)" stroke="rgba(16,185,129,0.3)"/>
+    <text x="251" y="26" text-anchor="middle" fill="#34d399" font-size="9.5" font-weight="700" font-family="'Cascadia Code', 'SF Mono', monospace">v0.3.0</text>
 
-    <!-- Global Search Input (Cmd+K) -->
-    <g transform="translate(420, 9)">
-      <rect width="320" height="26" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
-      <text x="12" y="17" fill="#71717a" font-size="11">Search capabilities, files, actions...</text>
-      <rect x="274" y="4" width="38" height="18" rx="4" fill="#1f1f26" stroke="#2e2e38" stroke-width="1"/>
-      <text x="281" y="16.5" fill="#a1a1aa" font-size="10" font-family="'Cascadia Code', 'SF Mono', monospace">⌘K</text>
+    <!-- Global Search Input (Ctrl+K / Cmd+K) -->
+    <g transform="translate(400, 9)">
+      <rect width="330" height="26" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
+      <text x="12" y="17" fill="#8b8b95" font-size="11">Search capabilities, memories, commands...</text>
+      <rect x="272" y="4" width="50" height="18" rx="4" fill="#1f1f26" stroke="#2e2e38" stroke-width="1"/>
+      <text x="297" y="16.5" text-anchor="middle" fill="#a1a1aa" font-size="9.5" font-family="'Cascadia Code', 'SF Mono', monospace">Ctrl+K</text>
     </g>
 
-    <!-- Live Telemetry Status Dot -->
-    <g transform="translate(1040, 15)">
+    <!-- Segmented Language Toggle + Export + Live Status -->
+    <g transform="translate(876, 10)">
+      <rect width="62" height="24" rx="5" fill="#141418" stroke="#27272a" stroke-width="1"/>
+      <text x="16" y="16" text-anchor="middle" fill="#8b8b95" font-size="10" font-weight="600">中</text>
+      <rect x="30" y="3" width="28" height="18" rx="4" fill="#23242e"/>
+      <text x="44" y="15.5" text-anchor="middle" fill="#fafafa" font-size="10" font-weight="700">EN</text>
+    </g>
+    <g transform="translate(948, 10)">
+      <rect width="84" height="24" rx="5" fill="#141418" stroke="#27272a" stroke-width="1"/>
+      <text x="42" y="15.5" text-anchor="middle" fill="#d4d4d8" font-size="10.5" font-weight="500">Export HTML</text>
+    </g>
+    <g transform="translate(1046, 15)">
       <circle cx="6" cy="7" r="3.5" fill="#10b981"/>
-      <text x="16" y="11" fill="#10b981" font-size="11" font-weight="500">Live · 0-dep</text>
+      <text x="16" y="11" fill="#10b981" font-size="11" font-weight="600">Live · 0-dep</text>
     </g>
 
-    <!-- 3-Column Skeleton -->
-    <!-- Column 1: Left Rail (210px) -->
+    <!-- Column 1: Left Rail (210px, x=0..210) -->
     <g transform="translate(0, 44)">
       <rect width="210" height="586" fill="#0f0f13"/>
       <line x1="210" y1="0" x2="210" y2="586" stroke="#27272a" stroke-width="1"/>
 
-      <!-- Nav Section -->
-      <text x="16" y="24" fill="#71717a" font-size="10" font-weight="600" letter-spacing="0.06em">VIEWS</text>
+      <text x="16" y="24" fill="#8b8b95" font-size="10" font-weight="700" letter-spacing="0.06em">NAVIGATION</text>
 
       <g transform="translate(12, 34)">
+        <text x="12" y="19" fill="#a1a1aa" font-size="12" font-weight="500">Overview</text>
+      </g>
+      <g transform="translate(12, 66)">
+        <text x="12" y="19" fill="#a1a1aa" font-size="12" font-weight="500">Capabilities</text>
+        <rect x="150" y="5" width="26" height="18" rx="9" fill="rgba(255,255,255,0.06)"/>
+        <text x="163" y="17.5" text-anchor="middle" fill="#a1a1aa" font-size="10" font-family="'Cascadia Code', monospace">9</text>
+      </g>
+      <g transform="translate(12, 98)">
+        <text x="12" y="19" fill="#a1a1aa" font-size="12" font-weight="500">Memories</text>
+        <rect x="150" y="5" width="26" height="18" rx="9" fill="rgba(52,211,153,0.14)"/>
+        <text x="163" y="17.5" text-anchor="middle" fill="#34d399" font-size="10" font-family="'Cascadia Code', monospace">3</text>
+      </g>
+      <g transform="translate(12, 130)">
+        <text x="12" y="19" fill="#a1a1aa" font-size="12" font-weight="500">Gatekeeper Log</text>
+        <circle cx="163" cy="14" r="3.5" fill="#10b981"/>
+      </g>
+      <g transform="translate(12, 162)">
         <rect width="186" height="30" rx="6" fill="url(#activePill)" stroke="#2e2e38" stroke-width="1"/>
-        <text x="12" y="19" fill="#fafafa" font-size="12" font-weight="600">Capabilities Matrix</text>
-        <rect x="154" y="6" width="22" height="18" rx="9" fill="rgba(255,255,255,0.08)"/>
-        <text x="160" y="18" fill="#a1a1aa" font-size="10" font-family="'Cascadia Code', monospace">12</text>
+        <text x="12" y="19" fill="#fafafa" font-size="12" font-weight="600">AST Topology</text>
+        <rect x="150" y="6" width="26" height="18" rx="9" fill="rgba(56,189,248,0.14)"/>
+        <text x="163" y="18" text-anchor="middle" fill="#38bdf8" font-size="10" font-family="'Cascadia Code', monospace">9</text>
       </g>
 
-      <g transform="translate(12, 70)">
-        <text x="12" y="19" fill="#a1a1aa" font-size="12" font-weight="500">AST Topology</text>
-        <rect x="154" y="6" width="22" height="18" rx="9" fill="rgba(255,255,255,0.04)"/>
-        <text x="162" y="18" fill="#71717a" font-size="10" font-family="'Cascadia Code', monospace">8</text>
-      </g>
+      <!-- Telemetry Cards -->
+      <g transform="translate(12, 232)">
+        <text x="4" y="0" fill="#8b8b95" font-size="10" font-weight="700" letter-spacing="0.06em">TELEMETRY</text>
 
-      <g transform="translate(12, 102)">
-        <text x="12" y="19" fill="#a1a1aa" font-size="12" font-weight="500">Git Bug Hotspots</text>
-        <rect x="154" y="6" width="22" height="18" rx="9" fill="rgba(255,255,255,0.04)"/>
-        <text x="162" y="18" fill="#71717a" font-size="10" font-family="'Cascadia Code', monospace">5</text>
-      </g>
-
-      <g transform="translate(12, 134)">
-        <text x="12" y="19" fill="#a1a1aa" font-size="12" font-weight="500">Gatekeeper Audit</text>
-        <circle cx="165" cy="14" r="3.5" fill="#10b981"/>
-      </g>
-
-      <!-- Telemetry Bento Group -->
-      <g transform="translate(12, 360)">
-        <text x="4" y="0" fill="#71717a" font-size="10" font-weight="600" letter-spacing="0.06em">TELEMETRY</text>
-
-        <!-- Bento Card 1: Health Score -->
+        <!-- Health Score -->
         <g transform="translate(0, 10)">
           <rect width="186" height="62" rx="8" fill="#141418" stroke="#27272a" stroke-width="1"/>
-          <text x="12" y="20" fill="#71717a" font-size="10.5" font-weight="500">HEALTH SCORE</text>
-          <text x="12" y="44" fill="#fafafa" font-size="18" font-weight="700">96</text>
-          <text x="40" y="44" fill="#71717a" font-size="12">/ 100</text>
-          <rect x="134" y="14" width="40" height="18" rx="4" fill="rgba(16,185,129,0.12)" stroke="rgba(16,185,129,0.3)"/>
-          <text x="142" y="26.5" fill="#10b981" font-size="10" font-weight="600">A+</text>
+          <text x="12" y="20" fill="#8b8b95" font-size="10" font-weight="600">HEALTH SCORE</text>
+          <text x="12" y="45" fill="#fafafa" font-size="19" font-weight="700">96</text>
+          <text x="40" y="45" fill="#8b8b95" font-size="12">/ 100</text>
+          <rect x="134" y="14" width="40" height="18" rx="4" fill="rgba(16,185,129,0.14)" stroke="rgba(16,185,129,0.32)"/>
+          <text x="154" y="26.5" text-anchor="middle" fill="#34d399" font-size="10" font-weight="700">A+</text>
         </g>
 
-        <!-- Bento Card 2: Prompt Tax Saved -->
+        <!-- Positive Token Savings Framing -->
         <g transform="translate(0, 80)">
+          <rect width="186" height="68" rx="8" fill="#141418" stroke="#27272a" stroke-width="1"/>
+          <text x="12" y="19" fill="#8b8b95" font-size="10" font-weight="600">TOKEN SAVINGS</text>
+          <text x="12" y="41" fill="#34d399" font-size="15.5" font-weight="700">Saved 88.7%</text>
+          <text x="12" y="57" fill="#8b8b95" font-size="10" font-family="'Cascadia Code', monospace">27.2k → 3.1k tok/turn</text>
+        </g>
+
+        <!-- 7-Day Recall -->
+        <g transform="translate(0, 156)">
           <rect width="186" height="62" rx="8" fill="#141418" stroke="#27272a" stroke-width="1"/>
-          <text x="12" y="20" fill="#71717a" font-size="10.5" font-weight="500">PROMPT TAX SAVED</text>
-          <text x="12" y="44" fill="#38bdf8" font-size="18" font-weight="700">94.4%</text>
-          <text x="100" y="44" fill="#10b981" font-size="11">↓ -16.2k</text>
+          <text x="12" y="19" fill="#8b8b95" font-size="10" font-weight="600">7-DAY RECALL</text>
+          <text x="12" y="42" fill="#fafafa" font-size="15" font-weight="700">5 recalls</text>
+          <text x="92" y="42" fill="#34d399" font-size="11" font-weight="600">· 3 helped</text>
         </g>
 
-        <!-- Bento Card 3: Rule Budget Watermark -->
-        <g transform="translate(0, 150)">
+        <!-- Core Rule Budget -->
+        <g transform="translate(0, 226)">
           <rect width="186" height="64" rx="8" fill="#141418" stroke="#27272a" stroke-width="1"/>
-          <text x="12" y="18" fill="#71717a" font-size="10" font-weight="500">CORE RULE BUDGET</text>
-          <text x="12" y="36" fill="#fafafa" font-size="13" font-family="'Cascadia Code', monospace">380 / 1500 tok</text>
+          <text x="12" y="18" fill="#8b8b95" font-size="10" font-weight="600">CORE RULE BUDGET</text>
+          <text x="12" y="36" fill="#fafafa" font-size="12.5" font-family="'Cascadia Code', monospace">132 / 1,500 tok</text>
           <rect x="12" y="45" width="162" height="5" rx="2.5" fill="#27272a"/>
-          <rect x="12" y="45" width="41" height="5" rx="2.5" fill="#10b981"/>
+          <rect x="12" y="45" width="16" height="5" rx="2.5" fill="#10b981"/>
         </g>
       </g>
     </g>
 
-    <!-- Column 2: Center Stage (Topology & Capabilities) (580px) -->
+    <!-- Column 2: Center Stage (580px: x=210..790; inner 540px at x=230..770, zero overlap!) -->
     <g transform="translate(210, 44)">
-      <!-- Stage Header -->
-      <g transform="translate(20, 20)">
-        <text x="0" y="14" fill="#fafafa" font-size="15" font-weight="600">Orthogonal Capability &amp; AST Topology</text>
-        <text x="0" y="32" fill="#71717a" font-size="11.5">Rules &amp; Skills → Cognitive Memories → AST Source Files &amp; Live Callers</text>
+      <g transform="translate(20, 18)">
+        <text x="0" y="14" fill="#fafafa" font-size="15" font-weight="700">Orthogonal Capability &amp; AST* Topology</text>
+        <text x="0" y="32" fill="#8b8b95" font-size="11.5">Rules (<tspan fill="#38bdf8">●</tspan>) · Skills (<tspan fill="#a78bfa">●</tspan>) · Tools (<tspan fill="#f59e0b">●</tspan>) → Memories (<tspan fill="#34d399">●</tspan>) → Live Source Symbols</text>
       </g>
 
-      <!-- SVG Topology Bezier Connectors -->
-      <g transform="translate(20, 70)">
-        <!-- Curved Paths -->
-        <path d="M 160 55 C 210 55, 210 115, 260 115" fill="none" stroke="#3b82f6" stroke-width="1.8" opacity="0.75"/>
-        <path d="M 160 175 C 210 175, 210 115, 260 115" fill="none" stroke="#27272a" stroke-width="1.5"/>
-        <path d="M 160 295 C 210 295, 210 235, 260 235" fill="none" stroke="#27272a" stroke-width="1.5"/>
-        <path d="M 400 115 C 450 115, 450 75, 490 75" fill="none" stroke="#3b82f6" stroke-width="1.8" opacity="0.75"/>
-        <path d="M 400 115 C 450 115, 450 195, 490 195" fill="none" stroke="#3b82f6" stroke-width="1.8" opacity="0.75"/>
-        <path d="M 400 235 C 450 235, 450 295, 490 295" fill="none" stroke="#27272a" stroke-width="1.5"/>
+      <!-- SVG Topology Bezier Connectors (max X = 540 inside 580 stage) -->
+      <g transform="translate(20, 72)">
+        <path d="M 152 55 C 176 55, 176 115, 198 115" fill="none" stroke="#38bdf8" stroke-width="1.8" opacity="0.8"/>
+        <path d="M 152 165 C 176 165, 176 115, 198 115" fill="none" stroke="#a78bfa" stroke-width="1.5" opacity="0.65"/>
+        <path d="M 152 275 C 176 275, 176 225, 198 225" fill="none" stroke="#f59e0b" stroke-width="1.5" opacity="0.65"/>
+        <path d="M 350 115 C 370 115, 370 65, 390 65" fill="none" stroke="#34d399" stroke-width="1.8" opacity="0.85"/>
+        <path d="M 350 115 C 370 115, 370 165, 390 165" fill="none" stroke="#34d399" stroke-width="1.8" opacity="0.85"/>
+        <path d="M 350 225 C 370 225, 370 275, 390 275" fill="none" stroke="#27272a" stroke-width="1.5"/>
 
-        <!-- Column A Nodes (Rules & Skills) -->
+        <!-- Column A: Rules, Skills, Micro-Tools (x=0..152) -->
         <g transform="translate(0, 30)">
-          <rect width="160" height="50" rx="6" fill="#141418" stroke="#3b82f6" stroke-width="1.2"/>
-          <circle cx="14" cy="25" r="3.5" fill="#10b981"/>
-          <text x="26" y="21" fill="#fafafa" font-size="11" font-weight="600">esm-typescript-imports</text>
-          <text x="26" y="36" fill="#71717a" font-size="9.5" font-family="'Cascadia Code', monospace">rule · .evo/rules</text>
+          <rect width="152" height="50" rx="6" fill="#141418" stroke="#38bdf8" stroke-width="1.2"/>
+          <circle cx="13" cy="25" r="3.5" fill="#38bdf8"/>
+          <text x="23" y="21" fill="#fafafa" font-size="10.5" font-weight="600">esm-typescript-imports</text>
+          <text x="23" y="36" fill="#8b8b95" font-size="9.5" font-family="'Cascadia Code', monospace">rule · .evo/rules</text>
         </g>
 
-        <g transform="translate(0, 150)">
-          <rect width="160" height="50" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
-          <circle cx="14" cy="25" r="3.5" fill="#10b981"/>
-          <text x="26" y="21" fill="#fafafa" font-size="11" font-weight="600">bug-to-guardrail-sop</text>
-          <text x="26" y="36" fill="#71717a" font-size="9.5" font-family="'Cascadia Code', monospace">skill · .evo/skills</text>
+        <g transform="translate(0, 140)">
+          <rect width="152" height="50" rx="6" fill="#141418" stroke="#a78bfa" stroke-width="1.1"/>
+          <circle cx="13" cy="25" r="3.5" fill="#a78bfa"/>
+          <text x="23" y="21" fill="#fafafa" font-size="10.5" font-weight="600">bug-to-guardrail-sop</text>
+          <text x="23" y="36" fill="#8b8b95" font-size="9.5" font-family="'Cascadia Code', monospace">skill · L0/L1/L2</text>
         </g>
 
-        <g transform="translate(0, 270)">
-          <rect width="160" height="50" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
-          <circle cx="14" cy="25" r="3.5" fill="#10b981"/>
-          <text x="26" y="21" fill="#fafafa" font-size="11" font-weight="600">evo-release-preflight</text>
-          <text x="26" y="36" fill="#71717a" font-size="9.5" font-family="'Cascadia Code', monospace">tool · node script</text>
+        <g transform="translate(0, 250)">
+          <rect width="152" height="50" rx="6" fill="#141418" stroke="#f59e0b" stroke-width="1.1"/>
+          <circle cx="13" cy="25" r="3.5" fill="#f59e0b"/>
+          <text x="23" y="21" fill="#fafafa" font-size="10.5" font-weight="600">agy-config-auditor</text>
+          <text x="23" y="36" fill="#8b8b95" font-size="9.5" font-family="'Cascadia Code', monospace">tool · sandbox exit 0</text>
         </g>
 
-        <!-- Column B Nodes (Cognitive Memories) -->
-        <g transform="translate(240, 90)">
-          <rect width="160" height="50" rx="6" fill="#181820" stroke="#3b82f6" stroke-width="1.5"/>
-          <circle cx="14" cy="25" r="3.5" fill="#10b981"/>
-          <text x="26" y="21" fill="#38bdf8" font-size="11" font-weight="600">url-userinfo-spoof</text>
-          <text x="26" y="36" fill="#a1a1aa" font-size="9.5" font-family="'Cascadia Code', monospace">memory · AST Verified</text>
+        <!-- Column B: Cognitive Memories (x=198..350) -->
+        <g transform="translate(198, 90)">
+          <rect width="152" height="50" rx="6" fill="#181820" stroke="#34d399" stroke-width="1.5"/>
+          <circle cx="13" cy="25" r="3.5" fill="#34d399"/>
+          <text x="23" y="21" fill="#34d399" font-size="10.5" font-weight="700">router-slash-loop</text>
+          <text x="23" y="36" fill="#d4d4d8" font-size="9.5" font-family="'Cascadia Code', monospace">memory · VERIFIED</text>
         </g>
 
-        <g transform="translate(240, 210)">
-          <rect width="160" height="50" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
-          <circle cx="14" cy="25" r="3.5" fill="#10b981"/>
-          <text x="26" y="21" fill="#fafafa" font-size="11" font-weight="600">powershell-quote-fix</text>
-          <text x="26" y="36" fill="#71717a" font-size="9.5" font-family="'Cascadia Code', monospace">memory · AST Verified</text>
+        <g transform="translate(198, 200)">
+          <rect width="152" height="50" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
+          <circle cx="13" cy="25" r="3.5" fill="#34d399"/>
+          <text x="23" y="21" fill="#fafafa" font-size="10.5" font-weight="600">bom-config-guard</text>
+          <text x="23" y="36" fill="#8b8b95" font-size="9.5" font-family="'Cascadia Code', monospace">memory · VERIFIED</text>
         </g>
 
-        <!-- Column C Nodes (Source AST Files & Functions) -->
-        <g transform="translate(480, 50)">
-          <rect width="160" height="50" rx="6" fill="#141418" stroke="#3b82f6" stroke-width="1.2"/>
-          <circle cx="14" cy="25" r="3.5" fill="#3b82f6"/>
-          <text x="26" y="21" fill="#fafafa" font-size="11" font-weight="600">src/cli/ui.ts</text>
-          <text x="26" y="36" fill="#71717a" font-size="9.5" font-family="'Cascadia Code', monospace">#isValidLocalHttpUrl</text>
+        <!-- Column C: Source AST Files & Functions (x=390..540) -->
+        <g transform="translate(390, 40)">
+          <rect width="150" height="50" rx="6" fill="#141418" stroke="#34d399" stroke-width="1.2"/>
+          <circle cx="13" cy="25" r="3.5" fill="#34d399"/>
+          <text x="23" y="21" fill="#fafafa" font-size="10.5" font-weight="600">src/router.ts</text>
+          <text x="23" y="36" fill="#8b8b95" font-size="9.5" font-family="'Cascadia Code', monospace">#normalizeRoutePath</text>
         </g>
 
-        <g transform="translate(480, 170)">
-          <rect width="160" height="50" rx="6" fill="#141418" stroke="#3b82f6" stroke-width="1.2"/>
-          <circle cx="14" cy="25" r="3.5" fill="#3b82f6"/>
-          <text x="26" y="21" fill="#fafafa" font-size="11" font-weight="600">src/cli/ui.ts</text>
-          <text x="26" y="36" fill="#71717a" font-size="9.5" font-family="'Cascadia Code', monospace">#POST /api/action</text>
+        <g transform="translate(390, 140)">
+          <rect width="150" height="50" rx="6" fill="#141418" stroke="#34d399" stroke-width="1.2"/>
+          <circle cx="13" cy="25" r="3.5" fill="#34d399"/>
+          <text x="23" y="21" fill="#fafafa" font-size="10.5" font-weight="600">src/router.ts</text>
+          <text x="23" y="36" fill="#8b8b95" font-size="9.5" font-family="'Cascadia Code', monospace">#dispatchRequest</text>
         </g>
 
-        <g transform="translate(480, 270)">
-          <rect width="160" height="50" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
-          <circle cx="14" cy="25" r="3.5" fill="#10b981"/>
-          <text x="26" y="21" fill="#fafafa" font-size="11" font-weight="600">src/cli/init.ts</text>
-          <text x="26" y="36" fill="#71717a" font-size="9.5" font-family="'Cascadia Code', monospace">#mountIdeExtensions</text>
+        <g transform="translate(390, 250)">
+          <rect width="150" height="50" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
+          <circle cx="13" cy="25" r="3.5" fill="#10b981"/>
+          <text x="23" y="21" fill="#fafafa" font-size="10.5" font-weight="600">src/validator.ts</text>
+          <text x="23" y="36" fill="#8b8b95" font-size="9.5" font-family="'Cascadia Code', monospace">#parseJsonConfig</text>
         </g>
       </g>
 
-      <!-- Bottom Benchmark Card inside Stage -->
-      <g transform="translate(20, 460)">
-        <rect width="660" height="96" rx="8" fill="#141418" stroke="#27272a" stroke-width="1"/>
-        <text x="16" y="24" fill="#a1a1aa" font-size="11" font-weight="600">CONTEXT TAX BENCHMARK (TURNS 1-50)</text>
-        <line x1="16" y1="36" x2="644" y2="36" stroke="#27272a" stroke-width="0.8"/>
-        <text x="16" y="60" fill="#71717a" font-size="11">Standard Host Rules:</text>
-        <rect x="140" y="50" width="360" height="12" rx="3" fill="#ef4444" opacity="0.6"/>
-        <text x="510" y="61" fill="#ef4444" font-size="11" font-family="'Cascadia Code', monospace">18,400 tok/req</text>
+      <!-- Bottom Session-Start Prefix Card inside Stage (width=540 inside 580) -->
+      <g transform="translate(20, 434)">
+        <rect width="540" height="124" rx="8" fill="#141418" stroke="#27272a" stroke-width="1"/>
+        <text x="16" y="23" fill="#d4d4d8" font-size="10.5" font-weight="700" letter-spacing="0.04em">SESSION-START TOKEN TAX (50-TURN BENCHMARK SSOT)</text>
+        <line x1="16" y1="34" x2="524" y2="34" stroke="#27272a" stroke-width="0.8"/>
 
-        <text x="16" y="82" fill="#71717a" font-size="11">EvoKernel L0 Seed:</text>
-        <rect x="140" y="72" width="24" height="12" rx="3" fill="#10b981"/>
-        <text x="174" y="83" fill="#10b981" font-size="11" font-family="'Cascadia Code', monospace">1,024 tok/req (-94.4%)</text>
+        <text x="16" y="58" fill="#8b8b95" font-size="11">Raw Multi-MCP (77 tools):</text>
+        <rect x="168" y="48" width="236" height="11" rx="3" fill="#ef4444" opacity="0.65"/>
+        <text x="414" y="58" fill="#f87171" font-size="10.5" font-family="'Cascadia Code', monospace">27,150 tok/turn</text>
+
+        <text x="16" y="84" fill="#fafafa" font-size="11" font-weight="600">EvoKernel (5 tools + L0):</text>
+        <rect x="168" y="74" width="27" height="11" rx="3" fill="#10b981"/>
+        <text x="204" y="84" fill="#34d399" font-size="10.5" font-weight="700" font-family="'Cascadia Code', monospace">3,066 tok/turn (Saved 88.7%)</text>
+
+        <text x="16" y="108" fill="#8b8b95" font-size="10">* AST = zero-dependency lexical-structural skeleton &amp; call-anchor fingerprinting (0 external compilers).</text>
       </g>
     </g>
 
-    <!-- Column 3: Right Inspector (350px) -->
+    <!-- Column 3: Right Inspector Drawer (350px: x=790..1140) -->
     <g transform="translate(790, 44)">
       <line x1="0" y1="0" x2="0" y2="586" stroke="#27272a" stroke-width="1"/>
       <rect width="350" height="586" fill="#0f0f13"/>
 
       <!-- Inspector Header & Actions -->
       <g transform="translate(16, 16)">
-        <rect x="0" y="0" width="60" height="18" rx="4" fill="rgba(59,130,246,0.15)" stroke="rgba(59,130,246,0.3)"/>
-        <text x="7" y="12.5" fill="#3b82f6" font-size="10" font-weight="600">MEMORY</text>
-        <text x="68" y="14" fill="#a1a1aa" font-size="11" font-family="'Cascadia Code', monospace">url-userinfo-spoof</text>
+        <rect x="0" y="0" width="62" height="18" rx="4" fill="rgba(52,211,153,0.14)" stroke="rgba(52,211,153,0.35)"/>
+        <text x="31" y="12.5" text-anchor="middle" fill="#34d399" font-size="9.5" font-weight="700">MEMORY</text>
+        <text x="70" y="13.5" fill="#fafafa" font-size="11.5" font-weight="600" font-family="'Cascadia Code', monospace">router-slash-loop</text>
 
-        <!-- Inspector Action Buttons (Sans font) -->
-        <g transform="translate(0, 30)">
-          <rect width="90" height="26" rx="5" fill="#181820" stroke="#2e2e38" stroke-width="1"/>
-          <text x="10" y="17" fill="#fafafa" font-size="11" font-weight="500">↗ Open IDE</text>
+        <g transform="translate(0, 28)">
+          <rect width="92" height="26" rx="5" fill="#181820" stroke="#2e2e38" stroke-width="1"/>
+          <text x="46" y="16.5" text-anchor="middle" fill="#fafafa" font-size="10.5" font-weight="500">↗ Open IDE</text>
 
-          <rect x="98" y="0" width="86" height="26" rx="5" fill="#181820" stroke="#2e2e38" stroke-width="1"/>
-          <text x="108" y="17" fill="#fafafa" font-size="11" font-weight="500">✓ Verify AST</text>
+          <rect x="100" y="0" width="90" height="26" rx="5" fill="#181820" stroke="#2e2e38" stroke-width="1"/>
+          <text x="145" y="16.5" text-anchor="middle" fill="#fafafa" font-size="10.5" font-weight="500">✓ Verify AST</text>
 
-          <rect x="192" y="0" width="60" height="26" rx="5" fill="#181820" stroke="#2e2e38" stroke-width="1"/>
-          <text x="204" y="17" fill="#fafafa" font-size="11" font-weight="500">✎ Edit</text>
+          <rect x="198" y="0" width="64" height="26" rx="5" fill="#181820" stroke="#2e2e38" stroke-width="1"/>
+          <text x="230" y="16.5" text-anchor="middle" fill="#fafafa" font-size="10.5" font-weight="500">✎ Edit</text>
         </g>
       </g>
 
-      <!-- AST Code Anchors Section -->
-      <g transform="translate(16, 92)">
-        <text x="0" y="14" fill="#71717a" font-size="10" font-weight="600" letter-spacing="0.06em">AST CODE ANCHORS</text>
-        <g transform="translate(0, 22)">
-          <rect width="318" height="52" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
-          <text x="12" y="22" fill="#fafafa" font-size="11.5" font-family="'Cascadia Code', monospace">src/cli/ui.ts:1042</text>
-          <text x="240" y="22" fill="#10b981" font-size="10" font-weight="600">VERIFIED</text>
-          <text x="12" y="40" fill="#71717a" font-size="10.5">isValidLocalHttpUrl() guard against @ spoof</text>
+      <!-- TL;DR Summary -->
+      <g transform="translate(16, 84)">
+        <text x="0" y="12" fill="#8b8b95" font-size="10" font-weight="700" letter-spacing="0.06em">TL;DR SUMMARY</text>
+        <rect y="20" width="318" height="48" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
+        <text x="12" y="39" fill="#fafafa" font-size="10.5">Root "/" route stripped to empty string → 308 loop</text>
+        <text x="12" y="56" fill="#8b8b95" font-size="10">Guard "/" before trimming leading/trailing slashes.</text>
+      </g>
+
+      <!-- Symptom / Root Cause / Solution Triad -->
+      <g transform="translate(16, 168)">
+        <text x="0" y="12" fill="#8b8b95" font-size="10" font-weight="700" letter-spacing="0.06em">DIAGNOSTIC TRIAD</text>
+
+        <g transform="translate(0, 20)">
+          <rect width="318" height="62" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
+          <text x="12" y="18" fill="#f87171" font-size="9.5" font-weight="700">SYMPTOM</text>
+          <text x="12" y="35" fill="#d4d4d8" font-size="10.5">GET / entered an infinite 308 redirect loop when</text>
+          <text x="12" y="50" fill="#d4d4d8" font-size="10.5">trailing-slash normalization ran pre-dispatch.</text>
+        </g>
+
+        <g transform="translate(0, 90)">
+          <rect width="318" height="62" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
+          <text x="12" y="18" fill="#f59e0b" font-size="9.5" font-weight="700">ROOT CAUSE</text>
+          <text x="12" y="35" fill="#d4d4d8" font-size="10.5">Unconditional slash stripping turned "/" into "",</text>
+          <text x="12" y="50" fill="#d4d4d8" font-size="10.5">re-triggering canonical redirect on each request.</text>
+        </g>
+
+        <g transform="translate(0, 160)">
+          <rect width="318" height="62" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
+          <text x="12" y="18" fill="#34d399" font-size="9.5" font-weight="700">VERIFIED SOLUTION</text>
+          <text x="12" y="35" fill="#d4d4d8" font-size="10.5">Return "/" early when trimmed path is "/" or empty,</text>
+          <text x="12" y="50" fill="#d4d4d8" font-size="10.5">then prefix single "/" on normalized segments.</text>
         </g>
       </g>
 
-      <!-- Live Terminal Console -->
-      <g transform="translate(16, 260)">
-        <text x="0" y="14" fill="#71717a" font-size="10" font-weight="600" letter-spacing="0.06em">SANDBOX TERMINAL CONSOLE</text>
-        <rect y="22" width="318" height="270" rx="6" fill="#09090b" stroke="#27272a" stroke-width="1"/>
-        <g transform="translate(12, 44)" font-family="'Cascadia Code', 'SF Mono', monospace" font-size="10.5">
-          <text y="0" fill="#10b981">▶ evo test:regression</text>
-          <text y="20" fill="#a1a1aa">✔ 11/11 suites passed (19.6s)</text>
-          <text y="40" fill="#a1a1aa">✔ 306/306 tests passed</text>
-          <text y="60" fill="#a1a1aa">✔ 0 runtime dependencies</text>
-          <text y="90" fill="#38bdf8">▶ evo release-preflight</text>
-          <text y="110" fill="#a1a1aa">status: READY</text>
-          <text y="130" fill="#a1a1aa">manifest_parity: OK</text>
-          <text y="150" fill="#a1a1aa">codegraph_status: FRESH</text>
-          <text y="180" fill="#10b981">✔ Ready for sync: main (8d262a5)</text>
+      <!-- AST Code Anchors -->
+      <g transform="translate(16, 408)">
+        <text x="0" y="12" fill="#8b8b95" font-size="10" font-weight="700" letter-spacing="0.06em">AST* SYMBOL ANCHORS (2/2 FRESH)</text>
+        <g transform="translate(0, 20)">
+          <rect width="318" height="66" rx="6" fill="#141418" stroke="#27272a" stroke-width="1"/>
+          <text x="12" y="21" fill="#fafafa" font-size="11" font-family="'Cascadia Code', monospace">src/router.ts:1-6</text>
+          <rect x="242" y="8" width="64" height="17" rx="4" fill="rgba(16,185,129,0.14)"/>
+          <text x="274" y="20" text-anchor="middle" fill="#34d399" font-size="9.5" font-weight="700">VERIFIED</text>
+          <text x="12" y="39" fill="#8b8b95" font-size="10" font-family="'Cascadia Code', monospace">fn normalizeRoutePath(rawPath)</text>
+          <text x="12" y="55" fill="#38bdf8" font-size="10" font-family="'Cascadia Code', monospace">↳ Caller: src/router.ts:8 (#dispatchRequest)</text>
+        </g>
+        <g transform="translate(0, 94)">
+          <rect width="318" height="48" rx="6" fill="rgba(16,185,129,0.06)" stroke="rgba(16,185,129,0.28)" stroke-width="1"/>
+          <text x="12" y="20" fill="#34d399" font-size="9.5" font-weight="700">🛡️ EVOKERNEL RECALL RECEIPT</text>
+          <text x="12" y="37" fill="#d4d4d8" font-size="10" font-family="'Cascadia Code', monospace">[memory] router-slash-loop · 3x helped (7d)</text>
         </g>
       </g>
     </g>

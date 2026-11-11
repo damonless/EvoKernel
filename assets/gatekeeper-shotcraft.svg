@@ -113,12 +113,12 @@
   <g id="header-row" transform="translate(36, 16)">
     <rect x="0" y="0" width="350" height="30" rx="15" fill="rgba(16,185,129,0.12)" stroke="rgba(16,185,129,0.3)"/>
     <circle cx="16" cy="15" r="4.5" fill="#10b981" filter="url(#glowEmerald)"/>
-    <text x="28" y="19" class="mono" font-size="11" font-weight="800" fill="#ffffff">DETERMINISTIC 4-STAGE GATEKEEPER</text>
+    <text x="28" y="19" class="mono" font-size="11" font-weight="800" fill="#ffffff">DETERMINISTIC 6-STAGE GATEKEEPER</text>
     <text x="246" y="19" class="mono" font-size="10" font-weight="700" fill="#34d399">OFFLINE COMPILER</text>
 
     <!-- Subtitle -->
     <text x="368" y="20" class="sans" font-size="12" fill="#94a3b8">
-      Guarantees Zero Bad Capabilities in Production • Offline Git Worktree Isolation • AST Structural Anchoring
+      Guarantees Zero Bad Capabilities in Production • Offline Git Worktree Isolation • AST* Structural Anchoring
     </text>
 
     <!-- Status Badge -->
@@ -126,23 +126,23 @@
     <text x="1064" y="19" class="mono" font-size="10.5" font-weight="700" fill="#38bdf8" text-anchor="middle">0 BYPASSES · PASS</text>
   </g>
 
-  <!-- ==================== 4 BENTO GATE CARDS ==================== -->
+  <!-- ==================== 4 BENTO GATE CARDS (6 STAGES) ==================== -->
   <g id="bento-gates" transform="translate(36, 62)">
 
-    <!-- ========== GATE 1: STATIC SECURITY & LEXICAL DE-SYMBOL ========== -->
+    <!-- ========== STAGES 1–2: STATIC SECURITY & LEXICAL DE-SYMBOL ========== -->
     <g id="gate-1" transform="translate(0, 0)">
       <rect width="268" height="350" rx="14" fill="url(#cardGrad)" stroke="#ef4444" stroke-width="1.8" class="card-1"/>
 
       <!-- Header Tag -->
-      <rect x="18" y="18" width="94" height="20" rx="4" fill="rgba(239,68,68,0.18)" stroke="#ef4444"/>
-      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#f87171">GATE 1 · STATIC</text>
+      <rect x="18" y="18" width="118" height="20" rx="4" fill="rgba(239,68,68,0.18)" stroke="#ef4444"/>
+      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#f87171">STAGES 1–2 · STATIC</text>
 
-      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">Static &amp; Lexical Guard</text>
-      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">AST De-Symbolization Check</text>
+      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">Security &amp; Lexical SSOT</text>
+      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Path Portability &amp; De-Symbol</text>
 
       <!-- Checklist -->
       <g transform="translate(18, 96)" class="mono" font-size="10.5" fill="#cbd5e1">
-        <text x="0" y="0">• Blocks absolute paths</text>
+        <text x="0" y="0">• Blocks hardcoded user paths</text>
         <text x="0" y="20">• Detects leaked secrets / keys</text>
         <text x="0" y="40">• SSOT: Rejects &gt;2 code symbols</text>
         <text x="0" y="60">• Strips magic number thresholds</text>
@@ -168,35 +168,35 @@
       <polygon points="16,-4 22,0 16,4" fill="#38bdf8"/>
     </g>
 
-    <!-- ========== GATE 2: 16-HEX AST ANCHOR & SANDBOX SELF-TEST ========== -->
+    <!-- ========== STAGE 3: 16-HEX AST ANCHOR & SANDBOX SELF-TEST ========== -->
     <g id="gate-2" transform="translate(288, 0)">
       <rect width="268" height="350" rx="14" fill="url(#cardGrad)" stroke="rgba(255,255,255,0.08)" stroke-width="1.4" class="card-2"/>
 
-      <rect x="18" y="18" width="94" height="20" rx="4" fill="rgba(56,189,248,0.18)" stroke="#38bdf8"/>
-      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#38bdf8">GATE 2 · SEMANTIC</text>
+      <rect x="18" y="18" width="108" height="20" rx="4" fill="rgba(56,189,248,0.18)" stroke="#38bdf8"/>
+      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#38bdf8">STAGE 3 · SANDBOX</text>
 
-      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">16-Hex AST &amp; Sandbox</text>
+      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">16-Hex AST* &amp; Self-Test</text>
       <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Deterministic --self-test exit(0)</text>
 
       <!-- Checklist -->
       <g transform="translate(18, 96)" class="mono" font-size="10.5" fill="#cbd5e1">
-        <text x="0" y="0">• 16-hex AST structural hashing</text>
-        <text x="0" y="20">• Verifies live callers in AST</text>
+        <text x="0" y="0">• 16-hex AST* skeleton hashing</text>
+        <text x="0" y="20">• Verifies live callers in AST*</text>
         <text x="0" y="40">• Micro-tool runs --self-test</text>
-        <text x="0" y="60">• Requires exit(0) &amp; 0 side effects</text>
+        <text x="0" y="60">• Requires exit(0) &amp; rollback</text>
       </g>
 
       <!-- Verification Status Box -->
       <g transform="translate(16, 180)">
         <rect width="236" height="74" rx="8" fill="rgba(56,189,248,0.1)" stroke="rgba(56,189,248,0.35)"/>
-        <text x="10" y="20" class="mono" font-size="10" font-weight="800" fill="#38bdf8">[VERIFIED: AST MATCH]</text>
-        <text x="10" y="38" class="mono" font-size="9.5" fill="#bae6fd">#8f3c7a2b · 16/16 anchors live</text>
+        <text x="10" y="20" class="mono" font-size="10" font-weight="800" fill="#38bdf8">[VERIFIED: AST* MATCH]</text>
+        <text x="10" y="38" class="mono" font-size="9.5" fill="#bae6fd">#8f3c7a2b · 36/36 anchors live</text>
         <text x="10" y="56" class="mono" font-size="9" fill="#94a3b8">Sandbox executed in 14ms (exit 0)</text>
       </g>
 
       <rect x="18" y="306" width="232" height="24" rx="6" fill="#040609" stroke="rgba(56,189,248,0.2)"/>
       <circle cx="30" cy="318" r="3.5" fill="#38bdf8"/>
-      <text x="40" y="322" class="mono" font-size="9.5" font-weight="700" fill="#38bdf8">AST anti-drift anchor guaranteed</text>
+      <text x="40" y="322" class="mono" font-size="9.5" font-weight="700" fill="#38bdf8">AST* anti-drift anchor guaranteed</text>
     </g>
 
     <!-- Connector 2 -> 3 -->
@@ -205,30 +205,30 @@
       <polygon points="16,-4 22,0 16,4" fill="#34d399"/>
     </g>
 
-    <!-- ========== GATE 3: FTS5 BM25 DEDUP & CAUSAL ATTRIBUTION ========== -->
+    <!-- ========== STAGES 4–5: FTS5 BM25 DEDUP & 1,500-TOKEN BUDGET ========== -->
     <g id="gate-3" transform="translate(576, 0)">
       <rect width="268" height="350" rx="14" fill="url(#cardGrad)" stroke="rgba(255,255,255,0.08)" stroke-width="1.4" class="card-3"/>
 
-      <rect x="18" y="18" width="102" height="20" rx="4" fill="rgba(52,211,153,0.18)" stroke="#34d399"/>
-      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#34d399">GATE 3 · STATISTICAL</text>
+      <rect x="18" y="18" width="122" height="20" rx="4" fill="rgba(52,211,153,0.18)" stroke="#34d399"/>
+      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#34d399">STAGES 4–5 · BUDGET</text>
 
-      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">FTS5 BM25 &amp; Causal ROI</text>
-      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Dedup &amp; Anti-Confounding</text>
+      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">BM25 Dedup &amp; 1,500-Tok</text>
+      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Collision Guard &amp; Scoped Quotas</text>
 
       <!-- Checklist -->
       <g transform="translate(18, 96)" class="mono" font-size="10.5" fill="#cbd5e1">
         <text x="0" y="0">• FTS5 BM25 Cosine Sim ≤ 0.85</text>
         <text x="0" y="20">• CJK / EN synonym collision guard</text>
-        <text x="0" y="40">• Multi-turn causal regression check</text>
-        <text x="0" y="60">• Helped vs Hurt attribution test</text>
+        <text x="0" y="40">• Strict 1,500-token core budget</text>
+        <text x="0" y="60">• Bucket quota limit (max 3/scope)</text>
       </g>
 
       <!-- Verification Status Box -->
       <g transform="translate(16, 180)">
         <rect width="236" height="74" rx="8" fill="rgba(52,211,153,0.1)" stroke="rgba(52,211,153,0.35)"/>
-        <text x="10" y="20" class="mono" font-size="10" font-weight="800" fill="#34d399">[VERIFIED: UNIQUE DELTA]</text>
-        <text x="10" y="38" class="mono" font-size="9.5" fill="#a7f3d0">ROI +18.4% · 0 duplication</text>
-        <text x="10" y="56" class="mono" font-size="9" fill="#94a3b8">No semantic collision with .evo/</text>
+        <text x="10" y="20" class="mono" font-size="10" font-weight="800" fill="#34d399">[VERIFIED: BUDGET &amp; DEDUP]</text>
+        <text x="10" y="38" class="mono" font-size="9.5" fill="#a7f3d0">132 / 1,500 tok · 0 collision</text>
+        <text x="10" y="56" class="mono" font-size="9" fill="#94a3b8">Scoped bucket within 3/scope cap</text>
       </g>
 
       <rect x="18" y="306" width="232" height="24" rx="6" fill="#040609" stroke="rgba(52,211,153,0.2)"/>
@@ -242,20 +242,20 @@
       <polygon points="16,-4 22,0 16,4" fill="#10b981"/>
     </g>
 
-    <!-- ========== GATE 4: 1,500-TOKEN CAP & ISOLATED GIT WORKTREE ========== -->
+    <!-- ========== STAGE 6: CAUSAL ANTI-CONFOUNDING & GIT WORKTREE ========== -->
     <g id="gate-4" transform="translate(864, 0)">
       <rect width="264" height="350" rx="14" fill="url(#cardGrad)" stroke="rgba(255,255,255,0.08)" stroke-width="1.4" class="card-4"/>
 
-      <rect x="18" y="18" width="114" height="20" rx="4" fill="rgba(16,185,129,0.22)" stroke="#10b981"/>
-      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#34d399">GATE 4 · WORKTREE</text>
+      <rect x="18" y="18" width="110" height="20" rx="4" fill="rgba(16,185,129,0.22)" stroke="#10b981"/>
+      <text x="24" y="32" class="mono" font-size="10" font-weight="800" fill="#34d399">STAGE 6 · CAUSAL</text>
 
-      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">1,500-Tok &amp; Worktree</text>
-      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Isolated Git Probe &amp; Commit</text>
+      <text x="18" y="60" class="sans" font-size="13" font-weight="800" fill="#ffffff">Causal ROI &amp; Worktree</text>
+      <text x="18" y="76" class="mono" font-size="10" fill="#94a3b8">Anti-Confounding &amp; Git Probe</text>
 
       <!-- Checklist -->
       <g transform="translate(18, 96)" class="mono" font-size="10.5" fill="#cbd5e1">
-        <text x="0" y="0">• Strict 1,500 token budget cap</text>
-        <text x="0" y="20">• Bucket quota limit (max 3/scope)</text>
+        <text x="0" y="0">• Helped / Hurt / Contested ledger</text>
+        <text x="0" y="20">• ERR_CONFOUNDED_CAUSATION guard</text>
         <text x="0" y="40">• Isolated git worktree dry-run</text>
         <text x="0" y="60">• Atomic fast-forward merge</text>
       </g>
@@ -264,7 +264,7 @@
       <g transform="translate(16, 180)">
         <rect width="232" height="74" rx="8" fill="rgba(16,185,129,0.14)" stroke="rgba(16,185,129,0.5)"/>
         <text x="10" y="20" class="mono" font-size="10" font-weight="800" fill="#34d399">[COMMITTED TO .evo/]</text>
-        <text x="10" y="38" class="mono" font-size="9.5" fill="#6ee7b7">1,492 / 1,500 tok · Quota OK</text>
+        <text x="10" y="38" class="mono" font-size="9.5" fill="#6ee7b7">Causal proof OK · 0 regressions</text>
         <text x="10" y="56" class="mono" font-size="9" fill="#94a3b8">Clean worktree merge into HEAD</text>
       </g>
 

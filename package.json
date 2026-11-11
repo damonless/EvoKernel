@@ -22,8 +22,15 @@
   "main": "./dist/index.js",
   "files": [
     "bin",
-    "dist",
-    "scripts",
+    "dist/index.js",
+    "dist/cli",
+    "dist/core",
+    "dist/ide",
+    "dist/mcp",
+    "dist/templates",
+    "scripts/antigravity_hook.mjs",
+    "scripts/boot-mcp.mjs",
+    "scripts/build.mjs",
     "templates",
     "rules",
     "skills",
@@ -33,8 +40,7 @@
     "gemini-extension.json",
     "server.json",
     "hooks.json",
-    "mcp_config.json",
-    "!README.zh-CN.md"
+    "mcp_config.json"
   ],
   "scripts": {
     "build": "node ./scripts/build.mjs",

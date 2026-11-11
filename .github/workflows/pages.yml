@@ -1,4 +1,4 @@
-name: Deploy EvoKernel Workbench 2.0 to GitHub Pages
+name: Deploy EvoKernel Landing & Workbench Demo to GitHub Pages
 
 on:
   push:
@@ -34,12 +34,11 @@ jobs:
       - name: "Build: ESM Bundle"
         run: npm run build
 
-      - name: "Export: Workbench 2.0"
+      - name: "Build & Audit: Landing Page + Synthetic Workbench Demo"
         run: |
-          mkdir -p public
-          node ./dist/cli/index.js ui --export public/index.html --anon
-          if grep -E -q '([A-Za-z]:\\\\Users|/home/|/Users/|"id":"(ceo-team-orchestrator|dual-agent-team|evo-dev-verification-sop|evo-release-preflight)")' public/index.html; then
-            echo "::error::Exported public/index.html contains absolute host paths or local-only skill identifiers!"
+          node ./scripts/build-pages.mjs
+          if grep -rnIE '(/Users/|/home/|(^|[^A-Za-z])[A-Za-z]:[/\\]|ghp_|sk-ant-|AKIA|"id":"(ceo-team-orchestrator|dual-agent-team|evo-dev-verification-sop|evo-release-preflight)")' public/; then
+            echo "::error::Generated public/ Pages bundle contains leaked host paths, credentials, or local-only skill identifiers!"
             exit 1
           fi
 
@@ -64,4 +63,4 @@ jobs:
       - name: "Pages: Skipped Notice"
         if: steps.pages_setup.outcome != 'success'
         run: |
-          echo "::notice title=GitHub Pages Not Enabled::GitHub Pages is not yet enabled in repository settings (Settings -> Pages -> Build and deployment -> Source: GitHub Actions). Static Workbench 2.0 export succeeded at ./public/index.html."
+          echo "::notice title=GitHub Pages Not Enabled::GitHub Pages is not yet enabled in repository settings (Settings -> Pages -> Build and deployment -> Source: GitHub Actions). Static Landing + EvoKernel Workbench Demo export succeeded in ./public/."

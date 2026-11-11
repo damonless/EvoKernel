@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel-cockpit",
   "displayName": "EvoKernel Workbench",
-  "description": "Deterministic Self-Evolving Meta-Kernel Cockpit & Cognitive Memory Workbench for AI Agents",
+  "description": "AST-Verified Cognitive Memory & Deterministic Context OS Workbench for AI Agents",
   "version": "0.3.0",
   "publisher": "damonless",
   "engines": {
@@ -30,13 +30,13 @@
     "commands": [
       {
         "command": "evo.openWorkbench",
-        "title": "EvoKernel: Open Workbench 2.0",
+        "title": "EvoKernel: Open Workbench",
         "category": "EvoKernel",
         "icon": "$(dashboard)"
       },
       {
         "command": "evo.viewCockpit",
-        "title": "EvoKernel: View Cockpit",
+        "title": "EvoKernel: Open Workbench (Legacy Alias)",
         "category": "EvoKernel",
         "icon": "$(layout-panel)"
       }

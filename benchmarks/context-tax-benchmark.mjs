@@ -42,10 +42,17 @@ const TOTAL_MONOLITHIC_KNOWLEDGE_TOKENS = Object.values(MONOLITHIC_KNOWLEDGE_TOK
   0
 );
 
-// EvoKernel Virtualized Footprint (dynamically measure live 5-tool MCP schema if built)
-let liveMetaMcpSchemaTokens = 380;
-let liveMetaMcpSchemaSource = 'static-fallback (380 tokens)';
+// EvoKernel Virtualized Footprint (shared META_MCP_5_TOOLS_TOKENS SSOT + live 5-tool MCP schema check)
+let liveMetaMcpSchemaTokens = 1916;
+let liveMetaMcpSchemaSource = 'static-baseline (5 tools, 1916 tokens @ ~3.8 chars/tok)';
 try {
+  const storagePath = path.join(rootDir, 'dist', 'core', 'storage.js');
+  if (fs.existsSync(storagePath)) {
+    const stMod = await import(pathToFileURL(storagePath).href);
+    if (typeof stMod.META_MCP_5_TOOLS_TOKENS === 'number') {
+      liveMetaMcpSchemaTokens = stMod.META_MCP_5_TOOLS_TOKENS;
+    }
+  }
   const serverPath = path.join(rootDir, 'dist', 'mcp', 'server.js');
   const handlersPath = path.join(rootDir, 'dist', 'mcp', 'handlers.js');
   let toolsDef = null;
@@ -62,7 +69,7 @@ try {
     liveMetaMcpSchemaSource = `live dist/mcp schema (${toolsDef.length} tools, ${liveMetaMcpSchemaTokens} tokens @ ~3.8 chars/tok)`;
   }
 } catch {
-  // Fallback to 380 tokens if dist/ is not yet built
+  // Fallback to META_MCP_5_TOOLS_TOKENS (1916 tokens) if dist/ is not yet built
 }
 
 const EVOKERNEL_FOOTPRINT = {
@@ -238,10 +245,27 @@ async function runLiveMicroBenchmarks() {
 
 const sim = runSimulation(50);
 const live = await runLiveMicroBenchmarks();
-const payload = { benchmark: sim, liveEngine: live };
+const payload = {
+  schemaSource: liveMetaMcpSchemaSource,
+  footprint: EVOKERNEL_FOOTPRINT,
+  benchmark: sim,
+  liveEngine: live,
+};
 
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify(payload, null, 2));
+  process.exit(0);
+}
+
+if (process.argv.includes('--markdown')) {
+  console.log(`| Metric | Raw MCP + Monolithic \`CLAUDE.md\` | EvoKernel 5-Tool Meta-Gateway | Improvement |
+| :--- | :---: | :---: | :---: |
+| **Exposed Tool Schemas** | ${sim.rawToolsCount} tools | **${sim.evoMetaToolsCount} fixed meta-tools** | **-93.5% schemas** |
+| **Session-Start Static Prefix / Turn** | ${sim.rawEagerTokensPerTurn.toLocaleString()} tokens | **${sim.evoBasePrefixTokens.toLocaleString()} tokens** | **-${sim.staticPrefixReductionPct}% session-start tax** |
+| **Mid-Session Cache Invalidations** | ${sim.rawCacheInvalidations} full prefix busts | **0 (100% cache hit)** | **100% cache shield** |
+| **50-Turn Cumulative Prompt Tokens** | ${sim.rawTotalInputTokens.toLocaleString()} tokens | **${sim.evoTotalInputTokens.toLocaleString()} tokens** | **-${sim.totalTokenSavingsPct}% total load** |
+| **50-Turn Cost (Claude Sonnet 4.5)** | $${sim.cost50TurnsUsd.sonnet.raw.toFixed(2)} | **$${sim.cost50TurnsUsd.sonnet.evo.toFixed(2)}** | **-${sim.cost50TurnsUsd.sonnet.savedPct}% API cost** |
+| **50-Turn Cost (Claude Opus 4.5)** | $${sim.cost50TurnsUsd.opus.raw.toFixed(2)} | **$${sim.cost50TurnsUsd.opus.evo.toFixed(2)}** | **-${sim.cost50TurnsUsd.opus.savedPct}% API cost** |`);
   process.exit(0);
 }
 

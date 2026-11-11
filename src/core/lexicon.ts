@@ -87,6 +87,7 @@ export const BASE_CANONICAL_MAP = new Map<string, string>([
   ['endpoint', 'port'],
   ['网络', 'network'],
   ['network', 'network'],
+  ['net', 'network'],
   ['git', 'git'],
   ['branch', 'git'],
   ['工作', 'workbook'],
@@ -115,22 +116,87 @@ export function compileLexiconConfig(config?: DomainLexiconConfig): CompiledLexi
   }
 
   const canonicalMap = new Map<string, string>(BASE_CANONICAL_MAP);
-  for (const [key, synList] of Object.entries(mergedSynonyms)) {
-    const lowerKey = key.toLowerCase();
-    if (canonicalMap.has(lowerKey)) continue;
-    if (!/^[a-z0-9_-]+$/.test(lowerKey)) {
-      const primaryAscii = synList
-        .map((t) => String(t).toLowerCase())
-        .find((t) => /^[a-z0-9_-]+$/.test(t));
-      const root = primaryAscii
-        ? canonicalMap.get(primaryAscii) || primaryAscii
-        : lowerKey;
-      canonicalMap.set(lowerKey, root);
-      if (primaryAscii && !canonicalMap.has(primaryAscii)) {
-        canonicalMap.set(primaryAscii, root);
+
+  const appendToRootSynonyms = (root: string, tokens: string[]) => {
+    const existing = mergedSynonyms[root] || [];
+    const combined = new Set<string>(existing);
+    for (const tok of tokens) {
+      if (tok && tok !== root) {
+        combined.add(tok);
       }
-    } else {
-      canonicalMap.set(lowerKey, lowerKey);
+    }
+    mergedSynonyms[root] = Array.from(combined);
+  };
+
+  if (config?.synonyms) {
+    // Pass 1: Register standalone ASCII custom keys not yet in BASE_CANONICAL_MAP as their own roots
+    // (e.g. "voltage", "current", "adc", "pcb", "pin") so associative neighbor lists do not collapse them.
+    for (const key of Object.keys(config.synonyms)) {
+      const lowerKey = key.toLowerCase();
+      if (/^[a-z0-9_-]+$/.test(lowerKey) && !canonicalMap.has(lowerKey)) {
+        canonicalMap.set(lowerKey, lowerKey);
+      }
+    }
+
+    // Pass 2: Resolve canonical roots for custom keys (including keys already in BASE_CANONICAL_MAP like "网络")
+    // and track candidate root claims for unmapped custom synonyms without collapsing CORE_SOFTWARE_SYNONYMS neighbors.
+    const keyRootMap = new Map<string, { root: string; synList: string[]; bindSynonyms: boolean }>();
+    const candidateSynRoots = new Map<string, Set<string>>();
+
+    for (const [key, synList] of Object.entries(config.synonyms)) {
+      if (!Array.isArray(synList)) continue;
+      const lowerKey = key.toLowerCase();
+      const normalizedSyns = synList.map((t) => String(t).toLowerCase()).filter(Boolean);
+      const wasBaseCanonical = BASE_CANONICAL_MAP.has(lowerKey);
+      const isNonAsciiKey = !/^[a-z0-9_-]+$/.test(lowerKey);
+
+      let root: string;
+      const primaryAscii = normalizedSyns.find((t) => /^[a-z0-9_-]+$/.test(t));
+      if (canonicalMap.has(lowerKey)) {
+        root = canonicalMap.get(lowerKey)!;
+        if (isNonAsciiKey && primaryAscii && !canonicalMap.has(primaryAscii)) {
+          canonicalMap.set(primaryAscii, root);
+        }
+      } else if (isNonAsciiKey) {
+        root = primaryAscii ? canonicalMap.get(primaryAscii) || primaryAscii : lowerKey;
+        canonicalMap.set(lowerKey, root);
+        if (primaryAscii && !canonicalMap.has(primaryAscii)) {
+          canonicalMap.set(primaryAscii, root);
+        }
+      } else {
+        root = lowerKey;
+        canonicalMap.set(lowerKey, root);
+      }
+
+      const bindSynonyms = wasBaseCanonical || isNonAsciiKey;
+      keyRootMap.set(key, { root, synList: normalizedSyns, bindSynonyms });
+
+      if (bindSynonyms) {
+        for (const syn of normalizedSyns) {
+          if (canonicalMap.has(syn)) continue;
+          let roots = candidateSynRoots.get(syn);
+          if (!roots) {
+            roots = new Set<string>();
+            candidateSynRoots.set(syn, roots);
+          }
+          roots.add(root);
+        }
+      }
+    }
+
+    // Pass 3: Append custom synonyms to their canonical root cluster and bind unambiguous unmapped synonyms
+    for (const [, { root, synList, bindSynonyms }] of keyRootMap.entries()) {
+      if (bindSynonyms) {
+        appendToRootSynonyms(root, synList);
+        for (const syn of synList) {
+          if (!canonicalMap.has(syn)) {
+            const roots = candidateSynRoots.get(syn);
+            if (roots && roots.size === 1) {
+              canonicalMap.set(syn, root);
+            }
+          }
+        }
+      }
     }
   }
 
