@@ -57,11 +57,11 @@
   </g>
 
   <text x="152" y="148" fill="#34d399" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="800" letter-spacing="-0.03em">Saved 91%</text>
-  <text x="152" y="170" fill="#e2e8f0" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" font-weight="600">36.8k &#8594; 3.3k tok/turn</text>
-  <text x="152" y="190" fill="#8b9bb4" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="11.5">33,524 tok/turn reclaimed</text>
+  <text x="152" y="170" fill="#e2e8f0" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" font-weight="600">37.6k &#8594; 3.3k tok/turn</text>
+  <text x="152" y="190" fill="#8b9bb4" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="11.5">34,254 tok/turn reclaimed</text>
 
   <line x1="46" y1="216" x2="410" y2="216" stroke="rgba(255,255,255,0.06)"/>
-  <text x="46" y="242" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="12">Before (Eager Load): <tspan fill="#f59e0b" font-weight="700">36,846 tok/turn</tspan></text>
+  <text x="46" y="242" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="12">Before (Eager Load): <tspan fill="#f59e0b" font-weight="700">37,576 tok/turn</tspan></text>
   <text x="46" y="266" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="12">After (Virtual L0) : <tspan fill="#34d399" font-weight="700">3,322 tok/turn</tspan></text>
 
   <!-- Progress Bar -->
@@ -69,7 +69,7 @@
   <rect class="savings-bar-fill" x="46" y="284" width="331" height="10" rx="5" fill="url(#barGrad)"/>
 
   <text x="46" y="320" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="11.5">Cache Shield: <tspan fill="#38bdf8" font-weight="700">100%</tspan>   ·   Hotspot Guard: <tspan fill="#34d399" font-weight="700">100%</tspan></text>
-  <text x="46" y="343" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="11.5">AST* Memories: <tspan fill="#f8fafc" font-weight="600">37/37 VERIFIED</tspan> · <tspan fill="#f8fafc">2 skills, 4 tools</tspan></text>
+  <text x="46" y="343" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="11.5">AST* Memories: <tspan fill="#f8fafc" font-weight="600">38/38 VERIFIED</tspan> · <tspan fill="#f8fafc">2 skills, 4 tools</tspan></text>
   <text x="46" y="368" fill="#64748b" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="8.2">* AST = zero-dep lexical-structural skeleton &amp; call-anchor fingerprinting</text>
   <text x="46" y="390" fill="#38bdf8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="11">github.com/damonless/EvoKernel · 0 Idle Core Token Cost</text>
 
@@ -77,7 +77,7 @@
   <rect x="446" y="72" width="470" height="334" rx="12" fill="url(#cardSurface)" stroke="rgba(255,255,255,0.08)"/>
   <text x="464" y="102" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="600" letter-spacing="0.05em">GIT FRAGILITY HOTSPOTS &amp; AST SYMBOL ANCHORS</text>
   <text x="464" y="136" fill="#ffffff" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="800" letter-spacing="-0.03em">10 / 10 <tspan font-size="14" font-weight="600" fill="#34d399">Hotspots Protected (100% Shielded)</tspan></text>
-  <text x="464" y="160" fill="#8b9bb4" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="11">16-Hex AST Fingerprints (37/37 Verified · Zero Stale Drift)</text>
+  <text x="464" y="160" fill="#8b9bb4" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="11">16-Hex AST Fingerprints (38/38 Verified · Zero Stale Drift)</text>
   <line x1="464" y1="178" x2="900" y2="178" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
   <text x="474" y="202" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="10.5" font-weight="600" letter-spacing="0.04em">PRODUCTION HOTSPOT FILE</text>
   <text x="825" y="202" text-anchor="middle" fill="#94a3b8" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace" font-size="10.5" font-weight="600" letter-spacing="0.04em">AST SHIELD STATUS</text>
@@ -92,7 +92,7 @@
       <rect x="0" y="-17" width="444" height="26" rx="6" fill="rgba(255,255,255,0.025)" stroke="rgba(255,255,255,0.06)"/>
       <text x="12" y="0" fill="#e2e8f0" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">src/module-2.ts</text>
       <rect x="292" y="-13" width="142" height="18" rx="9" fill="rgba(16,185,129,0.14)" stroke="rgba(16,185,129,0.4)" stroke-width="0.9"/>
-      <text x="363" y="-1" text-anchor="middle" fill="#34d399" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="600">● PROTECTED (9m/4r)</text>
+      <text x="363" y="-1" text-anchor="middle" fill="#34d399" font-family="'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" font-weight="600">● PROTECTED (10m/4r)</text>
     </g>
     <g transform="translate(462, 310)">
       <rect x="0" y="-17" width="444" height="26" rx="6" fill="rgba(255,255,255,0.025)" stroke="rgba(255,255,255,0.06)"/>

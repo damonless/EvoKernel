@@ -2,15 +2,15 @@
 id: ui-cli-flags-port-validation-and-powershell-escaping
 title: "UI CLI Port Validation, PowerShell URL Escaping & Early Help Isolation"
 l0_summary: "Port bounds validation [0,65535], URL-encoded UI token, and JSON-quoted PowerShell Start-Process -FilePath escaping for evo ui --open."
-created_commit: "4eee875"
+created_commit: "d077ff6"
 created_branch: "main"
 target_symbols: ["src/cli/ui.ts#startUiServer","src/cli/ui.ts#runUiCli","src/cli/index.ts#runCli"]
-ast_fingerprints: {"src/cli/ui.ts#startUiServer":{"symbol":"src/cli/ui.ts#startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":855,"end_line":1883,"signature":"export async function startUiServer(","ast_hash":"39c2240e1d4e8564"},"src/cli/ui.ts#runUiCli":{"symbol":"src/cli/ui.ts#runUiCli","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1929,"end_line":2018,"signature":"export async function runUiCli(workspaceRoot: string, args: string[]): Promise<void>","ast_hash":"5f161102282387da"},"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1313,"end_line":2360,"signature":"export function runCli(argv: string[]): void","ast_hash":"2f942e80ff6648ae"}}
+ast_fingerprints: {"src/cli/ui.ts#startUiServer":{"symbol":"src/cli/ui.ts#startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":855,"end_line":1883,"signature":"export async function startUiServer(","ast_hash":"39c2240e1d4e8564"},"src/cli/ui.ts#runUiCli":{"symbol":"src/cli/ui.ts#runUiCli","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1929,"end_line":2018,"signature":"export async function runUiCli(workspaceRoot: string, args: string[]): Promise<void>","ast_hash":"5f161102282387da"},"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1315,"end_line":2362,"signature":"export function runCli(argv: string[]): void","ast_hash":"2f942e80ff6648ae"}}
 tags: ["ui-cli","port-validation","powershell-escaping","cli-help-isolation","s1-s2-hardening"]
 origin: "evolved"
 supersedes_id: "ui-cli-flags-port-validation-and-powershell-escaping"
 created_at: "2026-11-04T20:29:08.709Z"
-updated_at: "2026-11-11T07:46:23.419Z"
+updated_at: "2026-11-11T08:12:04.374Z"
 ---
 
 ## Symptom

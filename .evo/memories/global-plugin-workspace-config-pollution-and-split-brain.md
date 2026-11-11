@@ -2,7 +2,7 @@
 id: global-plugin-workspace-config-pollution-and-split-brain
 title: "Global Plugin & Host Config Isolation, Seed Rule Scoping, and Global Surface Audit Fix"
 l0_summary: "Diagnosed and fixed 4 EvoKernel global plugin/init/audit defects causing context bloat, workspace routing leaks, and split-brain."
-created_commit: "4eee875"
+created_commit: "d077ff6"
 created_branch: "main"
 target_symbols: ["src/core/storage.ts#isHostGlobalConfigDir","src/core/storage.ts#isPluginOrExtensionInstallDir","src/mcp/handlers.ts#EvoMcpDispatcher.bindActiveContext","src/cli/harness.ts#detectCascadedTargets","src/cli/audit.ts#auditHarnessSurfaces"]
 ast_fingerprints: {"src/core/storage.ts#isHostGlobalConfigDir":{"symbol":"src/core/storage.ts#isHostGlobalConfigDir","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":111,"end_line":124,"signature":"export function isHostGlobalConfigDir(dirPath: string, customHome?: string): boolean","ast_hash":"084b2f96d995dbfb"},"src/core/storage.ts#isPluginOrExtensionInstallDir":{"symbol":"src/core/storage.ts#isPluginOrExtensionInstallDir","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":126,"end_line":140,"signature":"export function isPluginOrExtensionInstallDir(dirPath: string): boolean","ast_hash":"5e125cb80d8c7a11"},"src/mcp/handlers.ts#EvoMcpDispatcher.bindActiveContext":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher.bindActiveContext","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":615,"end_line":742,"signature":"private bindActiveContext(toolName: string, args: Record<string, unknown>): WorkspaceContext","ast_hash":"037ee734cbc67f0d"},"src/cli/harness.ts#detectCascadedTargets":{"symbol":"src/cli/harness.ts#detectCascadedTargets","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":2263,"end_line":2311,"signature":"export function detectCascadedTargets(","ast_hash":"2bfd62da0343775b"},"src/cli/audit.ts#auditHarnessSurfaces":{"symbol":"src/cli/audit.ts#auditHarnessSurfaces","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":372,"end_line":816,"signature":"export function auditHarnessSurfaces(","ast_hash":"8a2d44b4b64e1d39"}}
@@ -11,7 +11,7 @@ origin: "evolved"
 supersedes_id: "global-plugin-workspace-config-pollution-and-split-brain"
 review_status: "pending"
 created_at: "2026-11-07T19:44:28.033Z"
-updated_at: "2026-11-11T06:14:49.698Z"
+updated_at: "2026-11-11T08:12:03.563Z"
 ---
 
 ## Symptom

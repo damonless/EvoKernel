@@ -2,14 +2,14 @@
 id: workbench-typography-and-github-showcase-sync
 title: "workbench-typography-and-github-showcase-sync"
 l0_summary: "Modernize Workbench UI typography stack, fix button fonts, and sync GitHub Pages/README showcase."
-created_commit: "4eee875"
+created_commit: "d077ff6"
 created_branch: "main"
 target_symbols: ["renderUiClientHtml","exportUiHtml"]
 ast_fingerprints: {"renderUiClientHtml":{"symbol":"renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":5769,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"f5a92b27b9f5d033"},"exportUiHtml":{"symbol":"exportUiHtml","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1885,"end_line":1910,"signature":"export function exportUiHtml(","ast_hash":"df2d2c6c10366863"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-05T17:18:41.042Z"
-updated_at: "2026-11-11T07:11:52.438Z"
+updated_at: "2026-11-11T08:12:04.539Z"
 ---
 
 ## Symptom

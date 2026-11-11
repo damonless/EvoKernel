@@ -654,6 +654,11 @@ while (true) {
   curr = parent;
 }
 
+// Explicit EVO_KERNEL_ROOT override (e.g. from host CLI / doctor probe)
+if (process.env.EVO_KERNEL_ROOT && process.env.EVO_FORCE_NPX !== '1') {
+  candidates.push(path.join(path.resolve(process.env.EVO_KERNEL_ROOT), 'dist', 'cli', 'index.js'));
+}
+
 // Global npm modules & host plugin paths
 if (process.env.APPDATA) {
   candidates.push(path.join(process.env.APPDATA, 'npm', 'node_modules', 'evo-kernel', 'dist', 'cli', 'index.js'));

@@ -2,14 +2,14 @@
 id: url-userinfo-spoofing-and-powershell-subexpression-guard
 title: "URL Userinfo Spoofing & PowerShell Subexpression Execution Remediation"
 l0_summary: "Loopback URL validation rejects WHATWG userinfo (@) spoofing and PowerShell single-quoted escaping blocks $() subexpression execution."
-created_commit: "4eee875"
+created_commit: "d077ff6"
 created_branch: "main"
 target_symbols: ["src/cli/ui.ts#isValidLocalHttpUrl","src/cli/ui.ts#launchDefaultBrowser"]
 ast_fingerprints: {"src/cli/ui.ts#isValidLocalHttpUrl":{"symbol":"src/cli/ui.ts#isValidLocalHttpUrl","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":767,"end_line":778,"signature":"export function isValidLocalHttpUrl(rawUrl: string): boolean","ast_hash":"e3418e60fd7541dd"},"src/cli/ui.ts#launchDefaultBrowser":{"symbol":"src/cli/ui.ts#launchDefaultBrowser","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":780,"end_line":804,"signature":"export function launchDefaultBrowser(url: string): boolean","ast_hash":"da6a32e738aa8511"}}
 tags: ["security","url-validation","powershell","cli-ui"]
 origin: "evolved"
 created_at: "2026-11-05T09:37:27.809Z"
-updated_at: "2026-11-11T07:11:52.340Z"
+updated_at: "2026-11-11T08:12:04.433Z"
 ---
 
 ## Symptom

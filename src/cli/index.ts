@@ -1171,6 +1171,7 @@ export function probeMcpServerStdioSync(
   timeoutMs = 5000
 ): McpHandshakeProbeResult {
   const ws = path.resolve(workspaceRoot);
+  const selfEvoRoot = path.resolve(import.meta.dirname, '..', '..');
   try {
     const res = spawnSync(process.execPath, ['-e', MCP_STDIO_PROBE_SCRIPT], {
       cwd: ws,
@@ -1178,6 +1179,7 @@ export function probeMcpServerStdioSync(
       timeout: timeoutMs + 500,
       env: {
         ...process.env,
+        EVO_KERNEL_ROOT: process.env.EVO_KERNEL_ROOT || selfEvoRoot,
         EVO_MCP_PROBE_CFG: JSON.stringify({
           command: target.command,
           args: target.args,

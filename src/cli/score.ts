@@ -83,6 +83,18 @@ export function isProjectDirectoryFast(dir: string): boolean {
       '.mcp.json',
       '.cursor',
       '.claude',
+      '.gemini',
+      '.codex',
+      '.windsurf',
+      '.cline',
+      '.roo',
+      '.vscode',
+      'opencode.json',
+      'mcp_config.json',
+      '.cursorrules',
+      '.windsurfrules',
+      '.clinerules',
+      '.roorules',
     ];
     for (const marker of markers) {
       if (fs.existsSync(path.join(resolved, marker))) {
@@ -822,6 +834,7 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
   let userStaticRuleTokens = 0;
   let evoSeedTokens = 0;
   const home = os.homedir();
+  const effectiveIncludeGlobal = options?.anon ? false : (options?.includeGlobal ?? true);
   const ruleFilesToMeasure =
     mode === 'project'
       ? [
@@ -831,14 +844,17 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
           path.join(ws, '.cursorrules'),
           path.join(ws, '.windsurfrules'),
           path.join(ws, '.clinerules'),
+          path.join(ws, '.roorules'),
           path.join(ws, '.github', 'copilot-instructions.md'),
           path.join(ws, '.cursor', 'rules', 'evo-kernel.mdc'),
         ]
-      : [
-          path.join(home, '.claude', 'CLAUDE.md'),
-          ...(getHomeGeminiEntries(home).has('GEMINI.md') ? [path.join(home, '.gemini', 'GEMINI.md')] : []),
-          path.join(home, '.codex', 'AGENTS.md'),
-        ];
+      : effectiveIncludeGlobal || Boolean(options?.globalOnly)
+        ? [
+            path.join(home, '.claude', 'CLAUDE.md'),
+            ...(getHomeGeminiEntries(home).has('GEMINI.md') ? [path.join(home, '.gemini', 'GEMINI.md')] : []),
+            path.join(home, '.codex', 'AGENTS.md'),
+          ]
+        : [];
 
   const measuredRuleFiles = new Set<string>();
   for (const rf of ruleFilesToMeasure) {

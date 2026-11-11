@@ -2,14 +2,14 @@
 id: s1-s3-workbench-ci-and-anon-parity
 title: "S1-S3 Hardening: Gemini Init Dedup, Real .evo/ Token Measurement, CLI ASCII/No-Color & Static Snapshot Parity"
 l0_summary: "Fix Gemini settings skip bug, real .evo/ token measurement (1,916 Meta-MCP), CLI --ascii/--no-color, and static UI parity."
-created_commit: "4eee875"
+created_commit: "d077ff6"
 created_branch: "main"
 target_symbols: ["src/cli/harness.ts#hasStaleNpxMcpEntry","src/cli/init.ts#runInit","src/cli/score.ts#buildScoreReport","src/cli/term.ts#formatTerminalOutput","src/templates/ui-client.ts#renderUiClientHtml"]
 ast_fingerprints: {"src/cli/harness.ts#hasStaleNpxMcpEntry":{"symbol":"src/cli/harness.ts#hasStaleNpxMcpEntry","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":169,"end_line":255,"signature":"export function hasStaleNpxMcpEntry(entry: unknown, workspaceRoot?: string): boolean","ast_hash":"db5b78663e57c126"},"src/cli/ui.ts#scrubAnonTextValue":{"symbol":"src/cli/ui.ts#scrubAnonTextValue","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":50,"end_line":69,"signature":"function scrubAnonTextValue(val: string, ws: string, relativePathReplacements?: Array<[RegExp, string]>): string","ast_hash":"1ae873b626e5cd01"},"src/core/lexicon.ts#compileLexiconConfig":{"symbol":"src/core/lexicon.ts#compileLexiconConfig","file_path":"src/core/lexicon.ts","file":"src/core/lexicon.ts","kind":"function","start_line":99,"end_line":222,"signature":"export function compileLexiconConfig(config?: DomainLexiconConfig): CompiledLexicon","ast_hash":"d2ca91ec12001903"},"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":5769,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"f5a92b27b9f5d033"}}
 tags: ["ci","anon","lexicon","telemetry","workbench"]
 origin: "evolved"
 created_at: "2026-11-11T02:18:54.048Z"
-updated_at: "2026-11-11T07:11:52.117Z"
+updated_at: "2026-11-11T08:12:04.185Z"
 ---
 
 ## Symptom

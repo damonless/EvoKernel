@@ -5975,4 +5975,80 @@ process.exit(hasRule ? 0 : 1);
     }
   });
 
+  test('74. [Clean CI Runner Isolation] doctor MCP probe resolves invoking EVO_KERNEL_ROOT offline and stats computes MCP tax without host HOME leakage', () => {
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-clean-ci-home-'));
+    const wsProbe = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-clean-ci-probe-'));
+    const wsGemini = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-clean-ci-gemini-'));
+    const wsEmpty = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-clean-ci-empty-'));
+    try {
+      const cleanCiEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        HOME: emptyHome,
+        USERPROFILE: emptyHome,
+        APPDATA: path.join(emptyHome, 'AppData', 'Roaming'),
+        EVO_DISABLE_NPX_FALLBACK: '1',
+      };
+      delete cleanCiEnv.EVO_KERNEL_ROOT;
+
+      // (1) Standalone initialized workspace on clean runner resolves invoking CLI version offline via EVO_KERNEL_ROOT
+      runInit(wsProbe, ['claude'], { globalHomeDir: emptyHome });
+      const docRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'doctor', '--json', '--workspace', wsProbe],
+        { encoding: 'utf8', env: cleanCiEnv, timeout: 15000 }
+      );
+      assert.strictEqual(docRes.status, 0, `doctor --json failed: ${docRes.stderr}`);
+      const docJson = JSON.parse(docRes.stdout);
+      assert.strictEqual(docJson.mcpProbe.reachable, true, `Offline probe failed: ${JSON.stringify(docJson.mcpProbe)}`);
+      assert.strictEqual(docJson.mcpProbe.serverVersion, EVO_KERNEL_VERSION);
+      assert.strictEqual(docJson.mcpProbe.toolCount, 5);
+
+      // (2) Workspace with ONLY .gemini/settings.json on clean runner classifies as project mode and computes MCP tax > 0
+      fs.mkdirSync(path.join(wsGemini, '.gemini'), { recursive: true });
+      fs.writeFileSync(
+        path.join(wsGemini, '.gemini', 'settings.json'),
+        JSON.stringify({
+          mcpServers: {
+            github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] },
+          },
+        }),
+        'utf8'
+      );
+      const statsRes = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'stats', '--json', '--workspace', wsGemini],
+        { encoding: 'utf8', env: cleanCiEnv }
+      );
+      assert.strictEqual(statsRes.status, 0, statsRes.stderr);
+      const statsJson = JSON.parse(statsRes.stdout);
+      assert.strictEqual(statsJson.harnesses.mcpConfigured, true);
+      assert.ok(
+        statsJson.sessionStartTax.beforeTokens > 0,
+        `Expected positive beforeTokens from .gemini/settings.json on clean runner, got ${JSON.stringify(statsJson.sessionStartTax)}`
+      );
+
+      // (3) Even if HOME has ~/.claude/CLAUDE.md, buildScoreReport(..., { includeGlobal: false }) on empty folder must not leak global tokens
+      fs.mkdirSync(path.join(emptyHome, '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(emptyHome, '.claude', 'CLAUDE.md'), '# Global Claude Rules\n'.repeat(20), 'utf8');
+      const scoreEmptyRes = child_process.spawnSync(
+        process.execPath,
+        [
+          '-e',
+          `import('./dist/cli/score.js').then(m => { const r = m.buildScoreReport(${JSON.stringify(wsEmpty)}, { includeGlobal: false }); console.log(JSON.stringify(r.contextSavings)); })`,
+        ],
+        { cwd: process.cwd(), encoding: 'utf8', env: cleanCiEnv }
+      );
+      assert.strictEqual(scoreEmptyRes.status, 0, scoreEmptyRes.stderr);
+      const emptySavings = JSON.parse(scoreEmptyRes.stdout.trim());
+      assert.strictEqual(emptySavings.userStaticRuleTokens, 0);
+      assert.strictEqual(emptySavings.beforeTokens, 0);
+    } finally {
+      safeCleanup(wsProbe);
+      safeCleanup(wsGemini);
+      safeCleanup(wsEmpty);
+      safeCleanup(emptyHome);
+    }
+  });
+
 });
