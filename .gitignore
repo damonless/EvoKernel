@@ -6,6 +6,7 @@ dist/
 *.log
 .DS_Store
 .agents/
+evo-cockpit.html
 
 # Local-only personal & maintenance skills/rules/tools (never push to remote)
 docs/index.html

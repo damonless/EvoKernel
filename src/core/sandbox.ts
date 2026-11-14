@@ -373,6 +373,20 @@ function resolveSandboxInvocation(
   };
 }
 
+function truncateHeadTail(text: string, maxChars: number, label: string): { value: string; didTruncate: boolean } {
+  if (text.length <= maxChars) {
+    return { value: text, didTruncate: false };
+  }
+  const headChars = Math.floor(maxChars * 0.7);
+  const tailChars = Math.max(0, maxChars - headChars - 120);
+  const omitted = Math.max(0, text.length - headChars - tailChars);
+  const marker = `\n...[EVO SANDBOX TRUNCATED ${omitted} ${label}CHAR(S) TO PROTECT CONTEXT WINDOW (total ${text.length})]...\n`;
+  return {
+    value: text.slice(0, headChars) + marker + (tailChars > 0 ? text.slice(-tailChars) : ''),
+    didTruncate: true,
+  };
+}
+
 function formatSandboxResult(
   rawStdout: string,
   rawStderr: string,
@@ -380,28 +394,16 @@ function formatSandboxResult(
   durationMs: number,
   timedOut: boolean
 ): SandboxExecutionResult {
-  let stdout = rawStdout || '';
-  let stderr = rawStderr || '';
-  let truncated = false;
-
-  if (stdout.length > MAX_OUTPUT_CHARS) {
-    stdout =
-      stdout.slice(0, MAX_OUTPUT_CHARS) +
-      `\n...[EVO SANDBOX TRUNCATED ${stdout.length - MAX_OUTPUT_CHARS} CHARS TO PROTECT CONTEXT WINDOW]...`;
-    truncated = true;
-  }
-  if (stderr.length > MAX_OUTPUT_CHARS) {
-    stderr = stderr.slice(0, MAX_OUTPUT_CHARS) + '\n...[EVO SANDBOX TRUNCATED STDERR]...';
-    truncated = true;
-  }
+  const outRes = truncateHeadTail(rawStdout || '', MAX_OUTPUT_CHARS, '');
+  const errRes = truncateHeadTail(rawStderr || '', MAX_OUTPUT_CHARS, 'STDERR ');
 
   return {
     exitCode,
-    stdout: stdout.trim(),
-    stderr: stderr.trim(),
+    stdout: outRes.value.trim(),
+    stderr: errRes.value.trim(),
     durationMs,
     timedOut,
-    truncated,
+    truncated: outRes.didTruncate || errRes.didTruncate,
   };
 }
 
@@ -459,10 +461,45 @@ export function executeSandboxedScriptAsync(
 
   return new Promise<SandboxExecutionResult>((resolve) => {
     const start = Date.now();
-    let stdout = '';
-    let stderr = '';
     let timedOut = false;
     let settled = false;
+
+    const maxCollect = MAX_OUTPUT_CHARS * 4;
+    const headBudget = Math.floor(maxCollect * 0.65);
+    const tailBudget = Math.max(4096, maxCollect - headBudget - 128);
+    const createStreamCollector = () => {
+      let totalChars = 0;
+      let head = '';
+      let tail = '';
+      return {
+        push(chunk: string) {
+          totalChars += chunk.length;
+          if (head.length < headBudget) {
+            const take = headBudget - head.length;
+            head += chunk.slice(0, take);
+            const remainder = chunk.slice(take);
+            if (remainder) {
+              tail = (tail + remainder).slice(-tailBudget);
+            }
+          } else {
+            tail = (tail + chunk).slice(-tailBudget);
+          }
+        },
+        read(): string {
+          if (totalChars <= head.length + tail.length || head.length < headBudget) {
+            return head + tail;
+          }
+          const skipped = totalChars - head.length - tail.length;
+          if (skipped <= 0) {
+            return head + tail;
+          }
+          return `${head}\n...[truncated ${skipped} intermediate chars]...\n${tail}`;
+        },
+      };
+    };
+
+    const stdoutCollector = createStreamCollector();
+    const stderrCollector = createStreamCollector();
 
     const child = spawn(cmd, cmdArgs, {
       cwd,
@@ -472,23 +509,17 @@ export function executeSandboxedScriptAsync(
       detached: process.platform !== 'win32',
     });
 
-    const maxCollect = MAX_OUTPUT_CHARS * 4;
-
     if (child.stdout) {
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
-        if (stdout.length < maxCollect) {
-          stdout += chunk;
-        }
+        stdoutCollector.push(chunk);
       });
     }
 
     if (child.stderr) {
       child.stderr.setEncoding('utf8');
       child.stderr.on('data', (chunk: string) => {
-        if (stderr.length < maxCollect) {
-          stderr += chunk;
-        }
+        stderrCollector.push(chunk);
       });
     }
 
@@ -497,6 +528,8 @@ export function executeSandboxedScriptAsync(
       settled = true;
       clearTimeout(timer);
       const durationMs = Date.now() - start;
+      const stdout = stdoutCollector.read();
+      const stderr = stderrCollector.read();
       const finalStderr = stderr || errMessage || (timedOut ? `Process timed out after ${timeoutMs}ms` : '');
       const exitCode = timedOut ? 124 : (code ?? 1);
       resolve(formatSandboxResult(stdout, finalStderr, exitCode, durationMs, timedOut));

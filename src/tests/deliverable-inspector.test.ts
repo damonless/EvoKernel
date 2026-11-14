@@ -17,7 +17,7 @@ import {
   parseDelimited,
   decodeXmlEntities,
 } from '../core/deliverable.js';
-import { executeSandboxedScript } from '../core/sandbox.js';
+import { executeSandboxedScript, executeSandboxedScriptAsync } from '../core/sandbox.js';
 
 function createTempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-deliverable-test-'));
@@ -684,5 +684,171 @@ describe('Zero-Dependency Deliverable Canonical Consumer-Reader Suite', () => {
     const res = inspectDeliverableBuffer(zip, { format: 'xlsx' });
     assert.equal(res.ok, true);
     assert.ok(res.canonicalText.includes('AT&T <Corp>'));
+  });
+
+  test('34. Single-quoted XLSX attrs, CSV UNCLOSED_QUOTE, sandbox head/tail truncation, auditor stdlib & basename lookup, scanner binary resilience', async () => {
+    // 1. DEFECT-C-07: Single-quoted XLSX XML attributes
+    const sqRels = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet' Target='worksheets/sheet1.xml'/>
+</Relationships>`;
+    const sqWb = `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name='SingleQuotedSheet' sheetId='1' r:id='rId1'/></sheets>
+</workbook>`;
+    const sqSheet = `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r='1'>
+      <c r='A1' t='inlineStr'><is><t>SingleQuotedValue</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>`;
+    const sqZip = buildInMemoryZip([
+      { name: 'xl/_rels/workbook.xml.rels', content: sqRels },
+      { name: 'xl/workbook.xml', content: sqWb },
+      { name: 'xl/worksheets/sheet1.xml', content: sqSheet },
+    ]);
+    const sqRes = inspectDeliverableBuffer(sqZip, { format: 'xlsx' });
+    assert.equal(sqRes.ok, true);
+    assert.ok(sqRes.canonicalText.includes('SingleQuotedSheet'));
+    assert.ok(sqRes.canonicalText.includes('SingleQuotedValue'));
+
+    // 2. DEFECT-C-12: parseDelimited still returns string[][], while inspectDeliverableBuffer reports UNCLOSED_QUOTE
+    const badCsv = 'col1,col2\n"unterminated,cell';
+    const rows = parseDelimited(badCsv, ',');
+    assert.ok(Array.isArray(rows) && rows.length >= 2);
+    const csvRes = inspectDeliverableBuffer(Buffer.from(badCsv, 'utf8'), { format: 'csv' });
+    assert.equal(csvRes.ok, false);
+    assert.ok(csvRes.defects.some((d) => d.code === 'UNCLOSED_QUOTE'));
+
+    // 3. ISSUE-30-2a: Sync + async sandbox execution preserve both head and tail on large output
+    const ws = createTempWorkspace();
+    try {
+      const loudScript = path.join(ws, 'loud.mjs');
+      fs.writeFileSync(
+        loudScript,
+        [
+          'console.log("HEAD_MARKER_0001");',
+          'for (let i = 0; i < 600; i++) {',
+          '  console.log("FILLER_LINE_" + String(i).padStart(4, "0") + "_" + "x".repeat(40));',
+          '}',
+          'console.log("TAIL_MARKER_9999");',
+        ].join('\n'),
+        'utf8'
+      );
+      const syncOut = executeSandboxedScript('node', loudScript);
+      assert.equal(syncOut.exitCode, 0);
+      assert.equal(syncOut.truncated, true);
+      assert.ok(syncOut.stdout.includes('HEAD_MARKER_0001'));
+      assert.ok(syncOut.stdout.includes('TAIL_MARKER_9999'));
+
+      const asyncOut = await executeSandboxedScriptAsync('node', loudScript);
+      assert.equal(asyncOut.exitCode, 0);
+      assert.equal(asyncOut.truncated, true);
+      assert.ok(asyncOut.stdout.includes('HEAD_MARKER_0001'));
+      assert.ok(asyncOut.stdout.includes('TAIL_MARKER_9999'));
+
+      // 4. DEFECT-C-08: workspace-metrics-scanner skips binary/oversized files safely
+      const scanWs = path.join(ws, 'scan-target');
+      fs.mkdirSync(path.join(scanWs, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(scanWs, 'src', 'index.ts'), 'const a = 1;\nconst b = 2;', 'utf8');
+      fs.writeFileSync(path.join(scanWs, 'image.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0a, 0x00, 0x0a]));
+      fs.writeFileSync(path.join(scanWs, 'nul.txt'), Buffer.from([0x41, 0x00, 0x0a, 0x42, 0x0a]));
+      fs.writeFileSync(path.join(scanWs, 'huge.dat'), Buffer.alloc(2 * 1024 * 1024 + 64, 0x0a));
+
+      const scannerScript = path.resolve(process.cwd(), '.evo', 'tools', 'workspace-metrics-scanner', 'run.mjs');
+      const scanProc = spawnSync(process.execPath, [scannerScript], {
+        cwd: scanWs,
+        env: { ...process.env, EVO_WORKSPACE: scanWs },
+        encoding: 'utf8',
+      });
+      assert.equal(scanProc.status, 0, scanProc.stderr);
+      const scanJson = JSON.parse(scanProc.stdout);
+      assert.equal(scanJson.files, 4);
+      assert.equal(scanJson.lines, 2, 'Binary/oversized files must not inflate text LOC');
+      assert.equal(scanJson.skippedContent, 3);
+
+      // 5. ISSUE-30-2b, ISSUE-30-3, ISSUE-30-4: agy-config-auditor stdlib exemption, import stripping, basename lookup & deterministic violations summary
+      const auditWs = path.join(ws, 'audit-target');
+      const fakeGlobal = path.join(ws, 'fake-global');
+      const fakeHome = path.join(ws, 'fake-home');
+      fs.mkdirSync(path.join(auditWs, 'src', 'sub'), { recursive: true });
+      fs.mkdirSync(path.join(auditWs, '.evo', 'rules', 'scoped'), { recursive: true });
+      fs.mkdirSync(path.join(auditWs, '.evo', 'memories'), { recursive: true });
+      fs.mkdirSync(fakeGlobal, { recursive: true });
+      fs.mkdirSync(fakeHome, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(auditWs, 'src', 'sub', 'helper.ts'),
+        'export function helperFn(n: number): number {\n  return n * 2;\n}\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(auditWs, 'src', 'consumer.ts'),
+        "import { helperFn } from './sub/helper.js';\nexport const out = helperFn(2);\n",
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(auditWs, '.evo', 'rules', 'scoped', 'stream-rule.md'),
+        [
+          '---',
+          'id: stream-rule',
+          'title: Stream Reader Guard',
+          'l0_summary: Always check EOF before reading frames',
+          'scope_glob: "src/**/*.ts"',
+          'core: false',
+          'priority: 80',
+          'transfer_scenarios:',
+          '  - "Binary TCP stream frame decoding across socket readers"',
+          '  - "Chunked HTTP body reader EOF boundary handling"',
+          '---',
+          '',
+          'Check EOF when calling `StreamReader.ReadNextFrame`, `TextDecoder.decode`, `Math.max`, and `JSON.parse`.',
+          '',
+        ].join('\n'),
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(auditWs, '.evo', 'memories', 'basename-helper-mem.md'),
+        [
+          '---',
+          'id: basename-helper-mem',
+          'title: Basename helper lookup verification',
+          'l0_summary: Resolves real declaration over TS import statements',
+          'target_symbols:',
+          '  - "helper.ts#helperFn"',
+          '---',
+          '',
+          '## Symptom',
+          'Import line matched instead of declaration',
+          '',
+          '## Solution',
+          'Strip pure imports and resolve via basename',
+          '',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const auditorScript = path.resolve(process.cwd(), '.evo', 'tools', 'agy-config-auditor', 'run.mjs');
+      const auditProc = spawnSync(process.execPath, [auditorScript], {
+        cwd: auditWs,
+        env: {
+          ...process.env,
+          EVO_WORKSPACE: auditWs,
+          EVO_GLOBAL_DIR: fakeGlobal,
+          HOME: fakeHome,
+          USERPROFILE: fakeHome,
+        },
+        encoding: 'utf8',
+      });
+      assert.equal(auditProc.status, 0, auditProc.stdout + '\n' + auditProc.stderr);
+      const auditReport = JSON.parse(auditProc.stdout);
+      assert.equal(auditReport.ok, true);
+      assert.equal(auditReport.status, 'HEALTHY');
+      assert.ok(Array.isArray(auditReport.violations));
+      assert.equal(auditReport.violations.length, 0);
+      assert.equal(auditReport.summary.broken_memory_symbols, 0);
+      assert.equal(auditReport.memory_symbols_audit?.[0]?.symbols?.[0]?.file, 'src/sub/helper.ts');
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
   });
 });

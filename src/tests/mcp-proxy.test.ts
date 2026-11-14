@@ -3,6 +3,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as stream from 'node:stream';
 import {
   McpProxyManager,
   formatExternalToolId,
@@ -10,6 +11,7 @@ import {
   resolveWindowsSpawnCommand,
 } from '../mcp/proxy.js';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
+import { startMcpStdioServer } from '../mcp/server.js';
 import { EvoStorage } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 
@@ -547,6 +549,125 @@ rl.on('line', (line) => {
     } finally {
       proxy.close();
     }
+  });
+
+  test('11. Dotted ext IDs, relative cwd Windows spawn, stderr propagation, 0-tool sync cache & clean stdio close', async () => {
+    // 1. DEFECT-MCP-01: Dotted server and tool IDs round-trip cleanly
+    const dottedId = formatExternalToolId('github.enterprise', 'search.code');
+    assert.equal(dottedId, 'ext__github.enterprise__search.code');
+    assert.deepEqual(parseExternalToolId(dottedId), {
+      serverName: 'github.enterprise',
+      originalToolName: 'search.code',
+    });
+
+    // 2. DEFECT-MCP-02: resolveWindowsSpawnCommand honors cwd for relative paths
+    const relBinDir = path.join(ws, 'rel-tools');
+    fs.mkdirSync(relBinDir, { recursive: true });
+    const relShim = path.join(relBinDir, 'my-tool.cmd');
+    fs.writeFileSync(relShim, '@echo off\r\n', 'utf8');
+    const resolvedRel = resolveWindowsSpawnCommand('./rel-tools/my-tool', process.env, 'win32', ws);
+    assert.equal(resolvedRel.isBatch, true);
+    assert.equal(resolvedRel.command, relShim);
+
+    // 3. DEFECT-MCP-06: Failed/exiting downstream server propagates redacted stderr snippet
+    const failingServer = path.join(ws, 'failing_mcp.mjs');
+    fs.writeFileSync(
+      failingServer,
+      `process.stderr.write('FATAL token=ghp_${'a'.repeat(38)} init_failed\\n'); process.exit(2);\n`,
+      'utf8'
+    );
+    const failProxy = new McpProxyManager(ws);
+    try {
+      const brokenCfg = { command: process.execPath, args: [failingServer], timeoutMs: 5000 };
+      const callFailRes = await failProxy.callTool('broken.srv', 'ping', {}, brokenCfg);
+      assert.equal(callFailRes.isError, true);
+      const errText = callFailRes.content[0]?.text || '';
+      assert.match(errText, /stderr:/i);
+      assert.match(errText, /\[REDACTED_GITHUB_TOKEN\]/);
+      assert.equal(errText.includes('ghp_aaa'), false);
+    } finally {
+      failProxy.close();
+    }
+
+    // 4. DEFECT-MCP-07: Healthy 0-tool downstream server settles signature cache (no repeat spawn on subsequent call)
+    const countFile = path.join(ws, 'empty-tools-count.txt');
+    const emptyToolsServer = path.join(ws, 'empty_tools_mcp.mjs');
+    fs.writeFileSync(
+      emptyToolsServer,
+      `import * as fs from 'node:fs';
+import * as readline from 'node:readline';
+fs.appendFileSync(${JSON.stringify(countFile)}, '1\\n', 'utf8');
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+rl.on('line', (line) => {
+  const msg = JSON.parse(line.trim());
+  if (msg.method === 'initialize') {
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'empty', version: '1.0' } } }) + '\\n');
+  } else if (msg.method === 'tools/list') {
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [] } }) + '\\n');
+  }
+});\n`,
+      'utf8'
+    );
+    const storage = new EvoStorage(ws);
+    const cfg = storage.getConfig();
+    storage.saveConfig({
+      ...cfg,
+      externalServers: {
+        empty_srv: { command: process.execPath, args: [emptyToolsServer], timeoutMs: 5000 },
+      },
+    });
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      await dispatcher.handleToolCall('evo_search', { query: 'test', workspace: ws });
+      await dispatcher.handleToolCall('evo_search', { query: 'test', workspace: ws });
+      const syncStarts = fs.readFileSync(countFile, 'utf8').trim().split(/\r?\n/).filter(Boolean).length;
+      assert.equal(syncStarts, 1, 'Healthy 0-tool server must cache signature without re-syncing every call');
+    } finally {
+      dispatcher.close();
+    }
+
+    // 5. DEFECT-MCP-04 & DEFECT-MCP-05: Custom stream stdio server deduplicates Win drive case roots & drains cleanly on EOF without process.exit
+    const inPass = new stream.PassThrough();
+    const outPass = new stream.PassThrough();
+    let capturedOut = '';
+    outPass.setEncoding('utf8');
+    outPass.on('data', (chunk) => {
+      capturedOut += chunk;
+    });
+    storage.saveConfig({ ...storage.getConfig(), externalServers: {} });
+    const serverHandle = startMcpStdioServer(ws, { input: inPass, output: outPass });
+    const winRootUpper = 'C:/Users/Test/Repo';
+    const winRootLower = 'c:/Users/Test/Repo';
+    inPass.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          rootUri: `file:///${winRootUpper}`,
+          workspaceFolders: [{ uri: `file:///${winRootLower}`, name: 'repo' }],
+        },
+      }) + '\n'
+    );
+    inPass.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'evo_search', arguments: { query: 'nonexistent_xyz', workspace: ws } },
+      }) + '\n'
+    );
+    inPass.end();
+    for (let k = 0; k < 40 && !capturedOut.includes('"id":2'); k++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    serverHandle.close();
+    assert.match(capturedOut, /"id":1/);
+    assert.match(capturedOut, /"id":2/);
+    assert.equal(
+      (serverHandle.dispatcher as any).clientRoots.length,
+      process.platform === 'win32' ? 1 : 2
+    );
   });
 });
 

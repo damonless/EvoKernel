@@ -33,6 +33,7 @@ export interface VirtualizeResult {
   servers: VirtualizedServerEntry[];
   modifiedConfigFiles: string[];
   estimatedTokensSavedPerTurn: number;
+  warnings?: string[];
 }
 
 interface McpPoolFileSchema {
@@ -666,6 +667,9 @@ function runRestoreVirtualized(
 
   const restoredEntries: VirtualizedServerEntry[] = [];
   const modifiedSet = new Set<string>();
+  const failedRestoreFiles = new Set<string>();
+  const failedServerNames = new Set<string>();
+  const warnings: string[] = [];
   const injectedEvoByFile = new Map<string, VirtualizedServerOrigin['format']>();
 
   for (const name of allServerNames) {
@@ -683,19 +687,16 @@ function runRestoreVirtualized(
             },
           ];
 
-    restoredEntries.push({
-      name,
-      config: cfg,
-      origins,
-      estimatedSchemaTokens: ESTIMATED_TOKENS_PER_EXTERNAL_SERVER,
-    });
-
+    const restoredOrigins: VirtualizedServerOrigin[] = [];
     for (const origin of origins) {
-      modifiedSet.add(origin.relPath);
       if (origin.injectedEvoKernel) {
         injectedEvoByFile.set(origin.configPath, origin.format);
       }
-      if (dryRun) continue;
+      if (dryRun) {
+        modifiedSet.add(origin.relPath);
+        restoredOrigins.push(origin);
+        continue;
+      }
 
       if (origin.format === 'codexToml') {
         const existingToml = fs.existsSync(origin.configPath)
@@ -711,10 +712,21 @@ function runRestoreVirtualized(
           fs.mkdirSync(path.dirname(origin.configPath), { recursive: true });
           fs.writeFileSync(origin.configPath, nextToml, 'utf8');
         }
+        modifiedSet.add(origin.relPath);
+        restoredOrigins.push(origin);
         continue;
       }
 
-      const doc = readJsonSafe(origin.configPath) || {};
+      const fileExists = fs.existsSync(origin.configPath);
+      const doc = fileExists ? readJsonSafe(origin.configPath) : {};
+      if (!doc) {
+        failedRestoreFiles.add(origin.configPath);
+        failedServerNames.add(name);
+        warnings.push(
+          `Skipped restoring '${origin.relPath}' (${name}): existing config JSON failed to parse or root is not an object.`
+        );
+        continue;
+      }
       const containerKey =
         origin.format === 'vscodeServers'
           ? 'servers'
@@ -742,12 +754,23 @@ function runRestoreVirtualized(
 
       doc[containerKey] = record;
       writeJsonAtomic(origin.configPath, doc);
+      modifiedSet.add(origin.relPath);
+      restoredOrigins.push(origin);
+    }
+
+    if (restoredOrigins.length > 0) {
+      restoredEntries.push({
+        name,
+        config: cfg,
+        origins: restoredOrigins,
+        estimatedSchemaTokens: ESTIMATED_TOKENS_PER_EXTERNAL_SERVER,
+      });
     }
   }
 
   if (!dryRun) {
     for (const [configPath, format] of injectedEvoByFile.entries()) {
-      if (!fs.existsSync(configPath)) continue;
+      if (failedRestoreFiles.has(configPath) || !fs.existsSync(configPath)) continue;
       if (format === 'codexToml') {
         const rawToml = fs.readFileSync(configPath, 'utf8');
         const cleanedToml = stripEvoKernelFromCodexToml(rawToml);
@@ -778,12 +801,34 @@ function runRestoreVirtualized(
       }
     }
 
-    if (fs.existsSync(poolPath)) {
-      fs.unlinkSync(poolPath);
+    if (failedServerNames.size === 0) {
+      if (fs.existsSync(poolPath)) {
+        fs.unlinkSync(poolPath);
+      }
+    } else if (fs.existsSync(poolPath)) {
+      const remainingPoolServers: Record<string, ExternalMcpServerConfig> = {};
+      const remainingPoolOrigins: Record<string, VirtualizedServerOrigin[]> = {};
+      for (const failedName of failedServerNames) {
+        if (poolServers[failedName]) {
+          remainingPoolServers[failedName] = poolServers[failedName];
+        }
+        if (poolOrigins[failedName]) {
+          remainingPoolOrigins[failedName] = poolOrigins[failedName];
+        }
+      }
+      writeJsonAtomic(poolPath, {
+        version: rawPool?.version || EVO_KERNEL_VERSION,
+        updatedAt: new Date().toISOString(),
+        mcpServers: remainingPoolServers,
+        origins: remainingPoolOrigins,
+      });
     }
+
     if (evoConfig.externalServers) {
       for (const name of allServerNames) {
-        delete evoConfig.externalServers[name];
+        if (!failedServerNames.has(name)) {
+          delete evoConfig.externalServers[name];
+        }
       }
       if (Object.keys(evoConfig.externalServers).length === 0) {
         delete evoConfig.externalServers;
@@ -799,6 +844,7 @@ function runRestoreVirtualized(
     servers: restoredEntries,
     modifiedConfigFiles: Array.from(modifiedSet),
     estimatedTokensSavedPerTurn: restoredEntries.reduce((acc, s) => acc + s.estimatedSchemaTokens, 0),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 

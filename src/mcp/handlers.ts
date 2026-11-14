@@ -484,7 +484,18 @@ export class EvoMcpDispatcher {
   }
 
   public setClientRoots(roots: string[], readyPromise?: Promise<void>): void {
-    this.clientRoots = roots.map((r) => path.resolve(r));
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const r of roots) {
+      if (!r || !r.trim()) continue;
+      const resolved = path.resolve(r).replace(/^[a-z]:/, (m) => m.toUpperCase());
+      const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(resolved);
+      }
+    }
+    this.clientRoots = deduped;
     if (readyPromise) {
       this.rootsReadyPromise = readyPromise;
     }
@@ -615,7 +626,7 @@ export class EvoMcpDispatcher {
           );
           finalTools = [...discovered, ...preservedTools];
         }
-        if (failedServers.length === 0 && (finalTools.length > 0 || activeEntries.length === 0)) {
+        if (failedServers.length === 0) {
           c.lastExternalServersSignature = sig;
         }
         if (hasValidEvoStructure(c.storage.evoDir)) {

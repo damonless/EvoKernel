@@ -25,6 +25,20 @@ function parseUriToPath(uriStr: string): string | null {
   }
 }
 
+function normalizeWorkspaceRootKey(p: string): string {
+  const resolved = path.resolve(p).replace(/^[a-z]:/, (m) => m.toUpperCase());
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function appendUniqueRoot(target: string[], candidate: string | null): void {
+  if (!candidate) return;
+  const resolved = path.resolve(candidate).replace(/^[a-z]:/, (m) => m.toUpperCase());
+  const key = normalizeWorkspaceRootKey(resolved);
+  if (!target.some((existing) => normalizeWorkspaceRootKey(existing) === key)) {
+    target.push(resolved);
+  }
+}
+
 export interface McpServerOptions {
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
@@ -95,17 +109,20 @@ export function startMcpStdioServer(
     });
   };
 
-  rl.on('line', async (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
+  const inFlightTasks = new Set<Promise<void>>();
 
-    let req: any;
-    try {
-      req = JSON.parse(trimmed);
-    } catch {
-      sendError(null, -32700, 'Parse error');
-      return;
-    }
+  rl.on('line', (line) => {
+    const task = (async () => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      let req: any;
+      try {
+        req = JSON.parse(trimmed);
+      } catch {
+        sendError(null, -32700, 'Parse error');
+        return;
+      }
 
     if (!req || typeof req !== 'object' || Array.isArray(req)) {
       sendError(null, -32600, 'Invalid Request');
@@ -133,18 +150,15 @@ export function startMcpStdioServer(
       case 'initialize': {
         if (params && typeof params === 'object') {
           if (typeof params.rootUri === 'string') {
-            const p = parseUriToPath(params.rootUri);
-            if (p && !clientRoots.includes(p)) clientRoots.push(p);
+            appendUniqueRoot(clientRoots, parseUriToPath(params.rootUri));
           }
           if (typeof params.rootPath === 'string' && params.rootPath.trim()) {
-            const p = path.resolve(params.rootPath.trim());
-            if (!clientRoots.includes(p)) clientRoots.push(p);
+            appendUniqueRoot(clientRoots, path.resolve(params.rootPath.trim()));
           }
           if (Array.isArray(params.workspaceFolders)) {
             for (const folder of params.workspaceFolders) {
               if (folder && typeof folder.uri === 'string') {
-                const p = parseUriToPath(folder.uri);
-                if (p && !clientRoots.includes(p)) clientRoots.push(p);
+                appendUniqueRoot(clientRoots, parseUriToPath(folder.uri));
               }
             }
           }
@@ -181,8 +195,7 @@ export function startMcpStdioServer(
               if (res && Array.isArray(res.roots)) {
                 for (const r of res.roots) {
                   if (r && typeof r.uri === 'string') {
-                    const p = parseUriToPath(r.uri);
-                    if (p && !clientRoots.includes(p)) clientRoots.push(p);
+                    appendUniqueRoot(clientRoots, parseUriToPath(r.uri));
                   }
                 }
                 dispatcher.setClientRoots(clientRoots);
@@ -205,8 +218,7 @@ export function startMcpStdioServer(
                 const newRoots: string[] = [];
                 for (const r of res.roots) {
                   if (r && typeof r.uri === 'string') {
-                    const p = parseUriToPath(r.uri);
-                    if (p && !newRoots.includes(p)) newRoots.push(p);
+                    appendUniqueRoot(newRoots, parseUriToPath(r.uri));
                   }
                 }
                 clientRoots.length = 0;
@@ -257,10 +269,31 @@ export function startMcpStdioServer(
         }
         break;
     }
+    })();
+    inFlightTasks.add(task);
+    void task.finally(() => {
+      inFlightTasks.delete(task);
+    });
   });
 
+  let closed = false;
+  let sigintHandler: (() => void) | undefined;
+  let sigtermHandler: (() => void) | undefined;
+
   const close = () => {
-    rl.close();
+    if (closed) return;
+    closed = true;
+    if (sigintHandler) {
+      process.off('SIGINT', sigintHandler);
+      sigintHandler = undefined;
+    }
+    if (sigtermHandler) {
+      process.off('SIGTERM', sigtermHandler);
+      sigtermHandler = undefined;
+    }
+    try {
+      rl.close();
+    } catch {}
     for (const pending of pendingServerRequests.values()) {
       clearTimeout(pending.timer);
     }
@@ -268,11 +301,27 @@ export function startMcpStdioServer(
     dispatcher.close();
   };
 
+  rl.on('close', () => {
+    if (inFlightTasks.size === 0) {
+      close();
+      return;
+    }
+    Promise.allSettled(Array.from(inFlightTasks)).finally(() => {
+      close();
+    });
+  });
+
   if (!options?.input) {
-    process.on('SIGINT', () => {
+    sigintHandler = () => {
       close();
       process.exit(0);
-    });
+    };
+    sigtermHandler = () => {
+      close();
+      process.exit(0);
+    };
+    process.on('SIGINT', sigintHandler);
+    process.on('SIGTERM', sigtermHandler);
   }
 
   return { dispatcher, close };

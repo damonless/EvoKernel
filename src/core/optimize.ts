@@ -317,21 +317,28 @@ export function evaluateBaselineFitness(
   let telemetry: EvoTelemetry | undefined = telemetryArg;
   let ownsTelemetry = false;
 
+  const openTelemetryIfInitialized = (s: EvoStorage): EvoTelemetry | undefined => {
+    if (!fs.existsSync(s.evoDir) || !fs.existsSync(path.join(s.cacheDir, 'telemetry.db'))) {
+      return undefined;
+    }
+    try {
+      telemetry = new EvoTelemetry(s);
+      ownsTelemetry = true;
+      return telemetry;
+    } catch {
+      return undefined;
+    }
+  };
+
   if (typeof target === 'string') {
     storage = new EvoStorage(target);
     if (!telemetry) {
-      try {
-        telemetry = new EvoTelemetry(storage);
-        ownsTelemetry = true;
-      } catch {}
+      openTelemetryIfInitialized(storage);
     }
   } else if (target instanceof EvoStorage) {
     storage = target;
     if (!telemetry) {
-      try {
-        telemetry = new EvoTelemetry(storage);
-        ownsTelemetry = true;
-      } catch {}
+      openTelemetryIfInitialized(storage);
     }
   } else if (target && typeof target === 'object') {
     if (target.storage) {
@@ -343,10 +350,7 @@ export function evaluateBaselineFitness(
     }
     telemetry = target.telemetry ?? telemetry;
     if (!telemetry) {
-      try {
-        telemetry = new EvoTelemetry(storage);
-        ownsTelemetry = true;
-      } catch {}
+      openTelemetryIfInitialized(storage);
     }
   } else {
     storage = new EvoStorage(process.cwd());
@@ -2475,10 +2479,45 @@ export function runOptimizationCycle(
   const decision: 'ADOPT' | 'KEEP_BASE' = winningCandidate ? 'ADOPT' : 'KEEP_BASE';
   let applied = false;
 
+function snapshotEvoCapabilityDirs(evoDir: string): Map<string, Buffer> {
+  const snapshot = new Map<string, Buffer>();
+  const subdirs = ['rules', 'skills', 'tools', 'memories', '.archive'];
+  const walk = (dir: string) => {
+    if (!fs.existsSync(dir)) return;
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        walk(full);
+      } else if (ent.isFile()) {
+        snapshot.set(full, fs.readFileSync(full));
+      }
+    }
+  };
+  for (const sub of subdirs) {
+    walk(path.join(evoDir, sub));
+  }
+  return snapshot;
+}
+
+function restoreEvoCapabilityDirs(evoDir: string, snapshot: Map<string, Buffer>): void {
+  const subdirs = ['rules', 'skills', 'tools', 'memories', '.archive'];
+  for (const sub of subdirs) {
+    const dir = path.join(evoDir, sub);
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  for (const [filePath, buf] of snapshot.entries()) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, buf);
+  }
+}
+
   // 6. Apply to live workspaceRoot if requested
   if (decision === 'ADOPT' && winningCandidate && options.apply === true && !options.dryRun) {
     const liveStorage = new EvoStorage(wsRoot);
     liveStorage.ensureInitialized();
+    const preCommitSnapshot = snapshotEvoCapabilityDirs(liveStorage.evoDir);
     const liveTelemetry = new EvoTelemetry(liveStorage);
     liveTelemetry.syncFromDisk();
 
@@ -2511,6 +2550,13 @@ export function runOptimizationCycle(
       }
 
       applied = true;
+    } catch (err) {
+      restoreEvoCapabilityDirs(liveStorage.evoDir, preCommitSnapshot);
+      liveStorage.ensureInitialized();
+      try {
+        liveTelemetry.syncFromDisk();
+      } catch {}
+      throw err;
     } finally {
       liveTelemetry.close();
     }

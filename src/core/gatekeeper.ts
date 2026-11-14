@@ -20,8 +20,10 @@ import {
   estimateTokens,
   getExtensionForRuntime,
   getScopeBucketKey,
+  parseSkillSectionsFromMarkdown,
   sanitizeId,
 } from './storage.js';
+export { parseSkillSectionsFromMarkdown } from './storage.js';
 import { EvoTelemetry } from './telemetry.js';
 import { checkScriptSyntax, executeSandboxedScript } from './sandbox.js';
 import {
@@ -329,6 +331,40 @@ const ALLOWED_META_IDENTIFIERS = new Set([
   'EvoKernel',
 ]);
 
+const STDLIB_ROOT_RECEIVERS = new Set([
+  'Object',
+  'Array',
+  'Promise',
+  'JSON',
+  'Math',
+  'Number',
+  'String',
+  'Boolean',
+  'Symbol',
+  'BigInt',
+  'Reflect',
+  'Proxy',
+  'RegExp',
+  'Date',
+  'Error',
+  'Map',
+  'Set',
+  'WeakMap',
+  'WeakSet',
+  'Buffer',
+  'URL',
+  'URLSearchParams',
+  'Intl',
+  'Atomics',
+  'WebAssembly',
+  'console',
+  'process',
+  'fs',
+  'path',
+  'os',
+  'crypto',
+]);
+
 export function detectCoupledIdentifiersInRule(text: string): string[] {
   const found = new Set<string>();
   const hungarianRegex =
@@ -356,7 +392,11 @@ export function detectCoupledIdentifiersInRule(text: string): string[] {
   }
   for (const m of text.matchAll(backtickCallRegex)) {
     const callExpr = m[1];
-    if (!/^(?:evo_|codegraph|import\.|process\.|fs\.|path\.|os\.)/i.test(callExpr)) {
+    const rootReceiver = callExpr.includes('.') ? callExpr.split('.')[0] : '';
+    if (
+      !/^(?:evo_|codegraph|import\.|process\.|fs\.|path\.|os\.)/i.test(callExpr) &&
+      (!rootReceiver || !STDLIB_ROOT_RECEIVERS.has(rootReceiver))
+    ) {
       found.add(callExpr);
     }
   }
@@ -374,6 +414,9 @@ export function detectCoupledIdentifiersInRule(text: string): string[] {
     const isCamelOrPascal = /[a-z0-9][A-Z]/.test(ident);
     const isSnakeCase = /^[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+$/.test(ident);
     const isDottedMember = /^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_.]*$/.test(ident);
+    if (isDottedMember && STDLIB_ROOT_RECEIVERS.has(ident.split('.')[0])) {
+      continue;
+    }
     if (isCamelOrPascal || isSnakeCase || isDottedMember) {
       found.add(ident);
     }
@@ -477,7 +520,7 @@ export function scanCapabilityReferences(text: string): string[] {
     /\bevo_run\(\s*\{?\s*(?:tool_id\s*:\s*)?["']([a-z0-9][a-z0-9_-]*)["']/gi,
     /\bevo_inspect\(\s*\{?\s*(?:id\s*:\s*)?["']([a-z0-9][a-z0-9_-]*)["']/gi,
     /\btool_id\s*:\s*["']([a-z0-9][a-z0-9_-]*)["']/gi,
-    /\.evo\/(?:tools|skills|rules)(?:\/scoped)?\/([a-z0-9][a-z0-9_-]*?)(?:\.md(?=[^a-z0-9_-]|$)|(?=[^a-z0-9_-]|$))/gi,
+    /\.evo[/\\](?:tools|skills|rules)(?:[/\\]scoped)?[/\\]([a-z0-9][a-z0-9_-]*?)(?:\.md(?=[^a-z0-9_-]|$)|(?=[^a-z0-9_-]|$))/gi,
   ];
 
   for (const regex of patterns) {
@@ -1732,71 +1775,6 @@ export function restoreWorkspaceFromSnapshot(
   return { mutatedFiles, restoredFiles };
 }
 
-export function parseSkillSectionsFromMarkdown(markdown: string): {
-  l1: string;
-  l2: string;
-  hasL1Header: boolean;
-  hasL2Header: boolean;
-} {
-  const stripped = String(markdown || '')
-    .trim()
-    .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
-    .trim();
-  if (!stripped) {
-    return { l1: '', l2: '', hasL1Header: false, hasL2Header: false };
-  }
-
-  const lines = stripped.split(/\r?\n/);
-  const headers: Array<{ kind: 'l1' | 'l2'; lineIdx: number }> = [];
-  let fenceChar: '`' | '~' | '' = '';
-  let fenceLen = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
-    if (fenceMatch) {
-      const marker = fenceMatch[1];
-      const ch = marker[0] as '`' | '~';
-      if (!fenceChar) {
-        fenceChar = ch;
-        fenceLen = marker.length;
-        continue;
-      }
-      if (ch === fenceChar && marker.length >= fenceLen && fenceMatch[2].trim() === '') {
-        fenceChar = '';
-        fenceLen = 0;
-        continue;
-      }
-    }
-    if (fenceChar) continue;
-
-    if (/^#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b/i.test(line)) {
-      headers.push({ kind: 'l1', lineIdx: i });
-    } else if (/^#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b/i.test(line)) {
-      headers.push({ kind: 'l2', lineIdx: i });
-    }
-  }
-
-  const hasL1Header = headers.some((h) => h.kind === 'l1');
-  const hasL2Header = headers.some((h) => h.kind === 'l2');
-
-  let l1 = '';
-  let l2 = '';
-  for (let idx = 0; idx < headers.length; idx++) {
-    const h = headers[idx];
-    const startLine = h.lineIdx + 1;
-    const endLine = idx + 1 < headers.length ? headers[idx + 1].lineIdx : lines.length;
-    const sectionText = lines.slice(startLine, endLine).join('\n').trim();
-    if (h.kind === 'l1' && !l1 && sectionText) {
-      l1 = sectionText;
-    } else if (h.kind === 'l2' && !l2 && sectionText) {
-      l2 = sectionText;
-    }
-  }
-
-  return { l1, l2, hasL1Header, hasL2Header };
-}
-
 export class EvoGatekeeper {
   private readonly storage: EvoStorage;
   private readonly telemetry: EvoTelemetry;
@@ -1831,7 +1809,7 @@ export class EvoGatekeeper {
             stageFailed: res.passed ? undefined : (res.gate_failed || res.error_code || 'GATEKEEPER'),
             diagnostics: res.message || JSON.stringify(res),
           },
-          this.storage.workspaceRoot
+          this.storage.rootDir
         );
       } catch {}
     }
@@ -1884,16 +1862,49 @@ export class EvoGatekeeper {
           (cleanSupersedesId ? this.storage.getMemory(cleanSupersedesId) : null)
         : null;
 
+    const normalizeWorkspaceTargetPath = (spec: string): string => {
+      const trimmedSpec = spec.trim();
+      if (!trimmedSpec) return trimmedSpec;
+      let filePart = trimmedSpec;
+      let suffixPart = '';
+      const hashIdx = trimmedSpec.indexOf('#');
+      if (hashIdx !== -1) {
+        filePart = trimmedSpec.slice(0, hashIdx).trim();
+        suffixPart = trimmedSpec.slice(hashIdx);
+      } else {
+        for (let i = trimmedSpec.length - 1; i > 1; i--) {
+          if (trimmedSpec[i] === ':' && trimmedSpec[i - 1] !== ':' && trimmedSpec[i + 1] !== ':') {
+            const candSuffix = trimmedSpec.slice(i + 1).trim();
+            if (candSuffix && !/^\d+$/.test(candSuffix)) {
+              filePart = trimmedSpec.slice(0, i).trim();
+              suffixPart = trimmedSpec.slice(i);
+            }
+            break;
+          }
+        }
+      }
+      const normalizedSlashes = filePart.replace(/\\/g, '/');
+      if (path.isAbsolute(normalizedSlashes) || /^[A-Za-z]:\//.test(normalizedSlashes)) {
+        const wsRootResolved = path.resolve(this.storage.rootDir);
+        const fileResolved = path.resolve(filePart);
+        const rel = path.relative(wsRootResolved, fileResolved);
+        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+          return `${rel.replace(/\\/g, '/').replace(/^\.\/+/, '')}${suffixPart}`;
+        }
+      }
+      return trimmedSpec;
+    };
+
     const normalizeTargetSymbol = (s: unknown): string => {
-      if (typeof s === 'string') return s.trim();
+      if (typeof s === 'string') return normalizeWorkspaceTargetPath(s);
       if (s && typeof s === 'object' && !Array.isArray(s)) {
         const obj = s as Record<string, unknown>;
         const filePart = String(obj.file_path ?? obj.file ?? obj.path ?? '').trim();
         const symPart = String(obj.symbol_name ?? obj.symbol ?? obj.name ?? '').trim();
-        if (filePart && symPart) return `${filePart}#${symPart}`;
-        return symPart || filePart;
+        if (filePart && symPart) return normalizeWorkspaceTargetPath(`${filePart}#${symPart}`);
+        return normalizeWorkspaceTargetPath(symPart || filePart);
       }
-      return String(s ?? '').trim();
+      return normalizeWorkspaceTargetPath(String(s ?? ''));
     };
     const rawTargetSymbolsSource =
       rawProposal.target_symbols !== undefined

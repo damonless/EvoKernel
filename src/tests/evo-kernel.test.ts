@@ -902,6 +902,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         [path.join(repoRoot, 'scripts', 'antigravity_hook.mjs'), 'PreInvocation'],
         {
           cwd: repoRoot,
+          env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: path.join(fakeGlobalDir, 'agy-hook-state.json') },
           input: JSON.stringify({
             conversationId: convId,
             transcriptPath: mockTranscript,
@@ -921,6 +922,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         [path.join(repoRoot, 'scripts', 'antigravity_hook.mjs'), 'PreInvocation'],
         {
           cwd: repoRoot,
+          env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: path.join(fakeGlobalDir, 'agy-hook-state.json') },
           input: JSON.stringify({
             conversationId: convId,
             transcriptPath: mockTranscript,
@@ -938,6 +940,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         [path.join(repoRoot, 'scripts', 'antigravity_hook.mjs'), 'PreInvocation'],
         {
           cwd: repoRoot,
+          env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: path.join(fakeGlobalDir, 'agy-hook-state.json') },
           input: JSON.stringify({
             conversationId: 'missing-conv',
             transcriptPath: path.join(fakeGlobalDir, 'nonexistent.jsonl'),

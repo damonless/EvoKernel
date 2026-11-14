@@ -2,15 +2,15 @@
 id: stage-gate-pages-grep-pack-and-cli-ascii
 title: "Stage-Gate Hardening: pages.yml -rnIE, Positive npm pack Gate, Full CLI/Hook --ascii, -v Interception & boot-mcp Workspace Safety"
 l0_summary: "Fix pages.yml PNG grep (-rnIE), positive pkg.files + bounded CI pack JSON, CLI/pre-commit --ascii, -v routing, and boot-mcp --workspace mcp."
-created_commit: "7293568"
+created_commit: "6c7266d"
 created_branch: "main"
 target_symbols: ["src/cli/term.ts#toAsciiOutput","src/cli/hook.ts#handlePreCommit","src/cli/index.ts#runCli","src/cli/ui.ts#runUiCli","src/cli/optimize.ts#renderOptimizeHelp"]
-ast_fingerprints: {"src/cli/term.ts#toAsciiOutput":{"symbol":"src/cli/term.ts#toAsciiOutput","file_path":"src/cli/term.ts","file":"src/cli/term.ts","kind":"function","start_line":50,"end_line":112,"signature":"export function toAsciiOutput(str: string): string","ast_hash":"dd07b0bf7ba30018"},"src/cli/hook.ts#handlePreCommit":{"symbol":"src/cli/hook.ts#handlePreCommit","file_path":"src/cli/hook.ts","file":"src/cli/hook.ts","kind":"function","start_line":1256,"end_line":1372,"signature":"export function handlePreCommit(","ast_hash":"5e7b982ef8e75bb7"},"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1360,"end_line":2421,"signature":"export function runCli(argv: string[]): void","ast_hash":"0e3900f3799f4e99"},"src/cli/ui.ts#runUiCli":{"symbol":"src/cli/ui.ts#runUiCli","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1955,"end_line":2053,"signature":"export async function runUiCli(workspaceRoot: string, args: string[]): Promise<void>","ast_hash":"05872d3618846218"},"src/cli/optimize.ts#renderOptimizeHelp":{"symbol":"src/cli/optimize.ts#renderOptimizeHelp","file_path":"src/cli/optimize.ts","file":"src/cli/optimize.ts","kind":"function","start_line":170,"end_line":202,"signature":"export function renderOptimizeHelp(): string","ast_hash":"bc13369bf1a0734e"}}
+ast_fingerprints: {"src/cli/term.ts#toAsciiOutput":{"symbol":"src/cli/term.ts#toAsciiOutput","file_path":"src/cli/term.ts","file":"src/cli/term.ts","kind":"function","start_line":50,"end_line":112,"signature":"export function toAsciiOutput(str: string): string","ast_hash":"dd07b0bf7ba30018"},"src/cli/hook.ts#handlePreCommit":{"symbol":"src/cli/hook.ts#handlePreCommit","file_path":"src/cli/hook.ts","file":"src/cli/hook.ts","kind":"function","start_line":1277,"end_line":1401,"signature":"export function handlePreCommit(","ast_hash":"78be2480a2872fc9"},"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1358,"end_line":2419,"signature":"export function runCli(argv: string[]): void","ast_hash":"0e3900f3799f4e99"},"src/cli/ui.ts#runUiCli":{"symbol":"src/cli/ui.ts#runUiCli","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1955,"end_line":2053,"signature":"export async function runUiCli(workspaceRoot: string, args: string[]): Promise<void>","ast_hash":"05872d3618846218"},"src/cli/optimize.ts#renderOptimizeHelp":{"symbol":"src/cli/optimize.ts#renderOptimizeHelp","file_path":"src/cli/optimize.ts","file":"src/cli/optimize.ts","kind":"function","start_line":170,"end_line":202,"signature":"export function renderOptimizeHelp(): string","ast_hash":"bc13369bf1a0734e"}}
 tags: ["ci","packaging","cli","ascii","pages","hooks","mcp-bootstrap"]
 origin: "evolved"
 supersedes_id: "stage-gate-pages-grep-pack-and-cli-ascii"
 created_at: "2026-11-11T07:11:12.338Z"
-updated_at: "2026-11-14T17:15:20.428Z"
+updated_at: "2026-11-14T20:17:35.038Z"
 ---
 
 ## Symptom

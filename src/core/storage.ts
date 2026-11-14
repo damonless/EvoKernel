@@ -249,8 +249,77 @@ export function getExtensionForRuntime(runtime: ScriptRuntime): string {
   }
 }
 
+export function parseSkillSectionsFromMarkdown(markdown: string): {
+  l1: string;
+  l2: string;
+  hasL1Header: boolean;
+  hasL2Header: boolean;
+} {
+  const stripped = String(markdown || '')
+    .trim()
+    .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
+    .trim();
+  if (!stripped) {
+    return { l1: '', l2: '', hasL1Header: false, hasL2Header: false };
+  }
+
+  const lines = stripped.split(/\r?\n/);
+  const headers: Array<{ kind: 'l1' | 'l2'; lineIdx: number }> = [];
+  let fenceChar: '`' | '~' | '' = '';
+  let fenceLen = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      const ch = marker[0] as '`' | '~';
+      if (!fenceChar) {
+        fenceChar = ch;
+        fenceLen = marker.length;
+        continue;
+      }
+      if (ch === fenceChar && marker.length >= fenceLen && fenceMatch[2].trim() === '') {
+        fenceChar = '';
+        fenceLen = 0;
+        continue;
+      }
+    }
+    if (fenceChar) continue;
+
+    if (/^#{1,3}\s*L1(?:\s+Contract|\s+Overview)?\b/i.test(line)) {
+      headers.push({ kind: 'l1', lineIdx: i });
+    } else if (/^#{1,3}\s*L2(?:\s+SOP|\s+Procedure|\s+Body)?\b/i.test(line)) {
+      headers.push({ kind: 'l2', lineIdx: i });
+    }
+  }
+
+  const hasL1Header = headers.some((h) => h.kind === 'l1');
+  const hasL2Header = headers.some((h) => h.kind === 'l2');
+
+  let l1 = '';
+  let l2 = '';
+  for (let idx = 0; idx < headers.length; idx++) {
+    const h = headers[idx];
+    const startLine = h.lineIdx + 1;
+    const endLine = idx + 1 < headers.length ? headers[idx + 1].lineIdx : lines.length;
+    const sectionText = lines.slice(startLine, endLine).join('\n').trim();
+    if (h.kind === 'l1' && !l1 && sectionText) {
+      l1 = sectionText;
+    } else if (h.kind === 'l2' && !l2 && sectionText) {
+      l2 = sectionText;
+    }
+  }
+
+  return { l1, l2, hasL1Header, hasL2Header };
+}
+
 export class EvoStorage {
   public readonly rootDir: string;
+
+  public get workspaceRoot(): string {
+    return this.rootDir;
+  }
   public readonly localEvoDir: string;
   public readonly localConfigPath: string;
   public readonly isLinkedShared: boolean;
@@ -648,10 +717,13 @@ export class EvoStorage {
     try {
       const raw = fs.readFileSync(filePath, 'utf8');
       const { meta, body } = parseFrontmatter(raw);
-      const l1Match = body.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
-      const l2Match = body.match(/## L2 SOP\s+([\s\S]*)$/i);
-      const l1_contract = l1Match ? l1Match[1].trim() : body.slice(0, 300).trim();
-      const l2_sop = l2Match ? l2Match[1].trim() : body.trim();
+      const parsedSections = parseSkillSectionsFromMarkdown(body);
+      const l1_contract = parsedSections.hasL1Header
+        ? parsedSections.l1
+        : body.slice(0, 300).trim();
+      const l2_sop = parsedSections.hasL2Header
+        ? parsedSections.l2
+        : body.trim();
       const skillId = String(meta.id || cleanId);
       const l0_summary = String(meta.l0_summary || meta.description || '');
       const name = meta.name ? String(meta.name) : skillId;

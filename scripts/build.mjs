@@ -2,10 +2,25 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
-const rootDir = process.cwd();
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const srcDir = path.join(rootDir, 'src');
 const distDir = path.join(rootDir, 'dist');
+
+function assertEvoKernelRepoRoot(dir) {
+  const pkgPath = path.join(dir, 'package.json');
+  if (!fs.existsSync(pkgPath)) {
+    return false;
+  }
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  if (pkg?.name !== 'evo-kernel') {
+    throw new Error(
+      `[build.mjs] Refusing to modify non-evokernel directory '${dir}' (package.json name=${String(pkg?.name || '')}).`
+    );
+  }
+  return true;
+}
 
 export const SEED_RULES = [
   'gatekeeper-self-test-invariant.md',
@@ -60,65 +75,66 @@ function syncCanonicalSeeds() {
     fs.copyFileSync(compiledDeliverable, localDeliverableToolRun);
   }
 
-  // Also sync canonical seeds to ~/.evo/global/.evo if present
+  // Also sync canonical seeds to global store ONLY when explicitly opted in via EVO_SYNC_GLOBAL=1
   try {
-    const globalEvoDir = path.join(os.homedir(), '.evo', 'global', '.evo');
-    if (fs.existsSync(globalEvoDir)) {
-      // 1. Tools
-      for (const toolId of SEED_TOOLS) {
-        const globalToolDir = path.join(globalEvoDir, 'tools', toolId);
-        if (fs.existsSync(globalToolDir)) {
-          const localToolDir = path.join(evoDir, 'tools', toolId);
-          for (const f of ['run.mjs', 'manifest.json']) {
-            const srcFile = path.join(localToolDir, f);
-            if (fs.existsSync(srcFile)) {
-              fs.copyFileSync(srcFile, path.join(globalToolDir, f));
+    if (process.env.EVO_SYNC_GLOBAL === '1') {
+      const globalHome = process.env.EVO_GLOBAL_DIR
+        ? path.resolve(process.env.EVO_GLOBAL_DIR)
+        : path.join(os.homedir(), '.evo', 'global');
+      const globalEvoDir = fs.existsSync(path.join(globalHome, '.evo'))
+        ? path.join(globalHome, '.evo')
+        : path.basename(globalHome) === '.evo'
+          ? globalHome
+          : path.join(globalHome, '.evo');
+      if (fs.existsSync(globalEvoDir)) {
+        // 1. Tools (SEED_TOOLS only)
+        for (const toolId of SEED_TOOLS) {
+          const globalToolDir = path.join(globalEvoDir, 'tools', toolId);
+          if (fs.existsSync(globalToolDir)) {
+            const localToolDir = path.join(evoDir, 'tools', toolId);
+            for (const f of ['run.mjs', 'manifest.json']) {
+              const srcFile = path.join(localToolDir, f);
+              if (fs.existsSync(srcFile)) {
+                fs.copyFileSync(srcFile, path.join(globalToolDir, f));
+              }
             }
           }
         }
-      }
 
-      // 2. Rules (top-level SEED_RULES + matching scoped rules)
-      for (const ruleFile of SEED_RULES) {
-        const destRule = path.join(globalEvoDir, 'rules', ruleFile);
-        if (fs.existsSync(destRule)) {
-          const srcRule = path.join(evoDir, 'rules', ruleFile);
-          if (fs.existsSync(srcRule)) {
-            fs.copyFileSync(srcRule, destRule);
-          }
-        }
-      }
-      const localScopedDir = path.join(evoDir, 'rules', 'scoped');
-      const globalScopedDir = path.join(globalEvoDir, 'rules', 'scoped');
-      if (fs.existsSync(localScopedDir)) {
-        fs.mkdirSync(globalScopedDir, { recursive: true });
-        for (const scopedFile of SEED_SCOPED_RULES) {
-          const srcScoped = path.join(localScopedDir, scopedFile);
-          if (fs.existsSync(srcScoped)) {
-            fs.copyFileSync(srcScoped, path.join(globalScopedDir, scopedFile));
-            const legacyTop = path.join(globalEvoDir, 'rules', scopedFile);
-            if (fs.existsSync(legacyTop)) {
-              fs.rmSync(legacyTop, { force: true });
+        // 2. Rules (SEED_RULES & SEED_SCOPED_RULES only — never leak workspace-local scoped rules)
+        for (const ruleFile of SEED_RULES) {
+          const destRule = path.join(globalEvoDir, 'rules', ruleFile);
+          if (fs.existsSync(destRule)) {
+            const srcRule = path.join(evoDir, 'rules', ruleFile);
+            if (fs.existsSync(srcRule)) {
+              fs.copyFileSync(srcRule, destRule);
             }
           }
         }
-        for (const f of fs.readdirSync(localScopedDir)) {
-          if (f.endsWith('.md')) {
-            const destScoped = path.join(globalScopedDir, f);
-            if (fs.existsSync(destScoped)) {
-              fs.copyFileSync(path.join(localScopedDir, f), destScoped);
+        const localScopedDir = path.join(evoDir, 'rules', 'scoped');
+        const globalScopedDir = path.join(globalEvoDir, 'rules', 'scoped');
+        if (fs.existsSync(localScopedDir)) {
+          fs.mkdirSync(globalScopedDir, { recursive: true });
+          for (const scopedFile of SEED_SCOPED_RULES) {
+            const srcScoped = path.join(localScopedDir, scopedFile);
+            if (fs.existsSync(srcScoped)) {
+              fs.copyFileSync(srcScoped, path.join(globalScopedDir, scopedFile));
+              const legacyTop = path.join(globalEvoDir, 'rules', scopedFile);
+              if (fs.existsSync(legacyTop)) {
+                fs.rmSync(legacyTop, { force: true });
+              }
             }
           }
         }
-      }
 
-      // 3. Skills
-      for (const skillId of SEED_SKILLS) {
-        const destSkillDir = path.join(globalEvoDir, 'skills', skillId);
-        if (fs.existsSync(destSkillDir)) {
-          const srcSkillFile = path.join(evoDir, 'skills', skillId, 'SKILL.md');
-          if (fs.existsSync(srcSkillFile)) {
-            fs.copyFileSync(srcSkillFile, path.join(destSkillDir, 'SKILL.md'));
+        // 3. Skills (SEED_SKILLS only)
+        for (const skillId of SEED_SKILLS) {
+          const destSkillDir = path.join(globalEvoDir, 'skills', skillId);
+          if (fs.existsSync(destSkillDir)) {
+            const srcSkillFile = path.join(evoDir, 'skills', skillId, 'SKILL.md');
+            if (fs.existsSync(srcSkillFile)) {
+              fs.copyFileSync(srcSkillFile, path.join(destSkillDir, 'SKILL.md'));
+            }
           }
         }
       }
@@ -219,7 +235,10 @@ function syncCanonicalSeeds() {
   }
 }
 
+const isRepoRootWithPkg = assertEvoKernelRepoRoot(rootDir);
 fs.rmSync(distDir, { recursive: true, force: true });
 buildDir(srcDir, distDir);
-syncCanonicalSeeds();
+if (isRepoRootWithPkg && fs.existsSync(path.join(rootDir, '.evo'))) {
+  syncCanonicalSeeds();
+}
 console.log('Built dist/ from src/ using native node:module.stripTypeScriptTypes (0 external dependencies).');

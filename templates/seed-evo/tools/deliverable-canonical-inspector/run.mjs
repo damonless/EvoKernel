@@ -552,8 +552,8 @@ export function inspectXlsx(
   const relMatches = relsText.matchAll(/<Relationship\s+([^>]+?)\/?>/g);
   for (const match of relMatches) {
     const attrs = match[1];
-    const idMatch = attrs.match(/\bId="([^"]+)"/);
-    const targetMatch = attrs.match(/\bTarget="([^"]+)"/);
+    const idMatch = attrs.match(/\bId=["']([^"']+)["']/);
+    const targetMatch = attrs.match(/\bTarget=["']([^"']+)["']/);
     if (idMatch && targetMatch) {
       const id = idMatch[1];
       const target = targetMatch[1];
@@ -572,8 +572,8 @@ export function inspectXlsx(
   const sheetMatches = wbText.matchAll(/<sheet\s+([^>]+?)\/?>/g);
   for (const match of sheetMatches) {
     const attrs = match[1];
-    const nameMatch = attrs.match(/\bname="([^"]+)"/);
-    const rIdMatch = attrs.match(/\b(?:r:id|id)="([^"]+)"/);
+    const nameMatch = attrs.match(/\bname=["']([^"']+)["']/);
+    const rIdMatch = attrs.match(/\b(?:r:id|id)=["']([^"']+)["']/);
     if (nameMatch && rIdMatch) {
       const name = decodeXmlEntities(nameMatch[1]);
       const rId = rIdMatch[1];
@@ -684,8 +684,8 @@ export function inspectXlsx(
         const attrs = cellMatch[1];
         const inner = cellMatch[2] || '';
 
-        const rMatch = attrs.match(/\br="([A-Za-z]+)(\d+)"/);
-        const tMatch = attrs.match(/\bt="([^"]+)"/);
+        const rMatch = attrs.match(/\br=["']([A-Za-z]+)(\d+)["']/);
+        const tMatch = attrs.match(/\bt=["']([^"']+)["']/);
         const cellType = tMatch ? tMatch[1] : '';
         const cellRef = rMatch ? `${rMatch[1]}${rMatch[2]}` : '';
         const colLetters = rMatch ? rMatch[1] : '';
@@ -1130,14 +1130,15 @@ export function inspectPptx(
 // ---------------------------------------------------------------------------
 // Format Inspector: CSV / TSV
 // ---------------------------------------------------------------------------
-export function parseDelimited(
+function parseDelimitedWithState(
   text        ,
   delimiter        
-)             {
+)                                                                      {
   const rows             = [];
   let currentRow           = [];
   let currentField = '';
   let inQuotes = false;
+  let quoteStartRow = 1;
   let i = 0;
 
   while (i < text.length) {
@@ -1161,6 +1162,7 @@ export function parseDelimited(
     } else {
       if (char === '"') {
         inQuotes = true;
+        quoteStartRow = rows.length + 1;
         i++;
         continue;
       } else if (char === delimiter) {
@@ -1198,7 +1200,14 @@ export function parseDelimited(
     rows.push(currentRow);
   }
 
-  return rows;
+  return { rows, unclosedQuote: inQuotes, quoteStartRow };
+}
+
+export function parseDelimited(
+  text        ,
+  delimiter        
+)             {
+  return parseDelimitedWithState(text, delimiter).rows;
 }
 
 export function inspectDelimited(
@@ -1227,7 +1236,16 @@ export function inspectDelimited(
     };
   }
 
-  const rows = parseDelimited(content, delimiter);
+  const parsedDelim = parseDelimitedWithState(content, delimiter);
+  const rows = parsedDelim.rows;
+  if (parsedDelim.unclosedQuote) {
+    defects.push({
+      code: 'UNCLOSED_QUOTE',
+      severity: 'error',
+      location: `Row ${parsedDelim.quoteStartRow}`,
+      message: `Unclosed quoted field starting at row ${parsedDelim.quoteStartRow} reached EOF in .${format}.`,
+    });
+  }
   // Filter trailing completely empty rows
   while (
     rows.length > 0 &&

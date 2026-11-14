@@ -7,9 +7,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/daming56/EvoKernel"
+    "url": "https://github.com/damonless/EvoKernel"
   },
-  "homepage": "https://github.com/daming56/EvoKernel#readme",
+  "homepage": "https://github.com/damonless/EvoKernel#readme",
   "engines": {
     "vscode": "^1.80.0"
   },

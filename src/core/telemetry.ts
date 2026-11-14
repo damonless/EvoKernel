@@ -52,7 +52,7 @@ export function readRecallWindowStatsFromDb(db: DatabaseSync, days = 7): RecallW
            COALESCE(SUM(CASE WHEN event_type = 'search' THEN 1 ELSE 0 END), 0) AS searchEvents,
            COALESCE(SUM(CASE WHEN event_type = 'inspect' THEN 1 ELSE 0 END), 0) AS inspectEvents,
            COALESCE(SUM(CASE WHEN event_type = 'run' THEN 1 ELSE 0 END), 0) AS runEvents,
-           COALESCE(SUM(CASE WHEN helped > 0 THEN 1 ELSE 0 END), 0) AS helpedCount,
+           COALESCE(SUM(CASE WHEN helped > 0 AND event_type IN ('inspect', 'run') THEN 1 ELSE 0 END), 0) AS helpedCount,
            COUNT(DISTINCT CASE WHEN capability_id != '' AND capability_id != '__zero_hit__' THEN capability_id ELSE NULL END) AS uniqueCapabilities
          FROM recall_events
          WHERE timestamp >= ?`
@@ -624,6 +624,8 @@ export class EvoTelemetry {
   private readonly forceFallback: boolean;
   private fts5Enabled = false;
   private closed = false;
+  private cachedPausedDigest = '';
+  private cachedPausedIds = new Set<string>();
   private db: DatabaseSync;
 
   constructor(storage: EvoStorage, options?: TelemetryOptions) {
@@ -935,6 +937,19 @@ export class EvoTelemetry {
         }
       }
 
+      // Purge orphan memory_verification_cache rows
+      const existingMemCache = this.db
+        .prepare('SELECT memory_id FROM memory_verification_cache')
+        .all() as Array<{ memory_id: string }>;
+      const deleteMemCache = this.db.prepare('DELETE FROM memory_verification_cache WHERE memory_id = ?');
+      for (const row of existingMemCache) {
+        if (!activeMemoryIds.has(row.memory_id)) {
+          deleteMemCache.run(row.memory_id);
+        }
+      }
+      this.cachedPausedDigest = '';
+      this.cachedPausedIds.clear();
+
       const upsertTelemetry = this.db.prepare(`
         INSERT INTO telemetry (id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, tokens_saved, last_used_at, created_at)
         VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)
@@ -1101,7 +1116,7 @@ export class EvoTelemetry {
     try {
       const redactedDiag = redactSensitiveDiagnostics(
         event.diagnostics,
-        workspaceRoot || this.storage.workspaceRoot
+        workspaceRoot || this.storage.rootDir
       );
       const stmt = this.db.prepare(`
         INSERT INTO gatekeeper_events (timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics)
@@ -1237,19 +1252,25 @@ export class EvoTelemetry {
 
     const wsForScope = activeWorkspaceRoot || this.storage.rootDir;
     const workspaceCodeExts = wsForScope ? collectWorkspaceCodeExtensions(wsForScope) : undefined;
-    const pausedIds = new Set<string>();
-    for (const r of this.storage.listRules()) {
-      if (r.enabled === false) pausedIds.add(`rule:${r.id}`);
+    const currentPausedDigest = computeDiskSyncDigest(this.storage.evoDir);
+    if (currentPausedDigest !== this.cachedPausedDigest) {
+      const nextPausedIds = new Set<string>();
+      for (const r of this.storage.listRules()) {
+        if (r.enabled === false) nextPausedIds.add(`rule:${r.id}`);
+      }
+      for (const s of this.storage.listSkills()) {
+        if (s.enabled === false) nextPausedIds.add(`skill:${s.id}`);
+      }
+      for (const t of this.storage.listTools()) {
+        if (t.enabled === false) nextPausedIds.add(`tool:${t.id}`);
+      }
+      for (const m of this.storage.listMemories()) {
+        if (m.enabled === false) nextPausedIds.add(`memory:${m.id}`);
+      }
+      this.cachedPausedIds = nextPausedIds;
+      this.cachedPausedDigest = currentPausedDigest;
     }
-    for (const s of this.storage.listSkills()) {
-      if (s.enabled === false) pausedIds.add(`skill:${s.id}`);
-    }
-    for (const t of this.storage.listTools()) {
-      if (t.enabled === false) pausedIds.add(`tool:${t.id}`);
-    }
-    for (const m of this.storage.listMemories()) {
-      if (m.enabled === false) pausedIds.add(`memory:${m.id}`);
-    }
+    const pausedIds = this.cachedPausedIds;
     const filteredRows = rows.filter((r) => {
       if (pausedIds.has(`${String(r.kind)}:${String(r.id)}`)) {
         return false;
@@ -1730,7 +1751,23 @@ export class EvoTelemetry {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed as RecalledCapabilityEntry[];
+        const now = Date.now();
+        const pruned = (parsed as Array<RecalledCapabilityEntry & { at?: unknown }>).filter((item) => {
+          if (!item || typeof item.id !== 'string') return false;
+          const tsMs = typeof item.at === 'number' ? item.at : Date.parse(String(item.ts || ''));
+          if (Number.isFinite(tsMs) && now - tsMs > 86_400_000) {
+            return false;
+          }
+          return true;
+        });
+        if (pruned.length !== parsed.length) {
+          if (pruned.length === 0) {
+            this.clearRecalledCapabilities();
+          } else {
+            this.setSessionFlag('recalled_capabilities', JSON.stringify(pruned));
+          }
+        }
+        return pruned;
       }
     } catch {
       // ignore malformed session flag
@@ -1754,7 +1791,7 @@ export class EvoTelemetry {
             : null;
     if (!col) return;
     const rawId = id.trim();
-    const cleanId = rawId.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+    const cleanId = rawId.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-');
     const stmt = this.db.prepare(
       `UPDATE telemetry SET ${col} = ${col} + 1 WHERE id = ? OR id = ?`
     );
@@ -1785,7 +1822,7 @@ export class EvoTelemetry {
     if (outcome === 'helped') {
       try {
         const recentCutoff = new Date(Date.now() - 86400000).toISOString();
-        const upd = this.db
+        this.db
           .prepare(
             `UPDATE recall_events
              SET helped = 1
@@ -1793,25 +1830,13 @@ export class EvoTelemetry {
                SELECT id FROM recall_events
                WHERE (capability_id = ? OR capability_id = ?)
                  AND helped = 0
+                 AND event_type IN ('inspect', 'run')
                  AND timestamp >= ?
                ORDER BY id DESC
                LIMIT 1
              )`
           )
           .run(rawId, cleanId, recentCutoff);
-        if (upd.changes === 0) {
-          const rule = this.storage.getRule(cleanId);
-          const skill = this.storage.getSkill(cleanId);
-          const tool = this.storage.getTool(cleanId);
-          const memory = this.storage.getMemory(cleanId);
-          const kind = rule ? 'rule' : skill ? 'skill' : tool ? 'tool' : memory ? 'memory' : 'rule';
-          this.db
-            .prepare(
-              `INSERT INTO recall_events (timestamp, event_type, capability_id, kind, tier, helped)
-               VALUES (?, 'outcome', ?, ?, 'LOCAL', 1)`
-            )
-            .run(new Date().toISOString(), cleanId, kind);
-        }
       } catch {
         // Ignore if DB is read-only or closed
       }
@@ -1829,7 +1854,7 @@ export class EvoTelemetry {
     const capId = String(event.capabilityId || '').trim();
     if (!capId) return;
     try {
-      this.db
+      const res = this.db
         .prepare(
           `INSERT INTO recall_events (timestamp, event_type, capability_id, kind, tier, helped)
            VALUES (?, ?, ?, ?, ?, ?)`
@@ -1842,6 +1867,11 @@ export class EvoTelemetry {
           event.tier ? String(event.tier) : null,
           event.helped ? 1 : 0
         );
+      if (Number(res.lastInsertRowid) % 100 === 0) {
+        this.db.exec(
+          'DELETE FROM recall_events WHERE id NOT IN (SELECT id FROM recall_events ORDER BY id DESC LIMIT 5000)'
+        );
+      }
     } catch {
       // Ignore write failures
     }

@@ -1833,7 +1833,14 @@ export class CodexAdapter implements HarnessAdapter {
     if (fs.existsSync(rulePath)) {
       existing = fs.readFileSync(rulePath, 'utf8');
     }
-    fs.writeFileSync(rulePath, upsertMarkerBlock(existing, managedBlock), 'utf8');
+    const updatedAgentsMd = upsertMarkerBlock(existing, managedBlock);
+    fs.writeFileSync(rulePath, updatedAgentsMd, 'utf8');
+    const agentsMdBytes = Buffer.byteLength(updatedAgentsMd, 'utf8');
+    if (agentsMdBytes > 32768) {
+      console.warn(
+        `[EvoKernel] Warning: AGENTS.md (${agentsMdBytes} bytes) exceeds Codex CLI 32 KiB project_doc_max_bytes limit (32768 bytes); run "evo audit" / "evo compact" to prevent L0 rule truncation.`
+      );
+    }
 
     const tomlPath = path.join(ws, '.codex', 'config.toml');
     upsertCodexToml(tomlPath, ws);

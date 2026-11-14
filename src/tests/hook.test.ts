@@ -450,6 +450,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const runAgyHook = (event: 'PreInvocation' | 'Stop') => {
       const proc = spawnSync(process.execPath, [hookScript, event], {
         cwd: ws,
+        env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: path.join(ws, 'agy-hook-state.json') },
         input: JSON.stringify({
           conversationId: convId,
           transcriptPath: transcriptFile,
@@ -708,6 +709,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const runAgyHook = (event: 'PreInvocation' | 'Stop') => {
       const proc = spawnSync(process.execPath, [hookScript, event], {
         cwd: ws,
+        env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: path.join(ws, 'agy-hook-state.json') },
         input: JSON.stringify({
           conversationId: convId,
           transcriptPath: transcriptFile,
@@ -1051,6 +1053,8 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
     const t0 = Date.now();
     const child = spawn(process.execPath, [hookScript, 'PreInvocation'], {
+      cwd: ws,
+      env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: path.join(ws, 'agy-hook-state.json') },
       stdio: ['pipe', 'pipe', 'inherit'],
     });
     let stdout = '';
@@ -1074,6 +1078,8 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
   test('39. Dimension 8: scripts/antigravity_hook.mjs correctly receives piped JSON on stdin', async () => {
     const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
     const child = spawn(process.execPath, [hookScript, 'Stop'], {
+      cwd: ws,
+      env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: path.join(ws, 'agy-hook-state.json') },
       stdio: ['pipe', 'pipe', 'inherit'],
     });
     let stdout = '';
@@ -1110,6 +1116,8 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
   test('41. Dimension 8: scripts/antigravity_hook.mjs receives multi-chunk JSON delayed by >50ms', async () => {
     const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
     const child = spawn(process.execPath, [hookScript, 'Stop'], {
+      cwd: ws,
+      env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: path.join(ws, 'agy-hook-state.json') },
       stdio: ['pipe', 'pipe', 'inherit'],
     });
     let stdout = '';
@@ -1357,6 +1365,209 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     const t4 = new EvoTelemetry(storage);
     assert.equal(t4.getSessionFlag('monotonic_recovery_detected'), 'true');
     t4.close();
+  });
+
+  test('47. CLI hook --tool/--file parity, clean --help, contested_at anti-leak guard & antigravity_hook Stop closure', async () => {
+    // 1. DEFECT-CLI-HOOK-FLAGS-DESYNC: --tool/--file and --tool-name/--target-file parsing
+    const parsedSpace = parseHookPayloadArg(['--tool', 'edit_file', '--file', 'src/a.ts']);
+    assert.deepEqual(parsedSpace, { tool_name: 'edit_file', path: 'src/a.ts' });
+    const parsedEq = parseHookPayloadArg(['--tool-name=edit_file', '--target-file=src/a.ts']);
+    assert.deepEqual(parsedEq, { tool_name: 'edit_file', path: 'src/a.ts' });
+
+    // 2. DEFECT-CLI-HELP-COPYPASTE: memory/tree/mcp help exclude --unmount-ide; hook help documents --tool/--file
+    const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+    for (const subCmd of ['memory', 'tree', 'mcp']) {
+      const helpProc = spawnSync(process.execPath, [cliEntry, subCmd, '--help'], { encoding: 'utf8' });
+      assert.equal(helpProc.status, 0);
+      assert.doesNotMatch(helpProc.stdout, /--unmount-ide/);
+    }
+    const hookHelpProc = spawnSync(process.execPath, [cliEntry, 'hook', '--help'], { encoding: 'utf8' });
+    assert.equal(hookHelpProc.status, 0);
+    assert.match(hookHelpProc.stdout, /--tool/);
+    assert.match(hookHelpProc.stdout, /--file/);
+
+    // 3. DEFECT-HOOK-TELEMETRY-ATTRIBUTION-LEAK Part 2: contested_at prevents pre-correction capabilities from receiving 'helped'
+    const storage = new EvoStorage(ws);
+    for (const ruleId of ['cap-before', 'cap-after']) {
+      storage.saveRule({
+        id: ruleId,
+        title: `Rule ${ruleId}`,
+        l0_summary: `Guardrail summary for ${ruleId}`,
+        scope_glob: '**/*',
+        core: false,
+        priority: 80,
+        tokens: 25,
+        origin: 'test',
+        content: `Always validate invariant for ${ruleId}.`,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+    const tel1 = new EvoTelemetry(storage);
+    tel1.syncFromDisk();
+    tel1.recordRecalledCapability({ id: 'cap-before', kind: 'rule', tier: 'LOCAL' });
+    tel1.close();
+
+    // Turn 1: user correction triggers contested attribution for cap-before & stamps contested_at
+    handleStop(ws, { user_message: "That's wrong, fix it properly" }, {});
+
+    await new Promise((r) => setTimeout(r, 20));
+    const tel2 = new EvoTelemetry(storage);
+    tel2.recordRecalledCapability({ id: 'cap-after', kind: 'rule', tier: 'LOCAL' });
+    tel2.close();
+
+    // Turn 2: clean Stop must award 'helped' only to cap-after, never leaking to cap-before
+    handleStop(ws, {}, {});
+
+    const telCheck = new EvoTelemetry(storage);
+    try {
+      const map = telCheck.getTelemetryMap();
+      assert.equal(map.get('cap-before')?.contested_count, 1);
+      assert.equal(map.get('cap-before')?.helped_count, 0, 'Pre-correction capability must not receive post-correction helped');
+      assert.equal(map.get('cap-after')?.helped_count, 1);
+      assert.equal(telCheck.getRecalledCapabilities().length, 0);
+    } finally {
+      telCheck.close();
+    }
+
+    // 4. ISSUE-30-5 & ISSUE-30-6a: scripts/antigravity_hook.mjs Stop closes local SQLite telemetry, and skips wakeup/utility turns
+    const wsAgy = createTempWorkspace();
+    try {
+      const agyStorage = new EvoStorage(wsAgy);
+      agyStorage.ensureInitialized();
+      agyStorage.saveRule({
+        id: 'agy-stop-rule',
+        title: 'Antigravity Stop Telemetry Rule',
+        l0_summary: 'Verify Antigravity Stop hook awards helped on clean session completion.',
+        scope_glob: '**/*',
+        core: false,
+        priority: 80,
+        tokens: 25,
+        origin: 'test',
+        content: 'Validate Stop telemetry closure invariants cleanly.',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      const agyTel1 = new EvoTelemetry(agyStorage);
+      agyTel1.syncFromDisk();
+      agyTel1.recordRecallEvent({ eventType: 'inspect', capabilityId: 'agy-stop-rule', kind: 'rule', tier: 'LOCAL' });
+      agyTel1.recordRecalledCapability({ id: 'agy-stop-rule', kind: 'rule', tier: 'LOCAL' });
+      agyTel1.close();
+
+      const hookScript = path.resolve(process.cwd(), 'scripts', 'antigravity_hook.mjs');
+      const stateFile = path.join(wsAgy, 'agy-state.json');
+
+      const cleanTranscript = path.join(wsAgy, 'clean-transcript.jsonl');
+      fs.writeFileSync(
+        cleanTranscript,
+        [
+          JSON.stringify({ step_index: 1, type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'Fix small helper bug' }),
+          JSON.stringify({
+            step_index: 2,
+            type: 'PLANNER_RESPONSE',
+            source: 'MODEL',
+            status: 'DONE',
+            content: 'Fixed it.',
+            tool_calls: [{ name: 'edit_file', arguments: '{"TargetFile":"src/a.ts"}', status: 'DONE' }],
+          }),
+        ].join('\n') + '\n',
+        'utf8'
+      );
+
+      const stopRes = spawnSync(process.execPath, [hookScript, 'Stop'], {
+        cwd: wsAgy,
+        env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: stateFile },
+        input: JSON.stringify({
+          conversationId: 'conv-stop-clean-1',
+          transcriptPath: cleanTranscript,
+          workspacePaths: [wsAgy],
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(stopRes.status, 0, stopRes.stderr);
+
+      const agyTel2 = new EvoTelemetry(agyStorage);
+      try {
+        const map = agyTel2.getTelemetryMap();
+        assert.equal(map.get('agy-stop-rule')?.helped_count, 1);
+        assert.equal(agyTel2.getRecalledCapabilities().length, 0);
+      } finally {
+        agyTel2.close();
+      }
+
+      // Background task wakeup turn must not emit crystallization prompt
+      const wakeupTranscript = path.join(wsAgy, 'wakeup-transcript.jsonl');
+      fs.writeFileSync(
+        wakeupTranscript,
+        [
+          JSON.stringify({
+            step_index: 1,
+            type: 'USER_INPUT',
+            source: 'SYSTEM',
+            content: '[Message] timestamp=2026-11-15T00:00:00Z sender=conv-1/task-99 priority=HIGH content=Task id "conv-1/task-99" finished',
+          }),
+          JSON.stringify({
+            step_index: 2,
+            type: 'PLANNER_RESPONSE',
+            source: 'MODEL',
+            status: 'DONE',
+            content: 'Checking next.',
+            tool_calls: [{ name: 'edit_file', arguments: '{"TargetFile":"src/a.ts"}', status: 'DONE' }],
+          }),
+        ].join('\n') + '\n',
+        'utf8'
+      );
+      const wakeupRes = spawnSync(process.execPath, [hookScript, 'PreInvocation'], {
+        cwd: wsAgy,
+        env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: stateFile },
+        input: JSON.stringify({
+          conversationId: 'conv-wakeup-1',
+          transcriptPath: wakeupTranscript,
+          workspacePaths: [wsAgy],
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(wakeupRes.status, 0);
+      assert.equal(wakeupRes.stdout.trim(), '{}');
+
+      // Utility subagent (browser) turn must not emit crystallization prompt
+      const utilTranscript = path.join(wsAgy, 'utility-subagent-transcript.jsonl');
+      fs.writeFileSync(
+        utilTranscript,
+        [
+          JSON.stringify({ step_index: 1, type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'Open UI preview' }),
+          JSON.stringify({
+            step_index: 2,
+            type: 'PLANNER_RESPONSE',
+            source: 'MODEL',
+            status: 'DONE',
+            content: 'Delegating to browser.',
+            tool_calls: [
+              {
+                name: 'invoke_subagent',
+                arguments: JSON.stringify({ TypeName: 'browser', Prompt: 'Open http://localhost:3000' }),
+                status: 'DONE',
+              },
+            ],
+          }),
+        ].join('\n') + '\n',
+        'utf8'
+      );
+      const utilRes = spawnSync(process.execPath, [hookScript, 'PreInvocation'], {
+        cwd: wsAgy,
+        env: { ...process.env, EVO_AGY_HOOK_STATE_PATH: stateFile },
+        input: JSON.stringify({
+          conversationId: 'conv-util-subagent-1',
+          transcriptPath: utilTranscript,
+          workspacePaths: [wsAgy],
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(utilRes.status, 0);
+      assert.equal(utilRes.stdout.trim(), '{}');
+    } finally {
+      fs.rmSync(wsAgy, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 });
 

@@ -2,14 +2,14 @@
 id: generic-angle-semicolon-multiline-drift
 title: "Generic Angle Type Literal Semicolon and Multiline Drift"
 l0_summary: "Fix generic angle skipping on semicolons in type literals and multiline defaults"
-created_commit: "7293568"
+created_commit: "6c7266d"
 created_branch: "main"
 target_symbols: ["trySkipGenericAngles","findBraceBlockEnd"]
-ast_fingerprints: {"trySkipGenericAngles":{"symbol":"trySkipGenericAngles","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":301,"end_line":343,"signature":"export function trySkipGenericAngles(masked: string, pos: number): number","ast_hash":"1d46309b635963b2"},"findBraceBlockEnd":{"symbol":"findBraceBlockEnd","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":2056,"end_line":2386,"signature":"export function findBraceBlockEnd(","ast_hash":"45b1d6163d450972"}}
+ast_fingerprints: {"trySkipGenericAngles":{"symbol":"trySkipGenericAngles","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":308,"end_line":350,"signature":"export function trySkipGenericAngles(masked: string, pos: number): number","ast_hash":"1d46309b635963b2"},"findBraceBlockEnd":{"symbol":"findBraceBlockEnd","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":2300,"end_line":2661,"signature":"export function findBraceBlockEnd(","ast_hash":"83d1602e01ec0e9b"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-02T03:04:44.814Z"
-updated_at: "2026-11-14T03:52:06.050Z"
+updated_at: "2026-11-14T20:17:33.781Z"
 ---
 
 ## Symptom

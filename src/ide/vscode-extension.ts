@@ -337,10 +337,10 @@ export function resolveActiveWorkspaceRoot(vscode: any, fallbackCwd: string = pr
 }
 
 export function buildSecuredWebviewHtml(snapshot: UiSnapshot): string {
-  let html = renderUiClientHtml(snapshot, { token: '', isExport: false, anon: false });
+  let html = renderUiClientHtml(snapshot, { token: '', isExport: false, anon: false }).replace(/\r\n/g, '\n');
   const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
   if (scriptMatch) {
-    const scriptContent = scriptMatch[1].replace(/\r\n/g, '\n');
+    const scriptContent = scriptMatch[1];
     const hash = crypto.createHash('sha256').update(scriptContent, 'utf8').digest('base64');
     const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${hash}'; connect-src 'none'; img-src data:;">`;
     html = html.replace('<head>', `<head>\n  ${csp}`);
@@ -1152,7 +1152,7 @@ export async function handleWebviewAction(
           outPath = path.join(ws, 'evo-cockpit.html');
         }
         exportUiHtml(ws, outPath, { anon: Boolean(params?.anon) });
-        return { ok: true, data: { exportedPath: outPath } };
+        return { ok: true, data: { path: outPath, exportedPath: outPath } };
       }
 
       default:

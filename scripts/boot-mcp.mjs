@@ -45,7 +45,7 @@ const VALUE_FLAGS = new Set([
   '--skill-budget', '--dim', '-k', '--k', '--rounds', '--proposer-cmd', '--probe-cmd',
   '--worktree-setup-cmd', '--task', '--task-file', '--trajectory', '--trajectories',
   '--deliverable', '--deliverables', '--leak-glob',
-  '--payload', '--harness', '--event', '--tool', '--file',
+  '--payload', '--harness', '--event', '--tool', '--tool-name', '--file', '--target-file',
 ]);
 let firstPositional = '';
 let firstPositionalIdx = -1;

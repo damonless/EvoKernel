@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { EvoStorage, estimateTokens } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { formatToolsCatalogMarkdown, MAX_TOOLS_CATALOG_TOKENS, runInit } from '../cli/init.js';
@@ -17,7 +18,17 @@ import {
   extractSymbolFingerprint,
   maskSourceLexical,
   trySkipGenericAngles,
+  parseSymbolTarget,
+  collectWorkspaceSourceFiles,
+  isBodylessForwardDeclaration,
+  findAllSymbolDeclarationsInLines,
+  extractSymbolBlockFromLines,
 } from '../core/memory.js';
+import {
+  EvoGatekeeper,
+  detectCoupledIdentifiersInRule,
+  scanCapabilityReferences,
+} from '../core/gatekeeper.js';
 import { redactSensitiveDiagnostics } from '../core/telemetry.js';
 import { runOptimizationCycle } from '../core/optimize.js';
 import type { EvoMemory, EvoRule, EvoSkill, EvoToolManifest } from '../core/types.js';
@@ -1567,5 +1578,340 @@ describe('Causal Telemetry, Outcome Attribution & Dynamic Section 5 Catalog Suit
       '};',
     ];
     assert.equal(findBraceBlockEnd(tsVarArrowMultiline, 0, '.ts'), 6);
+  });
+
+  test('36. Polyglot AST & Memory Hardening (C const, ignored harness dirs, C array & extern fwd decls, Go/TS interfaces, C++ ::, """ strings, abs target normalization, detached HEAD)', () => {
+    // 1. CEO-01: C `const` return qualifier must not trigger JS/TS `isVarDecl`, while TS `const cfg: {...}` stays intact
+    const cConstLines = [
+      'const struct Node *get_node(void) {',
+      '  return 0;',
+      '}',
+      'int next_fn(void) { return 1; }',
+    ];
+    assert.equal(findBraceBlockEnd(cConstLines, 0, '.c'), 2);
+    const tsConstObj = [
+      'const cfg: { a: number } = {',
+      '  a: 1,',
+      '};',
+      'function nextFn() {}',
+    ];
+    assert.equal(findBraceBlockEnd(tsConstObj, 0, '.ts'), 2);
+
+    // 2. ISSUE-30-1 & DEFECT-CORE-002: C const 2D array variable + extern/struct forward declaration isolation
+    const cVarLines = [
+      'extern const uint16_t kLookupTable[4][2];',
+      'static const uint16_t kLookupTable[4][2] = {',
+      '  {1, 2}, {3, 4}, {5, 6}, {7, 8}',
+      '};',
+    ];
+    assert.equal(isBodylessForwardDeclaration(cVarLines, 0, '.c', 'variable'), true);
+    assert.equal(isBodylessForwardDeclaration(cVarLines, 1, '.c', 'variable'), false);
+    const varDecls = findAllSymbolDeclarationsInLines(cVarLines, 'kLookupTable', undefined, '.c');
+    assert.ok(varDecls.some((d) => d.kind === 'variable'));
+    const varBlock = extractSymbolBlockFromLines(cVarLines, 'kLookupTable', undefined, '.c');
+    assert.ok(varBlock);
+    assert.equal(varBlock.start_line, 2);
+    assert.equal(varBlock.end_line, 4);
+
+    const cStructLines = [
+      'struct OpaqueCtx;',
+      'struct OpaqueCtx {',
+      '  int width;',
+      '};',
+    ];
+    assert.equal(isBodylessForwardDeclaration(cStructLines, 0, '.c', 'struct'), true);
+    const structBlock = extractSymbolBlockFromLines(cStructLines, 'OpaqueCtx', undefined, '.c');
+    assert.ok(structBlock);
+    assert.equal(structBlock.start_line, 2);
+    assert.equal(structBlock.end_line, 4);
+
+    const tsTypeLines = ['type MyAlias = { x: number };'];
+    assert.equal(isBodylessForwardDeclaration(tsTypeLines, 0, '.ts', 'type'), false);
+
+    // 3. DEFECT-CORE-001: Go & TS interface method extraction without brace overflow
+    const goIfaceLines = [
+      'type FrameReader interface {',
+      '  ReadFrame(buf []byte) (int, error)',
+      '  Close() error',
+      '}',
+    ];
+    const goMethod = extractSymbolBlockFromLines(goIfaceLines, 'ReadFrame', 'FrameReader', '.go');
+    assert.ok(goMethod, 'Go interface method must resolve inside FrameReader');
+    assert.equal(goMethod.start_line, 2);
+    assert.equal(goMethod.end_line, 2);
+
+    const tsIfaceLines = [
+      'export interface FrameParser {',
+      '  parse(input: string): boolean;',
+      '  reset(): void;',
+      '}',
+    ];
+    const tsMethod = extractSymbolBlockFromLines(tsIfaceLines, 'parse', 'FrameParser', '.ts');
+    assert.ok(tsMethod, 'TS interface method must resolve inside FrameParser');
+    assert.equal(tsMethod.start_line, 2);
+    assert.equal(tsMethod.end_line, 2);
+
+    // 4. DEFECT-CORE-004: C++ qualified symbol target without leading ':'
+    const parsedCpp = parseSymbolTarget('src/engine.cpp:ns::Engine::step');
+    assert.equal(parsedCpp.fileHint, 'src/engine.cpp');
+    assert.equal(parsedCpp.classHint, 'Engine');
+    assert.equal(parsedCpp.symbolName, 'step');
+
+    // 5. DEFECT-CORE-005: Triple double quotes (""") masked across Java/Kotlin/C#
+    const javaBlockLines = [
+      'public String renderTemplate() {',
+      '  String body = """',
+      '    }} // braces inside raw text block',
+      '    """;',
+      '  return body;',
+      '}',
+      'public void afterMethod() {}',
+    ];
+    const maskedJava = maskSourceLexical(javaBlockLines.join('\n'), '.java');
+    assert.ok(!maskedJava.includes('braces inside raw text block'));
+    assert.equal(findBraceBlockEnd(javaBlockLines, 0, '.java'), 5);
+
+    // 6. CEO-02, DEFECT-CORE-003 & DEFECT-CORE-008: Ignored harness dirs, abs target normalization, detached HEAD preservation
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      for (const hiddenDir of ['.agents', '.claude', '.cursor', '.windsurf', '.roo', '.gemini', '.codex']) {
+        fs.mkdirSync(path.join(ws, hiddenDir), { recursive: true });
+        fs.writeFileSync(path.join(ws, hiddenDir, 'ghost.ts'), 'export function ignoredFn() {}\n', 'utf8');
+      }
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      const modFile = path.join(ws, 'src', 'mod.ts');
+      fs.writeFileSync(
+        modFile,
+        'export function runTask(x: number): number {\n  return x + 1;\n}\n',
+        'utf8'
+      );
+
+      const discoveredFiles = collectWorkspaceSourceFiles(ws).map((p) =>
+        path.relative(ws, p).replace(/\\/g, '/')
+      );
+      assert.ok(discoveredFiles.includes('src/mod.ts'));
+      for (const hiddenDir of ['.agents', '.claude', '.cursor', '.windsurf', '.roo', '.gemini', '.codex']) {
+        assert.ok(
+          !discoveredFiles.some((f) => f.startsWith(`${hiddenDir}/`)),
+          `collectWorkspaceSourceFiles must ignore ${hiddenDir}`
+        );
+      }
+
+      // Initialize git repo, commit, create feature branch, then detach HEAD
+      spawnSync('git', ['init', '-b', 'main'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['config', 'user.name', 'Test'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['add', 'src/mod.ts'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'init'], { cwd: ws, encoding: 'utf8' });
+      spawnSync('git', ['checkout', '-b', 'feature/keep-me'], { cwd: ws, encoding: 'utf8' });
+
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        const gk = new EvoGatekeeper(storage, telemetry);
+        const absRes = gk.evaluateAndCommit({
+          kind: 'memory',
+          id: 'abs-target-norm-mem',
+          title: 'Normalize workspace absolute symbol paths',
+          l0_summary: 'Workspace absolute target symbol paths must normalize to relative POSIX paths.',
+          symptom: 'runTask failed with stale hash across worktrees',
+          root_cause: 'Absolute workstation prefix broke portable target matching',
+          solution: 'Strip workspace prefix from target_symbols before fingerprinting runTask',
+          target_symbols: [`${modFile}#runTask`],
+        });
+        assert.equal(absRes.passed, true, absRes.message);
+        const savedMem = storage.getMemory('abs-target-norm-mem');
+        assert.ok(savedMem);
+        assert.deepEqual(savedMem.target_symbols, ['src/mod.ts#runTask']);
+        assert.equal(savedMem.created_branch, 'feature/keep-me');
+
+        // Switch to detached HEAD and refreshMemories -> created_branch must be preserved!
+        spawnSync('git', ['checkout', '--detach', 'HEAD'], { cwd: ws, encoding: 'utf8' });
+        refreshMemories(ws, storage, telemetry, { targetIds: ['abs-target-norm-mem'] });
+        const reloadedMem = storage.getMemory('abs-target-norm-mem');
+        assert.equal(
+          reloadedMem?.created_branch,
+          'feature/keep-me',
+          'Detached HEAD refresh must preserve recorded created_branch'
+        );
+      } finally {
+        telemetry.close();
+      }
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('37. Gatekeeper, Telemetry & Attribution Hardening (stdlib exemption, Win backslash refs, workspaceRoot redaction, 24h TTL, dotted ext IDs, paused digest & orphan cache purge)', () => {
+    // 1. DEFECT-CORE-006: STDLIB_ROOT_RECEIVERS exempted, custom domain receivers still detected
+    const stdlibOnlyRule =
+      'Use `JSON.parse`, `Math.max`, `fs.existsSync`, `path.join`, and `Promise.all` carefully.\n';
+    assert.deepEqual(detectCoupledIdentifiersInRule(stdlibOnlyRule), []);
+    const coupledRule =
+      'Call `OrderService.reconcileInvoice`, `PaymentGateway.captureCharge`, `LedgerStore.commitEntry`, and `TaxEngine.applyRate`.\n';
+    assert.ok(detectCoupledIdentifiersInRule(coupledRule).length >= 3);
+
+    // 2. DEFECT-CORE-007: Windows backslash capability references detected
+    const winRefBody = 'Run `.evo\\tools\\missing-tool\\run.mjs` and check `.evo\\rules\\scoped\\missing-rule.md`.';
+    const refs = scanCapabilityReferences(winRefBody);
+    assert.ok(refs.includes('missing-tool'));
+    assert.ok(refs.includes('missing-rule'));
+
+    // 3. DEFECT-C-01: workspaceRoot getter & non-HOME path redaction
+    const ws = createTempWorkspace();
+    const storage = new EvoStorage(ws);
+    storage.ensureInitialized();
+    try {
+      assert.equal(storage.workspaceRoot, storage.rootDir);
+      const foreignWs = path.join('D:\\', 'ci-runners', 'work', 'repo-alpha');
+      const redacted = redactSensitiveDiagnostics(`Error in ${foreignWs}\\src\\app.ts`, foreignWs);
+      assert.ok(redacted.includes('<WORKSPACE>'), `Expected <WORKSPACE> redaction, got: ${redacted}`);
+      assert.ok(!redacted.includes('repo-alpha'));
+
+      // Seed active rule + memory so telemetry syncs them
+      storage.saveRule({
+        id: 'sample-cached-rule',
+        title: 'Sample Cached Rule',
+        l0_summary: 'Validate deterministic sample payload checks before commit.',
+        scope_glob: '**/*',
+        core: false,
+        priority: 80,
+        tokens: 25,
+        origin: 'test',
+        enabled: true,
+        content: 'Always verify sample payload invariants prior to disk flush.',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      });
+      storage.saveMemory({
+        id: 'keep-mem',
+        title: 'Keep Alive Memory',
+        l0_summary: 'Active memory retained in verification cache.',
+        symptom: 'Sample fault',
+        root_cause: 'Sample cause',
+        solution: 'Sample fix',
+        target_symbols: [],
+        ast_fingerprints: {},
+        tags: ['sample'],
+        origin: 'test',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      });
+
+      storage.saveExternalTools([
+        {
+          id: 'ext__github.enterprise__list_prs',
+          serverName: 'github.enterprise',
+          originalName: 'list_prs',
+          title: 'List PRs',
+          description: 'List pull requests',
+          inputSchema: { type: 'object', properties: {} },
+          cachedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ]);
+
+      const telemetry = new EvoTelemetry(storage);
+      try {
+        telemetry.syncFromDisk();
+
+        // 4. DEFECT-MCP-01 & ISSUE-30-6b / DEFECT-C-02: Dotted external ID & no synthetic 'outcome' rows
+        const extId = 'ext__github.enterprise__list_prs';
+        telemetry.recordRecallEvent({
+          eventType: 'run',
+          capabilityId: extId,
+          kind: 'tool',
+          tier: 'LOCAL',
+        });
+        telemetry.recordCapabilityOutcome(extId, 'helped');
+
+        // 5. ISSUE-30-6b: 24h TTL pruning in getRecalledCapabilities
+        const staleIso = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+        const freshIso = new Date().toISOString();
+        telemetry.setSessionFlag(
+          'recalled_capabilities',
+          JSON.stringify([
+            { id: 'stale-recalled-cap', kind: 'rule', tier: 'LOCAL', ts: staleIso },
+            { id: 'fresh-recalled-cap', kind: 'rule', tier: 'LOCAL', ts: freshIso },
+          ])
+        );
+        const recalled = telemetry.getRecalledCapabilities();
+        assert.deepEqual(
+          recalled.map((c) => c.id),
+          ['fresh-recalled-cap']
+        );
+
+        // 6. DEFECT-C-09: Paused-ID cache invalidates when enabled toggles on disk
+        const hitsBefore = telemetry.search('sample payload invariants', 'rule', 5);
+        assert.ok(hitsBefore.some((h) => h.id === 'sample-cached-rule'));
+        storage.saveRule({
+          ...storage.getRule('sample-cached-rule')!,
+          enabled: false,
+          updated_at: '2026-01-02T00:00:00.000Z',
+        });
+        const hitsPaused = telemetry.search('sample payload invariants', 'rule', 5);
+        assert.ok(!hitsPaused.some((h) => h.id === 'sample-cached-rule'));
+        storage.saveRule({
+          ...storage.getRule('sample-cached-rule')!,
+          enabled: true,
+          updated_at: '2026-01-03T00:00:00.000Z',
+        });
+        const hitsResumed = telemetry.search('sample payload invariants', 'rule', 5);
+        assert.ok(hitsResumed.some((h) => h.id === 'sample-cached-rule'));
+      } finally {
+        telemetry.close();
+      }
+
+      // 7. DEFECT-C-11: Verify DB state (no synthetic 'outcome' rows, dotted ext row upserted, orphan memory_verification_cache purged)
+      const rawDb = new DatabaseSync(path.join(storage.cacheDir, 'telemetry.db'));
+      try {
+        const outcomeRows = rawDb
+          .prepare("SELECT COUNT(*) as cnt FROM recall_events WHERE event_type = 'outcome'")
+          .get() as { cnt: number };
+        assert.equal(outcomeRows.cnt, 0, 'Must never insert synthetic outcome recall_events');
+        const extTelemetryRow = rawDb
+          .prepare('SELECT helped_count FROM telemetry WHERE id = ?')
+          .get('ext__github.enterprise__list_prs') as { helped_count: number } | undefined;
+        assert.equal(extTelemetryRow?.helped_count, 1);
+
+        rawDb
+          .prepare(
+            `INSERT INTO memory_verification_cache (memory_id, parser_version, memory_file_sig, target_files_sig, workspace_sources_sig, overall_status, report_json, cached_at, has_callers)
+             VALUES (?, 2, 'sig1', 'sig2', 'ws1', 'VERIFIED', '{}', ?, 0)`
+          )
+          .run('deleted-ghost-mem', new Date().toISOString());
+        rawDb
+          .prepare(
+            `INSERT INTO memory_verification_cache (memory_id, parser_version, memory_file_sig, target_files_sig, workspace_sources_sig, overall_status, report_json, cached_at, has_callers)
+             VALUES (?, 2, 'sig1', 'sig2', 'ws1', 'VERIFIED', '{}', ?, 0)`
+          )
+          .run('keep-mem', new Date().toISOString());
+      } finally {
+        rawDb.close();
+      }
+
+      const telemetryCheck = new EvoTelemetry(storage);
+      try {
+        telemetryCheck.syncFromDisk(true);
+      } finally {
+        telemetryCheck.close();
+      }
+
+      const postDb = new DatabaseSync(path.join(storage.cacheDir, 'telemetry.db'));
+      try {
+        const ghostRow = postDb
+          .prepare('SELECT memory_id FROM memory_verification_cache WHERE memory_id = ?')
+          .get('deleted-ghost-mem');
+        const keepRow = postDb
+          .prepare('SELECT memory_id FROM memory_verification_cache WHERE memory_id = ?')
+          .get('keep-mem');
+        assert.equal(ghostRow, undefined, 'Orphan memory_verification_cache entry must be purged');
+        assert.ok(keepRow, 'Live memory_verification_cache entry must be preserved');
+      } finally {
+        postDb.close();
+      }
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 });

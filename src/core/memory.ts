@@ -86,6 +86,13 @@ const IGNORED_DIRS = new Set([
   '__pycache__',
   '.venv',
   'venv',
+  '.agents',
+  '.claude',
+  '.cursor',
+  '.windsurf',
+  '.roo',
+  '.gemini',
+  '.codex',
 ]);
 
 export interface GitPaths {
@@ -433,6 +440,8 @@ export function maskSourceLexical(
   if (!rawSrc) return '';
   const len = rawSrc.length;
   const isPy = ext === '.py';
+  const allowTripleDouble = /^\.(?:py|pyw|java|kt|kts|cs|swift|groovy|scala|dart)$/i.test(ext);
+  const tripleDoubleSupportsEscape = /^\.(?:py|pyw|java|swift|dart|groovy|scala)$/i.test(ext);
   const isJsTs = /^\.(?:ts|tsx|js|jsx|mjs|cjs)$/i.test(ext);
   const isGo = ext === '.go';
   const isRust = ext === '.rs';
@@ -510,7 +519,7 @@ export function maskSourceLexical(
     }
 
     if (inPyTripleDouble) {
-      if (ch === '\\' && i + 1 < len && next !== '\r' && next !== '\n') {
+      if (tripleDoubleSupportsEscape && ch === '\\' && i + 1 < len && next !== '\r' && next !== '\n') {
         out += '  ';
         i += 2;
         continue;
@@ -790,6 +799,12 @@ export function maskSourceLexical(
     }
 
     if (ch === '"') {
+      if (allowTripleDouble && next === '"' && next2 === '"') {
+        inPyTripleDouble = true;
+        out += '   ';
+        i += 3;
+        continue;
+      }
       inDoubleQuote = true;
       out += ' ';
       i++;
@@ -1211,53 +1226,68 @@ export interface ParsedSymbolTarget {
   isWholeFile: boolean;
 }
 
+function splitQualifiedSymbolName(symPart: string): {
+  classHint?: string;
+  symbolName: string;
+} {
+  const clean = symPart.trim();
+  const scopeIdx = clean.lastIndexOf('::');
+  if (scopeIdx !== -1) {
+    const scopePrefix = clean.slice(0, scopeIdx).trim();
+    const symbolName = clean.slice(scopeIdx + 2).trim();
+    const lastScope = scopePrefix.split('::').filter(Boolean).pop();
+    return lastScope ? { classHint: lastScope, symbolName } : { symbolName };
+  }
+  const dotIdx = clean.indexOf('.');
+  if (dotIdx !== -1) {
+    return {
+      classHint: clean.slice(0, dotIdx).trim(),
+      symbolName: clean.slice(dotIdx + 1).trim(),
+    };
+  }
+  return { symbolName: clean };
+}
+
+function findSingleSeparatorColon(spec: string): number {
+  for (let i = spec.length - 1; i > 1; i--) {
+    if (spec[i] === ':' && spec[i - 1] !== ':' && spec[i + 1] !== ':') {
+      return i;
+    }
+  }
+  return -1;
+}
+
 export function parseSymbolTarget(rawSpec: string): ParsedSymbolTarget {
   const trimmed = rawSpec.trim();
   const normalizedSlashes = trimmed.replace(/\\/g, '/');
 
-  // Format 1: path/to/file.ext#Class.method or path/to/file.ext#symbol
+  // Format 1: path/to/file.ext#Class.method or path/to/file.ext#ns::symbol
   const hashIdx = normalizedSlashes.indexOf('#');
   if (hashIdx !== -1) {
     const filePart = normalizedSlashes.slice(0, hashIdx).trim();
     const symPart = normalizedSlashes.slice(hashIdx + 1).trim();
-    const dotIdx = symPart.indexOf('.');
-    if (dotIdx !== -1) {
-      return {
-        raw: trimmed,
-        fileHint: filePart,
-        classHint: symPart.slice(0, dotIdx).trim(),
-        symbolName: symPart.slice(dotIdx + 1).trim(),
-        isWholeFile: false,
-      };
-    }
+    const qualified = splitQualifiedSymbolName(symPart);
     return {
       raw: trimmed,
       fileHint: filePart,
-      symbolName: symPart,
+      ...(qualified.classHint ? { classHint: qualified.classHint } : {}),
+      symbolName: qualified.symbolName,
       isWholeFile: false,
     };
   }
 
-  // Format 2: path/to/file.ext:symbol (avoid matching Windows drive letter C:/)
-  const colonIdx = normalizedSlashes.lastIndexOf(':');
+  // Format 2: path/to/file.ext:symbol (avoid matching C++/Rust "::" or Windows drive letter "C:/")
+  const colonIdx = findSingleSeparatorColon(normalizedSlashes);
   if (colonIdx > 1) {
     const filePart = normalizedSlashes.slice(0, colonIdx).trim();
     const symPart = normalizedSlashes.slice(colonIdx + 1).trim();
     if (symPart && !/^\d+$/.test(symPart)) {
-      const dotIdx = symPart.indexOf('.');
-      if (dotIdx !== -1) {
-        return {
-          raw: trimmed,
-          fileHint: filePart,
-          classHint: symPart.slice(0, dotIdx).trim(),
-          symbolName: symPart.slice(dotIdx + 1).trim(),
-          isWholeFile: false,
-        };
-      }
+      const qualified = splitQualifiedSymbolName(symPart);
       return {
         raw: trimmed,
         fileHint: filePart,
-        symbolName: symPart,
+        ...(qualified.classHint ? { classHint: qualified.classHint } : {}),
+        symbolName: qualified.symbolName,
         isWholeFile: false,
       };
     }
@@ -1274,13 +1304,13 @@ export function parseSymbolTarget(rawSpec: string): ParsedSymbolTarget {
     };
   }
 
-  // Format 4: ClassName.methodName
-  const dotIdx = normalizedSlashes.indexOf('.');
-  if (dotIdx !== -1) {
+  // Format 4: ClassName::methodName or ClassName.methodName
+  if (normalizedSlashes.includes('::') || normalizedSlashes.includes('.')) {
+    const qualified = splitQualifiedSymbolName(normalizedSlashes);
     return {
       raw: trimmed,
-      classHint: normalizedSlashes.slice(0, dotIdx).trim(),
-      symbolName: normalizedSlashes.slice(dotIdx + 1).trim(),
+      ...(qualified.classHint ? { classHint: qualified.classHint } : {}),
+      symbolName: qualified.symbolName,
       isWholeFile: false,
     };
   }
@@ -1380,13 +1410,66 @@ export function isBodylessForwardDeclaration(
   kind?: SymbolKind
 ): boolean {
   if (ext === '.py') return false;
-  if (kind && kind !== 'function' && kind !== 'method') return false;
 
   const startLine = lines[declLineIdx] ?? '';
-  if (/^\s*(?:export\s+)?(?:type|interface|class|struct|enum|union)\b/.test(startLine)) {
+  if (/^\s*#\s*define\b/.test(startLine)) {
     return false;
   }
-  if (/^\s*#\s*define\b/.test(startLine)) {
+  if (/^\s*(?:export\s+)?type\b/.test(startLine)) {
+    return false;
+  }
+
+  if (kind === 'variable') {
+    if (!/\bextern\b/.test(startLine) || /^\s*extern\s+"[^"]+"/.test(startLine)) {
+      return false;
+    }
+    const maxLine = Math.min(lines.length, declLineIdx + 10);
+    let parenDepth = 0;
+    let bracketDepth = 0;
+    for (let i = declLineIdx; i < maxLine; i++) {
+      const cleanLine = stripCStyleComments(lines[i] ?? '');
+      for (let c = 0; c < cleanLine.length; c++) {
+        const ch = cleanLine[c];
+        if (ch === '(') parenDepth++;
+        else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
+        else if (ch === '[') bracketDepth++;
+        else if (ch === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+        else if (parenDepth === 0 && bracketDepth === 0) {
+          if (ch === '=' || ch === '{') return false;
+          if (ch === ';') return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  if (
+    (kind === 'struct' || kind === 'class') &&
+    /^\.(?:c|h|cpp|hpp|cc|cxx|m|mm)$/i.test(ext)
+  ) {
+    const maxLine = Math.min(lines.length, declLineIdx + 10);
+    let parenDepth = 0;
+    let bracketDepth = 0;
+    for (let i = declLineIdx; i < maxLine; i++) {
+      const cleanLine = stripCStyleComments(lines[i] ?? '');
+      for (let c = 0; c < cleanLine.length; c++) {
+        const ch = cleanLine[c];
+        if (ch === '(') parenDepth++;
+        else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
+        else if (ch === '[') bracketDepth++;
+        else if (ch === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+        else if (parenDepth === 0 && bracketDepth === 0) {
+          if (ch === '{' || ch === '=') return false;
+          if (ch === ';') return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  if (kind && kind !== 'function' && kind !== 'method') return false;
+
+  if (/^\s*(?:export\s+)?(?:interface|class|struct|enum|union)\b/.test(startLine)) {
     return false;
   }
   if (/^\s*(?:export\s+)?(?:const|let|var)\b/.test(startLine)) {
@@ -1444,6 +1527,7 @@ interface ContainerRange {
   name: string;
   start: number;
   end: number;
+  kind?: 'class' | 'struct' | 'interface';
 }
 
 function collectContainerRangesInLines(lines: string[], ext = '.ts'): ContainerRange[] {
@@ -1462,7 +1546,7 @@ function collectContainerRangesInLines(lines: string[], ext = '.ts'): ContainerR
       const pyMatch = cleanLine.match(/^\s*class\s+([A-Za-z_]\w*)\b/);
       if (pyMatch) {
         const end = findPythonBlockEnd(lines, i);
-        containers.push({ name: pyMatch[1], start: i, end });
+        containers.push({ name: pyMatch[1], start: i, end, kind: 'class' });
       }
       continue;
     }
@@ -1473,30 +1557,40 @@ function collectContainerRangesInLines(lines: string[], ext = '.ts'): ContainerR
       );
       if (implMatch) {
         const end = findBraceBlockEnd(lines, i, ext, mLines);
-        containers.push({ name: implMatch[1], start: i, end });
+        containers.push({ name: implMatch[1], start: i, end, kind: 'class' });
         continue;
       }
       const typeMatch = cleanLine.match(
-        /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait|union)\s+([A-Za-z_]\w*)\b/
+        /^\s*(?:pub(?:\([^)]*\))?\s+)?(struct|enum|trait|union)\s+([A-Za-z_]\w*)\b/
       );
       if (typeMatch && !/;\s*$/.test(cleanLine.trim())) {
         const end = findBraceBlockEnd(lines, i, ext, mLines);
-        containers.push({ name: typeMatch[1], start: i, end });
+        containers.push({
+          name: typeMatch[2],
+          start: i,
+          end,
+          kind: typeMatch[1] === 'trait' ? 'interface' : 'struct',
+        });
       }
       continue;
     }
 
     if (isGo) {
-      const goTypeMatch = cleanLine.match(/^\s*type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b/);
+      const goTypeMatch = cleanLine.match(/^\s*type\s+([A-Za-z_]\w*)\s+(struct|interface)\b/);
       if (goTypeMatch) {
         const end = findBraceBlockEnd(lines, i, ext, mLines);
-        containers.push({ name: goTypeMatch[1], start: i, end });
+        containers.push({
+          name: goTypeMatch[1],
+          start: i,
+          end,
+          kind: goTypeMatch[2] === 'interface' ? 'interface' : 'struct',
+        });
       }
       continue;
     }
 
     const classMatch = cleanLine.match(
-      /^\s*(?:template\s*<[^>]*>\s*)?(?:export\s+)?(?:default\s+)?(?:(?:abstract|public|private|protected|internal|final|sealed|static|typedef)\s+)*(?:class|struct|interface)\s+([A-Za-z_]\w*)\b/
+      /^\s*(?:template\s*<[^>]*>\s*)?(?:export\s+)?(?:default\s+)?(?:(?:abstract|public|private|protected|internal|final|sealed|static|typedef)\s+)*(class|struct|interface)\s+([A-Za-z_]\w*)\b/
     );
     if (classMatch) {
       const trimmed = cleanLine.trim();
@@ -1504,11 +1598,105 @@ function collectContainerRangesInLines(lines: string[], ext = '.ts'): ContainerR
         continue;
       }
       const end = findBraceBlockEnd(lines, i, ext, mLines);
-      containers.push({ name: classMatch[1], start: i, end });
+      containers.push({
+        name: classMatch[2],
+        start: i,
+        end,
+        kind: classMatch[1] === 'interface' ? 'interface' : classMatch[1] === 'struct' ? 'struct' : 'class',
+      });
     }
   }
 
   return containers;
+}
+
+const TYPED_VAR_KEYWORD_DENYLIST = new Set([
+  'return',
+  'using',
+  'throw',
+  'case',
+  'delete',
+  'new',
+  'typedef',
+  'typename',
+  'import',
+  'package',
+  'namespace',
+  'goto',
+  'else',
+  'do',
+  'sizeof',
+  'co_return',
+  'co_yield',
+  'co_await',
+  'if',
+  'for',
+  'while',
+  'switch',
+]);
+
+const AGGREGATE_TAG_KEYWORDS = new Set(['class', 'struct', 'interface', 'enum', 'union']);
+
+function isValidTypedVarPrefix(prefix: string): boolean {
+  let angleDepth = 0;
+  for (let i = 0; i < prefix.length; i++) {
+    const ch = prefix[i];
+    if (ch === '<') angleDepth++;
+    else if (ch === '>') {
+      angleDepth--;
+      if (angleDepth < 0) return false;
+    } else if (ch === ',' && angleDepth === 0) {
+      return false;
+    }
+  }
+  if (angleDepth !== 0) return false;
+
+  const idents = prefix.match(/[A-Za-z_][A-Za-z0-9_]*/g);
+  if (!idents || idents.length === 0) return false;
+  const firstToken = idents[0];
+  const lastToken = idents[idents.length - 1];
+  if (TYPED_VAR_KEYWORD_DENYLIST.has(firstToken) || TYPED_VAR_KEYWORD_DENYLIST.has(lastToken)) {
+    return false;
+  }
+  if (idents.length === 1 && AGGREGATE_TAG_KEYWORDS.has(firstToken)) {
+    return false;
+  }
+  return true;
+}
+
+function computeDeclarationScopeByLine(lines: string[], ext: string): boolean[] {
+  const mLines = maskSourceLexical(lines.join('\n'), ext).split(/\r?\n/);
+  const result = new Array<boolean>(lines.length).fill(true);
+  const scopeStack: boolean[] = [];
+  let pendingHeader = '';
+
+  for (let i = 0; i < mLines.length; i++) {
+    const line = mLines[i] ?? '';
+    result[i] = scopeStack.every(Boolean);
+    for (let c = 0; c < line.length; c++) {
+      const ch = line[c];
+      if (ch === '{') {
+        const header = pendingHeader.trim();
+        const isContainer =
+          /\b(?:namespace|class|struct|enum|union|interface)\b/.test(header) ||
+          /\bextern\s+"[^"]+"/.test(header);
+        scopeStack.push(isContainer && !header.includes('='));
+        pendingHeader = '';
+      } else if (ch === '}') {
+        if (scopeStack.length > 0) scopeStack.pop();
+        pendingHeader = '';
+      } else if (ch === ';') {
+        pendingHeader = '';
+      } else {
+        pendingHeader += ch;
+        if (pendingHeader.length > 400) {
+          pendingHeader = pendingHeader.slice(-300);
+        }
+      }
+    }
+    pendingHeader += ' ';
+  }
+  return result;
 }
 
 export function findAllSymbolDeclarationsInLines(
@@ -1564,13 +1752,23 @@ export function findAllSymbolDeclarationsInLines(
     }
   }
 
-  const allContainers = classHint ? collectContainerRangesInLines(lines, ext) : [];
+  const needInterfaces =
+    Boolean(classHint) || ext === '.go' || /\b(?:interface|trait)\b/.test(lines.join('\n'));
+  const allContainers = needInterfaces ? collectContainerRangesInLines(lines, ext) : [];
+  const interfaceRanges = allContainers.filter((c) => c.kind === 'interface');
   const targetClassRanges = classHint
     ? allContainers.filter((c) => c.name === classHint)
     : [];
   const otherClassRanges = classHint
     ? allContainers.filter((c) => c.name !== classHint)
     : [];
+  const isTypedVarLang = /^\.(?:c|h|cpp|hpp|cc|cxx|cs|java)$/i.test(ext);
+  const typedVarRe = isTypedVarLang
+    ? new RegExp(
+        `^\\s*(?:extern\\s+"[^"]+"\\s+)?([A-Za-z_][A-Za-z0-9_:<>*&\\[\\],\\s]*?(?:\\s+|[*&]\\s*))${esc}(?:\\s*\\[[^\\]]*\\])*\\s*(?:=|;|,\\s*[A-Za-z_*&]|\\{)`
+      )
+    : null;
+  const declScopeFlags = isTypedVarLang ? computeDeclarationScopeByLine(lines, ext) : null;
 
   if (classHint && ext === '.go' && targetClassRanges.length === 0) {
     return [];
@@ -1643,6 +1841,9 @@ export function findAllSymbolDeclarationsInLines(
         `\\b${escapeRegExp(classHint)}\\s*::\\s*${esc}\\s*\\([^;{]*(?:\\{.*)?$`
       )
     : null;
+  const interfaceMethodRe = new RegExp(
+    `^\\s*(?:(?:public|private|protected|static|readonly|async|override|virtual|inline|\\*)\\s+)*${esc}\\s*(?:<[^>]*>)?\\s*\\([^;{]*;?\\s*$`
+  );
 
   const isInsideOtherClass = (lineIdx: number): boolean => {
     if (!classHint || otherClassRanges.length === 0) return false;
@@ -1696,8 +1897,12 @@ export function findAllSymbolDeclarationsInLines(
         continue;
       }
 
+      const insideInterface = interfaceRanges.some((ir) => i > ir.start && i < ir.end);
       for (const pat of patterns) {
-        if (pat.regex.test(cleanLine)) {
+        const matchedPat =
+          pat.regex.test(cleanLine) ||
+          (insideInterface && pat.kind === 'method' && interfaceMethodRe.test(cleanLine));
+        if (matchedPat) {
           if (
             (pat.kind === 'method' || pat.kind === 'function') &&
             CONTROL_KEYWORDS.has(symbolName)
@@ -1726,15 +1931,25 @@ export function findAllSymbolDeclarationsInLines(
                     if (foundParen && pDepth === 0) {
                       const rest = l.slice(ci + 1).trim();
                       if (
+                        insideInterface &&
+                        ext === '.go' &&
+                        !rest.startsWith('.') &&
+                        !rest.startsWith('=') &&
+                        !rest.startsWith(':=')
+                      ) {
+                        isDecl = true;
+                      } else if (
                         rest &&
                         (rest.startsWith('{') ||
                           rest.startsWith(':') ||
+                          (insideInterface && rest.startsWith(';')) ||
                           rest.startsWith('->') ||
                           rest.startsWith('=>') ||
                           /^(?:where|throws|noexcept|const|volatile)\b/.test(rest))
                       ) {
                         isDecl = true;
                       } else if (!rest) {
+                        let nextNonEmptyStartsWithCallChainOrAssign = false;
                         for (let nextL = lineIdx + 1; nextL < Math.min(lines.length, lineIdx + 5); nextL++) {
                           const trimmedNext = lines[nextL].trim();
                           if (!trimmedNext || trimmedNext.startsWith('//')) continue;
@@ -1746,8 +1961,16 @@ export function findAllSymbolDeclarationsInLines(
                             /^(?:where|throws|noexcept|const|volatile)\b/.test(trimmedNext)
                           ) {
                             isDecl = true;
+                          } else if (
+                            trimmedNext.startsWith('.') ||
+                            trimmedNext.startsWith('=')
+                          ) {
+                            nextNonEmptyStartsWithCallChainOrAssign = true;
                           }
                           break;
+                        }
+                        if (insideInterface && !nextNonEmptyStartsWithCallChainOrAssign) {
+                          isDecl = true;
                         }
                       }
                       break;
@@ -1770,6 +1993,17 @@ export function findAllSymbolDeclarationsInLines(
             signature: trimmed.replace(/\s*\{$/, '').trim(),
           });
           break;
+        }
+      }
+
+      if (typedVarRe && (matches.length === 0 || matches[matches.length - 1].lineIndex !== i)) {
+        const varMatch = cleanLine.match(typedVarRe);
+        if (varMatch && isValidTypedVarPrefix(varMatch[1])) {
+          matches.push({
+            kind: 'variable',
+            lineIndex: i,
+            signature: trimmed.replace(/\s*\{$/, '').trim(),
+          });
         }
       }
     }
@@ -1807,13 +2041,21 @@ export function findAllSymbolDeclarationsInLines(
     if (
       rawMatches.length === 0 &&
       targetClassRanges.length === 0 &&
-      otherClassRanges.length === 0 &&
       new RegExp(`\\b${escapeRegExp(classHint)}\\b`).test(lines.join('\n'))
     ) {
       rawMatches = collectInRange(0, lines.length - 1, true);
     }
   } else {
     rawMatches = collectInRange(0, lines.length - 1, false);
+  }
+
+  if (declScopeFlags && rawMatches.length > 1) {
+    const inDeclScope = rawMatches.filter(
+      (m) => m.kind !== 'variable' || declScopeFlags[m.lineIndex] !== false
+    );
+    if (inDeclScope.length > 0) {
+      rawMatches = inDeclScope;
+    }
   }
 
   const bodyful = rawMatches.filter(
@@ -1896,10 +2138,12 @@ export function extractSymbolBlockFromLines(
     };
   }
 
-  // Only perform Same-File Overload Aggregation when ext is an overload-capable language or classHint is provided
+  // Only perform Same-File Overload Aggregation for function/method declarations when ext is overload-capable or classHint is provided
+  const primaryKind = blocks[0].decl.kind;
   const isOverloadCapable =
-    Boolean(classHint) ||
-    /^\.(?:ts|tsx|js|jsx|mjs|cjs|cpp|hpp|cc|cxx|c|h|java|cs)$/i.test(ext);
+    (primaryKind === 'function' || primaryKind === 'method') &&
+    (Boolean(classHint) ||
+      /^\.(?:ts|tsx|js|jsx|mjs|cjs|cpp|hpp|cc|cxx|c|h|java|cs)$/i.test(ext));
 
   if (!isOverloadCapable) {
     return {
@@ -2083,12 +2327,15 @@ export function findBraceBlockEnd(
 
   const startLine = lines[startIndex] || '';
   const isTypeDecl = /^\s*(?:export\s+)?type\b/.test(startLine);
-  const isVarDecl = /^\s*(?:export\s+)?(?:const|let|var)\b/.test(startLine);
+  const isJsTs = /^\.(?:ts|tsx|js|jsx|mjs|cjs)$/i.test(ext);
+  const isVarDecl = isJsTs && /^\s*(?:export\s+)?(?:const|let|var)\b/.test(startLine);
   const isCpp = /^\.(?:cpp|hpp|cc|cxx|c|h)$/i.test(ext);
+  const isGo = ext === '.go';
   const hasCPreprocessor = /^\.(?:c|h|cpp|hpp|cc|cxx|cs|m|mm)$/i.test(ext);
 
   let seenTopLevelEquals = false;
   let seenArrow = false;
+  let seenOpenParen = false;
   let inCppInitList = false;
   let unclosedIfdefBraceDelta = 0;
 
@@ -2205,6 +2452,7 @@ export function findBraceBlockEnd(
 
       if (ch === '(') {
         parenDepth++;
+        seenOpenParen = true;
         continue;
       }
       if (ch === ')') {
@@ -2366,6 +2614,33 @@ export function findBraceBlockEnd(
             braceDepth = Math.max(0, braceDepth);
           }
           continue;
+        }
+
+        if (!foundBodyOpen && ppStack.length === 0) {
+          return line.slice(0, c).trim() ? i : Math.max(startIndex, i - 1);
+        }
+      }
+    }
+
+    if (
+      isGo &&
+      !foundBodyOpen &&
+      seenOpenParen &&
+      parenDepth === 0 &&
+      bracketDepth === 0 &&
+      typeBraceDepth === 0
+    ) {
+      const trimmedClean = line.trim();
+      if (trimmedClean && !trimmedClean.endsWith(',') && !trimmedClean.endsWith('{')) {
+        let nextStartsBrace = false;
+        for (let k = i + 1; k < Math.min(mLines.length, i + 5); k++) {
+          const nextClean = (mLines[k] ?? '').trim();
+          if (!nextClean) continue;
+          nextStartsBrace = nextClean.startsWith('{');
+          break;
+        }
+        if (!nextStartsBrace) {
+          return i;
         }
       }
     }
@@ -2901,7 +3176,15 @@ function extractSymbolFingerprintAtCommit(
 
   const addCandidate = (rel?: string) => {
     if (!rel || rel === '(unrecorded)') return;
-    const clean = rel.replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
+    let normalizedInput = rel.trim();
+    if (path.isAbsolute(normalizedInput) || /^[A-Za-z]:[/\\]/.test(normalizedInput)) {
+      const relFromWs = path.relative(workspaceRoot, normalizedInput);
+      if (!relFromWs || relFromWs.startsWith('..') || path.isAbsolute(relFromWs)) {
+        return;
+      }
+      normalizedInput = relFromWs;
+    }
+    const clean = normalizedInput.replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
     if (clean && !seenFiles.has(clean)) {
       seenFiles.add(clean);
       candidateRelFiles.push(clean);
@@ -3020,7 +3303,15 @@ export function extractSymbolFingerprintAtCommitV1(
 
   const addCandidate = (rel?: string) => {
     if (!rel || rel === '(unrecorded)') return;
-    const clean = rel.replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
+    let normalizedInput = rel.trim();
+    if (path.isAbsolute(normalizedInput) || /^[A-Za-z]:[/\\]/.test(normalizedInput)) {
+      const relFromWs = path.relative(workspaceRoot, normalizedInput);
+      if (!relFromWs || relFromWs.startsWith('..') || path.isAbsolute(relFromWs)) {
+        return;
+      }
+      normalizedInput = relFromWs;
+    }
+    const clean = normalizedInput.replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
     if (clean && !seenFiles.has(clean)) {
       seenFiles.add(clean);
       candidateRelFiles.push(clean);
@@ -4038,7 +4329,7 @@ export function refreshMemories(
       ) {
         differs = true;
       }
-      if ((memory.created_branch || '') !== (currentBranch || '')) differs = true;
+      if (currentBranch && (memory.created_branch || '') !== currentBranch) differs = true;
 
       const existingKeys = Object.keys(memory.ast_fingerprints);
       if (existingKeys.length !== targetKeys.length) {
@@ -4065,7 +4356,9 @@ export function refreshMemories(
       if (differs) {
         memory.ast_fingerprints = newFingerprints;
         memory.created_commit = currentCommit;
-        memory.created_branch = currentBranch;
+        if (currentBranch) {
+          memory.created_branch = currentBranch;
+        }
         memory.updated_at = new Date().toISOString();
         storage.saveMemory(memory);
         refreshed.push(memory.id);

@@ -10,6 +10,7 @@ import {
   assertNoLeakPaths,
   assertTextHasNoGraderVerdicts,
   detectTrajectoryFormat,
+  evaluateBaselineFitness,
   prepareOptimizationWorkspace,
   probeCandidateInWorktree,
   renderTrajectory,
@@ -1407,6 +1408,182 @@ if (hasClaude && hasAgents && hasGemini && hasNodePath && hasViteCache) {
       assert.equal(secondRes.applied, false, 'Subsequent run with no orphaned memories should report applied: false');
     } finally {
       cleanTempWorkspace(ws);
+    }
+  });
+
+  test('22. Zero-write evaluateBaselineFitness, fenced SKILL L2 SOP load, runOptimizationCycle live rollback & foreign cwd build safety', () => {
+    const rootTmp = createTempWorkspace();
+    try {
+      // 1. DEFECT-C-10: evaluateBaselineFitness must create 0 files on uninitialized directories
+      const uninitDir = path.join(rootTmp, 'uninit');
+      fs.mkdirSync(uninitDir, { recursive: true });
+      const report = evaluateBaselineFitness(uninitDir);
+      assert.equal(report.active_rules, 0);
+      assert.equal(report.helped_count, 0);
+      assert.equal(report.hurt_count, 0);
+      assert.equal(report.avgCapTokens, 0);
+      assert.deepEqual(fs.readdirSync(uninitDir), []);
+
+      // 2. CEO-03: EvoStorage.getSkill ignores fenced ## L2 SOP inside ## L1 Contract
+      const skillWs = path.join(rootTmp, 'skill-ws');
+      const skillStorage = new EvoStorage(skillWs);
+      skillStorage.ensureInitialized();
+      const skillDir = path.join(skillWs, '.evo', 'skills', 'fenced-demo');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        [
+          '---',
+          'name: fenced-demo',
+          'description: Verify fenced L2 heading handling in storage.',
+          '---',
+          '',
+          '## L1 Contract',
+          'Contract intro.',
+          '```markdown',
+          '## L2 SOP',
+          'Example nested heading inside code fence.',
+          '```',
+          '',
+          '## L2 SOP',
+          '1. Execute actual checklist step.',
+          '',
+        ].join('\n'),
+        'utf8'
+      );
+      const loadedSkill = skillStorage.getSkill('fenced-demo');
+      assert.ok(loadedSkill);
+      assert.match(loadedSkill.l1_contract, /Example nested heading inside code fence/);
+      assert.equal(loadedSkill.l2_sop, '1. Execute actual checklist step.');
+
+      // 3. DEFECT-C-04: runOptimizationCycle restores deleted & partial live commits on live commit failure
+      const wsRb = path.join(rootTmp, 'rollback-ws');
+      const rbStorage = new EvoStorage(wsRb);
+      rbStorage.ensureInitialized();
+      fs.mkdirSync(path.join(wsRb, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(wsRb, 'src', 'app.ts'), 'export const appVersion = 1;\n', 'utf8');
+      fs.writeFileSync(
+        path.join(wsRb, 'src', 'wt-only.ts'),
+        'export function commitGuardAnchor(): number { return 42; }\n',
+        'utf8'
+      );
+      rbStorage.saveRule({
+        id: 'tracked-obsolete-rule',
+        title: 'Tracked Obsolete Rule',
+        l0_summary: 'Legacy rule tracked in git and targeted for deletion.',
+        scope_glob: '**/*',
+        core: false,
+        priority: 40,
+        tokens: 20,
+        origin: 'test',
+        transfer_scenarios: ['Legacy HTTP worker adapter', 'Deprecated CLI command shim'],
+        content: '- Legacy guidance scheduled for retirement.\n',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      });
+
+      child_process.spawnSync('git', ['init', '-b', 'main'], { cwd: wsRb, encoding: 'utf8' });
+      child_process.spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: wsRb, encoding: 'utf8' });
+      child_process.spawnSync('git', ['config', 'user.name', 'Test'], { cwd: wsRb, encoding: 'utf8' });
+      child_process.spawnSync('git', ['add', '-A'], { cwd: wsRb, encoding: 'utf8' });
+      child_process.spawnSync('git', ['commit', '-m', 'init'], { cwd: wsRb, encoding: 'utf8' });
+
+      // Unlink committed src/wt-only.ts in live working tree (HEAD keeps it -> passes worktree probe, triggers ERR_LIVE_COMMIT_FAILED live)
+      fs.unlinkSync(path.join(wsRb, 'src', 'wt-only.ts'));
+
+      const proposerScript = path.join(rootTmp, 'rb-proposer.mjs');
+      fs.writeFileSync(
+        proposerScript,
+        `import * as fs from 'node:fs';
+import * as path from 'node:path';
+const ctxDir = process.env.EVO_OPTIMIZE_CONTEXT_DIR;
+fs.writeFileSync(path.join(ctxDir, 'proposals.json'), JSON.stringify({
+  deleted_ids: [{ kind: 'rule', id: 'tracked-obsolete-rule' }],
+  proposals: [
+    {
+      kind: 'memory',
+      id: 'a-first-good-mem',
+      title: 'App Version Startup Anchor Memory',
+      l0_summary: 'Verify appVersion constant initialization during worker startup.',
+      symptom: 'Worker startup read uninitialized version constant during cold boot.',
+      root_cause: 'Module export order accessed appVersion prior to initialization.',
+      solution: 'Export deterministic appVersion constant from src/app.ts before worker bootstrap.',
+      target_symbols: ['src/app.ts#appVersion'],
+    },
+    {
+      kind: 'memory',
+      id: 'z-second-fail-mem',
+      title: 'Commit Guard Anchor Drift Memory',
+      l0_summary: 'Anchor live commit verification against existing commitGuardAnchor symbol.',
+      symptom: 'Optimization live commit attempts to persist memory when commitGuardAnchor source file is deleted locally.',
+      root_cause: 'Uncommitted deletion in live working tree diverges from HEAD worktree probe state.',
+      solution: 'Reject live commit with ERR_SYMBOL_NOT_FOUND and roll back prior capability mutations atomically.',
+      target_symbols: ['src/wt-only.ts#commitGuardAnchor'],
+    }
+  ]
+}, null, 2), 'utf8');
+`,
+        'utf8'
+      );
+
+      const probeScript = path.join(rootTmp, 'rb-probe.mjs');
+      fs.writeFileSync(
+        probeScript,
+        `import * as fs from 'node:fs';
+import * as path from 'node:path';
+const wt = process.env.EVO_WORKSPACE || process.cwd();
+const hasGood = fs.existsSync(path.join(wt, '.evo', 'memories', 'a-first-good-mem.md'));
+console.log(JSON.stringify({ score: hasGood ? 10 : 1 }));
+`,
+        'utf8'
+      );
+
+      assert.throws(
+        () =>
+          runOptimizationCycle({
+            workspaceRoot: wsRb,
+            dim: 'inv',
+            k: 1,
+            proposerCmd: `node "${proposerScript}"`,
+            probeCmd: `node "${probeScript}"`,
+            apply: true,
+          }),
+        /ERR_LIVE_COMMIT_FAILED/
+      );
+
+      const postStorage = new EvoStorage(wsRb);
+      assert.ok(
+        postStorage.getRule('tracked-obsolete-rule') !== null,
+        'Archived tracked-obsolete-rule must roll back cleanly on live commit failure'
+      );
+      assert.equal(
+        postStorage.getMemory('a-first-good-mem'),
+        null,
+        'Partially committed a-first-good-mem must roll back cleanly on live commit failure'
+      );
+
+      // 4. DEFECT-BUILD-FOREIGN-CWD-DATA-LOSS & DEFECT-BUILD-GLOBAL-HOST-POLLUTION:
+      // scripts/build.mjs run from foreign cwd must not wipe foreign cwd/dist or touch global dir without EVO_SYNC_GLOBAL=1
+      const foreignCwd = path.join(rootTmp, 'foreign-cwd');
+      const foreignKeepFile = path.join(foreignCwd, 'dist', 'keep.txt');
+      const fakeGlobalDir = path.join(rootTmp, 'fake-global');
+      fs.mkdirSync(path.dirname(foreignKeepFile), { recursive: true });
+      fs.mkdirSync(fakeGlobalDir, { recursive: true });
+      fs.writeFileSync(foreignKeepFile, 'DO_NOT_DELETE', 'utf8');
+
+      const buildScript = path.resolve(process.cwd(), 'scripts', 'build.mjs');
+      const buildEnv = { ...process.env, EVO_GLOBAL_DIR: fakeGlobalDir };
+      delete (buildEnv as Record<string, string | undefined>).EVO_SYNC_GLOBAL;
+      const buildProc = child_process.spawnSync(process.execPath, [buildScript], {
+        cwd: foreignCwd,
+        env: buildEnv,
+        encoding: 'utf8',
+      });
+      assert.equal(buildProc.status, 0, buildProc.stderr);
+      assert.equal(fs.readFileSync(foreignKeepFile, 'utf8'), 'DO_NOT_DELETE');
+      assert.deepEqual(fs.readdirSync(fakeGlobalDir), []);
+    } finally {
+      cleanTempWorkspace(rootTmp);
     }
   });
 });

@@ -4,6 +4,7 @@ import * as readline from 'node:readline';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import { EVO_KERNEL_VERSION } from '../core/storage.js';
+import { redactSensitiveDiagnostics } from '../core/telemetry.js';
 import type { ExternalMcpServerConfig, ExternalToolDefinition } from '../core/types.js';
 
 export function formatExternalToolId(serverName: string, originalToolName: string): string {
@@ -13,11 +14,11 @@ export function formatExternalToolId(serverName: string, originalToolName: strin
 export function parseExternalToolId(
   toolId: string
 ): { serverName: string; originalToolName: string } | null {
-  const match = toolId.match(/^ext__([a-zA-Z0-9_-]+)__(.+)$/);
+  const match = toolId.match(/^ext__([a-zA-Z0-9_.-]+)__(.+)$/);
   if (match) {
     return { serverName: match[1], originalToolName: match[2] };
   }
-  const colonMatch = toolId.match(/^mcp:([a-zA-Z0-9_-]+):(.+)$/);
+  const colonMatch = toolId.match(/^mcp:([a-zA-Z0-9_.-]+):(.+)$/);
   if (colonMatch) {
     return { serverName: colonMatch[1], originalToolName: colonMatch[2] };
   }
@@ -27,7 +28,8 @@ export function parseExternalToolId(
 export function resolveWindowsSpawnCommand(
   command: string,
   env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  cwd?: string
 ): { command: string; isBatch: boolean } {
   if (platform !== 'win32') {
     return { command, isBatch: false };
@@ -41,14 +43,19 @@ export function resolveWindowsSpawnCommand(
     return { command: unquoted, isBatch: true };
   }
   if (unquoted.includes('/') || unquoted.includes('\\')) {
-    if (fs.existsSync(`${unquoted}.exe`)) {
-      return { command: `${unquoted}.exe`, isBatch: false };
+    const resolvedBase =
+      !path.isAbsolute(unquoted) && cwd ? path.resolve(cwd, unquoted) : unquoted;
+    if (fs.existsSync(`${resolvedBase}.exe`)) {
+      return { command: `${resolvedBase}.exe`, isBatch: false };
     }
-    if (fs.existsSync(`${unquoted}.cmd`)) {
-      return { command: `${unquoted}.cmd`, isBatch: true };
+    if (fs.existsSync(`${resolvedBase}.cmd`)) {
+      return { command: `${resolvedBase}.cmd`, isBatch: true };
     }
-    if (fs.existsSync(`${unquoted}.bat`)) {
-      return { command: `${unquoted}.bat`, isBatch: true };
+    if (fs.existsSync(`${resolvedBase}.bat`)) {
+      return { command: `${resolvedBase}.bat`, isBatch: true };
+    }
+    if (fs.existsSync(resolvedBase)) {
+      return { command: resolvedBase, isBatch: false };
     }
     return { command: unquoted, isBatch: false };
   }
@@ -98,6 +105,13 @@ export class McpClientConnection {
     this.workspaceRoot = workspaceRoot;
   }
 
+  private formatStderrSuffix(): string {
+    const raw = this.stderrBuffer.join('').trim();
+    if (!raw) return '';
+    const tail = raw.length > 600 ? raw.slice(-600) : raw;
+    return ` | stderr: ${redactSensitiveDiagnostics(tail, this.workspaceRoot)}`;
+  }
+
   public async connect(): Promise<void> {
     if (this.proc && !this.proc.killed && this.initialized) {
       return;
@@ -122,7 +136,7 @@ export class McpClientConnection {
       }
     }
 
-    const resolvedCmd = resolveWindowsSpawnCommand(this.config.command, env);
+    const resolvedCmd = resolveWindowsSpawnCommand(this.config.command, env, process.platform, cwd);
     const isBatch = resolvedCmd.isBatch;
     const spawnCommand =
       isBatch && /\s/.test(resolvedCmd.command) && !/^".*"$/.test(resolvedCmd.command)
@@ -149,9 +163,10 @@ export class McpClientConnection {
     });
 
     proc.on('error', (err) => {
+      const stderrSuffix = this.formatStderrSuffix();
       for (const [, req] of this.pending.entries()) {
         clearTimeout(req.timer);
-        req.reject(new Error(`MCP server '${this.serverName}' process error: ${err.message}`));
+        req.reject(new Error(`MCP server '${this.serverName}' process error: ${err.message}${stderrSuffix}`));
       }
       this.pending.clear();
       this.initialized = false;
@@ -159,11 +174,12 @@ export class McpClientConnection {
     });
 
     proc.on('exit', () => {
+      const stderrSuffix = this.formatStderrSuffix();
       this.initialized = false;
       this.proc = null;
       for (const [, req] of this.pending.entries()) {
         clearTimeout(req.timer);
-        req.reject(new Error(`MCP server '${this.serverName}' exited unexpectedly`));
+        req.reject(new Error(`MCP server '${this.serverName}' exited unexpectedly${stderrSuffix}`));
       }
       this.pending.clear();
     });
@@ -266,12 +282,13 @@ export class McpClientConnection {
 
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        const stderrSuffix = this.formatStderrSuffix();
         if (method === 'initialize' || method === 'tools/list') {
           this.close();
         }
         reject(
           new Error(
-            `Timeout (${timeoutMs}ms) waiting for response from external MCP server '${this.serverName}' (method: ${method})`
+            `Timeout (${timeoutMs}ms) waiting for response from external MCP server '${this.serverName}' (method: ${method})${stderrSuffix}`
           )
         );
       }, timeoutMs);

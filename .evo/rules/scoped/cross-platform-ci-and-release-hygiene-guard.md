@@ -11,9 +11,8 @@ supersedes_id: "cross-platform-ci-and-release-hygiene-guard"
 confidence: "high"
 contrastive_evidence: "Before fix: `if npm view \"evo-kernel@$PKG_VERSION\" version >/dev/null 2>&1` in publish.yml exited 0 in 3s on v0.4.0 with empty stdout and silently skipped npm publish (`https://registry.npmjs.org/evo-kernel/0.4.0` returned 404). After fix: `PUBLISHED_VER=\"$(npm view ... | tr -d '[:space:]' || true)\"` checks `[ -n \"$PKG_VERSION\" ] && [ \"$PUBLISHED_VER\" = \"$PKG_VERSION\" ]`, guarded by regression assertions in `src/tests/score-and-ui.test.ts`."
 transfer_scenarios: ["Pre-publish idempotency checks in GitHub Actions release workflows across npm, PyPI, or container registries","Cross-platform CLI diagnostic probes and static showcase exporters executed across Windows and POSIX runners"]
-review_status: "pending"
 created_at: "2026-11-11T07:53:24.313Z"
-updated_at: "2026-11-14T17:57:58.729Z"
+updated_at: "2026-11-14T18:32:41.426Z"
 ---
 
 When implementing cross-platform CLI diagnostics, static web/documentation exporters, CI leak scanners, or package publish workflows:

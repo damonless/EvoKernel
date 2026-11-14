@@ -48,8 +48,8 @@ runs:
       run: |
         node "${GITHUB_ACTION_PATH}/scripts/build.mjs"
         REPORT_JSON="$(node "${GITHUB_ACTION_PATH}/dist/cli/index.js" score --json --workspace "$INPUT_WORKSPACE")"
-        SCORE="$(node -e 'const r = JSON.parse(process.argv[1]); console.log(r.overallScore);' "$REPORT_JSON")"
-        GRADE="$(node -e 'const r = JSON.parse(process.argv[1]); console.log(r.grade);' "$REPORT_JSON")"
+        SCORE="$(node -e 'try { const r = JSON.parse(process.argv[1]); if (Number.isFinite(Number(r.overallScore))) console.log(Math.round(Number(r.overallScore))); } catch {}' "$REPORT_JSON")"
+        GRADE="$(node -e 'try { const r = JSON.parse(process.argv[1]); console.log(r.grade || "UNKNOWN"); } catch { console.log("UNKNOWN"); }' "$REPORT_JSON")"
         BADGE="$(node "${GITHUB_ACTION_PATH}/dist/cli/index.js" score --badge --workspace "$INPUT_WORKSPACE")"
         echo "score=${SCORE}" >> "$GITHUB_OUTPUT"
         echo "grade=${GRADE}" >> "$GITHUB_OUTPUT"
@@ -65,6 +65,14 @@ runs:
             echo "- **Overall Score**: \`${SCORE} / 100\` (**Grade ${GRADE}**)"
             echo "- **Markdown Badge**: \`${BADGE}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        if ! [[ "$SCORE" =~ ^[0-9]+$ ]]; then
+          echo "::error::Failed to parse numeric EvoKernel score (got '${SCORE}')"
+          exit 1
+        fi
+        if ! [[ "$INPUT_MIN_SCORE" =~ ^[0-9]+$ ]]; then
+          echo "::error::Invalid numeric min-score threshold (got '${INPUT_MIN_SCORE}')"
+          exit 1
         fi
         if [ "$SCORE" -lt "$INPUT_MIN_SCORE" ]; then
           echo "::error::EvoKernel Score (${SCORE}) is below minimum threshold (${INPUT_MIN_SCORE})"

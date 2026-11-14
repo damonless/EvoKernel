@@ -10,9 +10,11 @@
  *   multi-file bug fixes, scratch script iterations, command error-recovery loops, or
  *   post-crystallization source code mutations are detected in the conversation transcript.
  */
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 const TAIL_BYTES = 128 * 1024;
 const COOLDOWN_STEPS = 4;
@@ -209,17 +211,18 @@ function loadHookState(statePath) {
 
 function saveHookState(statePath, state, conversationId, convState) {
   try {
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
     const merged = { ...state, ...loadHookState(statePath) };
     if (conversationId && convState) {
       merged[conversationId] = convState;
     }
     const serialized = JSON.stringify(merged);
     const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmpPath, serialized, 'utf8');
+    fs.writeFileSync(tmpPath, serialized, { encoding: 'utf8', mode: 0o600 });
     try {
       fs.renameSync(tmpPath, statePath);
     } catch {
-      fs.writeFileSync(statePath, serialized, 'utf8');
+      fs.writeFileSync(statePath, serialized, { encoding: 'utf8', mode: 0o600 });
       try {
         fs.unlinkSync(tmpPath);
       } catch {
@@ -228,6 +231,157 @@ function saveHookState(statePath, state, conversationId, convState) {
     }
   } catch {
     // Ignore write errors
+  }
+}
+
+function resolveTelemetryDbsForStop(input) {
+  const rawWs =
+    (Array.isArray(input.workspacePaths) && input.workspacePaths[0]) ||
+    (Array.isArray(input.workspace_paths) && input.workspace_paths[0]) ||
+    input.workspace ||
+    input.workspaceRoot ||
+    input.workspace_root ||
+    input.cwd ||
+    process.cwd();
+  const wsRoot = path.resolve(String(rawWs || process.cwd()));
+  const localDbPath = path.join(wsRoot, '.evo', '.cache', 'telemetry.db');
+
+  const globalHome = process.env.EVO_GLOBAL_DIR
+    ? path.resolve(process.env.EVO_GLOBAL_DIR)
+    : path.join(os.homedir(), '.evo', 'global');
+  let globalDbPath = '';
+  for (const cand of [
+    path.join(globalHome, '.evo', '.cache', 'telemetry.db'),
+    path.join(globalHome, '.cache', 'telemetry.db'),
+  ]) {
+    if (fs.existsSync(cand)) {
+      globalDbPath = cand;
+      break;
+    }
+  }
+  return { localDbPath, globalDbPath };
+}
+
+function applyStopOutcomeToDb(db, cleanId, kind, outcome) {
+  const col = outcome === 'helped' ? 'helped_count' : 'contested_count';
+  const res = db
+    .prepare(`UPDATE telemetry SET ${col} = ${col} + 1 WHERE id = ? OR lower(id) = ?`)
+    .run(cleanId, cleanId);
+  if (res.changes === 0) {
+    const nowIso = new Date().toISOString();
+    try {
+      db.prepare(
+        `INSERT INTO telemetry (id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, tokens_saved, last_used_at, created_at, ${col})
+         VALUES (?, ?, ?, '', '', 1, 0, 0, 0, ?, ?, 1)
+         ON CONFLICT(id) DO UPDATE SET ${col} = ${col} + 1`
+      ).run(cleanId, kind || 'rule', cleanId, nowIso, nowIso);
+    } catch {
+      // ignore insert failure on partial schema
+    }
+  }
+  if (outcome === 'helped') {
+    const recentCutoff = new Date(Date.now() - 86_400_000).toISOString();
+    db.prepare(
+      `UPDATE recall_events
+       SET helped = 1
+       WHERE id = (
+         SELECT id FROM recall_events
+         WHERE (capability_id = ? OR lower(capability_id) = ?)
+           AND helped = 0
+           AND event_type IN ('inspect', 'run')
+           AND timestamp >= ?
+         ORDER BY id DESC
+         LIMIT 1
+       )`
+    ).run(cleanId, cleanId, recentCutoff);
+  }
+}
+
+function closeRecalledTelemetryOnStop(input, hadTurnCorrection) {
+  let localDb;
+  let globalDb;
+  try {
+    const { localDbPath, globalDbPath } = resolveTelemetryDbsForStop(input);
+    if (!fs.existsSync(localDbPath)) {
+      return;
+    }
+    localDb = new DatabaseSync(localDbPath, { timeout: 2000 });
+    const getFlag = (key) => {
+      const row = localDb.prepare('SELECT value FROM session_state WHERE key = ?').get(key);
+      return row && row.value !== undefined ? String(row.value) : undefined;
+    };
+    const recalledRaw = getFlag('recalled_capabilities');
+    if (recalledRaw) {
+      let parsed = [];
+      try {
+        const candidate = JSON.parse(recalledRaw);
+        if (Array.isArray(candidate)) parsed = candidate;
+      } catch {}
+      const now = Date.now();
+      const validEntries = parsed.filter((item) => {
+        if (!item || typeof item.id !== 'string') return false;
+        const tsMs = typeof item.at === 'number' ? item.at : Date.parse(String(item.ts || ''));
+        if (Number.isFinite(tsMs) && now - tsMs > 86_400_000) return false;
+        return true;
+      });
+
+      const userCorrectionFlag = getFlag('user_correction_detected') === 'true';
+      const hadCommandErrorFlag = getFlag('had_command_error') === 'true';
+      const contestedAttributed = getFlag('contested_attributed') === 'true';
+      const contestedAt = parseInt(getFlag('contested_at') || '0', 10);
+      const hasCorrection = hadTurnCorrection || userCorrectionFlag;
+
+      let targetOutcome = null;
+      let entriesToRecord = validEntries;
+      if (hasCorrection) {
+        if (!contestedAttributed) {
+          targetOutcome = 'contested';
+        } else {
+          entriesToRecord = [];
+        }
+      } else if (!hadCommandErrorFlag) {
+        entriesToRecord = validEntries.filter((c) => {
+          const tsMs = typeof c.at === 'number' ? c.at : Date.parse(String(c.ts || ''));
+          return !contestedAttributed || (contestedAt > 0 && Number.isFinite(tsMs) && tsMs > contestedAt);
+        });
+        if (entriesToRecord.length > 0) {
+          targetOutcome = 'helped';
+        }
+      } else {
+        entriesToRecord = [];
+      }
+
+      if (targetOutcome && entriesToRecord.length > 0) {
+        for (const entry of entriesToRecord) {
+          const cleanId = String(entry.id || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9_.-]+/g, '-');
+          if (!cleanId) continue;
+          const kind = String(entry.kind || 'rule');
+          if (entry.tier === 'GLOBAL' && globalDbPath) {
+            if (!globalDb) {
+              globalDb = new DatabaseSync(globalDbPath, { timeout: 2000 });
+            }
+            applyStopOutcomeToDb(globalDb, cleanId, kind, targetOutcome);
+          } else {
+            applyStopOutcomeToDb(localDb, cleanId, kind, targetOutcome);
+          }
+        }
+      }
+    }
+    localDb.exec(
+      "DELETE FROM session_state WHERE key IN ('recalled_capabilities', 'contested_attributed', 'contested_at', 'user_correction_detected', 'had_command_error')"
+    );
+  } catch {
+    // Non-fatal: Stop hook must never block or fail host IDE
+  } finally {
+    try {
+      globalDb?.close();
+    } catch {}
+    try {
+      localDb?.close();
+    } catch {}
   }
 }
 
@@ -251,18 +405,28 @@ Options:
   const event = process.argv[2] || 'PreInvocation';
   const input = await readStdinJson();
   const conversationId = String(input.conversationId || input.conversation_id || 'default');
-  const statePath = path.join(os.tmpdir(), 'evo-agy-hook-state.json');
+  const userHash =
+    typeof process.getuid === 'function'
+      ? String(process.getuid())
+      : crypto.createHash('sha1').update(os.homedir()).digest('hex').slice(0, 8);
+  const statePath = process.env.EVO_AGY_HOOK_STATE_PATH
+    ? path.resolve(process.env.EVO_AGY_HOOK_STATE_PATH)
+    : path.join(os.tmpdir(), `evo-agy-hook-state-${userHash}.json`);
 
   if (event === 'Stop') {
     const allState = loadHookState(statePath);
-    if (allState[conversationId]) {
-      const cs = allState[conversationId];
+    const cs = allState[conversationId];
+    const hadTurnCorrection = Boolean(
+      cs && (cs.lastCorrectionStep ?? -1) > (cs.clearedCorrectionStep ?? -1)
+    );
+    if (cs) {
       cs.clearedCorrectionStep = cs.lastCorrectionStep ?? -1;
       cs.clearedDirtyEditStep = cs.lastDirtyEditStep ?? -1;
       cs.clearedErrorRecoveryStep = cs.lastErrorRecoveryStep ?? -1;
       cs.clearedAuditStep = cs.lastAuditStep ?? -1;
       saveHookState(statePath, allState, conversationId, allState[conversationId]);
     }
+    closeRecalledTelemetryOnStop(input, hadTurnCorrection);
     process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
     return;
   }
@@ -328,9 +492,13 @@ Options:
 
     if (step.source === 'SYSTEM' && step.type === 'SYSTEM_MESSAGE') {
       const sysContent = normalizeTranscriptString(step.content || '');
+      const isBackgroundTaskWakeup =
+        /\bsender=[^\s]*\/task-/i.test(sysContent) ||
+        /\bsender=(?:system|task-|cron|timer|background)\b/i.test(sysContent) ||
+        /\bTask id ["'][^"']+["']\s+(?:finished|completed|failed|exited)/i.test(sysContent);
       if (
         sysContent.includes('sender=') &&
-        !sysContent.includes('sender=system') &&
+        !isBackgroundTaskWakeup &&
         (seenModelStep || !sysContent.includes('<original_task>'))
       ) {
         seenModelStep = true;
@@ -393,7 +561,34 @@ Options:
         }
 
         if (toolName === 'invoke_subagent') {
-          latestAuditStepIndex = idx;
+          const subagentKind = normalizeTranscriptString(
+            args.AgentName ||
+              args.SubagentType ||
+              args.TypeName ||
+              args.agent_name ||
+              args.subagent_type ||
+              args.type_name ||
+              ''
+          ).toLowerCase();
+          const subagentTask = normalizeTranscriptString(
+            args.Task ||
+              args.Prompt ||
+              args.Message ||
+              args.Role ||
+              args.task ||
+              args.prompt ||
+              args.role ||
+              ''
+          );
+          const isUtilitySubagent =
+            /^(?:browser|image-generator|image_generator|media|web_search)$/.test(subagentKind);
+          const isAuditIntent =
+            /(?:audit|review|verif|root[\s_-]*cause|diagnos|bug|defect|security|forensic|排查|核查|审计|取证|定位|验证|复核)/i.test(
+              `${subagentKind} ${subagentTask}`
+            );
+          if (!isUtilitySubagent && isAuditIntent) {
+            latestAuditStepIndex = idx;
+          }
         }
 
         const targetToolId = normalizeTranscriptString(

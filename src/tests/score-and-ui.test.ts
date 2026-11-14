@@ -23,6 +23,7 @@ import { renderUiClientHtml } from '../templates/ui-client.js';
 import { runInit, runUninstall, mountIdeExtensions, unmountIdeExtensions, syncManagedRuleBlocks } from '../cli/init.js';
 import {
   activate,
+  buildSecuredWebviewHtml,
   deactivate,
   handleWebviewAction,
   resolveActiveWorkspaceRoot,
@@ -2461,6 +2462,36 @@ Widget issue
         fs.rmSync(umbrellaDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         fs.rmSync(umbrellaDir2, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         fs.rmSync(externalDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      } catch {}
+    }
+  });
+
+  test('33. VS Code Webview CSP LF-normalized SHA-256 parity and dual export-html path fields', async () => {
+    const ws = createTempDir('webview-csp');
+    try {
+      new EvoStorage(ws).ensureInitialized();
+      const exportRes = await handleWebviewAction(
+        'export-html',
+        { outPath: 'exports/dual-field.html', anon: true },
+        ws,
+        {}
+      );
+      assert.equal(exportRes.ok, true, exportRes.error);
+      const expectedPath = path.join(ws, 'exports', 'dual-field.html');
+      assert.equal(exportRes.data?.path, expectedPath);
+      assert.equal(exportRes.data?.exportedPath, expectedPath);
+      assert.ok(fs.existsSync(expectedPath));
+
+      const html = buildSecuredWebviewHtml(buildUiSnapshot(ws));
+      assert.equal(html.includes('\r\n'), false, 'Webview HTML must normalize CRLF to LF before computing CSP hash');
+      const cspMatch = html.match(/script-src 'sha256-([^']+)'/);
+      const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+      assert.ok(cspMatch && scriptMatch);
+      const computedHash = crypto.createHash('sha256').update(scriptMatch[1], 'utf8').digest('base64');
+      assert.equal(computedHash, cspMatch[1]);
+    } finally {
+      try {
+        fs.rmSync(ws, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       } catch {}
     }
   });

@@ -253,6 +253,40 @@ const ALLOWED_META_IDENTIFIERS = new Set([
   'EvoKernel',
 ]);
 
+const STDLIB_ROOT_RECEIVERS = new Set([
+  'Object',
+  'Array',
+  'Promise',
+  'JSON',
+  'Math',
+  'Number',
+  'String',
+  'Boolean',
+  'Symbol',
+  'BigInt',
+  'Reflect',
+  'Proxy',
+  'RegExp',
+  'Date',
+  'Error',
+  'Map',
+  'Set',
+  'WeakMap',
+  'WeakSet',
+  'Buffer',
+  'URL',
+  'URLSearchParams',
+  'Intl',
+  'Atomics',
+  'WebAssembly',
+  'console',
+  'process',
+  'fs',
+  'path',
+  'os',
+  'crypto',
+]);
+
 function detectCoupledIdentifiersInRule(text) {
   const found = new Set();
   const hungarianRegex =
@@ -281,7 +315,11 @@ function detectCoupledIdentifiersInRule(text) {
   }
   for (const m of text.matchAll(backtickCallRegex)) {
     const callExpr = m[1];
-    if (!/^(?:evo_|codegraph|import\.|process\.|fs\.|path\.|os\.)/i.test(callExpr)) {
+    const rootReceiver = callExpr.includes('.') ? callExpr.split('.')[0] : '';
+    if (
+      !/^(?:evo_|codegraph|import\.|process\.|fs\.|path\.|os\.)/i.test(callExpr) &&
+      (!rootReceiver || !STDLIB_ROOT_RECEIVERS.has(rootReceiver))
+    ) {
       found.add(callExpr);
     }
   }
@@ -299,11 +337,18 @@ function detectCoupledIdentifiersInRule(text) {
     const isCamelOrPascal = /[a-z0-9][A-Z]/.test(ident);
     const isSnakeCase = /^[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+$/.test(ident);
     const isDottedMember = /^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_.]*$/.test(ident);
+    if (isDottedMember && STDLIB_ROOT_RECEIVERS.has(ident.split('.')[0])) {
+      continue;
+    }
     if (isCamelOrPascal || isSnakeCase || isDottedMember) {
       found.add(ident);
     }
   }
   return Array.from(found);
+}
+
+function sortDirents(entries) {
+  return [...entries].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // -------------------------------------------------------------------------
@@ -319,7 +364,7 @@ const ruleFiles = [
 ];
 const configRulesDir = path.join(root, 'config', 'rules');
 if (fs.existsSync(configRulesDir)) {
-  for (const ent of fs.readdirSync(configRulesDir, { withFileTypes: true })) {
+  for (const ent of sortDirents(fs.readdirSync(configRulesDir, { withFileTypes: true }))) {
     if (ent.isFile() && ent.name.endsWith('.md')) {
       ruleFiles.push(`config/rules/${ent.name}`);
     }
@@ -513,7 +558,7 @@ const ruleAuditResults = [];
 if (fs.existsSync(rulesDir)) {
   const scanRuleDir = (dir) => {
     if (!fs.existsSync(dir)) return;
-    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    for (const ent of sortDirents(fs.readdirSync(dir, { withFileTypes: true }))) {
       const full = path.join(dir, ent.name);
       if (ent.isDirectory()) {
         scanRuleDir(full);
@@ -695,6 +740,19 @@ function stripCodeComments(input) {
 
 function hasSymbolIdentifier(codeWithoutComments, symbolName) {
   if (!symbolName) return false;
+  if (symbolName.includes('::')) {
+    const parts = symbolName
+      .split('::')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const lastPart = parts[parts.length - 1] || '';
+    if (lastPart && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(lastPart)) {
+      const escaped = lastPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`\\b${escaped}\\b`).test(codeWithoutComments)) {
+        return true;
+      }
+    }
+  }
   if (symbolName.includes('.')) {
     const parts = symbolName
       .split('.')
@@ -901,6 +959,28 @@ function checkSymbolAtParallelBranchCommit(
   return false;
 }
 
+const KNOWN_FILE_EXTENSIONS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.pyw', '.go', '.rs', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
+  '.cs', '.java', '.kt', '.kts', '.swift', '.rb', '.php', '.scala', '.groovy', '.dart', '.m', '.mm',
+  '.json', '.yaml', '.yml', '.toml', '.md', '.sql', '.sh', '.ps1', '.html', '.css', '.scss', '.xml', '.csv', '.tsv', '.txt',
+]);
+
+function stripPureImports(code) {
+  return code
+    .replace(/^\s*import\s+(?:type\s+)?(?:[\s\S]*?\bfrom\s+)?['"][^'"]+['"]\s*;?/gm, '')
+    .replace(/^\s*from\s+[\w.]+\s+import\s+[^\r\n]+/gm, '');
+}
+
+function findSingleColonIndex(spec) {
+  for (let i = spec.length - 1; i > 1; i--) {
+    if (spec[i] === ':' && spec[i - 1] !== ':' && spec[i + 1] !== ':') {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = '', createdBranch = '') {
   const spec = rawSpec.trim();
   const hashIdx = spec.indexOf('#');
@@ -911,57 +991,31 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
     fileHint = spec.slice(0, hashIdx).trim().replace(/^[/\\]+/, '');
     symbolName = spec.slice(hashIdx + 1).trim();
   } else {
-    const colonIdx = spec.indexOf(':', 2);
-    if (colonIdx !== -1 && /\.[a-z0-9]+$/i.test(spec.slice(0, colonIdx).trim())) {
+    const colonIdx = findSingleColonIndex(spec);
+    if (colonIdx !== -1 && KNOWN_FILE_EXTENSIONS.has(path.extname(spec.slice(0, colonIdx).trim()).toLowerCase())) {
       fileHint = spec.slice(0, colonIdx).trim().replace(/^[/\\]+/, '');
       symbolName = spec.slice(colonIdx + 1).trim();
     } else {
       const cleanFileCandidate = spec.replace(/^[/\\]+/, '');
-      if (/\.[a-z0-9]+$/i.test(cleanFileCandidate) && !cleanFileCandidate.includes(' ')) {
-        isWholeFile = true;
-        fileHint = cleanFileCandidate;
-      }
       const fullCandidate = path.resolve(root, cleanFileCandidate);
       if (fs.existsSync(fullCandidate) && fs.statSync(fullCandidate).isFile()) {
         return { exists: true, file: cleanFileCandidate.replace(/\\/g, '/') };
       }
+      const extCandidate = path.extname(cleanFileCandidate).toLowerCase();
+      if (
+        !cleanFileCandidate.includes(' ') &&
+        (KNOWN_FILE_EXTENSIONS.has(extCandidate) || cleanFileCandidate.includes('/') || cleanFileCandidate.includes('\\'))
+      ) {
+        isWholeFile = true;
+        fileHint = cleanFileCandidate;
+      }
     }
   }
 
-  if (fileHint) {
-    const normalizedHint = fileHint.replace(/\\/g, '/');
-    const fullHint = path.resolve(root, fileHint);
-    if (fs.existsSync(fullHint) && fs.statSync(fullHint).isFile()) {
-      if (isWholeFile) {
-        return { exists: true, file: normalizedHint };
-      }
-      const content = stripCodeComments(fs.readFileSync(fullHint, 'utf8'));
-      if (hasSymbolIdentifier(content, symbolName)) {
-        return {
-          exists: true,
-          file: normalizedHint,
-        };
-      }
-    }
-    if (
-      checkSymbolAtParallelBranchCommit(
-        createdCommit,
-        createdBranch,
-        normalizedHint,
-        symbolName,
-        isWholeFile
-      )
-    ) {
-      return {
-        exists: true,
-        branch_scoped: true,
-        file: normalizedHint,
-      };
-    }
-    return { exists: false, file: normalizedHint };
-  }
-
-  // Fallback: search non-test source files across workspace (supporting C/embedded layouts as well as src/lib)
+  const normalizedHint = fileHint ? fileHint.replace(/\\/g, '/').replace(/^\.\/+/, '') : '';
+  const normalizedRecorded = recordedFilePath
+    ? recordedFilePath.trim().replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/^\.\/+/, '')
+    : '';
   const ignoredDirs = new Set([
     'node_modules',
     '.git',
@@ -975,22 +1029,151 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
     '.windsurf',
     '.roo',
     '.gemini',
+    '.codex',
     'templates',
     'tests',
     '__tests__',
   ]);
+
+  if (normalizedRecorded && normalizedRecorded !== '(unrecorded)' && normalizedRecorded !== '(unlocated)') {
+    const fullRecorded = path.resolve(root, normalizedRecorded);
+    if (fs.existsSync(fullRecorded) && fs.statSync(fullRecorded).isFile()) {
+      if (isWholeFile) {
+        return { exists: true, file: normalizedRecorded };
+      }
+      const content = stripCodeComments(fs.readFileSync(fullRecorded, 'utf8'));
+      if (hasSymbolIdentifier(content, symbolName)) {
+        return { exists: true, file: normalizedRecorded };
+      }
+      if (!normalizedHint || normalizedHint === normalizedRecorded) {
+        if (
+          checkSymbolAtParallelBranchCommit(
+            createdCommit,
+            createdBranch,
+            normalizedRecorded,
+            symbolName,
+            isWholeFile
+          )
+        ) {
+          return {
+            exists: true,
+            branch_scoped: true,
+            file: normalizedRecorded,
+          };
+        }
+        return { exists: false, file: normalizedRecorded };
+      }
+    }
+  }
+
+  if (fileHint) {
+    const fullHint = path.resolve(root, normalizedHint);
+    if (fs.existsSync(fullHint) && fs.statSync(fullHint).isFile()) {
+      if (isWholeFile) {
+        return { exists: true, file: normalizedHint };
+      }
+      const content = stripCodeComments(fs.readFileSync(fullHint, 'utf8'));
+      if (hasSymbolIdentifier(content, symbolName)) {
+        return {
+          exists: true,
+          file: normalizedHint,
+        };
+      }
+      if (
+        checkSymbolAtParallelBranchCommit(
+          createdCommit,
+          createdBranch,
+          normalizedRecorded || normalizedHint,
+          symbolName,
+          isWholeFile
+        )
+      ) {
+        return {
+          exists: true,
+          branch_scoped: true,
+          file: normalizedRecorded || normalizedHint,
+        };
+      }
+      return { exists: false, file: normalizedHint };
+    }
+
+    if (!normalizedHint.includes('/')) {
+      const targetLower = normalizedHint.toLowerCase();
+      const stack = [root];
+      const exactMatches = [];
+      const ciMatches = [];
+      let walkedFiles = 0;
+      while (stack.length > 0 && walkedFiles < 2000) {
+        const current = stack.pop();
+        let entries = [];
+        try {
+          entries = sortDirents(fs.readdirSync(current, { withFileTypes: true }));
+        } catch {
+          continue;
+        }
+        for (const ent of entries) {
+          if (walkedFiles >= 2000) break;
+          const entPath = path.join(current, ent.name);
+          if (ent.isDirectory()) {
+            if (!ignoredDirs.has(ent.name)) {
+              stack.push(entPath);
+            }
+          } else if (ent.isFile()) {
+            walkedFiles++;
+            if (ent.name === normalizedHint) {
+              exactMatches.push(entPath);
+            } else if (process.platform === 'win32' && ent.name.toLowerCase() === targetLower) {
+              ciMatches.push(entPath);
+            }
+          }
+        }
+      }
+      const candidates = exactMatches.length > 0 ? exactMatches : ciMatches;
+      for (const candidatePath of candidates) {
+        const rel = path.relative(root, candidatePath).replace(/\\/g, '/');
+        if (isWholeFile) {
+          return { exists: true, file: rel };
+        }
+        try {
+          const content = stripCodeComments(fs.readFileSync(candidatePath, 'utf8'));
+          if (hasSymbolIdentifier(content, symbolName)) {
+            return { exists: true, file: rel };
+          }
+        } catch {}
+      }
+    }
+
+    if (
+      checkSymbolAtParallelBranchCommit(
+        createdCommit,
+        createdBranch,
+        normalizedRecorded || normalizedHint,
+        symbolName,
+        isWholeFile
+      )
+    ) {
+      return {
+        exists: true,
+        branch_scoped: true,
+        file: normalizedRecorded || normalizedHint,
+      };
+    }
+    return { exists: false, file: normalizedRecorded || normalizedHint };
+  }
+
+  // Fallback: search non-test source files across workspace (supporting C/embedded layouts as well as src/lib)
   const stack = [root];
   let scannedSourceFiles = 0;
-  while (stack.length > 0 && scannedSourceFiles < 500) {
+  while (stack.length > 0 && scannedSourceFiles < 2000) {
     const current = stack.pop();
     let entries = [];
     try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
+      entries = sortDirents(fs.readdirSync(current, { withFileTypes: true }));
     } catch {
       continue;
     }
     for (const ent of entries) {
-      if (scannedSourceFiles >= 500) break;
+      if (scannedSourceFiles >= 2000) break;
       const entPath = path.join(current, ent.name);
       if (ent.isDirectory()) {
         if (!ignoredDirs.has(ent.name)) {
@@ -998,12 +1181,12 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
         }
       } else if (
         ent.isFile() &&
-        /\.(?:ts|tsx|js|jsx|mjs|cjs|c|h|cpp|hpp|py|rs|go|java|cs)$/i.test(ent.name) &&
+        /\.(?:ts|tsx|js|jsx|mjs|cjs|c|h|cpp|hpp|cc|cxx|py|rs|go|java|cs|kt|swift)$/i.test(ent.name) &&
         !/\.(?:test|spec)\.[a-z0-9]+$/i.test(ent.name)
       ) {
         scannedSourceFiles++;
         try {
-          const code = stripCodeComments(fs.readFileSync(entPath, 'utf8'));
+          const code = stripPureImports(stripCodeComments(fs.readFileSync(entPath, 'utf8')));
           if (hasSymbolIdentifier(code, symbolName)) {
             return { exists: true, file: path.relative(root, entPath).replace(/\\/g, '/') };
           }
@@ -1013,21 +1196,21 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
   }
 
   if (
-    recordedFilePath &&
-    checkSymbolAtParallelBranchCommit(createdCommit, createdBranch, recordedFilePath, symbolName, false)
+    normalizedRecorded &&
+    checkSymbolAtParallelBranchCommit(createdCommit, createdBranch, normalizedRecorded, symbolName, false)
   ) {
     return {
       exists: true,
       branch_scoped: true,
-      file: recordedFilePath.replace(/\\/g, '/'),
+      file: normalizedRecorded,
     };
   }
 
-  return { exists: false, file: fileHint || recordedFilePath || '(unlocated)' };
+  return { exists: false, file: fileHint || normalizedRecorded || '(unlocated)' };
 }
 
 if (fs.existsSync(memoriesDir)) {
-  for (const ent of fs.readdirSync(memoriesDir, { withFileTypes: true })) {
+  for (const ent of sortDirents(fs.readdirSync(memoriesDir, { withFileTypes: true }))) {
     if (ent.isFile() && ent.name.endsWith('.md')) {
       const full = path.join(memoriesDir, ent.name);
       const raw = fs.readFileSync(full, 'utf8');
@@ -1110,7 +1293,7 @@ if (fs.existsSync(globalEvoDir)) {
     const checkDir = (locSub, globSub) => {
       if (!fs.existsSync(locSub) || !fs.existsSync(globSub)) return;
       if (path.resolve(locSub).toLowerCase() === path.resolve(globSub).toLowerCase()) return;
-      for (const ent of fs.readdirSync(locSub, { withFileTypes: true })) {
+      for (const ent of sortDirents(fs.readdirSync(locSub, { withFileTypes: true }))) {
         if (ent.isFile() && ent.name.endsWith('.md') && ent.name !== 'core-invariants.md') {
           const locFile = path.join(locSub, ent.name);
           const globFile = path.join(globSub, ent.name);
@@ -1133,7 +1316,7 @@ if (fs.existsSync(globalEvoDir)) {
   ]) {
     if (!fs.existsSync(localSkillsDir) || !fs.existsSync(globalSkillsDir)) continue;
     if (path.resolve(localSkillsDir).toLowerCase() === path.resolve(globalSkillsDir).toLowerCase()) continue;
-    for (const ent of fs.readdirSync(localSkillsDir, { withFileTypes: true })) {
+    for (const ent of sortDirents(fs.readdirSync(localSkillsDir, { withFileTypes: true }))) {
       if (ent.isDirectory()) {
         const locSkill = path.join(localSkillsDir, ent.name, 'SKILL.md');
         const globSkill = path.join(globalSkillsDir, ent.name, 'SKILL.md');
@@ -1164,7 +1347,7 @@ if (fs.existsSync(globalEvoDir)) {
   const localToolsDir = path.join(root, '.evo', 'tools');
   const globalToolsDir = path.join(globalEvoDir, 'tools');
   if (fs.existsSync(localToolsDir) && fs.existsSync(globalToolsDir)) {
-    for (const ent of fs.readdirSync(localToolsDir, { withFileTypes: true })) {
+    for (const ent of sortDirents(fs.readdirSync(localToolsDir, { withFileTypes: true }))) {
       if (ent.isDirectory()) {
         const locScript = path.join(localToolsDir, ent.name, 'run.mjs');
         const globScript = path.join(globalToolsDir, ent.name, 'run.mjs');
@@ -1239,7 +1422,7 @@ const skillDirsToScan = [
 ];
 for (const parentDir of skillDirsToScan) {
   if (!fs.existsSync(parentDir)) continue;
-  for (const ent of fs.readdirSync(parentDir, { withFileTypes: true })) {
+  for (const ent of sortDirents(fs.readdirSync(parentDir, { withFileTypes: true }))) {
     if (ent.isDirectory()) {
       const skillFile = path.join(parentDir, ent.name, 'SKILL.md');
       const relPath = path.relative(root, skillFile).replace(/\\/g, '/');
@@ -1345,6 +1528,13 @@ const finalReport = {
   workspace: path.basename(root),
   status: overallStatus,
   ok: totalViolations === 0,
+  violations: [
+    ...budgetViolations.map((v) => ({ category: 'token_budget', target: v.file, status: v.status })),
+    ...gateViolations.map((v) => ({ category: 'gate1_5', target: v.id || v.file, issues: v.violations })),
+    ...brokenSymbols.map((v) => ({ category: 'memory_symbol', target: `${v.memoryId}:${v.symbol}`, file: v.file })),
+    ...splitBrainDivergences.map((v) => ({ category: 'split_brain', target: `${v.capability}:${v.id}`, reason: v.reason })),
+    ...skillFrontmatterViolations.map((v) => ({ category: 'skill_frontmatter', target: v.skill, issues: v.issues })),
+  ],
   summary: {
     budget_violations: budgetViolations.length,
     gate1_5_violations: gateViolations.length,
@@ -1352,11 +1542,25 @@ const finalReport = {
     split_brain_conflicts: splitBrainDivergences.length,
     skill_frontmatter_violations: skillFrontmatterViolations.length,
   },
-  token_budget_audit: tokenAudit,
-  gate1_5_audit: ruleAuditResults,
-  memory_symbols_audit: memoryAuditResults,
-  split_brain_audit: splitBrainDivergences,
-  skill_frontmatter_audit: skillFrontmatterViolations,
+  token_budget_audit: [...tokenAudit].sort(
+    (a, b) => (a.status !== 'HEALTHY' ? 0 : 1) - (b.status !== 'HEALTHY' ? 0 : 1) || a.file.localeCompare(b.file)
+  ),
+  gate1_5_audit: [...ruleAuditResults].sort(
+    (a, b) =>
+      (b.violations.length > 0 ? 1 : 0) - (a.violations.length > 0 ? 1 : 0) ||
+      String(a.id || a.file || '').localeCompare(String(b.id || b.file || ''))
+  ),
+  memory_symbols_audit: [...memoryAuditResults].sort(
+    (a, b) =>
+      (b.symbols_count - b.verified_count > 0 ? 1 : 0) -
+        (a.symbols_count - a.verified_count > 0 ? 1 : 0) || a.id.localeCompare(b.id)
+  ),
+  split_brain_audit: [...splitBrainDivergences].sort(
+    (a, b) => a.capability.localeCompare(b.capability) || String(a.id || '').localeCompare(String(b.id || ''))
+  ),
+  skill_frontmatter_audit: [...skillFrontmatterViolations].sort((a, b) =>
+    a.skill.localeCompare(b.skill)
+  ),
 };
 
 console.log(JSON.stringify(finalReport, null, 2));

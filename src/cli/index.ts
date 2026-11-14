@@ -71,10 +71,12 @@ Events:
   mark-recovery Records error-recovery telemetry for recent capability usage
 
 Options:
-  --payload <json>   Hook event payload as JSON string
-  --workspace <path> Target workspace directory (default: current directory)
-  --dry-run          Simulate hook execution without modifying telemetry or git state
-  -h, --help         Show this help message
+  --payload <json>      Hook event payload as JSON string
+  --tool <name>         Tool name (alias: --tool-name)
+  --file <path>         Target file path (alias: --target-file)
+  --workspace <path>    Target workspace directory (default: current directory)
+  --dry-run             Simulate hook execution without modifying telemetry or git state
+  -h, --help            Show this help message
 `,
     args
   );
@@ -221,8 +223,6 @@ Subcommands:
   refresh              Re-anchor drifted AST fingerprints to current commit/branch
 
 Options:
-  --unmount-ide        Also uninstall mounted IDE extension bundles & registry entries
-  --ide <targets>      Comma-separated target IDEs when --unmount-ide is set
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -297,8 +297,6 @@ Usage:
 Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/).
 
 Options:
-  --unmount-ide        Also uninstall mounted IDE extension bundles & registry entries
-  --ide <targets>      Comma-separated target IDEs when --unmount-ide is set
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -352,8 +350,6 @@ Usage:
 Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools).
 
 Options:
-  --unmount-ide        Also uninstall mounted IDE extension bundles & registry entries
-  --ide <targets>      Comma-separated target IDEs when --unmount-ide is set
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -788,7 +784,7 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
   ],
   tree: [...GLOBAL_COMMON_FLAGS, '--json', '--full'],
   stats: [...GLOBAL_COMMON_FLAGS, '--json', '--global', '-g'],
-  hook: [...GLOBAL_COMMON_FLAGS, '--payload', '--harness', '--dry-run', '--tool-name', '--target-file'],
+  hook: [...GLOBAL_COMMON_FLAGS, '--payload', '--harness', '--dry-run', '--tool', '--file', '--tool-name', '--target-file'],
   doctor: [...GLOBAL_COMMON_FLAGS, '--json', '--roi', '--probe', '--no-probe'],
   check: [...GLOBAL_COMMON_FLAGS, '--json'],
   inspect: [...GLOBAL_COMMON_FLAGS, '--json'],
@@ -1329,6 +1325,8 @@ export const VALUE_TAKING_FLAGS = new Set([
   '--event',
   '--tool',
   '--file',
+  '--tool-name',
+  '--target-file',
 ]);
 
 function normalizeLeadingFlags(rawArgs: string[]): string[] {

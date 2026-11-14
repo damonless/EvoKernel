@@ -14,12 +14,23 @@
   "hooks": {
     "PostToolUse": [
       {
-        "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/boot-mcp.mjs hook post-tool"
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/boot-mcp.mjs\" hook post-tool --harness claude"
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/boot-mcp.mjs hook stop"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/boot-mcp.mjs\" hook stop --harness claude"
+          }
+        ]
       }
     ]
   }

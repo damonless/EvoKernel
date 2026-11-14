@@ -15,6 +15,7 @@ import {
 } from '../cli/init.js';
 import {
   ALL_HARNESS_ADAPTERS,
+  CodexAdapter,
   detectCascadedTargets,
   parseHarnessTargets,
   removeCodexToml,
@@ -1172,6 +1173,68 @@ describe('EvoKernel Multi-Agent Harness Matrix Suite (Milestone 2)', () => {
       } finally {
         fs.rmSync(ws2, { recursive: true, force: true });
       }
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('15. Fail-closed virtualize --restore preserves entries for corrupt configs & CodexAdapter warns when AGENTS.md exceeds 32 KiB', () => {
+    // 1. DEFECT-MCP-03: Fail-closed virtualize --restore
+    const ws = createTempWorkspace();
+    try {
+      new EvoStorage(ws).ensureInitialized();
+      const mcpJsonPath = path.join(ws, '.mcp.json');
+      const vscDir = path.join(ws, '.vscode');
+      const vscMcpPath = path.join(vscDir, 'mcp.json');
+      fs.mkdirSync(vscDir, { recursive: true });
+      fs.writeFileSync(
+        mcpJsonPath,
+        JSON.stringify({ mcpServers: { broken_target: { command: 'node', args: ['a.mjs'] } } }),
+        'utf8'
+      );
+      fs.writeFileSync(
+        vscMcpPath,
+        JSON.stringify({ servers: { healthy_target: { type: 'stdio', command: 'node', args: ['b.mjs'] } } }),
+        'utf8'
+      );
+
+      const vRes = runVirtualize(ws, { dryRun: false });
+      assert.equal(vRes.servers.length, 2);
+
+      // Corrupt .mcp.json before restore -> must fail closed for broken_target while restoring healthy_target
+      fs.writeFileSync(mcpJsonPath, '{ invalid json !!!', 'utf8');
+      const restoreRes = runVirtualize(ws, { restore: true });
+      assert.ok(Array.isArray(restoreRes.warnings) && restoreRes.warnings.length >= 1);
+
+      const restoredVsc = JSON.parse(fs.readFileSync(vscMcpPath, 'utf8'));
+      assert.ok(restoredVsc.servers.healthy_target, 'Healthy config server must restore');
+
+      const poolAfter = JSON.parse(
+        fs.readFileSync(path.join(ws, '.evo', 'mcp-pool.json'), 'utf8')
+      );
+      assert.ok(poolAfter.mcpServers.broken_target, 'Failed target must remain preserved in mcp-pool.json');
+      assert.equal(poolAfter.mcpServers.healthy_target, undefined, 'Restored target must be removed from mcp-pool.json');
+
+      // 2. DEFECT-CODEX-HARNESS-INSTALL-TRUNCATION-BLINDSPOT: CodexAdapter.install warns when AGENTS.md > 32 KiB
+      const codexWs = path.join(ws, 'codex-large');
+      fs.mkdirSync(codexWs, { recursive: true });
+      new EvoStorage(codexWs).ensureInitialized();
+      fs.writeFileSync(path.join(codexWs, 'AGENTS.md'), '# User Content\n' + 'x'.repeat(33_000) + '\n', 'utf8');
+
+      const warnings: string[] = [];
+      const origWarn = console.warn;
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.map(String).join(' '));
+      };
+      try {
+        new CodexAdapter().install(codexWs, '<!-- EVO:START -->\nCore\n<!-- EVO:END -->\n');
+      } finally {
+        console.warn = origWarn;
+      }
+      assert.ok(
+        warnings.some((w) => /32\s*KiB|32768|project_doc_max_bytes/i.test(w)),
+        `Expected Codex truncation warning, got: ${JSON.stringify(warnings)}`
+      );
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

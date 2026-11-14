@@ -347,12 +347,22 @@ export function parseHookPayloadArg(args: string[]): Record<string, unknown> | u
       return undefined;
     }
   }
-  const toolIdx = args.indexOf('--tool');
-  const fileIdx = args.indexOf('--file');
-  if (toolIdx !== -1 || fileIdx !== -1) {
+  const readFlagValue = (names: string[]): string | undefined => {
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      for (const name of names) {
+        if (a === name && args[i + 1]) return args[i + 1];
+        if (a.startsWith(`${name}=`)) return a.slice(name.length + 1);
+      }
+    }
+    return undefined;
+  };
+  const toolVal = readFlagValue(['--tool', '--tool-name']);
+  const fileVal = readFlagValue(['--file', '--target-file']);
+  if (toolVal !== undefined || fileVal !== undefined) {
     const p: Record<string, unknown> = {};
-    if (toolIdx !== -1 && args[toolIdx + 1]) p.tool_name = args[toolIdx + 1];
-    if (fileIdx !== -1 && args[fileIdx + 1]) p.path = args[fileIdx + 1];
+    if (toolVal !== undefined) p.tool_name = toolVal;
+    if (fileVal !== undefined) p.path = fileVal;
     return p;
   }
   return undefined;
@@ -792,6 +802,7 @@ export function handlePostTool(
       telemetry.setSessionFlag('session_edited_files', '');
       telemetry.setSessionFlag('user_correction_detected', 'false');
       telemetry.setSessionFlag('contested_attributed', 'false');
+      telemetry.setSessionFlag('contested_at', '0');
       telemetry.setSessionFlag('had_command_error', 'false');
       telemetry.setSessionFlag('monotonic_recovery_detected', 'false');
       telemetry.setSessionFlag('dirty_crystallized_id', '');
@@ -897,6 +908,7 @@ export function handlePostTool(
             }
           }
           telemetry.setSessionFlag('contested_attributed', 'true');
+          telemetry.setSessionFlag('contested_at', String(Date.now()));
         }
       }
 
@@ -1063,6 +1075,7 @@ export function handleStop(
     const hadCommandError = telemetry.getSessionFlag('had_command_error') === 'true';
     const monotonicRecovery = telemetry.getSessionFlag('monotonic_recovery_detected') === 'true';
     const contestedAttributed = telemetry.getSessionFlag('contested_attributed') === 'true';
+    const contestedAt = parseInt(telemetry.getSessionFlag('contested_at') || '0', 10);
 
     const pending = telemetry.getSessionFlag('pending_evolution') === 'true';
     const dirtyId = telemetry.getSessionFlag('dirty_crystallized_id');
@@ -1094,13 +1107,21 @@ export function handleStop(
           }
         }
         telemetry.setSessionFlag('contested_attributed', 'true');
+        telemetry.setSessionFlag('contested_at', String(Date.now()));
       } else if (!hasUserCorrection && !hadCommandError) {
-        if (!options.dryRun) {
-          for (const c of recalled) {
+        const toAward = recalled.filter((c) => {
+          const rawAt = (c as unknown as { at?: unknown }).at;
+          const tsMs = typeof rawAt === 'number' ? rawAt : Date.parse(String(c.ts || ''));
+          return !contestedAttributed || (contestedAt > 0 && Number.isFinite(tsMs) && tsMs > contestedAt);
+        });
+        if (!options.dryRun && toAward.length > 0) {
+          for (const c of toAward) {
             recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped', modifiedFiles);
           }
         }
         telemetry.clearRecalledCapabilities();
+        telemetry.setSessionFlag('contested_attributed', 'false');
+        telemetry.setSessionFlag('contested_at', '0');
       }
     }
 
@@ -1345,15 +1366,23 @@ export function handlePreCommit(
     try {
       const hadCommandError = telemetry.getSessionFlag('had_command_error') === 'true';
       const userCorrection = telemetry.getSessionFlag('user_correction_detected') === 'true';
+      const contestedAttributed = telemetry.getSessionFlag('contested_attributed') === 'true';
+      const contestedAt = parseInt(telemetry.getSessionFlag('contested_at') || '0', 10);
       if (!hadCommandError && !userCorrection) {
         if (!options.dryRun) {
-          const recalled = telemetry.getRecalledCapabilities();
+          const recalled = telemetry.getRecalledCapabilities().filter((c) => {
+            const rawAt = (c as unknown as { at?: unknown }).at;
+            const tsMs = typeof rawAt === 'number' ? rawAt : Date.parse(String(c.ts || ''));
+            return !contestedAttributed || (contestedAt > 0 && Number.isFinite(tsMs) && tsMs > contestedAt);
+          });
           const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
           for (const c of recalled) {
             recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped', sessionModifiedFiles);
           }
         }
         telemetry.clearRecalledCapabilities();
+        telemetry.setSessionFlag('contested_attributed', 'false');
+        telemetry.setSessionFlag('contested_at', '0');
       }
     } finally {
       telemetry.close();
@@ -1431,6 +1460,7 @@ export function runHook(
                 }
               }
               telemetry.setSessionFlag('contested_attributed', 'true');
+              telemetry.setSessionFlag('contested_at', String(Date.now()));
             }
           } finally {
             telemetry.close();

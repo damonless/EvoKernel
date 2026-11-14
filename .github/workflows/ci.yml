@@ -44,9 +44,12 @@ jobs:
           node ./dist/cli/index.js memory verify
 
       - name: "Smoke Test: Run Score and UI Export"
+        shell: bash
         run: |
           node ./dist/cli/index.js score --json
           node ./dist/cli/index.js ui --export ./evo-cockpit.html
+          test -s ./evo-cockpit.html
+          rm -f ./evo-cockpit.html
 
       - name: "Verify npm Tarball Allowlist (npm pack --dry-run --json)"
         shell: bash
