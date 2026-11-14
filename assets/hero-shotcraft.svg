@@ -164,7 +164,7 @@
   <g id="top-bar">
     <rect x="24" y="16" width="330" height="34" rx="17" fill="rgba(10,16,28,0.85)" stroke="rgba(255,255,255,0.12)"/>
     <circle cx="42" cy="33" r="4.5" fill="#10b981" filter="url(#glowEmerald)"/>
-    <text x="56" y="38" class="sans" font-size="13" font-weight="800" fill="#ffffff" letter-spacing="-0.01em">🧬 EvoKernel v0.3.0</text>
+    <text x="56" y="38" class="sans" font-size="13" font-weight="800" fill="#ffffff" letter-spacing="-0.01em">🧬 EvoKernel v0.4.0</text>
     <text x="212" y="38" class="mono" font-size="11" font-weight="600" fill="#34d399">· META-KERNEL</text>
 
     <!-- Multi-Harness Badges -->
@@ -434,7 +434,7 @@
 
       <text x="24" y="32" class="mono" font-size="11" font-weight="800" fill="#94a3b8" letter-spacing="0.08em">KERNEL HEALTH &amp; ANTI-DRIFT GAUGE</text>
       <rect x="424" y="16" width="130" height="22" rx="11" fill="rgba(56,189,248,0.12)" stroke="rgba(56,189,248,0.35)"/>
-      <text x="440" y="31" class="mono" font-size="10.5" font-weight="700" fill="#38bdf8">GRADE A+ (96/100)</text>
+      <text x="440" y="31" class="mono" font-size="10.5" font-weight="700" fill="#38bdf8">GRADE A+ (100/100)</text>
 
       <!-- Circular Radial Gauge (needle-sweep-selftest with Rule R1 >=1.5s Settle Breathing) -->
       <g transform="translate(24, 46)">
@@ -453,7 +453,7 @@
           </g>
           <!-- Gauge Center Readout with Settle Breathing -->
           <g class="gauge-readout">
-            <text x="65" y="60" class="mono" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle">96</text>
+            <text x="65" y="60" class="mono" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle">100</text>
             <text x="65" y="78" class="mono" font-size="12" font-weight="700" fill="#34d399" text-anchor="middle">GRADE A+</text>
             <text x="65" y="94" class="sans" font-size="9" fill="#94a3b8" text-anchor="middle">CONTEXT INDEX</text>
           </g>
@@ -466,8 +466,8 @@
         <g transform="translate(0, 0)">
           <rect width="378" height="30" rx="7" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)"/>
           <circle cx="16" cy="15" r="4" fill="#10b981"/>
-          <text x="28" y="19" fill="#e2e8f0" font-weight="600">36/36 AST* Memories [VERIFIED]</text>
-          <text x="364" y="19" fill="#34d399" font-weight="700" text-anchor="end">~0.32ms</text>
+          <text x="28" y="19" fill="#e2e8f0" font-weight="600">41/41 AST* Memories [VERIFIED]</text>
+          <text x="364" y="19" fill="#34d399" font-weight="700" text-anchor="end">~1.2ms</text>
         </g>
         <!-- Row 2 -->
         <g transform="translate(0, 36)">

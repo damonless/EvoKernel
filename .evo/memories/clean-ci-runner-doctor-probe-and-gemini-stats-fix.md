@@ -9,9 +9,8 @@ ast_fingerprints: {"src/cli/index.ts#extractLaunchTargetFromEntry":{"symbol":"sr
 tags: ["ci","doctor","mcp-probe","windows-cmd","score","gemini","favicon"]
 origin: "evolved"
 supersedes_id: "clean-ci-runner-doctor-probe-and-gemini-stats-fix"
-review_status: "pending"
 created_at: "2026-11-11T08:12:29.700Z"
-updated_at: "2026-11-14T03:52:05.686Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Symptom

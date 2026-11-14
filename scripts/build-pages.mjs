@@ -414,7 +414,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
     <div class="container topbar-inner">
       <div class="brand">
         <span>🧬 EvoKernel</span>
-        <span class="brand-badge">v0.3.0</span>
+        <span class="brand-badge">v0.4.0</span>
       </div>
       <nav class="nav-links">
         <a href="#pillars" data-i18n="navFeatures">Capabilities</a>

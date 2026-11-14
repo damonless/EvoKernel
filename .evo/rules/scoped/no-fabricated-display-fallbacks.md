@@ -9,9 +9,8 @@ tokens: 360
 origin: "evolved"
 confidence: "high"
 transfer_scenarios: ["Workbench HTML dashboard KPI cards rendering health/savings when snapshot fields are absent","Terminal stats/doctor/score renderers printing pass rates, cache stability, or enabled hosts on empty workspaces","README badges and promo SVGs quoting benchmark numbers that drift from the generated benchmark JSON"]
-review_status: "pending"
 created_at: "2026-11-07T18:55:21.249Z"
-updated_at: "2026-11-07T18:55:21.249Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Guardrail

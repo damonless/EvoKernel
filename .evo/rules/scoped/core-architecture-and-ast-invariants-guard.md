@@ -11,9 +11,8 @@ supersedes_id: "core-architecture-and-ast-invariants-guard"
 confidence: "high"
 contrastive_evidence: "Before: sandbox --self-test permitted workspace file writes, deduplication only compared title+l0_summary headers, and logging/string edits invalidated AST memory hashes. After: pre/post workspace tree signatures reject mutating --self-test runs, hybrid body+IDF similarity blocks duplicate rule/tool bodies with rewritten headers, and control-flow structural skeleton hashes preserve VERIFIED status across log/comment edits."
 transfer_scenarios: ["Validating sandbox micro-tool dry-runs and semantic capability deduplication in src/core/gatekeeper.ts and src/core/telemetry.ts","Verifying multi-branch AST symbol freshness and structural skeleton hashes in src/core/memory.ts"]
-review_status: "pending"
 created_at: "2026-10-26T05:50:00.000Z"
-updated_at: "2026-11-07T19:10:49.285Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 When modifying kernel lifecycle handlers, workspace telemetry analyzers, or AST symbol grounding pipelines:

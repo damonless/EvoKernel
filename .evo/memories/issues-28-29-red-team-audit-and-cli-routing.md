@@ -9,9 +9,8 @@ ast_fingerprints: {"src/core/gatekeeper.ts#captureWorkspaceRollbackSnapshot":{"s
 tags: ["red-team-audit","sandbox-rollback","worktree-reuse","ast-engine","lexicon","cli-routing","mcp-bootstrap"]
 origin: "evolved"
 supersedes_id: "issues-28-29-red-team-audit-and-cli-routing"
-review_status: "pending"
 created_at: "2026-11-10T16:31:10.698Z"
-updated_at: "2026-11-14T03:52:07.035Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Symptom

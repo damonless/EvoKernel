@@ -8,9 +8,8 @@ target_symbols: ["src/core/sandbox.ts#executeSandboxedScriptAsync","src/core/mem
 ast_fingerprints: {"src/core/sandbox.ts#executeSandboxedScriptAsync":{"symbol":"src/core/sandbox.ts#executeSandboxedScriptAsync","file_path":"src/core/sandbox.ts","file":"src/core/sandbox.ts","kind":"function","start_line":447,"end_line":527,"signature":"export function executeSandboxedScriptAsync(","ast_hash":"13c270ca64304c39"},"src/core/memory.ts#findPythonBlockEnd":{"symbol":"src/core/memory.ts#findPythonBlockEnd","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":2388,"end_line":2535,"signature":"export function findPythonBlockEnd(","ast_hash":"4c4c33b385d3213f"},"src/core/gatekeeper.ts#isValidContrastiveEvidence":{"symbol":"src/core/gatekeeper.ts#isValidContrastiveEvidence","file_path":"src/core/gatekeeper.ts","file":"src/core/gatekeeper.ts","kind":"function","start_line":77,"end_line":236,"signature":"export function isValidContrastiveEvidence(","ast_hash":"30bd8158a2a77b81"},"src/cli/hook.ts#isCapabilityRelevantToModifiedFiles":{"symbol":"src/cli/hook.ts#isCapabilityRelevantToModifiedFiles","file_path":"src/cli/hook.ts","file":"src/cli/hook.ts","kind":"function","start_line":14,"end_line":75,"signature":"export function isCapabilityRelevantToModifiedFiles(","ast_hash":"23b98859fa388c7a"},"src/cli/score.ts#isExcludedGitHotspotPath":{"symbol":"src/cli/score.ts#isExcludedGitHotspotPath","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":412,"end_line":430,"signature":"export function isExcludedGitHotspotPath(filePath: string): boolean","ast_hash":"bf855f764a1ef66b"}}
 tags: ["issue-25","sandbox","ast-parser","mcp","attribution","optimize"]
 origin: "evolved"
-review_status: "pending"
 created_at: "2026-11-07T06:19:27.206Z"
-updated_at: "2026-11-14T03:52:06.461Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Symptom

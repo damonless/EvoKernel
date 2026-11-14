@@ -18,7 +18,7 @@ import type {
   SymbolFingerprint,
 } from './types.js';
 
-export const EVO_KERNEL_VERSION = '0.3.0';
+export const EVO_KERNEL_VERSION = '0.4.0';
 
 /**
  * Measured token footprint of the immutable 5-tool Meta-MCP JSON Schema

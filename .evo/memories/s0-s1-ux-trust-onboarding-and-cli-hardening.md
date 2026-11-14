@@ -9,9 +9,8 @@ ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"sr
 tags: ["ux","workbench","trust","cli","onboarding","mcp"]
 origin: "evolved"
 supersedes_id: "ux-audit-fabricated-fallbacks-and-pages-leak"
-review_status: "pending"
 created_at: "2026-11-07T18:55:36.052Z"
-updated_at: "2026-11-14T03:52:07.428Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Symptom

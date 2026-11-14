@@ -8,9 +8,8 @@ target_symbols: ["src/cli/audit.ts#discoverAuditableFiles","src/cli/audit.ts#aud
 ast_fingerprints: {"src/cli/audit.ts#discoverAuditableFiles":{"symbol":"src/cli/audit.ts#discoverAuditableFiles","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":211,"end_line":345,"signature":"function discoverAuditableFiles(","ast_hash":"dff7b9a396746432"},"src/cli/audit.ts#auditHarnessSurfaces":{"symbol":"src/cli/audit.ts#auditHarnessSurfaces","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":372,"end_line":816,"signature":"export function auditHarnessSurfaces(","ast_hash":"8a2d44b4b64e1d39"},"src/cli/audit.ts#runAudit":{"symbol":"src/cli/audit.ts#runAudit","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":821,"end_line":1177,"signature":"export function runAudit(workspaceRoot: string, options: AuditOptions = {}): AuditReport","ast_hash":"256f1c8e2c7542c2"}}
 tags: ["audit","global-rules","agy-config-auditor","hook-concurrency"]
 origin: "evolved"
-review_status: "pending"
 created_at: "2026-11-08T16:58:49.823Z"
-updated_at: "2026-11-11T08:48:09.749Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Symptom

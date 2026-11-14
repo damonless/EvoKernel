@@ -9,13 +9,13 @@
 
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
 [![EvoKernel Workbench Demo](https://img.shields.io/badge/EvoKernel_Workbench-在线交互演示-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/demo/)
-[![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-96%2F100_(A%2B)-34d399?style=flat-square)](#-30-秒极速上手)
-[![Version](https://img.shields.io/badge/npm-v0.3.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
+[![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-100%2F100_(A%2B)-34d399?style=flat-square)](#-30-秒极速上手)
+[![Version](https://img.shields.io/badge/npm-v0.4.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#-零依赖原生架构)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#-核心架构5-个固定元工具原语)
-[![Tests](https://img.shields.io/badge/tests-325%2B%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
+[![Tests](https://img.shields.io/badge/tests-336%20通过%20%7C%2011%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 
 **[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 产品主页](https://damonless.github.io/EvoKernel/) · [🖥️ 在线交互式工作台 (EvoKernel Workbench)](https://damonless.github.io/EvoKernel/demo/) · [📊 基准评测 (Benchmarks)](benchmarks/README.md)**
 
@@ -149,7 +149,7 @@ EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数
 | **50 轮累计输入 Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% 累计负载** |
 | **50 轮账单成本 (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **节省 70.4% API 成本** |
 | **50 轮账单成本 (Claude Opus 4.5)** | \$5.76 | **\$1.70** | **节省 70.4% API 成本** |
-| **本地引擎 AST 校验速率** | 无校验（重构后静默腐败） | **~0.32 ms / 条记忆** | **<12ms 批量校验 36 条记忆¹** |
+| **本地引擎 AST 校验速率** | 无校验（重构后静默腐败） | **~1.2 ms / 条记忆** | **~49ms 批量校验 41 条记忆¹** |
 
 > ¹ *术语说明：* AST 防漂移/符号指纹采用**零依赖词法-结构骨架指纹（Zero-Dep Lexical-Structural Skeleton Fingerprinting）**，无需外部重型编译器即可对注释修改、代码格式化和行号漂移天然免疫。
 
@@ -180,7 +180,7 @@ EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数
 
 <br/>
 
-| 对比维度 | `MemGPT / Letta` | `Aider` | 传统 MCP 代理 (直通型) | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.3.0 (本项目)** |
+| 对比维度 | `MemGPT / Letta` | `Aider` | 传统 MCP 代理 (直通型) | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.4.0 (本项目)** |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **核心定位** | 有状态对话 Agent 记忆数据库 | Git 驱动的终端结对编程工具 | 聚合多个 MCP 端口的直通桥梁 | 静态工程提示词与规则合集 | 后台 LLM 演化学习 Agent | **面向 AI 编程智能体的确定性自演进元内核** |
 | **接入形态** | 依赖外部服务 / Postgres / 独立进程 | 独立 Python CLI 替代主流 IDE | 暴露所有子工具到 host tools/list | 静态预置 Markdown 模板 | 劫持 `/v1/chat` 本地反向代理 | **寄生型单一 Meta-MCP + <80行元规则种子注入既有 IDE** |
@@ -344,7 +344,7 @@ npx evo-kernel check report.xlsx --json   # 面向 CI 流水线的结构化 JSON
 │   ├── [NODE] deliverable-canonical-inspector (runs: 18 | pass: 100%) — Zero-dep validator for .xlsx, .docx, .pptx, CSV, JSON, MD.
 │   ├── [NODE] git-hotspot-analyzer (runs: 5 | pass: 100%) — Identifies top 10 frequently modified files in recent git history.
 │   └── [NODE] workspace-metrics-scanner (runs: 13 | pass: 100%) — Scans file counts, LOC, and extension distribution.
-└── 🧠 Episodic Memories (36 fault cases | 36 VERIFIED · 0 STALE)
+└── 🧠 Episodic Memories (41 fault cases | 41 VERIFIED · 0 STALE)
     ├── [VERIFIED] audit-broken-refs-and-hook-param-fix (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] cli-help-zero-side-effect-isolation (confidence: HIGH | symbols: 2/2 fresh)
     ├── [VERIFIED] codex-hooks-corrupt-file-unlink (confidence: HIGH | symbols: 2/2 fresh)
@@ -356,7 +356,7 @@ npx evo-kernel check report.xlsx --json   # 面向 CI 流水线的结构化 JSON
     ├── [VERIFIED] multi-harness-cascaded-detection-and-reversible-teardown (confidence: HIGH | symbols: 8/8 fresh)
     ├── [VERIFIED] s0-s1-ux-trust-onboarding-and-cli-hardening (confidence: HIGH | symbols: 5/5 fresh)
     ├── [VERIFIED] s1-s3-workbench-ci-and-anon-parity (confidence: HIGH | symbols: 4/4 fresh)
-    └── ... (+25 additional AST-verified fault cases)
+    └── ... (+30 additional AST-verified fault cases)
 ```
 
 </details>
@@ -372,7 +372,7 @@ EvoKernel 配备了基于 Node 原生测试运行器（`node:test`）的零外�
 node ./scripts/test.mjs
 ```
 
-**325+ 项单元与集成测试、11 个测试套件，在 ~21 秒内 100% 通过（0 失败）：**
+**336 项单元与集成测试、11 个测试套件，在 ~21 秒内 100% 通过（0 失败）：**
 
 <details>
 <summary><b>🔍 查看全部 11 个验证测试套件清单（点击展开）</b></summary>
@@ -382,14 +382,14 @@ node ./scripts/test.mjs
 | 1 | `dist/tests/bootstrap.test.js` | 仓库冷启动与多技术栈基因挖掘测试套件 | 22 tests |
 | 2 | `dist/tests/causal-telemetry-and-catalog.test.js` | 因果遥测、成效归因与动态目录测试套件 | 18 tests |
 | 3 | `dist/tests/deliverable-inspector.test.js` | 零依赖交付物规范消费核检器测试套件 | 33 tests |
-| 4 | `dist/tests/evo-kernel.test.js` | 核心沙盒门禁、AST 认知记忆与架构不变式测试套件 | 49 tests |
+| 4 | `dist/tests/evo-kernel.test.js` | 核心沙盒门禁、AST 认知记忆与架构不变式测试套件 | 54 tests |
 | 5 | `dist/tests/hook.test.js` | 通用生命周期 Hook 路由与管道 Stdin 非阻塞弹性测试套件 | 31 tests |
 | 6 | `dist/tests/lifecycle-guard-hooks.test.js` | 门禁触发词、前置阻断与引用完整性测试套件 | 27 tests |
 | 7 | `dist/tests/mcp-proxy.test.js` | 下游 MCP 代理与动态虚拟化测试套件 | 10 tests |
 | 8 | `dist/tests/multi-harness.test.js` | 10 款智能体宿主多环境级联探测与安装测试套件 | 14 tests |
 | 9 | `dist/tests/optimize.test.js` | 离线 Git Worktree 能力演进优化循环测试套件 | 21 tests |
-| 10 | `dist/tests/score-and-ui.test.js` | 体检评分、EvoKernel Workbench 工作台与交互 API、热身与快捷指令套件 | 28 tests |
-| 11 | `dist/tests/surface-audit-and-hardening.test.js` | 多宿主静默失败表面审计矩阵与 S0-S3 全链路加固测试套件 | 70+ tests |
+| 10 | `dist/tests/score-and-ui.test.js` | 体检评分、EvoKernel Workbench 工作台与交互 API、热身与快捷指令套件 | 30 tests |
+| 11 | `dist/tests/surface-audit-and-hardening.test.js` | 多宿主静默失败表面审计矩阵与 S0-S3 全链路加固测试套件 | 76 tests |
 
 </details>
 

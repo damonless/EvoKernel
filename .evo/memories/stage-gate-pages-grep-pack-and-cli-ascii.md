@@ -9,9 +9,8 @@ ast_fingerprints: {"src/cli/term.ts#toAsciiOutput":{"symbol":"src/cli/term.ts#to
 tags: ["ci","packaging","cli","ascii","pages","hooks","mcp-bootstrap"]
 origin: "evolved"
 supersedes_id: "stage-gate-pages-grep-pack-and-cli-ascii"
-review_status: "pending"
 created_at: "2026-11-11T07:11:12.338Z"
-updated_at: "2026-11-14T03:52:07.803Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Symptom

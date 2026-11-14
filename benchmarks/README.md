@@ -24,7 +24,7 @@ EvoKernel folds the 77 tools + monolithic knowledge base behind **5 fixed meta-t
 | **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% total tokens** |
 | **50-Turn Cost (Claude Sonnet 4.5)** | $1.15 | **$0.34** | **-70.4% API cost** |
 | **50-Turn Cost (Claude Opus 4.5)** | $5.76 | **$1.70** | **-70.4% API cost** |
-| **AST Memory Verification Latency¹** | N/A (Unverified text) | **~0.32 ms / memory** | **Deterministic AST Grounding** |
-| **Full Repo X-Ray Score Calculation** | N/A | **~25 ms** | **Zero-Overhead Local Audit** |
+| **AST Memory Verification Latency¹** | N/A (Unverified text) | **~1.2 ms / memory** | **~49 ms batch across 41 memories** |
+| **Full Repo X-Ray Score Calculation** | N/A | **~369 ms** | **Score: 100/100 (A+)** |
 
 > ¹ *AST Terminology Note:* "AST" refers to EvoKernel's zero-dependency lexical-structural skeleton & call-anchor fingerprinting (`src/core/memory.ts`), immune to comments, formatting, and line-number drift without external compiler packages.

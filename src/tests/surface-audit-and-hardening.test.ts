@@ -4229,7 +4229,7 @@ process.exit(hasRule ? 0 : 1);
         path.join(fakeHome, '.gemini', 'settings.json'),
         JSON.stringify({
           mcpServers: {
-            'evo-kernel': { command: 'npx', args: ['-y', 'evo-kernel@0.3.0', 'mcp'] },
+            'evo-kernel': { command: 'npx', args: ['-y', `evo-kernel@${EVO_KERNEL_VERSION}`, 'mcp'] },
           },
         }),
         'utf8'
@@ -4245,7 +4245,7 @@ process.exit(hasRule ? 0 : 1);
         path.join(fakeHome, '.codeium', 'windsurf', 'mcp_config.json'),
         JSON.stringify({
           mcpServers: {
-            'evo-kernel': { command: 'npx', args: ['-y', 'evo-kernel@0.3.0', 'mcp'] },
+            'evo-kernel': { command: 'npx', args: ['-y', `evo-kernel@${EVO_KERNEL_VERSION}`, 'mcp'] },
           },
         }),
         'utf8'
@@ -4492,7 +4492,7 @@ process.exit(hasRule ? 0 : 1);
         path.join(ws, '.mcp.json'),
         JSON.stringify({
           mcpServers: {
-            'evo-kernel': { command: 'npx', args: ['-y', 'evo-kernel@0.3.0', 'mcp'] },
+            'evo-kernel': { command: 'npx', args: ['-y', `evo-kernel@${EVO_KERNEL_VERSION}`, 'mcp'] },
             'internal-corp-postgres': { command: 'node', args: ['/Users/alice/.corp/mcp-pg.js'] },
           },
         }),
@@ -5659,8 +5659,8 @@ process.exit(hasRule ? 0 : 1);
       const validPackJson = path.join(tmpPackDir, 'valid-pack.json');
       fs.writeFileSync(
         validPackJson,
-        `> evo-kernel@0.3.0 prepack\n> node ./scripts/build.mjs\n\nBuilt dist/ from src/.\n${JSON.stringify(
-          [{ id: 'evo-kernel@0.3.0', files: realPackedFiles }],
+        `> evo-kernel@${EVO_KERNEL_VERSION} prepack\n> node ./scripts/build.mjs\n\nBuilt dist/ from src/.\n${JSON.stringify(
+          [{ id: `evo-kernel@${EVO_KERNEL_VERSION}`, files: realPackedFiles }],
           null,
           2
         )}\nnpm notice New minor version of npm available!\n`,
@@ -5677,7 +5677,7 @@ process.exit(hasRule ? 0 : 1);
         const leakPackJson = path.join(tmpPackDir, 'leak-pack.json');
         fs.writeFileSync(
           leakPackJson,
-          JSON.stringify([{ id: 'evo-kernel@0.3.0', files: [...realPackedFiles, { path: badPath }] }]),
+          JSON.stringify([{ id: `evo-kernel@${EVO_KERNEL_VERSION}`, files: [...realPackedFiles, { path: badPath }] }]),
           'utf8'
         );
         const leakCiRes = child_process.spawnSync(process.execPath, ['-e', ciValidatorCode], {

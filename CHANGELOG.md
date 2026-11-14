@@ -2,6 +2,27 @@
 
 All notable changes to **EvoKernel (`evo-kernel`)** will be documented in this file.
 
+## [0.4.0] - 2026-11-15
+
+### Added
+- **EvoKernel Workbench 2.0/2.1/2.2 Overhaul & Native Window Launcher (`evo ui`)**: Overhauled industrial-grade dark-mode Workbench with interactive SVG Memory & Symbol Topology Constellation, 2D Proportional Context Budget Treemap, `/api/action` Control API for in-browser capability mutation and re-audit, and `--desktop`/`--app` native micro-window launcher with automatic platform app wrapper detection and browser fallback.
+- **Zero-Dependency Deliverable Verification CLI (`evo check`)**: Standalone deliverable conformance CLI verifying `.xlsx`, `.docx`, `.pptx`, CSV, JSON/JSONL, and Markdown files against strict canonical standards without external office, python, or heavy npm dependencies.
+- **S0–S3 Golden Onboarding Path & Live 5-Tool MCP Doctor Handshake (`evo doctor`, `evo init`)**: Deterministic diagnostic pipeline executing live stdio JSON-RPC handshake against the 5 fixed meta-tools (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`), validating version parity, detecting stale/ephemeral `_npx` cache paths, and providing structured next steps.
+- **Observable Recall Provenance & Telemetry Ledger (`evo stats`)**: Granular `recall_events` attribution tracking incremental `search`, `inspect`, and `run` invocations across sessions with visible 1-line recall receipts (`🛡️ EvoKernel Recall`), eliminating ghost hits and unverified backfills.
+- **VS Code Cockpit Extension (`damonless.evo-kernel-cockpit`)**: Official companion extension featuring parent/umbrella and `git:` diff workspace resolution, quick-pick action bar, live AST status indicators, and reversible `--unmount-ide` harness isolation.
+- **Expanded AST Episodic Memories**: Added verified memories for multi-harness edge cases, ghost workspace SQLite locks, and lexical AST parser resilience, bringing repository memory coverage to 41/41 AST-verified fault cases (`41/41 VERIFIED · 0 STALE`).
+
+### Changed
+- **`evo_propose` Gatekeeper Hardening & Anti-Poisoning**: Enforced schema inheritance verification, AST anti-poisoning guards, `skeleton_hash` validation, and a `low_overlap` filter to prevent low-signal rule fragmentation while maintaining the strict 1,500-token core rule budget.
+- **10-Harness Matrix Isolation**: Hardened lossless integration across Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, and Antigravity, preventing cross-harness config contamination and silent registration failures.
+- **Comprehensive Verification Suite**: Expanded zero-dependency test suite to 336 tests across 11 test suites passing deterministically with 0 failures (`336 passed | 11 suites`).
+- **Context Health Score**: Attained perfect 100/100 (A+) context health grade with ~1.2ms live AST memory verification latency.
+
+### Fixed
+- **Windows `cmd.exe` Caret Escaping & Version-Pinned MCP Launcher (`boot-mcp.mjs`)**: Escaped Windows `%VAR%` variables and cmd.exe carets during MCP process invocation; pinned exact `evo-kernel` package version in boot scripts to prevent version mismatch drift.
+- **Multi-Language Lexical AST Parser & Non-ASCII Rollback**: Hardened lexical skeleton fingerprinting across polyglot C/C++, TypeScript, Rust, and Python codebases; guaranteed clean unlinking and rollback of untracked non-ASCII files upon test/sandbox failures.
+- **Cross-Platform CI & Positive Tarball Allowlists**: Enforced strict positive allowlists in `package.json` `files` and GitHub Actions CI workflows, preventing dev scripts, test fixtures, and internal benchmarks from leaking into the published npm tarball.
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

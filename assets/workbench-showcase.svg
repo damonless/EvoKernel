@@ -36,7 +36,7 @@
     <!-- App Brand -->
     <text x="84" y="26" fill="#fafafa" font-size="13" font-weight="700" letter-spacing="-0.01em">EvoKernel Workbench</text>
     <rect x="228" y="14" width="46" height="18" rx="4" fill="rgba(16,185,129,0.14)" stroke="rgba(16,185,129,0.3)"/>
-    <text x="251" y="26" text-anchor="middle" fill="#34d399" font-size="9.5" font-weight="700" font-family="'Cascadia Code', 'SF Mono', monospace">v0.3.0</text>
+    <text x="251" y="26" text-anchor="middle" fill="#34d399" font-size="9.5" font-weight="700" font-family="'Cascadia Code', 'SF Mono', monospace">v0.4.0</text>
 
     <!-- Global Search Input (Ctrl+K / Cmd+K) -->
     <g transform="translate(400, 9)">

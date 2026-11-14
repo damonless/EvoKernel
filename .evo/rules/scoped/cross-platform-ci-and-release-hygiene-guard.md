@@ -10,9 +10,8 @@ origin: "evolved"
 confidence: "high"
 contrastive_evidence: "Before: POSIX path.isAbsolute missed C:/ _npx paths on Linux CI, grep -rnE matched binary PNG bytes in public/ and broke Pages CI, !negation in package.json#files had undefined npm behavior, and pre-refresh asset renders froze stale memory counts. After: OS-neutral drive prefix check + -rnIE binary-safe grep + positive files allowlist + refresh-before-render passed 329/329 tests and 0 leak/audit violations."
 transfer_scenarios: ["Validating serialized Windows or POSIX executable paths inside cross-platform CLI doctor and config migration tools running on Linux CI runners.","Running automated regex secret/path leak gates and npm tarball allowlist checks over static site outputs containing rendered PNG/WebP screenshots."]
-review_status: "pending"
 created_at: "2026-11-11T07:53:24.313Z"
-updated_at: "2026-11-11T07:53:24.313Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 When implementing cross-platform CLI diagnostics, static web/documentation exporters, CI leak scanners, or package release manifests:

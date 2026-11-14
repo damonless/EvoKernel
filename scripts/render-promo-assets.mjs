@@ -47,7 +47,7 @@ const benchRaw = execFileSync(
   { cwd: repoRoot, encoding: 'utf8' }
 );
 const bench = JSON.parse(benchRaw).benchmark;
-const pkgVersion = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version || '0.3.0';
+const pkgVersion = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version || '0.4.0';
 
 // 1. Update SVG diagnostic card (`assets/terminal-score-xray.svg`) with anon=true (zero path leaks)
 const scoreReport = buildScoreReport(repoRoot, { anon: true });

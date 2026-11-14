@@ -590,7 +590,7 @@ Widget issue
       fs.writeFileSync(
         path.join(evoDir, 'mcp-pool.json'),
         JSON.stringify({
-          version: '0.3.0',
+          version: EVO_KERNEL_VERSION,
           updatedAt: '2026-11-01T00:00:00.000Z',
           mcpServers: {
             github: { command: 'npx', args: ['@modelcontextprotocol/server-github'] },
@@ -756,7 +756,7 @@ Widget issue
         timeout: 5000,
       });
       assert.equal(verProc.status, 0, 'evo version must exit with 0');
-      assert.ok(verProc.stdout.includes('0.3.0'), 'evo version must print 0.3.0');
+      assert.ok(verProc.stdout.includes(EVO_KERNEL_VERSION), `evo version must print ${EVO_KERNEL_VERSION}`);
       assert.deepEqual(fs.readdirSync(emptyDir), [], 'evo version created 0 files or directories');
 
       // 5. evo init -h with other flags

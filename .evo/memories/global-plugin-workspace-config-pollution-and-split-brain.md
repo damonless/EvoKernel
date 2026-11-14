@@ -9,9 +9,8 @@ ast_fingerprints: {"src/core/storage.ts#isHostGlobalConfigDir":{"symbol":"src/co
 tags: ["global-config","plugin","split-brain","token-budget","multi-harness","audit"]
 origin: "evolved"
 supersedes_id: "global-plugin-workspace-config-pollution-and-split-brain"
-review_status: "pending"
 created_at: "2026-11-07T19:44:28.033Z"
-updated_at: "2026-11-14T03:52:06.316Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Symptom

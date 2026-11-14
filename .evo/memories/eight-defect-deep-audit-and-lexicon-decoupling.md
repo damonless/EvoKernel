@@ -9,9 +9,8 @@ ast_fingerprints: {"src/core/memory.ts#findBraceBlockEnd":{"symbol":"src/core/me
 tags: ["ast-engine","lexicon-decoupling","telemetry-sync","sandbox-rollback","mcp-proxy","gatekeeper-security"]
 origin: "evolved"
 supersedes_id: "eight-defect-deep-audit-and-lexicon-decoupling"
-review_status: "pending"
 created_at: "2026-11-08T17:52:31.075Z"
-updated_at: "2026-11-14T03:52:06.011Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 ## Symptom

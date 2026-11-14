@@ -1,4 +1,4 @@
-# VHS tape recording for EvoKernel v0.3.0 Live Demo
+# VHS tape recording for EvoKernel v0.4.0 Live Demo
 Output assets/demo.gif
 
 Set FontSize 15

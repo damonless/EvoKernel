@@ -11,9 +11,8 @@ supersedes_id: "workspace-isolation-and-fts5-guard"
 confidence: "high"
 contrastive_evidence: "src/core/storage.ts:isHostGlobalConfigDir and src/mcp/handlers.ts:isHostGlobalConfigDir route host global config workspaces to ~/.evo/global instead of creating local .evo/ directories."
 transfer_scenarios: ["Auditing global vs workspace capability roots without double-counting violations or misflagging multi-harness distribution files","Preventing repo-anchored scope globs and duplicate managed blocks in user-global rule directories"]
-review_status: "pending"
 created_at: "2026-10-15T17:25:28.446Z"
-updated_at: "2026-11-08T16:59:19.507Z"
+updated_at: "2026-11-14T17:15:20.428Z"
 ---
 
 When managing workspace boundaries, stealth exclusions, telemetry indexing, or search retrieval:

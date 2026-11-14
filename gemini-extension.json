@@ -1,6 +1,6 @@
 {
   "name": "evo-kernel",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Deterministic Self-Evolving Meta-Kernel & Zero-Dep Lexical-Structural Symbol Fingerprinting with Offline Worktree Evolution, Deliverable Inspection, and Fixed 5-Tool Meta-MCP Gateway for AI Coding Agents",
   "contextFileName": "templates/GEMINI.extension.md",
   "mcpServers": {
