@@ -1563,25 +1563,83 @@ console.log(JSON.stringify({ score: hasGood ? 10 : 1 }));
       );
 
       // 4. DEFECT-BUILD-FOREIGN-CWD-DATA-LOSS & DEFECT-BUILD-GLOBAL-HOST-POLLUTION:
-      // scripts/build.mjs run from foreign cwd must not wipe foreign cwd/dist or touch global dir without EVO_SYNC_GLOBAL=1
+      // Isolated mockRepoDir fixture so scripts/build.mjs never wipes live <repo>/dist mid-parallel-test-run.
       const foreignCwd = path.join(rootTmp, 'foreign-cwd');
       const foreignKeepFile = path.join(foreignCwd, 'dist', 'keep.txt');
       const fakeGlobalDir = path.join(rootTmp, 'fake-global');
+      const mockRepoDir = path.join(rootTmp, 'mock-evo-repo');
+      const mockBuildScript = path.join(mockRepoDir, 'scripts', 'build.mjs');
+      const realBuildScript = path.resolve(process.cwd(), 'scripts', 'build.mjs');
+      const realSeedRule = path.resolve(process.cwd(), '.evo', 'rules', 'gatekeeper-self-test-invariant.md');
+
       fs.mkdirSync(path.dirname(foreignKeepFile), { recursive: true });
       fs.mkdirSync(fakeGlobalDir, { recursive: true });
+      fs.mkdirSync(path.join(mockRepoDir, 'scripts'), { recursive: true });
+      fs.mkdirSync(path.join(mockRepoDir, 'src', 'cli'), { recursive: true });
+      fs.mkdirSync(path.join(mockRepoDir, '.evo', 'rules'), { recursive: true });
       fs.writeFileSync(foreignKeepFile, 'DO_NOT_DELETE', 'utf8');
+      fs.writeFileSync(
+        path.join(mockRepoDir, 'package.json'),
+        JSON.stringify({ name: 'evo-kernel', version: '0.4.0' }),
+        'utf8'
+      );
+      fs.copyFileSync(realBuildScript, mockBuildScript);
+      fs.writeFileSync(
+        path.join(mockRepoDir, 'src', 'cli', 'index.ts'),
+        'export const ok: boolean = true;\n',
+        'utf8'
+      );
+      const mockRuleContent = fs.readFileSync(realSeedRule, 'utf8');
+      fs.writeFileSync(
+        path.join(mockRepoDir, '.evo', 'rules', 'gatekeeper-self-test-invariant.md'),
+        mockRuleContent,
+        'utf8'
+      );
 
-      const buildScript = path.resolve(process.cwd(), 'scripts', 'build.mjs');
+      // 4a. Without EVO_SYNC_GLOBAL=1, running from foreignCwd builds mockRepoDir/dist cleanly and never touches foreignCwd/dist or fakeGlobalDir
       const buildEnv = { ...process.env, EVO_GLOBAL_DIR: fakeGlobalDir };
       delete (buildEnv as Record<string, string | undefined>).EVO_SYNC_GLOBAL;
-      const buildProc = child_process.spawnSync(process.execPath, [buildScript], {
+      const buildProc = child_process.spawnSync(process.execPath, [mockBuildScript], {
         cwd: foreignCwd,
         env: buildEnv,
         encoding: 'utf8',
       });
       assert.equal(buildProc.status, 0, buildProc.stderr);
+      assert.equal(fs.existsSync(path.join(mockRepoDir, 'dist', 'cli', 'index.js')), true);
       assert.equal(fs.readFileSync(foreignKeepFile, 'utf8'), 'DO_NOT_DELETE');
       assert.deepEqual(fs.readdirSync(fakeGlobalDir), []);
+
+      // 4b. With EVO_SYNC_GLOBAL=1, pre-existing canonical seed rule in fakeGlobalDir is updated
+      const fakeGlobalRule = path.join(fakeGlobalDir, '.evo', 'rules', 'gatekeeper-self-test-invariant.md');
+      fs.mkdirSync(path.dirname(fakeGlobalRule), { recursive: true });
+      fs.writeFileSync(fakeGlobalRule, 'OUTDATED_RULE', 'utf8');
+      const syncProc = child_process.spawnSync(process.execPath, [mockBuildScript], {
+        cwd: foreignCwd,
+        env: { ...buildEnv, EVO_SYNC_GLOBAL: '1' },
+        encoding: 'utf8',
+      });
+      assert.equal(syncProc.status, 0, syncProc.stderr);
+      assert.equal(fs.readFileSync(fakeGlobalRule, 'utf8'), mockRuleContent);
+
+      // 4c. Running build.mjs inside non-evo-kernel repo fails closed before deleting dist/
+      const badRepoDir = path.join(rootTmp, 'bad-repo');
+      const badKeepFile = path.join(badRepoDir, 'dist', 'keep.txt');
+      fs.mkdirSync(path.join(badRepoDir, 'scripts'), { recursive: true });
+      fs.mkdirSync(path.dirname(badKeepFile), { recursive: true });
+      fs.writeFileSync(badKeepFile, 'PROTECTED_DIST', 'utf8');
+      fs.writeFileSync(
+        path.join(badRepoDir, 'package.json'),
+        JSON.stringify({ name: 'foreign-app', version: '1.0.0' }),
+        'utf8'
+      );
+      fs.copyFileSync(realBuildScript, path.join(badRepoDir, 'scripts', 'build.mjs'));
+      const badProc = child_process.spawnSync(
+        process.execPath,
+        [path.join(badRepoDir, 'scripts', 'build.mjs')],
+        { cwd: badRepoDir, env: buildEnv, encoding: 'utf8' }
+      );
+      assert.notEqual(badProc.status, 0);
+      assert.equal(fs.readFileSync(badKeepFile, 'utf8'), 'PROTECTED_DIST');
     } finally {
       cleanTempWorkspace(rootTmp);
     }
