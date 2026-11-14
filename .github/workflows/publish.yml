@@ -48,7 +48,8 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.tag || 'latest' }}
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
-          if npm view "evo-kernel@$PKG_VERSION" version >/dev/null 2>&1; then
+          PUBLISHED_VER="$(npm view "evo-kernel@$PKG_VERSION" version 2>/dev/null | tr -d '[:space:]' || true)"
+          if [ -n "$PKG_VERSION" ] && [ "$PUBLISHED_VER" = "$PKG_VERSION" ]; then
             echo "Notice: evo-kernel@$PKG_VERSION is already published on npm. Skipping publish idempotently."
             exit 0
           fi

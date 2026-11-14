@@ -1527,12 +1527,14 @@ Widget issue
       fs.rmSync(ws, { recursive: true, force: true });
     }
 
-    // 4. .github/workflows/publish.yml has concurrency group and npm view idempotency check
+    // 4. .github/workflows/publish.yml has concurrency group and stdout-verified npm view idempotency check
     const publishYmlPath = path.resolve(process.cwd(), '.github', 'workflows', 'publish.yml');
     const publishYml = fs.readFileSync(publishYmlPath, 'utf8');
     assert.ok(publishYml.includes('concurrency:'), 'publish.yml must define concurrency group');
     assert.ok(publishYml.includes('group: npm-publish'), 'publish.yml must use npm-publish concurrency group');
     assert.ok(publishYml.includes('npm view "evo-kernel@$PKG_VERSION" version'), 'publish.yml must check npm registry before publishing');
+    assert.ok(!publishYml.includes('if npm view "evo-kernel@$PKG_VERSION" version >/dev/null'), 'publish.yml must not rely on bare npm view exit code (npm exits 0 with empty stdout for missing versions)');
+    assert.ok(publishYml.includes('PUBLISHED_VER=') && publishYml.includes('"$PUBLISHED_VER" = "$PKG_VERSION"'), 'publish.yml must compare trimmed npm view stdout against PKG_VERSION');
   });
 
   test('24. Issue #23 Regression: Flexbox text overflow protection, AST symbol deduplication, and CJK visual truncation', () => {
