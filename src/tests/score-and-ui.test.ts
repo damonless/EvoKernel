@@ -20,11 +20,11 @@ import {
   isTestEnvironment,
 } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { runInit, runUninstall, mountIdeExtensions, syncManagedRuleBlocks } from '../cli/init.js';
+import { runInit, runUninstall, mountIdeExtensions, unmountIdeExtensions, syncManagedRuleBlocks } from '../cli/init.js';
 import { handleWebviewAction } from '../ide/vscode-extension.js';
 import { resolveCurrentGitCommit, resolveCurrentGitBranch } from '../core/memory.js';
 import { redactSensitiveDiagnostics, EvoTelemetry } from '../core/telemetry.js';
-import { EvoStorage } from '../core/storage.js';
+import { EVO_KERNEL_VERSION, EvoStorage } from '../core/storage.js';
 
 function createTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `evo-score-ui-${prefix}-`));
@@ -2107,6 +2107,128 @@ Widget issue
       );
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('31. IDE extension manifest parity, extensions.json/.obsolete sync, --unmount-ide isolation, and Webview export/reject snapshot', async () => {
+    const extPkgPath = path.resolve(process.cwd(), 'templates', 'ide-extension', 'package.json');
+    const extPkg = JSON.parse(fs.readFileSync(extPkgPath, 'utf8'));
+    assert.equal(extPkg.version, EVO_KERNEL_VERSION, 'IDE extension version must match EVO_KERNEL_VERSION');
+    assert.ok(Array.isArray(extPkg.activationEvents));
+    assert.equal(
+      extPkg.activationEvents.includes('onStartupFinished'),
+      false,
+      'IDE extension must not register heavy onStartupFinished activation'
+    );
+
+    const ws = createTempDir('ide-registry-sync');
+    const fakeExtDir = createTempDir('fake-vscode-extensions');
+    const oldIdeEnv = process.env.EVO_IDE_EXTENSIONS_DIR;
+
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      storage.saveRule({
+        id: 'ui-reject-rule',
+        title: 'Clean UI Rule',
+        l0_summary: 'Validate boundary invariants cleanly.',
+        scope_glob: '**/*.ts',
+        core: false,
+        priority: 10,
+        tokens: 15,
+        content: '- Always validate boundary invariants cleanly across services.\n',
+        tags: ['ui'],
+        origin: 'session',
+        enabled: true,
+        review_status: 'pending',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // Seed stale extensions.json & .obsolete BEFORE mountIdeExtensions
+      fs.writeFileSync(path.join(fakeExtDir, 'extensions.json'), '[]\n', 'utf8');
+      fs.writeFileSync(
+        path.join(fakeExtDir, '.obsolete'),
+        JSON.stringify({ 'damonless.evo-kernel-cockpit': true }, null, 2),
+        'utf8'
+      );
+      process.env.EVO_IDE_EXTENSIONS_DIR = fakeExtDir;
+
+      const mountRes = mountIdeExtensions(ws);
+      assert.equal(mountRes.length, 1);
+
+      const mountedFolder = path.join(fakeExtDir, 'damonless.evo-kernel-cockpit');
+      assert.ok(fs.existsSync(path.join(mountedFolder, 'package.json')), 'Mounted package.json must exist');
+      assert.ok(fs.existsSync(path.join(mountedFolder, 'README.md')), 'Mounted README.md must exist');
+
+      const regAfterMount = JSON.parse(fs.readFileSync(path.join(fakeExtDir, 'extensions.json'), 'utf8'));
+      assert.ok(
+        Array.isArray(regAfterMount) &&
+          regAfterMount.some((e: any) => e?.identifier?.id === 'damonless.evo-kernel-cockpit'),
+        'extensions.json must register damonless.evo-kernel-cockpit'
+      );
+
+      const obsoleteAfterMount = JSON.parse(fs.readFileSync(path.join(fakeExtDir, '.obsolete'), 'utf8'));
+      assert.equal(
+        'damonless.evo-kernel-cockpit' in obsoleteAfterMount,
+        false,
+        '.obsolete tombstone for damonless.evo-kernel-cockpit must be cleared'
+      );
+
+      // Default runUninstall (without unmountIde: true) must preserve IDE extension
+      runUninstall(ws);
+      assert.ok(fs.existsSync(mountedFolder), 'Default runUninstall must not unmount IDE extension');
+
+      // Explicit runUninstall({ unmountIde: true }) or unmountIdeExtensions must remove & prune registry
+      runUninstall(ws, { unmountIde: true });
+      assert.equal(fs.existsSync(mountedFolder), false, 'unmountIde: true must remove mounted extension');
+      const regAfterUnmount = JSON.parse(fs.readFileSync(path.join(fakeExtDir, 'extensions.json'), 'utf8'));
+      assert.equal(
+        regAfterUnmount.some((e: any) => e?.identifier?.id === 'damonless.evo-kernel-cockpit'),
+        false,
+        'extensions.json must prune damonless.evo-kernel-cockpit after unmount'
+      );
+
+      // Direct unmountIdeExtensions no-op safety check when already cleaned
+      const secondUnmount = unmountIdeExtensions();
+      assert.equal(secondUnmount.errors.length, 0);
+
+      // Webview export-html action + traversal rejection
+      const travExport = await handleWebviewAction('export-html', { outPath: '../outside.html' }, ws, {});
+      assert.equal(travExport.ok, false);
+      assert.match(travExport.error || '', /Forbidden/i);
+
+      const okExport = await handleWebviewAction(
+        'export-html',
+        { outPath: 'exports/report.html', anon: true },
+        ws,
+        {}
+      );
+      assert.equal(okExport.ok, true, okExport.error);
+      assert.ok(fs.existsSync(path.join(ws, 'exports', 'report.html')), 'Exported HTML must exist on disk');
+
+      // Webview Gatekeeper rejection must include latest snapshot so UI refreshes cleanly
+      const rejectedUpdate = await handleWebviewAction(
+        'update-content',
+        {
+          kind: 'rule',
+          id: 'ui-reject-rule',
+          content:
+            'Enforce dwTimeoutLimit = 4200mV and `wCellMaxVolt`, `s_chgCurrLimit`, `st_battFlag` across `MAX_CHG_RETRY_LIMIT`.',
+        },
+        ws,
+        {}
+      );
+      assert.equal(rejectedUpdate.ok, false, 'Gatekeeper must reject domain-numeric rule edit');
+      assert.ok(rejectedUpdate.snapshot, 'Rejected Webview update-content must still return latest snapshot');
+    } finally {
+      if (oldIdeEnv === undefined) {
+        delete process.env.EVO_IDE_EXTENSIONS_DIR;
+      } else {
+        process.env.EVO_IDE_EXTENSIONS_DIR = oldIdeEnv;
+      }
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(fakeExtDir, { recursive: true, force: true });
     }
   });
 });

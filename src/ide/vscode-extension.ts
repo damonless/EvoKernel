@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 
-import { buildUiSnapshot } from '../cli/ui.js';
+import { buildUiSnapshot, exportUiHtml } from '../cli/ui.js';
 import type { UiSnapshot } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import { EvoStorage, estimateTokens, findNearestEvoWorkspace, openSqliteReadOnly, parseFrontmatter, sanitizeId } from '../core/storage.js';
@@ -14,6 +14,7 @@ import {
   EvoGatekeeper,
   captureWorkspaceMutationSignature,
   captureWorkspaceRollbackSnapshot,
+  parseSkillSectionsFromMarkdown,
   restoreWorkspaceFromSnapshot,
 } from '../core/gatekeeper.js';
 import {
@@ -124,6 +125,7 @@ export interface VsCodeApi {
     showInformationMessage(message: string, ...items: string[]): Promise<string | undefined> | Thenable<string | undefined>;
     showWarningMessage(message: string, ...items: string[]): Promise<string | undefined> | Thenable<string | undefined>;
     showErrorMessage(message: string, ...items: string[]): Promise<string | undefined> | Thenable<string | undefined>;
+    showSaveDialog?(options?: { defaultUri?: VsCodeUri; filters?: Record<string, string[]>; saveLabel?: string }): Promise<VsCodeUri | undefined> | Thenable<VsCodeUri | undefined>;
     activeTextEditor?: VsCodeTextEditor;
   };
   workspace: {
@@ -253,8 +255,9 @@ export async function handleWebviewAction(
       case 'open-editor': {
         const rawPath = typeof params?.filePath === 'string' ? params.filePath.trim() : '';
         if (!rawPath) return { ok: false, error: 'Bad Request: Missing or invalid filePath' };
+        const storage = new EvoStorage(ws);
         const targetPath = path.resolve(ws, rawPath);
-        if (!isSubpathOf(ws, targetPath)) {
+        if (!isSubpathOf(ws, targetPath) && !isSubpathOf(storage.evoDir, targetPath)) {
           return { ok: false, error: 'Forbidden: Path traversal outside workspace root' };
         }
         if (!fs.existsSync(targetPath)) {
@@ -390,7 +393,7 @@ export async function handleWebviewAction(
         const archived = storage.archiveCapability(cleanId, rawKind as EvoKind, reason);
         if (!archived) return { ok: false, error: `Not Found: ${rawKind} "${cleanId}" not found` };
 
-        if (rawKind === 'rule') {
+        if (rawKind !== 'memory') {
           syncManagedRuleBlocks(ws);
         }
 
@@ -420,7 +423,7 @@ export async function handleWebviewAction(
           return { ok: false, error: `Not Found: Archived ${rawKind} "${cleanId}" not found` };
         }
 
-        if (rawKind === 'rule') {
+        if (rawKind !== 'memory') {
           syncManagedRuleBlocks(ws);
         }
         const telem = new EvoTelemetry(storage);
@@ -447,7 +450,7 @@ export async function handleWebviewAction(
         }
 
         const storage = new EvoStorage(ws);
-        let touchedRules = false;
+        let touchedManagedCatalog = false;
         let updatedCount = 0;
         const now = new Date().toISOString();
 
@@ -477,7 +480,7 @@ export async function handleWebviewAction(
               }
             }
             storage.saveRule({ ...rule, enabled: targetEnabled, updated_at: now });
-            touchedRules = true;
+            touchedManagedCatalog = true;
             updatedCount++;
           } else if (rawKind === 'skill') {
             const skill = storage.getSkill(cleanId);
@@ -486,6 +489,7 @@ export async function handleWebviewAction(
               continue;
             }
             storage.saveSkill({ ...skill, enabled: targetEnabled, updated_at: now });
+            touchedManagedCatalog = true;
             updatedCount++;
           } else if (rawKind === 'tool') {
             const tool = storage.getTool(cleanId);
@@ -495,6 +499,7 @@ export async function handleWebviewAction(
             }
             const { script_code, script_path: _sp, ...manifest } = tool;
             storage.saveTool({ ...manifest, enabled: targetEnabled, updated_at: now }, script_code);
+            touchedManagedCatalog = true;
             updatedCount++;
           } else if (rawKind === 'memory') {
             const mem = storage.getMemory(cleanId);
@@ -507,7 +512,7 @@ export async function handleWebviewAction(
           }
         }
 
-        if (touchedRules) {
+        if (touchedManagedCatalog) {
           syncManagedRuleBlocks(ws);
         }
         const telem = new EvoTelemetry(storage);
@@ -738,7 +743,7 @@ export async function handleWebviewAction(
           const corePath = path.join(storage.rulesDir, `${cleanId}.md`);
           const scopedPath = path.join(storage.rulesDir, 'scoped', `${cleanId}.md`);
           const targetPath = fs.existsSync(corePath) ? corePath : (fs.existsSync(scopedPath) ? scopedPath : null);
-          if (!targetPath || !isSubpathOf(ws, targetPath) || !existingRule) {
+          if (!targetPath || (!isSubpathOf(ws, targetPath) && !isSubpathOf(storage.evoDir, targetPath)) || !existingRule) {
             return { ok: false, error: `Not Found: Rule "${cleanId}" not found` };
           }
           const isCore =
@@ -797,17 +802,15 @@ export async function handleWebviewAction(
         } else if (rawKind === 'skill') {
           const existingSkill = storage.getSkill(cleanId);
           const skillPath = path.join(storage.skillsDir, cleanId, 'SKILL.md');
-          if (!fs.existsSync(skillPath) || !isSubpathOf(ws, skillPath) || !existingSkill) {
+          if (!fs.existsSync(skillPath) || (!isSubpathOf(ws, skillPath) && !isSubpathOf(storage.evoDir, skillPath)) || !existingSkill) {
             return { ok: false, error: `Not Found: Skill "${cleanId}" not found` };
           }
           const trimmedBody = body.trim();
-          const l1Match = trimmedBody.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
-          const l2Match = trimmedBody.match(/## L2 SOP\s+([\s\S]*)$/i);
-          const l1_contract =
-            l1Match && l1Match[1].trim()
-              ? l1Match[1].trim()
-              : (existingSkill.l1_contract || 'Standard skill contract');
-          const l2_sop = l2Match && l2Match[1].trim() ? l2Match[1].trim() : trimmedBody;
+          const parsedSec = parseSkillSectionsFromMarkdown(trimmedBody);
+          const l1_contract = parsedSec.l1 || existingSkill.l1_contract || 'Standard skill contract';
+          const l2_sop =
+            parsedSec.l2 ||
+            (!parsedSec.hasL1Header && trimmedBody ? trimmedBody : existingSkill.l2_sop || '');
 
           preservedEnabled =
             meta.enabled !== undefined
@@ -861,7 +864,7 @@ export async function handleWebviewAction(
         } else if (rawKind === 'memory') {
           const existingMem = storage.getMemory(cleanId);
           const memPath = path.join(storage.memoriesDir, `${cleanId}.md`);
-          if (!fs.existsSync(memPath) || !isSubpathOf(ws, memPath) || !existingMem) {
+          if (!fs.existsSync(memPath) || (!isSubpathOf(ws, memPath) && !isSubpathOf(storage.evoDir, memPath)) || !existingMem) {
             return { ok: false, error: `Not Found: Memory "${cleanId}" not found` };
           }
           const trimmedBody = body.trim();
@@ -894,6 +897,15 @@ export async function handleWebviewAction(
               ? meta.review_status
               : existingMem.review_status;
 
+          const nextTargetSymbols =
+            Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
+              ? meta.target_symbols.map((s) => String(s).trim()).filter(Boolean)
+              : existingMem.target_symbols;
+          const prevTargetSymbols = (existingMem.target_symbols || []).map((s) => s.trim()).filter(Boolean);
+          const sameTargetSymbols =
+            prevTargetSymbols.length === nextTargetSymbols.length &&
+            prevTargetSymbols.every((s, idx) => s === nextTargetSymbols[idx]);
+
           payload = {
             kind: 'memory',
             id: cleanId,
@@ -904,28 +916,27 @@ export async function handleWebviewAction(
             symptom,
             root_cause,
             solution,
-            target_symbols:
-              Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
-                ? meta.target_symbols.map(String)
-                : existingMem.target_symbols,
-            tags:
-              Array.isArray(meta.tags) && meta.tags.length > 0
-                ? meta.tags.map(String)
-                : existingMem.tags,
-            created_commit: meta.created_commit
-              ? String(meta.created_commit).trim()
-              : existingMem.created_commit,
-            created_branch: meta.created_branch
-              ? String(meta.created_branch).trim()
-              : existingMem.created_branch,
+            target_symbols: nextTargetSymbols,
+            tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
             origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
             supersedes_id: cleanId,
             enabled: preservedEnabled,
             review_status: preservedReviewStatus,
-          };
+            ...(typeof meta.created_commit === 'string' && meta.created_commit.trim()
+              ? { created_commit: meta.created_commit.trim() }
+              : sameTargetSymbols && existingMem.created_commit
+                ? { created_commit: existingMem.created_commit }
+                : {}),
+            created_branch:
+              typeof meta.created_branch === 'string' && meta.created_branch.trim()
+                ? meta.created_branch.trim()
+                : sameTargetSymbols
+                  ? existingMem.created_branch
+                  : undefined,
+          } as ProposalPayload;
         } else {
           const tool = storage.getTool(cleanId);
-          if (!tool || !fs.existsSync(tool.script_path) || !isSubpathOf(ws, tool.script_path)) {
+          if (!tool || !fs.existsSync(tool.script_path) || (!isSubpathOf(ws, tool.script_path) && !isSubpathOf(storage.evoDir, tool.script_path))) {
             return { ok: false, error: `Not Found: Tool "${cleanId}" not found` };
           }
 
@@ -964,11 +975,13 @@ export async function handleWebviewAction(
         }
 
         if (!gateRes.passed) {
+          const snapshot = buildUiSnapshot(ws);
           return {
             ok: false,
             code: gateRes.error_code,
             gate_failed: gateRes.gate_failed,
             error: gateRes.message || 'Gatekeeper rejected content update',
+            snapshot,
           };
         }
 
@@ -996,6 +1009,34 @@ export async function handleWebviewAction(
         };
       }
 
+      case 'export-html': {
+        let outPath = '';
+        if (typeof params?.outPath === 'string' && params.outPath.trim()) {
+          const resolvedOut = path.resolve(ws, params.outPath.trim());
+          if (!isSubpathOf(ws, resolvedOut)) {
+            return { ok: false, error: 'Forbidden: Export path outside workspace root' };
+          }
+          outPath = resolvedOut;
+        } else if (typeof vscode?.window?.showSaveDialog === 'function') {
+          const defaultUri = vscode?.Uri?.file
+            ? vscode.Uri.file(path.join(ws, 'evo-cockpit.html'))
+            : undefined;
+          const selectedUri = await vscode.window.showSaveDialog({
+            defaultUri,
+            filters: { HTML: ['html'] },
+            saveLabel: 'Export EvoKernel Workbench HTML',
+          });
+          if (!selectedUri) {
+            return { ok: true, data: { cancelled: true } };
+          }
+          outPath = selectedUri.fsPath || selectedUri.path || path.join(ws, 'evo-cockpit.html');
+        } else {
+          outPath = path.join(ws, 'evo-cockpit.html');
+        }
+        exportUiHtml(ws, outPath, { anon: Boolean(params?.anon) });
+        return { ok: true, data: { exportedPath: outPath } };
+      }
+
       default:
         return { ok: false, error: `Bad Request: Unknown action "${action}"` };
     }
@@ -1008,6 +1049,21 @@ export async function handleWebviewAction(
 export const dispatchExtensionAction = handleWebviewAction;
 
 let activePanel: VsCodeWebviewPanel | undefined = undefined;
+let activePanelWatchers: fs.FSWatcher[] = [];
+let activePanelDebounce: ReturnType<typeof setTimeout> | undefined = undefined;
+
+function disposeActivePanelResources(): void {
+  if (activePanelDebounce) {
+    clearTimeout(activePanelDebounce);
+    activePanelDebounce = undefined;
+  }
+  for (const w of activePanelWatchers) {
+    try {
+      w.close();
+    } catch {}
+  }
+  activePanelWatchers = [];
+}
 
 export function getActivePanel(): VsCodeWebviewPanel | undefined {
   return activePanel;
@@ -1020,6 +1076,57 @@ export async function activate(
   const vscode = resolveVsCode(vscodeOverride);
   if (!vscode) return;
 
+  let currentWs = '';
+
+  const pushSnapshot = () => {
+    if (!activePanel || !currentWs) return;
+    try {
+      const snap = buildUiSnapshot(currentWs);
+      void activePanel.webview.postMessage({
+        type: 'evoSnapshotPush',
+        snapshot: snap,
+      });
+    } catch {}
+  };
+
+  const scheduleSnapshotPush = () => {
+    if (activePanelDebounce) clearTimeout(activePanelDebounce);
+    activePanelDebounce = setTimeout(() => {
+      activePanelDebounce = undefined;
+      pushSnapshot();
+    }, 250);
+  };
+
+  const attachWatchers = (wsRoot: string) => {
+    disposeActivePanelResources();
+    const evoDir = path.join(wsRoot, '.evo');
+    if (fs.existsSync(evoDir)) {
+      try {
+        const w = fs.watch(evoDir, { recursive: true }, (_e, f) => {
+          if (!f) {
+            scheduleSnapshotPush();
+            return;
+          }
+          const norm = String(f).replace(/\\/g, '/');
+          if (norm.startsWith('.cache') || norm.includes('telemetry.db') || norm.startsWith('optimize')) {
+            return;
+          }
+          scheduleSnapshotPush();
+        });
+        w.on('error', () => {});
+        activePanelWatchers.push(w);
+      } catch {}
+    }
+    const gitHead = path.join(wsRoot, '.git', 'HEAD');
+    if (fs.existsSync(gitHead)) {
+      try {
+        const w = fs.watch(gitHead, () => scheduleSnapshotPush());
+        w.on('error', () => {});
+        activePanelWatchers.push(w);
+      } catch {}
+    }
+  };
+
   const openWorkbenchHandler = async () => {
     const ws = resolveActiveWorkspaceRoot(vscode);
     if (!ws) {
@@ -1029,8 +1136,12 @@ export async function activate(
       return;
     }
 
+    currentWs = ws;
+
     if (activePanel) {
       activePanel.reveal(vscode?.ViewColumn?.One ?? 1, false);
+      attachWatchers(currentWs);
+      pushSnapshot();
       return;
     }
 
@@ -1047,17 +1158,30 @@ export async function activate(
     activePanel = panel;
 
     panel.onDidDispose(() => {
+      disposeActivePanelResources();
       activePanel = undefined;
     }, null, context?.subscriptions);
 
-    panel.webview.html = renderWorkbenchHtml(ws);
+    panel.onDidChangeViewState?.((e: any) => {
+      const isVisible = e?.webviewPanel?.visible ?? panel.visible;
+      if (!isVisible) return;
+      const nextWs = resolveActiveWorkspaceRoot(vscode, currentWs);
+      if (nextWs && nextWs !== currentWs) {
+        currentWs = nextWs;
+        attachWatchers(currentWs);
+      }
+      pushSnapshot();
+    }, null, context?.subscriptions);
+
+    panel.webview.html = renderWorkbenchHtml(currentWs);
+    attachWatchers(currentWs);
 
     panel.webview.onDidReceiveMessage(async (message: any) => {
       if (!message || message.type !== 'evoAction' || !message.reqId || !message.action) {
         return;
       }
 
-      const res = await handleWebviewAction(message.action, message.params || {}, ws, vscode);
+      const res = await handleWebviewAction(message.action, message.params || {}, currentWs, vscode);
       panel.webview.postMessage({
         type: 'evoActionResult',
         reqId: message.reqId,
@@ -1076,6 +1200,7 @@ export async function activate(
 }
 
 export function deactivate(): void {
+  disposeActivePanelResources();
   if (activePanel) {
     try {
       activePanel.dispose();

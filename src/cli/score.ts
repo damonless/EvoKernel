@@ -109,6 +109,7 @@ export interface McpTaxReport {
   totalTaxTokens: number;
   activeTaxTokens: number;
   pooledTaxTokens: number;
+  hasEvoMcpMounted?: boolean;
 }
 
 const KNOWN_HEAVY_MCP_PROFILES: Record<string, number> = {
@@ -199,9 +200,11 @@ export function inspectMcpTaxSnapshot(
     } catch {}
   }
 
+  let hasEvoMcpMounted = false;
   function registerServer(id: string, name: string, source: string, sCfg: any, forcePooled = false) {
     const lower = name.toLowerCase();
     if (lower === 'evo-kernel' || lower === 'evokernel') {
+      hasEvoMcpMounted = true;
       return;
     }
     const isPooled = forcePooled || Boolean(sCfg?.disabled) || sCfg?.enabled === false || pooledNames.has(lower);
@@ -392,6 +395,7 @@ export function inspectMcpTaxSnapshot(
     totalTaxTokens,
     activeTaxTokens,
     pooledTaxTokens,
+    hasEvoMcpMounted,
   };
 }
 
@@ -867,7 +871,9 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
     userStaticRuleTokens +
     Math.max(virtualizedCapabilityTokens, evoSeedTokens);
   const hasMetaMcpGateway =
-    mcpTax.totalServers > 0 || (hasEvo && virtualizedCapabilityTokens > META_MCP_5_TOOLS_TOKENS);
+    mcpTax.totalServers > 0 ||
+    Boolean(mcpTax.hasEvoMcpMounted) ||
+    (hasEvo && virtualizedCapabilityTokens > META_MCP_5_TOOLS_TOKENS);
   const afterMcpTax =
     mcpTax.activeTaxTokens > 0
       ? mcpTax.activeTaxTokens + META_MCP_5_TOOLS_TOKENS
@@ -893,23 +899,6 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
     fragileCodeScore = Math.round(protectedRatio * 100);
   }
 
-  // Overall Score (0 - 100)
-  const contextEfficiency = savingsPercent;
-  const overallScore = Math.min(
-    100,
-    Math.max(
-      20,
-      Math.round(contextEfficiency * 0.4 + cacheShieldingScore * 0.3 + fragileCodeScore * 0.3)
-    )
-  );
-
-  let grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F' = 'F';
-  if (overallScore >= 95) grade = 'A+';
-  else if (overallScore >= 85) grade = 'A';
-  else if (overallScore >= 70) grade = 'B';
-  else if (overallScore >= 55) grade = 'C';
-  else if (overallScore >= 40) grade = 'D';
-
   const activeMcpWaste =
     hasEvo || mcpTax.pooledServers > 0
       ? mcpTax.activeTaxTokens
@@ -926,11 +915,38 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
     opusUsd: Number(((wastedTokens100 / 1_000_000) * 15).toFixed(2)),
   };
 
+  // Overall Score (0 - 100)
+  const contextEfficiency =
+    hasEvo && wasteTokensPerTurn === 0 && mcpTax.totalServers === 0
+      ? 100
+      : ruleWaste > 0 && savingsPercent === 0
+        ? Math.max(20, Math.round((1500 / Math.max(1500, userStaticRuleTokens)) * 100))
+        : savingsPercent;
+  const overallScore = Math.min(
+    100,
+    Math.max(
+      20,
+      Math.round(contextEfficiency * 0.4 + cacheShieldingScore * 0.3 + fragileCodeScore * 0.3)
+    )
+  );
+
+  let grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F' = 'F';
+  if (overallScore >= 95) grade = 'A+';
+  else if (overallScore >= 85) grade = 'A';
+  else if (overallScore >= 70) grade = 'B';
+  else if (overallScore >= 55) grade = 'C';
+  else if (overallScore >= 40) grade = 'D';
+
   const deductions: string[] = [];
   if (overallScore < 100) {
     if (mcpTax.activeServers > 0) {
       deductions.push(
         `Unvirtualized MCP schemas (${mcpTax.activeServers} active server(s), ~${mcpTax.activeTaxTokens} tok/turn)`
+      );
+    }
+    if (ruleWaste > 0) {
+      deductions.push(
+        `Static rule budget exceeded (+${ruleWaste} tok over 1,500-token ceiling)`
       );
     }
     if (unprotectedHotspots > 0) {
@@ -1178,9 +1194,11 @@ export function renderScoreAnsi(
     `  ├─ Virtualized Load: ${c.green}${report.contextSavings.afterTokens.toLocaleString()} tokens${c.reset} (after EvoKernel)`
   );
   const arrowGlyph = isAscii ? '->' : '→';
-  lines.push(
-    `  ├─ Virtualized Gain: ${c.bold}${c.green}Saved ${report.contextSavings.savingsPercent}% · ${formatCompactTok(report.contextSavings.beforeTokens)} ${arrowGlyph} ${formatCompactTok(report.contextSavings.afterTokens)} tok${c.reset} (${report.contextSavings.savedTokens.toLocaleString()} tokens saved)`
-  );
+  const virtualizedGainLine =
+    report.contextSavings.afterTokens > report.contextSavings.beforeTokens
+      ? `  ├─ Virtualized Gain: ${c.bold}${c.green}Fixed L0 Gateway · ${formatCompactTok(report.contextSavings.afterTokens)} tok (100% KV-cache shielded)${c.reset}`
+      : `  ├─ Virtualized Gain: ${c.bold}${c.green}Saved ${report.contextSavings.savingsPercent}% · ${formatCompactTok(report.contextSavings.beforeTokens)} ${arrowGlyph} ${formatCompactTok(report.contextSavings.afterTokens)} tok${c.reset} (${report.contextSavings.savedTokens.toLocaleString()} tokens saved)`;
+  lines.push(virtualizedGainLine);
   lines.push(
     `  ├─ 100-Turn Waste  : ${c.yellow}\$${report.waste100TurnsUsd.sonnetUsd.toFixed(2)}${c.reset} (Sonnet) / ${c.red}\$${report.waste100TurnsUsd.opusUsd.toFixed(2)}${c.reset} (Opus)`
   );

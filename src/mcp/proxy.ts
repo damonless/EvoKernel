@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import * as path from 'node:path';
 import * as url from 'node:url';
+import { EVO_KERNEL_VERSION } from '../core/storage.js';
 import type { ExternalMcpServerConfig, ExternalToolDefinition } from '../core/types.js';
 
 export function formatExternalToolId(serverName: string, originalToolName: string): string {
@@ -237,7 +238,7 @@ export class McpClientConnection {
         workspaceFolders: [{ uri: rootUri, name: rootName }],
         clientInfo: {
           name: 'evo-kernel-proxy',
-          version: '0.3.0',
+          version: EVO_KERNEL_VERSION,
         },
       });
 

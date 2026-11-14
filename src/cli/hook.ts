@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
-import { EvoStorage } from '../core/storage.js';
+import type { DatabaseSync } from 'node:sqlite';
+import { EvoStorage, openSqliteReadOnly } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { parseSymbolTarget } from '../core/memory.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
@@ -567,6 +568,73 @@ function toolMatchesTrigger(
   });
 }
 
+function openHookTelemetry(storage: EvoStorage, dryRun?: boolean): EvoTelemetry {
+  if (!dryRun) {
+    return new EvoTelemetry(storage);
+  }
+  const overlay = new Map<string, string>();
+  let clearedRecalled = false;
+  let roDb: DatabaseSync | undefined;
+  if (fs.existsSync(storage.telemetryDbPath)) {
+    try {
+      roDb = openSqliteReadOnly(storage.telemetryDbPath);
+    } catch {
+      roDb = undefined;
+    }
+  }
+  const stub = {
+    getSessionFlag(key: string): string | null {
+      if (overlay.has(key)) return overlay.get(key) ?? null;
+      if (!roDb) return null;
+      try {
+        const row = roDb.prepare('SELECT value FROM session_state WHERE key = ?').get(key) as
+          | { value?: string }
+          | undefined;
+        return row && typeof row.value === 'string' ? row.value : null;
+      } catch {
+        return null;
+      }
+    },
+    setSessionFlag(key: string, value: string): void {
+      overlay.set(key, value);
+    },
+    getRecalledCapabilities(): RecalledCapabilityEntry[] {
+      if (clearedRecalled) return [];
+      const raw = stub.getSessionFlag('recalled_capabilities');
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? (parsed as RecalledCapabilityEntry[]) : [];
+      } catch {
+        return [];
+      }
+    },
+    clearRecalledCapabilities(): void {
+      clearedRecalled = true;
+      overlay.delete('recalled_capabilities');
+    },
+    recordRecalledCapability(entry: RecalledCapabilityEntry): void {
+      const current = stub.getRecalledCapabilities();
+      if (!current.some((c) => c.id === entry.id)) {
+        clearedRecalled = false;
+        overlay.set('recalled_capabilities', JSON.stringify([...current, entry]));
+      }
+    },
+    recordCapabilityOutcome(): void {
+      // Dry-run: intentionally skip mutating capability counters on disk
+    },
+    close(): void {
+      if (roDb) {
+        try {
+          roDb.close();
+        } catch {}
+        roDb = undefined;
+      }
+    },
+  };
+  return stub as unknown as EvoTelemetry;
+}
+
 export function handlePreTool(
   workspaceRoot: string,
   payload: Record<string, unknown>,
@@ -591,7 +659,7 @@ export function handlePreTool(
     ? (path.isAbsolute(ctx.rawPath) ? path.relative(workspaceRoot, ctx.rawPath).replace(/\\/g, '/') : ctx.normPath)
     : '';
 
-  const telemetry = new EvoTelemetry(storage);
+  const telemetry = openHookTelemetry(storage, options.dryRun);
   try {
     const candidateTools = storage
       .listTools()
@@ -691,7 +759,7 @@ export function handlePostTool(
     return { event: 'post-tool', success: true, exitCode: 0, output: '' };
   }
 
-  const telemetry = new EvoTelemetry(storage);
+  const telemetry = openHookTelemetry(storage, options.dryRun);
   try {
     const currentStep = parseInt(telemetry.getSessionFlag('session_step_seq') || '0', 10) + 1;
     telemetry.setSessionFlag('session_step_seq', String(currentStep));
@@ -815,16 +883,18 @@ export function handlePostTool(
       ) {
         telemetry.setSessionFlag('user_correction_detected', 'true');
         if (telemetry.getSessionFlag('contested_attributed') !== 'true') {
-          const recalled = telemetry.getRecalledCapabilities();
-          const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
-          for (const c of recalled) {
-            recordRecalledOutcomeWithTierRouting(
-              storage,
-              telemetry,
-              c,
-              'contested',
-              sessionModifiedFiles
-            );
+          if (!options.dryRun) {
+            const recalled = telemetry.getRecalledCapabilities();
+            const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
+            for (const c of recalled) {
+              recordRecalledOutcomeWithTierRouting(
+                storage,
+                telemetry,
+                c,
+                'contested',
+                sessionModifiedFiles
+              );
+            }
           }
           telemetry.setSessionFlag('contested_attributed', 'true');
         }
@@ -982,7 +1052,7 @@ export function handleStop(
   if (!fs.existsSync(storage.evoDir)) {
     return { event: 'stop', success: true, exitCode: 0, output: '' };
   }
-  const telemetry = new EvoTelemetry(storage);
+  const telemetry = openHookTelemetry(storage, options.dryRun);
   try {
     if (telemetry.getSessionFlag('stop_hook_running') === 'true') {
       return { event: 'stop', success: true, exitCode: 0, output: '' };
@@ -1018,13 +1088,17 @@ export function handleStop(
 
     if (recalled.length > 0) {
       if (hasUserCorrection && !contestedAttributed) {
-        for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'contested', modifiedFiles);
+        if (!options.dryRun) {
+          for (const c of recalled) {
+            recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'contested', modifiedFiles);
+          }
         }
         telemetry.setSessionFlag('contested_attributed', 'true');
       } else if (!hasUserCorrection && !hadCommandError) {
-        for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped', modifiedFiles);
+        if (!options.dryRun) {
+          for (const c of recalled) {
+            recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped', modifiedFiles);
+          }
         }
         telemetry.clearRecalledCapabilities();
       }
@@ -1201,12 +1275,14 @@ export function handlePreCommit(
   if (forbiddenStaged.length > 0) {
     if (evoDirExists) {
       try {
-        const telemetry = new EvoTelemetry(storage);
+        const telemetry = openHookTelemetry(storage, options.dryRun);
         try {
-          const recalled = telemetry.getRecalledCapabilities();
-          const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
-          for (const c of recalled) {
-            recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
+          if (!options.dryRun) {
+            const recalled = telemetry.getRecalledCapabilities();
+            const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
+            for (const c of recalled) {
+              recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
+            }
           }
         } finally {
           telemetry.close();
@@ -1233,12 +1309,14 @@ export function handlePreCommit(
   if (!report.healthy) {
     if (evoDirExists) {
       try {
-        const telemetry = new EvoTelemetry(storage);
+        const telemetry = openHookTelemetry(storage, options.dryRun);
         try {
-          const recalled = telemetry.getRecalledCapabilities();
-          const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
-          for (const c of recalled) {
-            recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
+          if (!options.dryRun) {
+            const recalled = telemetry.getRecalledCapabilities();
+            const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
+            for (const c of recalled) {
+              recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'hurt', sessionModifiedFiles);
+            }
           }
         } finally {
           telemetry.close();
@@ -1263,15 +1341,17 @@ export function handlePreCommit(
   }
 
   if (evoDirExists) {
-    const telemetry = new EvoTelemetry(storage);
+    const telemetry = openHookTelemetry(storage, options.dryRun);
     try {
       const hadCommandError = telemetry.getSessionFlag('had_command_error') === 'true';
       const userCorrection = telemetry.getSessionFlag('user_correction_detected') === 'true';
       if (!hadCommandError && !userCorrection) {
-        const recalled = telemetry.getRecalledCapabilities();
-        const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
-        for (const c of recalled) {
-          recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped', sessionModifiedFiles);
+        if (!options.dryRun) {
+          const recalled = telemetry.getRecalledCapabilities();
+          const sessionModifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
+          for (const c of recalled) {
+            recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'helped', sessionModifiedFiles);
+          }
         }
         telemetry.clearRecalledCapabilities();
       }
@@ -1332,21 +1412,23 @@ export function runHook(
       case 'mark-recovery': {
         const storage = new EvoStorage(ws);
         if (fs.existsSync(storage.evoDir)) {
-          const telemetry = new EvoTelemetry(storage);
+          const telemetry = openHookTelemetry(storage, options.dryRun);
           try {
             telemetry.setSessionFlag('pending_evolution', 'true');
             telemetry.setSessionFlag('had_command_error', 'true');
             if (telemetry.getSessionFlag('contested_attributed') !== 'true') {
-              const recalled = telemetry.getRecalledCapabilities();
-              const sessionModifiedFiles = getSessionModifiedFiles(ws, telemetry);
-              for (const c of recalled) {
-                recordRecalledOutcomeWithTierRouting(
-                  storage,
-                  telemetry,
-                  c,
-                  'contested',
-                  sessionModifiedFiles
-                );
+              if (!options.dryRun) {
+                const recalled = telemetry.getRecalledCapabilities();
+                const sessionModifiedFiles = getSessionModifiedFiles(ws, telemetry);
+                for (const c of recalled) {
+                  recordRecalledOutcomeWithTierRouting(
+                    storage,
+                    telemetry,
+                    c,
+                    'contested',
+                    sessionModifiedFiles
+                  );
+                }
               }
               telemetry.setSessionFlag('contested_attributed', 'true');
             }

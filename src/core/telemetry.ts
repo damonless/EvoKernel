@@ -294,6 +294,7 @@ export function extractQueryTokens(
   const expansionTokens = new Set<string>();
 
   for (const exp of lexicon.patternExpansions) {
+    exp.regex.lastIndex = 0;
     if (exp.regex.test(trimmed)) {
       for (const tok of exp.tokens) {
         expansionTokens.add(tok);
@@ -397,8 +398,27 @@ export function buildQueryConceptGroups(
   for (const lit of [...asciiLiterals, ...cjkBigrams]) {
     if (seen.has(lit)) continue;
     seen.add(lit);
-    const syns = lexicon.synonyms[lit] || lexicon.synonyms[lit.toLowerCase()] || [];
-    const terms = Array.from(new Set([lit, ...syns.map((s) => s.toLowerCase())]));
+    const canon = lexicon.canonicalMap.get(lit) || lexicon.canonicalMap.get(lit.toLowerCase());
+    const syns =
+      lexicon.synonyms[lit] ||
+      lexicon.synonyms[lit.toLowerCase()] ||
+      (canon ? lexicon.synonyms[canon] || lexicon.synonyms[canon.toLowerCase()] : undefined) ||
+      [];
+    const expTerms: string[] = [];
+    for (const exp of lexicon.patternExpansions) {
+      exp.regex.lastIndex = 0;
+      if (exp.regex.test(lit)) {
+        for (const tok of exp.tokens) expTerms.push(tok.toLowerCase());
+      }
+    }
+    const terms = Array.from(
+      new Set([
+        lit,
+        ...(canon ? [canon.toLowerCase()] : []),
+        ...syns.map((s) => s.toLowerCase()),
+        ...expTerms,
+      ])
+    );
     groups.push({
       literal: lit,
       isGeneric: GENERIC_QUERY_CONCEPT_TOKENS.has(lit),
@@ -412,15 +432,16 @@ function evaluateConceptOverlap(
   conceptGroups: QueryConceptGroup[],
   row: Record<string, unknown>
 ): { matchedConcepts: number; matchedSpecific: number; lowOverlap: boolean } {
-  if (conceptGroups.length < 2) {
-    return { matchedConcepts: conceptGroups.length, matchedSpecific: conceptGroups.length, lowOverlap: false };
+  if (conceptGroups.length === 0) {
+    return { matchedConcepts: 0, matchedSpecific: 0, lowOverlap: false };
   }
+  const isTool = String(row.kind || '') === 'tool';
   const searchable = [
     String(row.id || ''),
     String(row.title || ''),
     String(row.l0_summary || ''),
     String(row.keywords || ''),
-    String(row.body || ''),
+    isTool ? '' : String(row.body || ''),
   ]
     .join(' ')
     .toLowerCase();
@@ -439,10 +460,12 @@ function evaluateConceptOverlap(
   }
 
   // A hit is low-overlap when:
+  // 0. None of the query concepts matched in searchable metadata (e.g., a tool matching only raw script_code literals).
   // 1. The query has >= 2 distinct concepts with at least 1 specific technical anchor (e.g. "EPO", "emergency"),
   //    and the candidate matches 0 specific anchors (only matching generic domain words like "power", "delay").
-  // 2. Or the query has >= 3 distinct concepts (all generic) and the candidate only matches <= 1 concept.
+  // 2. Or the query has >= 3 distinct concepts and the candidate only matches <= 1 concept.
   const lowOverlap =
+    matchedConcepts === 0 ||
     (conceptGroups.length >= 2 && totalSpecific >= 1 && matchedSpecific === 0) ||
     (conceptGroups.length >= 3 && matchedConcepts <= 1);
 
@@ -990,9 +1013,22 @@ export class EvoTelemetry {
       // Index external tools into telemetry and FTS
       for (const et of externalTools) {
         const idTokens = et.id.replace(/[-_]+/g, ' ');
+        const etPropsObj =
+          et.inputSchema &&
+          typeof et.inputSchema === 'object' &&
+          (et.inputSchema as Record<string, unknown>).properties &&
+          typeof (et.inputSchema as Record<string, unknown>).properties === 'object'
+            ? ((et.inputSchema as Record<string, unknown>).properties as Record<string, Record<string, unknown>>)
+            : {};
+        const etSchemaPropsText = Object.entries(etPropsObj)
+          .map(
+            ([k, v]) =>
+              `${k} ${k.replace(/[-_]+/g, ' ')} ${typeof v?.description === 'string' ? v.description : ''}`
+          )
+          .join(' ');
         const schemaText = JSON.stringify(et.inputSchema);
-        const cjkKw = extractCjkBigrams(`${et.title} ${et.description}`).join(' ');
-        const kw = `${idTokens} external proxy mcp ${et.serverName} ${et.originalName} ${cjkKw}`.trim();
+        const cjkKw = extractCjkBigrams(`${et.title} ${et.description} ${etSchemaPropsText}`).join(' ');
+        const kw = `${idTokens} external proxy mcp ${et.serverName} ${et.originalName} ${etSchemaPropsText} ${cjkKw}`.trim();
         const l0 = (et.description || `External MCP tool from ${et.serverName}`).slice(0, 140);
         upsertFtsRow(et.id, 'tool', et.title, l0, kw, schemaText);
         upsertTelemetry.run(et.id, 'tool', et.title, l0, '**/*', now, et.cachedAt || now);
@@ -1348,7 +1384,15 @@ export class EvoTelemetry {
     const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
       s === 'STALE' ? 2 : s === 'OTHER_BRANCH' ? 1 : 0;
 
-    return hits
+    const highRelevanceHits = hits.filter((h) => !h.low_overlap);
+    const effectiveHits =
+      highRelevanceHits.length >= 2
+        ? highRelevanceHits
+        : highRelevanceHits.length === 1
+          ? hits.filter((h) => !h.low_overlap || (h.matched_concepts ?? 0) > 0)
+          : hits;
+
+    return effectiveHits
       .sort((a, b) => {
         const tierDiff = statusTier(a.memory_status) - statusTier(b.memory_status);
         if (tierDiff !== 0) return tierDiff;

@@ -201,11 +201,19 @@ export function compileLexiconConfig(config?: DomainLexiconConfig): CompiledLexi
   }
 
   const patternExpansions: CompiledPatternExpansion[] = [];
+  const nestedQuantifierRe =
+    /\([^()]*(?:[+*]|\{\d+,\d*\})[^()]*\)(?:[+*]|\{[2-9]\d*,?\d*\}|\{\d{2,},?\d*\})/;
   if (Array.isArray(config?.pattern_expansions)) {
     for (const item of config.pattern_expansions) {
       if (item && typeof item.pattern === 'string' && Array.isArray(item.tokens)) {
+        if (item.pattern.length > 160 || nestedQuantifierRe.test(item.pattern)) {
+          // Reject overly long or ReDoS-prone nested quantifier regex patterns
+          continue;
+        }
         try {
-          const regex = new RegExp(item.pattern, item.flags);
+          const safeFlags =
+            typeof item.flags === 'string' ? item.flags.replace(/[gy]/g, '') : undefined;
+          const regex = new RegExp(item.pattern, safeFlags);
           patternExpansions.push({ regex, tokens: [...item.tokens] });
         } catch {
           // safely skip invalid regex

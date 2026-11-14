@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { EvoStorage } from '../core/storage.js';
+import { EVO_KERNEL_VERSION, EvoStorage } from '../core/storage.js';
 import type { ExternalMcpServerConfig } from '../core/types.js';
 import { resolveEvoMcpLaunchConfig } from './harness.js';
 
@@ -585,7 +585,7 @@ export function runVirtualize(
     storage.ensureInitialized();
 
     let existingPool: McpPoolFileSchema = {
-      version: '0.3.0',
+      version: EVO_KERNEL_VERSION,
       updatedAt: new Date().toISOString(),
       mcpServers: {},
       origins: {},
@@ -593,7 +593,7 @@ export function runVirtualize(
     const rawPool = readJsonSafe(poolPath);
     if (rawPool) {
       existingPool = {
-        version: '0.3.0',
+        version: EVO_KERNEL_VERSION,
         updatedAt: new Date().toISOString(),
         mcpServers:
           rawPool.mcpServers && typeof rawPool.mcpServers === 'object'

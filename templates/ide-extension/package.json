@@ -4,6 +4,12 @@
   "description": "AST-Verified Cognitive Memory & Deterministic Context OS Workbench for AI Agents",
   "version": "0.3.0",
   "publisher": "damonless",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/daming56/EvoKernel"
+  },
+  "homepage": "https://github.com/daming56/EvoKernel#readme",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -21,7 +27,6 @@
     "mcp"
   ],
   "activationEvents": [
-    "onStartupFinished",
     "onCommand:evo.openWorkbench",
     "onCommand:evo.viewCockpit"
   ],

@@ -16,6 +16,32 @@ import { EvoTelemetry } from './telemetry.js';
 
 export const PARSER_VERSION = 2;
 
+export function isRealSubpathOf(rootDir: string, candidatePath: string): boolean {
+  try {
+    const resolvedRoot = fs.existsSync(rootDir) ? fs.realpathSync(rootDir) : path.resolve(rootDir);
+    let targetPath = path.resolve(candidatePath);
+    if (fs.existsSync(targetPath)) {
+      targetPath = fs.realpathSync(targetPath);
+    } else {
+      let cur = path.dirname(targetPath);
+      const trailing: string[] = [path.basename(targetPath)];
+      while (!fs.existsSync(cur)) {
+        const parent = path.dirname(cur);
+        if (parent === cur) break;
+        trailing.unshift(path.basename(cur));
+        cur = parent;
+      }
+      if (fs.existsSync(cur)) {
+        targetPath = path.join(fs.realpathSync(cur), ...trailing);
+      }
+    }
+    const rel = path.relative(resolvedRoot, targetPath);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  } catch {
+    return false;
+  }
+}
+
 export const SOURCE_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
@@ -2540,20 +2566,26 @@ export function extractSymbolFingerprint(
   if (parsed.fileHint) {
     const cleanHint = parsed.fileHint.replace(/^[/\\]+/, '');
     const directHint = path.resolve(root, cleanHint);
+    const absHint = path.resolve(parsed.fileHint);
     const fullHint =
-      fs.existsSync(directHint) && fs.statSync(directHint).isFile()
+      isRealSubpathOf(root, directHint) &&
+      fs.existsSync(directHint) &&
+      fs.statSync(directHint).isFile()
         ? directHint
-        : fs.existsSync(parsed.fileHint) && fs.statSync(parsed.fileHint).isFile()
-          ? path.resolve(parsed.fileHint)
-          : directHint;
+        : isRealSubpathOf(root, absHint) &&
+            fs.existsSync(absHint) &&
+            fs.statSync(absHint).isFile()
+          ? absHint
+          : null;
 
-    if (fs.existsSync(fullHint) && fs.statSync(fullHint).isFile()) {
+    if (fullHint) {
       candidateFiles.push(fullHint);
-    } else {
-      // Try matching by suffix in workspace
+    } else if (!path.isAbsolute(parsed.fileHint) && !cleanHint.includes('..')) {
+      // Try matching by suffix inside workspace only (never escape workspace root)
       const allFiles = collectWorkspaceSourceFiles(root);
       const normHint = cleanHint.replace(/\\/g, '/').toLowerCase();
       for (const f of allFiles) {
+        if (!isRealSubpathOf(root, f)) continue;
         const rel = path.relative(root, f).replace(/\\/g, '/').toLowerCase();
         if (rel === normHint || rel.endsWith(`/${normHint}`)) {
           candidateFiles.push(f);
@@ -2565,6 +2597,7 @@ export function extractSymbolFingerprint(
   if (parsed.isWholeFile) {
     if (candidateFiles.length === 0) return null;
     const targetFile = candidateFiles[0];
+    if (!isRealSubpathOf(root, targetFile)) return null;
     const rawContent = fs.readFileSync(targetFile, 'utf8');
     const lines = rawContent.split(/\r?\n/);
     const relPath = resolveCanonicalRelativePath(root, targetFile);
@@ -2673,7 +2706,7 @@ export function findSymbolCallers(
   const refRegex = new RegExp(`\\b${esc}\\b`);
   const callers: string[] = [];
 
-  const files = collectWorkspaceSourceFiles(root, 300);
+  const files = collectWorkspaceSourceFiles(root, 2500);
   for (const filePath of files) {
     if (callers.length >= maxCallers) break;
     let raw: string;
@@ -3069,7 +3102,7 @@ export function getWorkspaceSourcesSig(workspaceRoot: string): string {
   if (cached && cached.expiresAt > now) {
     return cached.sig;
   }
-  const files = collectWorkspaceSourceFiles(root, 300);
+  const files = collectWorkspaceSourceFiles(root, 2500);
   const parts: string[] = [];
   for (const f of files) {
     try {
@@ -3178,10 +3211,32 @@ export function verifyMemoryFreshness(
         const fp = memory.ast_fingerprints[symKey];
         if (fp && fp.file_path && fp.file_path !== '(unrecorded)') {
           const p = path.resolve(root, fp.file_path);
-          targetSigs.push(`${fp.file_path}:${getFileSigFast(p)}`);
+          targetSigs.push(
+            isRealSubpathOf(root, p)
+              ? `${fp.file_path}:${getFileSigFast(p)}`
+              : `${fp.file_path}:outside-workspace`
+          );
         }
       }
-      targetFilesSig = targetSigs.join('|');
+      let createdBranchHead = '';
+      if (
+        memory.created_branch &&
+        memory.created_branch !== 'HEAD' &&
+        memory.created_branch !== currentBranch &&
+        headSnap.commit !== 'uncommitted'
+      ) {
+        try {
+          const brRes = spawnSync('git', ['rev-parse', '--short', '--verify', memory.created_branch], {
+            cwd: root,
+            encoding: 'utf8',
+            timeout: 800,
+          });
+          if (brRes.status === 0 && brRes.stdout) {
+            createdBranchHead = brRes.stdout.trim();
+          }
+        } catch {}
+      }
+      targetFilesSig = `${targetSigs.join('|')}||git:${currentBranch || ''}:${currentCommit}:${memory.created_commit || ''}:${memory.created_branch || ''}:${createdBranchHead}:${hasCodeGraph ? '1' : '0'}`;
       canUseCache = true;
     }
 
@@ -3500,6 +3555,7 @@ export function verifyMemoryFreshness(
           const histFp = extractSymbolFingerprintAtCommit(root, createdCommit, symKey, recorded);
           const histMatchesRecorded =
             Boolean(histFp) &&
+            Boolean(recorded.ast_hash) &&
             (histFp!.ast_hash === recorded.ast_hash ||
               extractSymbolFingerprintAtCommitV1(root, createdCommit, symKey, recorded)?.ast_hash ===
                 recorded.ast_hash);
@@ -3519,7 +3575,7 @@ export function verifyMemoryFreshness(
                 ? histExtracted.blockCode
                 : histLines.slice(histFp.start_line - 1, histFp.end_line).join('\n');
               const liveFullPath = path.resolve(root, live.file_path);
-              if (fs.existsSync(liveFullPath)) {
+              if (isRealSubpathOf(root, liveFullPath) && fs.existsSync(liveFullPath)) {
                 const liveFullText = fs.readFileSync(liveFullPath, 'utf8');
                 const liveLines = liveFullText.split(/\r?\n/);
                 const liveExtracted = extractSymbolBlockFromLines(liveLines, parsed.symbolName, parsed.classHint, ext);
@@ -3972,9 +4028,17 @@ export function refreshMemories(
         continue;
       }
 
+      // Only rewrite unchanged-branch memories when created_commit is missing or AST fingerprints drifted/incomplete;
+      // advancing HEAD alone must not churn untouched memory files.
       let differs = false;
-      if (memory.created_commit !== currentCommit) differs = true;
-      if (memory.created_branch !== currentBranch) differs = true;
+      if (
+        (!memory.created_commit || memory.created_commit === 'uncommitted') &&
+        currentCommit &&
+        currentCommit !== 'uncommitted'
+      ) {
+        differs = true;
+      }
+      if ((memory.created_branch || '') !== (currentBranch || '')) differs = true;
 
       const existingKeys = Object.keys(memory.ast_fingerprints);
       if (existingKeys.length !== targetKeys.length) {

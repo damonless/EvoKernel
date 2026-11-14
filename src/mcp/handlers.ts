@@ -235,8 +235,28 @@ export const META_MCP_TOOLS = [
 ] as const;
 
 export function isSubpathOf(parent: string, child: string): boolean {
-  const normParent = path.resolve(parent);
-  const normChild = path.resolve(child);
+  const resolveWithRealAncestor = (p: string): string => {
+    const abs = path.resolve(p);
+    try {
+      if (fs.existsSync(abs)) return fs.realpathSync(abs);
+      let cur = path.dirname(abs);
+      const trailing: string[] = [path.basename(abs)];
+      while (!fs.existsSync(cur)) {
+        const up = path.dirname(cur);
+        if (up === cur) break;
+        trailing.unshift(path.basename(cur));
+        cur = up;
+      }
+      if (fs.existsSync(cur)) {
+        return path.join(fs.realpathSync(cur), ...trailing);
+      }
+    } catch {
+      // fall back to lexical resolution
+    }
+    return abs;
+  };
+  const normParent = resolveWithRealAncestor(parent);
+  const normChild = resolveWithRealAncestor(child);
   const rel = path.relative(normParent, normChild);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
@@ -271,6 +291,7 @@ export class EvoMcpDispatcher {
   private watermarkDirtySig = '';
   private lastWorktreeStateSig = '';
   private activeCallCount = 0;
+  private readonly sessionProposedIds = new Map<string, Map<string, EvoKind>>();
 
   constructor(workspaceRoot: string, onCoreRulesChanged?: () => void) {
     this.defaultRoot = path.resolve(workspaceRoot);
@@ -414,6 +435,52 @@ export class EvoMcpDispatcher {
       return '\n💡 Uncommitted edits detected — call evo_propose(workspace) once root cause/fix is verified.';
     }
     return '';
+  }
+
+  private recordSessionProposal(
+    workspaceRoot: string,
+    id: string,
+    kind: EvoKind,
+    supersedesIds?: string[],
+    enabled = true
+  ): void {
+    const wsKey = path.resolve(workspaceRoot).toLowerCase();
+    let wsMap = this.sessionProposedIds.get(wsKey);
+    if (!wsMap) {
+      wsMap = new Map<string, EvoKind>();
+      this.sessionProposedIds.set(wsKey, wsMap);
+    }
+    if (supersedesIds) {
+      for (const oldId of supersedesIds) {
+        const cleanOld = sanitizeId(oldId);
+        if (cleanOld && cleanOld !== id) {
+          wsMap.delete(cleanOld);
+        }
+      }
+    }
+    if (enabled === false) {
+      wsMap.delete(id);
+    } else if (id) {
+      wsMap.set(id, kind);
+    }
+  }
+
+  private getSessionAntiPoisonReminder(
+    workspaceRoot: string,
+    filterKind: EvoKind | 'all' = 'all'
+  ): string {
+    const wsKey = path.resolve(workspaceRoot).toLowerCase();
+    const wsMap = this.sessionProposedIds.get(wsKey);
+    if (!wsMap || wsMap.size === 0) return '';
+    const ids: string[] = [];
+    for (const [id, k] of wsMap.entries()) {
+      if (filterKind === 'all' || k === filterKind || k === 'memory') {
+        ids.push(id);
+      }
+    }
+    if (ids.length === 0) return '';
+    const recentIds = ids.slice(-5);
+    return `\n🔄 Anti-Poisoning Guard: Earlier in this session you crystallized [${recentIds.join(', ')}]. If new findings or user feedback refine or overturn that diagnosis, call evo_propose(id, supersedes_id: id, workspace) to update it.`;
   }
 
   public setClientRoots(roots: string[], readyPromise?: Promise<void>): void {
@@ -928,10 +995,18 @@ export class EvoMcpDispatcher {
       }
     }
 
+    const highRelevanceHits = mergedHits.filter((h) => !h.low_overlap);
+    const effectiveMergedHits =
+      highRelevanceHits.length >= 2
+        ? highRelevanceHits
+        : highRelevanceHits.length === 1
+          ? mergedHits.filter((h) => !h.low_overlap || (h.matched_concepts ?? 0) > 0)
+          : mergedHits;
+
     const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
       s === 'STALE' ? 2 : s === 'OTHER_BRANCH' ? 1 : 0;
 
-    const hits = mergedHits
+    const hits = effectiveMergedHits
       .sort((a, b) => {
         const tierDiff = statusTier(a.memory_status) - statusTier(b.memory_status);
         if (tierDiff !== 0) return tierDiff;
@@ -1022,10 +1097,11 @@ export class EvoMcpDispatcher {
       )
       .slice(0, 3)
       .map((h) => h.id);
+    const antiPoisonReminder = this.getSessionAntiPoisonReminder(targetCtx.storage.rootDir, kind);
     const footerDirective =
       topGuardrailIds.length > 0
-        ? `Action Required: Call evo_inspect(id, "L2", workspace) on matched guardrails/SOPs [${topGuardrailIds.join(', ')}] to load full checklists (never rely on L0 summaries alone), or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}`
-        : `Tip: Call evo_inspect(id, "L1"|"L2", workspace) for details/topology anchors or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}`;
+        ? `Action Required: Call evo_inspect(id, "L2", workspace) on matched guardrails/SOPs [${topGuardrailIds.join(', ')}] to load full checklists (never rely on L0 summaries alone), or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}${antiPoisonReminder}`
+        : `Tip: Call evo_inspect(id, "L1"|"L2", workspace) for details/topology anchors or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}${antiPoisonReminder}`;
 
     const provenanceLine =
       '🛡️ Recall Provenance: Local observable chain active (search -> inspect/run -> verified outcome tracked in .evo/.cache/telemetry.db; 0 outbound telemetry).';
@@ -1070,9 +1146,13 @@ export class EvoMcpDispatcher {
       return { hit_count: 1, helped_count: 0, tokens_saved: 0 };
     };
 
-    const formatInspectResult = (bodyText: string) => {
+    const formatInspectResult = (bodyText: string, isPaused = false) => {
+      const pausedBanner = isPaused
+        ? '> [!WARNING] **[PAUSED — enabled: false]**: This capability is currently paused in EvoKernel Workbench. Inspect only; do not rely on it as active policy.\n\n'
+        : '';
       const reminder = this.checkDirtyTreeReminder(storage.rootDir, telemetry || this.telemetry);
-      return { content: [{ type: 'text' as const, text: bodyText + reminder }] };
+      const antiPoisonReminder = this.getSessionAntiPoisonReminder(storage.rootDir);
+      return { content: [{ type: 'text' as const, text: pausedBanner + bodyText + reminder + antiPoisonReminder }] };
     };
 
     const parsedExt = parseExternalToolId(rawId);
@@ -1164,7 +1244,7 @@ export class EvoMcpDispatcher {
         tier === 'L1'
           ? `[RULE L1] ${rule.id} (${rule.scope_glob})\nL0: ${rule.l0_summary}\nTokens: ${rule.tokens}`
           : `[RULE L2] ${rule.id} — ${rule.title}\nScope: ${rule.scope_glob} | Core: ${rule.core}\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nL0: ${rule.l0_summary}\n\n${rule.content}`;
-      return formatInspectResult(body);
+      return formatInspectResult(body, rule.enabled === false);
     }
 
     let skill = storage.getSkill(id);
@@ -1211,7 +1291,7 @@ export class EvoMcpDispatcher {
         tier === 'L1'
           ? `[SKILL L1] ${skill.id} — ${skill.title}\nL0: ${skill.l0_summary}\nTags: ${skill.tags.join(', ')}\n\n## L1 Contract\n${skill.l1_contract}`
           : `[SKILL L2] ${skill.id} — ${skill.title}\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nL0: ${skill.l0_summary}\n\n## L1 Contract\n${skill.l1_contract}\n\n## L2 SOP\n${skill.l2_sop}`;
-      return formatInspectResult(body);
+      return formatInspectResult(body, skill.enabled === false);
     }
 
     let tool = storage.getTool(id);
@@ -1258,7 +1338,7 @@ export class EvoMcpDispatcher {
         tier === 'L1'
           ? `[TOOL L1] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}`
           : `[TOOL L2] ${tool.id} (${tool.runtime})\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}\n\nScript (${tool.entry_script}):\n\`\`\`${tool.runtime}\n${tool.script_code}\n\`\`\``;
-      return formatInspectResult(body);
+      return formatInspectResult(body, tool.enabled === false);
     }
 
     const memory = storage.getMemory(id);
@@ -1355,7 +1435,7 @@ export class EvoMcpDispatcher {
         ]
           .filter(Boolean)
           .join('\n');
-        return formatInspectResult(l1Body);
+        return formatInspectResult(l1Body, memory.enabled === false);
       }
 
       const stat = getTelemetryStat(memory.id, telemetry);
@@ -1383,7 +1463,7 @@ export class EvoMcpDispatcher {
       ]
         .filter(Boolean)
         .join('\n');
-      return formatInspectResult(l2Body);
+      return formatInspectResult(l2Body, memory.enabled === false);
     }
 
     return {
@@ -1495,17 +1575,20 @@ export class EvoMcpDispatcher {
         const header = `[evo_run: ${canonicalExtId} (proxy: ${parsedExt.serverName}/${resolvedToolName}) | exit=${res.isError ? 1 : 0} | ${res.durationMs}ms]`;
         const formattedText = res.content.map((c) => c.text).join('\n\n');
         const reminder = this.checkDirtyTreeReminder(initialCtx.storage.rootDir, initialCtx.telemetry);
+        const antiPoisonReminder = this.getSessionAntiPoisonReminder(initialCtx.storage.rootDir);
         return {
           isError: res.isError,
-          content: [{ type: 'text' as const, text: `${header}\n\n${formattedText}${reminder}` }],
+          content: [{ type: 'text' as const, text: `${header}\n\n${formattedText}${reminder}${antiPoisonReminder}` }],
         };
       };
 
       return executeCall();
     }
 
-    let tool = this.storage.getTool(toolId);
-    let activeTelemetry = this.telemetry;
+    const initialStorage = activeCtx?.storage || this.storage;
+    const localTool = initialStorage.getTool(toolId);
+    let tool = localTool;
+    let activeTelemetry = activeCtx?.telemetry || this.telemetry;
     if (!tool) {
       for (const gCtx of this.getGlobalFallbackContexts()) {
         const gTool = gCtx.storage.getTool(toolId);
@@ -1515,6 +1598,17 @@ export class EvoMcpDispatcher {
           break;
         }
       }
+    }
+    if (tool && tool.enabled === false) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text' as const,
+            text: `ERR_CAPABILITY_PAUSED: Micro-Tool '${toolId}' is currently paused (enabled: false) and cannot be executed.`,
+          },
+        ],
+      };
     }
     if (!tool) {
       return {
@@ -1585,6 +1679,7 @@ export class EvoMcpDispatcher {
       }
 
       const reminder = this.checkDirtyTreeReminder(execCwd, boundTelemetry);
+      const antiPoisonReminder = this.getSessionAntiPoisonReminder(boundStorage.rootDir);
       const output = [
         `[evo_run: ${targetTool.id} (${targetTool.runtime}) | exit=${res.exitCode} | ${res.durationMs}ms]`,
         res.stdout ? `STDOUT:\n${res.stdout}` : '',
@@ -1595,7 +1690,7 @@ export class EvoMcpDispatcher {
 
       return {
         isError: !success,
-        content: [{ type: 'text' as const, text: output + reminder }],
+        content: [{ type: 'text' as const, text: output + reminder + antiPoisonReminder }],
       };
     };
 
@@ -1630,6 +1725,17 @@ export class EvoMcpDispatcher {
         ],
       };
     }
+
+    const committedId = String(
+      (result.diagnostics as Record<string, unknown> | undefined)?.id || sanitizeId(payload.id || '')
+    );
+    this.recordSessionProposal(
+      storage.rootDir,
+      committedId,
+      payload.kind,
+      payload.supersedes_id ? [payload.supersedes_id] : undefined,
+      payload.enabled !== false
+    );
 
     if (payload.kind === 'rule' || payload.kind === 'tool' || payload.kind === 'skill') {
       syncManagedRuleBlocks(storage.rootDir);
@@ -1855,6 +1961,14 @@ export class EvoMcpDispatcher {
         fs.writeFileSync(snap.path, snap.data);
       }
       (telemetry || this.telemetry)?.syncFromDisk();
+    } else {
+      this.recordSessionProposal(
+        storage.rootDir,
+        mergedCleanId,
+        effectiveMergedProposal.kind,
+        targetIds,
+        effectiveMergedProposal.enabled !== false
+      );
     }
 
     syncManagedRuleBlocks(storage.rootDir);

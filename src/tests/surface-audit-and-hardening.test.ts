@@ -17,7 +17,12 @@ import {
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { EvoGatekeeper, hasUnsafeHookRegex, isValidContrastiveEvidence } from '../core/gatekeeper.js';
-import { executeSandboxedScript, executeSandboxedScriptAsync, killProcessTreeAsync } from '../core/sandbox.js';
+import {
+  executeSandboxedScript,
+  executeSandboxedScriptAsync,
+  killProcessTreeAsync,
+  resolvePythonBinary,
+} from '../core/sandbox.js';
 import {
   maskSourceLexical,
   stripCStyleComments,
@@ -25,6 +30,8 @@ import {
   findPythonBlockEnd,
   extractSymbolFingerprint,
   extractSymbolBlockFromLines,
+  isRealSubpathOf,
+  refreshMemories,
   verifyMemoryFreshness,
 } from '../core/memory.js';
 import { auditHarnessSurfaces, runAudit, runRefactor } from '../cli/audit.js';
@@ -6210,4 +6217,186 @@ process.exit(hasRule ? 0 : 1);
     }
   });
 
+  test('Security, MCP pause guard, lexicon ReDoS guard, non-churn refresh, hook --dry-run, and Score/UI surface hardening', async () => {
+    const wsA = createTempWorkspace();
+    const wsB = createTempWorkspace();
+    const fakeHome = createTempWorkspace();
+    const wsGit = createTempWorkspace();
+    const wsHook = createTempWorkspace();
+    const wsCleanScore = createTempWorkspace();
+
+    try {
+      // [SEC-1] Directory junction / symlink escape inside workspace must return false
+      fs.writeFileSync(path.join(wsB, 'secret.ts'), 'export const secret = 1;\n', 'utf8');
+      const linkPath = path.join(wsA, 'linked');
+      fs.symlinkSync(wsB, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+      assert.strictEqual(
+        isRealSubpathOf(wsA, path.join(linkPath, 'secret.ts')),
+        false,
+        'isRealSubpathOf must reject symlink/junction paths escaping workspace root'
+      );
+      assert.strictEqual(isRealSubpathOf(wsA, path.join(wsA, 'src', 'new-file.ts')), true);
+
+      // [SEC-2] ReDoS nested quantifier rejection while keeping valid optional decimal groups + stripping g/y
+      const compiledLex = compileLexiconConfig({
+        synonyms: {},
+        pattern_expansions: [
+          { pattern: '(a+)+$', flags: 'gi', tokens: ['redos'] },
+          { pattern: '\\d+(?:\\.\\d+)?V', flags: 'gi', tokens: ['voltage'] },
+        ],
+      });
+      assert.strictEqual(compiledLex.patternExpansions.length, 1, 'Unsafe ReDoS pattern must be dropped');
+      assert.strictEqual(compiledLex.patternExpansions[0].regex.global, false, 'g flag must be stripped');
+      assert.strictEqual(compiledLex.patternExpansions[0].regex.sticky, false, 'y flag must be stripped');
+      assert.strictEqual(compiledLex.patternExpansions[0].regex.test('12.5V'), true);
+      assert.strictEqual(compiledLex.patternExpansions[0].regex.test('12.5V'), true);
+
+      // [MCP-1] Paused tool blocked with ERR_CAPABILITY_PAUSED & evo_inspect shows [PAUSED — enabled: false]
+      const storageMcp = new EvoStorage(wsA);
+      storageMcp.ensureInitialized();
+      storageMcp.saveTool(
+        {
+          id: 'paused-tool',
+          name: 'paused-tool',
+          title: 'Paused Tool',
+          description: 'Tool disabled for runtime invocation.',
+          l0_summary: 'Disabled tool for MCP pause test.',
+          runtime: 'node',
+          input_schema: { type: 'object', properties: {} },
+          tags: ['test'],
+          origin: 'session',
+          enabled: false,
+          review_status: 'approved',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        'if (process.argv.includes("--self-test")) process.exit(0);\nconsole.log("ok");\n'
+      );
+      const dispatcher = new EvoMcpDispatcher(wsA);
+      try {
+        const inspectPaused = dispatcher.handleToolCall('evo_inspect', {
+          workspace: wsA,
+          id: 'paused-tool',
+          tier: 'L2',
+        });
+        assert.match(inspectPaused.content[0]?.text || '', /\[PAUSED\s+—\s+enabled:\s+false\]/);
+
+        const runPaused = await dispatcher.handleToolCall('evo_run', {
+          workspace: wsA,
+          tool_id: 'paused-tool',
+        });
+        assert.strictEqual(runPaused.isError, true, 'Running a disabled tool must fail');
+        assert.match(runPaused.content[0]?.text || '', /ERR_CAPABILITY_PAUSED/);
+      } finally {
+        dispatcher.close();
+      }
+
+      // [CORE-1] refreshMemories must not churn unchanged AST memories solely because HEAD advances
+      child_process.spawnSync('git', ['init'], { cwd: wsGit, stdio: 'ignore' });
+      child_process.spawnSync('git', ['config', 'user.email', 'test@evokernel.local'], { cwd: wsGit, stdio: 'ignore' });
+      child_process.spawnSync('git', ['config', 'user.name', 'EvoTest'], { cwd: wsGit, stdio: 'ignore' });
+      fs.mkdirSync(path.join(wsGit, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(wsGit, 'src', 'core.ts'),
+        'export function stableHelper(v: number): number {\n  return v + 1;\n}\n',
+        'utf8'
+      );
+      child_process.spawnSync('git', ['add', '.'], { cwd: wsGit, stdio: 'ignore' });
+      child_process.spawnSync('git', ['commit', '-m', 'init core'], { cwd: wsGit, stdio: 'ignore' });
+
+      const fp = extractSymbolFingerprint(wsGit, 'src/core.ts#stableHelper');
+      assert.ok(fp, 'Expected live symbol fingerprint');
+      const gitStorage = new EvoStorage(wsGit);
+      gitStorage.ensureInitialized();
+      const head1 = child_process.spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: wsGit,
+        encoding: 'utf8',
+      }).stdout.trim();
+      const branch1 = child_process.spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+        cwd: wsGit,
+        encoding: 'utf8',
+      }).stdout.trim();
+      gitStorage.saveMemory({
+        id: 'stable-helper-mem',
+        title: 'Stable Helper Memory',
+        l0_summary: 'Tracks stableHelper AST without churn across unrelated commits.',
+        symptom: 'Initial observation',
+        root_cause: 'Verified baseline',
+        solution: 'Keep stableHelper monotonic',
+        target_symbols: ['src/core.ts#stableHelper'],
+        ast_fingerprints: { 'src/core.ts#stableHelper': fp! },
+        tags: ['core'],
+        origin: 'session',
+        enabled: true,
+        review_status: 'approved',
+        created_commit: head1,
+        created_branch: branch1,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      // Unrelated commit on README.md advances HEAD
+      fs.writeFileSync(path.join(wsGit, 'README.md'), '# Unrelated Docs Change\n', 'utf8');
+      child_process.spawnSync('git', ['add', 'README.md'], { cwd: wsGit, stdio: 'ignore' });
+      child_process.spawnSync('git', ['commit', '-m', 'docs update'], { cwd: wsGit, stdio: 'ignore' });
+      const refreshRes = refreshMemories(wsGit);
+      assert.ok(
+        refreshRes.unchanged.includes('stable-helper-mem'),
+        `Unchanged AST memory on same branch must stay in unchanged, got: ${JSON.stringify(refreshRes)}`
+      );
+      assert.strictEqual(refreshRes.refreshed.includes('stable-helper-mem'), false);
+
+      // [CORE-2] resolvePythonBinary returns non-empty executable candidate
+      const pyBin = resolvePythonBinary();
+      assert.strictEqual(typeof pyBin, 'string');
+      assert.ok(pyBin.length > 0);
+
+      // hook stop --dry-run must perform zero telemetry DB mutations
+      const hookStorage = new EvoStorage(wsHook);
+      hookStorage.ensureInitialized();
+      const hookTelem = new EvoTelemetry(hookStorage);
+      hookTelem.close();
+      const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
+      const dryRunProc = child_process.spawnSync(
+        process.execPath,
+        [cliEntry, 'hook', 'stop', '--dry-run', '--workspace', wsHook],
+        {
+          encoding: 'utf8',
+          input: JSON.stringify({ session_id: 'dry-test', transcript_text: 'completed check' }),
+          timeout: 5000,
+        }
+      );
+      assert.strictEqual(dryRunProc.status, 0, dryRunProc.stderr);
+      const roHookDb = openSqliteReadOnly(path.join(hookStorage.cacheDir, 'telemetry.db'));
+      try {
+        const recallCountRow = roHookDb.prepare('SELECT COUNT(*) AS cnt FROM recall_events').get() as { cnt: number };
+        assert.strictEqual(recallCountRow.cnt, 0, 'hook --dry-run must write 0 recall_events');
+      } finally {
+        roHookDb.close();
+      }
+
+      // [SCORE-1..2] Clean initialized workspace achieves Grade A+ (Fixed L0 Gateway badge in UI)
+      runInit(wsCleanScore, { targets: ['cursor'], globalHomeDir: fakeHome });
+      const cleanScore = buildScoreReport(wsCleanScore, { includeGlobal: false });
+      assert.strictEqual(cleanScore.hasEvo, true);
+      assert.strictEqual(cleanScore.mcpTax.hasEvoMcpMounted, true);
+      assert.strictEqual(cleanScore.grade, 'A+');
+      assert.ok(cleanScore.overallScore >= 98, `Expected clean initialized workspace score >= 98, got ${cleanScore.overallScore}`);
+
+      const uiHtml = renderUiClientHtml(buildUiSnapshot(wsCleanScore), { token: 't', isExport: false, anon: false });
+      assert.ok(uiHtml.includes('/api/export'), 'Workbench UI must include /api/export route');
+      assert.ok(uiHtml.includes('Fixed L0 Gateway'), 'Workbench UI must support Fixed L0 Gateway display');
+      assert.strictEqual(/\bon[a-z]+\s*=/i.test(uiHtml), false, 'Workbench HTML must contain zero inline on*= handlers or on* identifier assignments');
+      assert.strictEqual(uiHtml.includes('confirm('), false, 'Workbench HTML must not call blocking window.confirm(');
+      assert.strictEqual(uiHtml.includes('max-width: 360px;'), false);
+      assert.strictEqual(/:\s*98(?!\d)/.test(uiHtml), false);
+    } finally {
+      safeCleanup(wsA);
+      safeCleanup(wsB);
+      safeCleanup(fakeHome);
+      safeCleanup(wsGit);
+      safeCleanup(wsHook);
+      safeCleanup(wsCleanScore);
+    }
+  });
 });

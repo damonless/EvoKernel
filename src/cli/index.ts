@@ -122,6 +122,7 @@ Options:
   --export [path]      Export complete static HTML snapshot without starting server
   --anon               Anonymize workspace paths and non-seed capabilities
   --install-ide        Mount IDE extension into detected IDEs before starting server
+  --ide <targets>      Comma-separated list of target IDEs (vscode, cursor, windsurf, trae, antigravity, all)
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -162,6 +163,8 @@ Usage:
 Cleanly remove EvoKernel marker blocks, rules, and MCP registrations from host configs.
 
 Options:
+  --unmount-ide        Also uninstall mounted IDE extension bundles & registry entries
+  --ide <targets>      Comma-separated target IDEs when --unmount-ide is set
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -218,6 +221,8 @@ Subcommands:
   refresh              Re-anchor drifted AST fingerprints to current commit/branch
 
 Options:
+  --unmount-ide        Also uninstall mounted IDE extension bundles & registry entries
+  --ide <targets>      Comma-separated target IDEs when --unmount-ide is set
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -292,6 +297,8 @@ Usage:
 Render the ASCII Self-Evolving Capability & Cognitive Memory Tree (.evo/).
 
 Options:
+  --unmount-ide        Also uninstall mounted IDE extension bundles & registry entries
+  --ide <targets>      Comma-separated target IDEs when --unmount-ide is set
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -309,6 +316,7 @@ Deprecated alias for 'evo doctor --roi': displays ROI Telemetry Ledger, Session-
 
 Options:
   --json               Output ROI & telemetry ledger in JSON format
+  --global, -g         Include global capability store (~/.evo/global) statistics
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -344,6 +352,8 @@ Usage:
 Start the stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools).
 
 Options:
+  --unmount-ide        Also uninstall mounted IDE extension bundles & registry entries
+  --ide <targets>      Comma-separated target IDEs when --unmount-ide is set
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -747,6 +757,7 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--export',
     '--anon',
     '--install-ide',
+    '--ide',
   ],
   init: [
     ...GLOBAL_COMMON_FLAGS,
@@ -759,7 +770,7 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--no-ide',
     '--ide',
   ],
-  uninstall: [...GLOBAL_COMMON_FLAGS],
+  uninstall: [...GLOBAL_COMMON_FLAGS, '--unmount-ide', '--ide'],
   bootstrap: [...GLOBAL_COMMON_FLAGS, '--max-commits'],
   virtualize: [...GLOBAL_COMMON_FLAGS, '--dry-run', '--restore', '--global', '-g'],
   memory: [...GLOBAL_COMMON_FLAGS, '--refresh', '--json'],
@@ -776,7 +787,8 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--json',
   ],
   tree: [...GLOBAL_COMMON_FLAGS, '--json', '--full'],
-  stats: [...GLOBAL_COMMON_FLAGS, '--json'],
+  stats: [...GLOBAL_COMMON_FLAGS, '--json', '--global', '-g'],
+  hook: [...GLOBAL_COMMON_FLAGS, '--payload', '--harness', '--dry-run', '--tool-name', '--target-file'],
   doctor: [...GLOBAL_COMMON_FLAGS, '--json', '--roi', '--probe', '--no-probe'],
   check: [...GLOBAL_COMMON_FLAGS, '--json'],
   inspect: [...GLOBAL_COMMON_FLAGS, '--json'],
@@ -1590,9 +1602,9 @@ export function runCli(argv: string[]): void {
       const targets = parseTargetsArg(args, workspaceRoot);
       const linkEvoFrom = parseLinkArg(args);
       const warmup = args.includes('--warmup') && !args.includes('--no-warmup');
-      const installIde = args.includes('--install-ide') ? true : undefined;
       const noIde = args.includes('--no-ide');
       const ide = parseIdeTargetsArg(args);
+      const installIde = args.includes('--install-ide') || (Boolean(ide?.length) && !noIde) ? true : undefined;
       const logInit = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
       const res = runInit(workspaceRoot, {
         stealth,
@@ -1793,7 +1805,7 @@ export function runCli(argv: string[]): void {
         console.log(renderAuditReport(report, termOpts));
       }
       if (!report.healthy) {
-        process.exit(1);
+        return handleExit(1);
       }
       break;
     }
@@ -1829,6 +1841,7 @@ export function runCli(argv: string[]): void {
 
     case 'stats': {
       const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
+      const includeGlobal = args.includes('--global') || args.includes('-g');
       console.error(
         formatTerminalOutput(
           "ℹ️ Note: 'evo stats' is deprecated; use 'evo doctor --roi' for ROI & session-start tax diagnostics.",
@@ -1836,9 +1849,9 @@ export function runCli(argv: string[]): void {
         )
       );
       if (args.includes('--json')) {
-        console.log(JSON.stringify(buildEvoStatsJson(workspaceRoot), null, 2));
+        console.log(JSON.stringify(buildEvoStatsJson(workspaceRoot, { includeGlobal }), null, 2));
       } else {
-        console.log(renderEvoStats(workspaceRoot, termOpts));
+        console.log(renderEvoStats(workspaceRoot, { ...termOpts, includeGlobal }));
       }
       break;
     }
@@ -1857,6 +1870,7 @@ export function runCli(argv: string[]): void {
       const event = parseHookEvent(args);
       const payload = parseHookPayloadArg(args);
       const harness = parseHookHarnessArg(args);
+      const dryRun = args.includes('--dry-run');
 
       const isTestProcess = Boolean(process.argv[1]?.includes('.test.'));
 
@@ -1868,6 +1882,7 @@ export function runCli(argv: string[]): void {
             workspaceRoot,
             payload,
             harness,
+            dryRun,
             stdinData: stdinData || undefined,
             ...(isHumanCliHook ? cliTermOpts : {}),
           });
@@ -1877,11 +1892,11 @@ export function runCli(argv: string[]): void {
             );
           }
           if (result.exitCode !== 0) {
-            process.exit(result.exitCode);
+            return handleExit(result.exitCode);
           }
         }).catch((err) => {
           console.error(err);
-          process.exit(1);
+          return handleExit(1);
         });
       }
 
@@ -1889,6 +1904,7 @@ export function runCli(argv: string[]): void {
         workspaceRoot,
         payload,
         harness,
+        dryRun,
         ...(isHumanCliHook ? cliTermOpts : {}),
       });
       if (result.output) {
@@ -1897,7 +1913,7 @@ export function runCli(argv: string[]): void {
         );
       }
       if (result.exitCode !== 0) {
-        process.exit(result.exitCode);
+        return handleExit(result.exitCode);
       }
       break;
     }
@@ -2359,7 +2375,9 @@ export function runCli(argv: string[]): void {
     }
 
     case 'uninstall': {
-      const res = runUninstall(workspaceRoot);
+      const unmountIde = args.includes('--unmount-ide');
+      const ide = parseIdeTargetsArg(args);
+      const res = runUninstall(workspaceRoot, { unmountIde, ide });
       console.log(
         formatTerminalOutput(
           `🧹 Cleaned EvoKernel markers from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`,

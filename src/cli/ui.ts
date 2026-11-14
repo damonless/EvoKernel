@@ -20,6 +20,7 @@ import {
   EvoGatekeeper,
   captureWorkspaceMutationSignature,
   captureWorkspaceRollbackSnapshot,
+  parseSkillSectionsFromMarkdown,
   restoreWorkspaceFromSnapshot,
 } from '../core/gatekeeper.js';
 import {
@@ -921,6 +922,15 @@ export async function startUiServer(
         req.on('close', () => clients.delete(res));
         return;
       }
+      if (pathname === '/api/export') {
+        const exportHtml = buildExportHtmlContent(ws, { anon: options.anon });
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="evo-workbench-export.html"',
+        });
+        res.end(exportHtml);
+        return;
+      }
 
       // --- POST /api/action Router ---
       if (pathname === '/api/action') {
@@ -1101,7 +1111,7 @@ export async function startUiServer(
               return;
             }
 
-            if (rawKind === 'rule') {
+            if (rawKind !== 'memory') {
               syncManagedRuleBlocks(ws);
             }
             const telem = new EvoTelemetry(storage);
@@ -1137,7 +1147,7 @@ export async function startUiServer(
               return;
             }
 
-            if (rawKind === 'rule') {
+            if (rawKind !== 'memory') {
               syncManagedRuleBlocks(ws);
             }
             const telem = new EvoTelemetry(storage);
@@ -1169,7 +1179,7 @@ export async function startUiServer(
               return;
             }
 
-            let touchedRules = false;
+            let touchedManagedCatalog = false;
             let updatedCount = 0;
             const now = new Date().toISOString();
 
@@ -1204,7 +1214,7 @@ export async function startUiServer(
                   }
                 }
                 storage.saveRule({ ...rule, enabled: targetEnabled, updated_at: now });
-                touchedRules = true;
+                touchedManagedCatalog = true;
                 updatedCount++;
               } else if (rawKind === 'skill') {
                 const skill = storage.getSkill(cleanId);
@@ -1216,6 +1226,7 @@ export async function startUiServer(
                   continue;
                 }
                 storage.saveSkill({ ...skill, enabled: targetEnabled, updated_at: now });
+                touchedManagedCatalog = true;
                 updatedCount++;
               } else if (rawKind === 'tool') {
                 const tool = storage.getTool(cleanId);
@@ -1228,6 +1239,7 @@ export async function startUiServer(
                 }
                 const { script_code, script_path: _sp, ...manifest } = tool;
                 storage.saveTool({ ...manifest, enabled: targetEnabled, updated_at: now }, script_code);
+                touchedManagedCatalog = true;
                 updatedCount++;
               } else if (rawKind === 'memory') {
                 const mem = storage.getMemory(cleanId);
@@ -1243,7 +1255,7 @@ export async function startUiServer(
               }
             }
 
-            if (touchedRules) {
+            if (touchedManagedCatalog) {
               syncManagedRuleBlocks(ws);
             }
             const telem = new EvoTelemetry(storage);
@@ -1591,13 +1603,11 @@ export async function startUiServer(
               }
 
               const trimmedBody = body.trim();
-              const l1Match = trimmedBody.match(/## L1 Contract\s+([\s\S]*?)(?=## L2 SOP|$)/i);
-              const l2Match = trimmedBody.match(/## L2 SOP\s+([\s\S]*)$/i);
-              const l1_contract =
-                l1Match && l1Match[1].trim()
-                  ? l1Match[1].trim()
-                  : (existingSkill.l1_contract || 'Standard skill contract');
-              const l2_sop = l2Match && l2Match[1].trim() ? l2Match[1].trim() : trimmedBody;
+              const parsedSec = parseSkillSectionsFromMarkdown(trimmedBody);
+              const l1_contract = parsedSec.l1 || existingSkill.l1_contract || 'Standard skill contract';
+              const l2_sop =
+                parsedSec.l2 ||
+                (!parsedSec.hasL1Header && trimmedBody ? trimmedBody : existingSkill.l2_sop || '');
 
               preservedEnabled =
                 meta.enabled !== undefined
@@ -1686,6 +1696,15 @@ export async function startUiServer(
                   ? meta.review_status
                   : existingMem.review_status;
 
+              const nextTargetSymbols =
+                Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
+                  ? meta.target_symbols.map((s) => String(s).trim()).filter(Boolean)
+                  : existingMem.target_symbols;
+              const prevTargetSymbols = (existingMem.target_symbols || []).map((s) => s.trim()).filter(Boolean);
+              const sameTargetSymbols =
+                prevTargetSymbols.length === nextTargetSymbols.length &&
+                prevTargetSymbols.every((s, idx) => s === nextTargetSymbols[idx]);
+
               payload = {
                 kind: 'memory',
                 id: cleanId,
@@ -1696,25 +1715,24 @@ export async function startUiServer(
                 symptom,
                 root_cause,
                 solution,
-                target_symbols:
-                  Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
-                    ? meta.target_symbols.map(String)
-                    : existingMem.target_symbols,
-                tags:
-                  Array.isArray(meta.tags) && meta.tags.length > 0
-                    ? meta.tags.map(String)
-                    : existingMem.tags,
-                created_commit: meta.created_commit
-                  ? String(meta.created_commit).trim()
-                  : existingMem.created_commit,
-                created_branch: meta.created_branch
-                  ? String(meta.created_branch).trim()
-                  : existingMem.created_branch,
+                target_symbols: nextTargetSymbols,
+                tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
                 origin: meta.origin ? String(meta.origin) : (existingMem.origin || 'session'),
                 supersedes_id: cleanId,
                 enabled: preservedEnabled,
                 review_status: preservedReviewStatus,
-              };
+                ...(typeof meta.created_commit === 'string' && meta.created_commit.trim()
+                  ? { created_commit: meta.created_commit.trim() }
+                  : sameTargetSymbols && existingMem.created_commit
+                    ? { created_commit: existingMem.created_commit }
+                    : {}),
+                created_branch:
+                  typeof meta.created_branch === 'string' && meta.created_branch.trim()
+                    ? meta.created_branch.trim()
+                    : sameTargetSymbols
+                      ? existingMem.created_branch
+                      : undefined,
+              } as ProposalPayload;
             } else {
               const tool = storage.getTool(cleanId);
               if (!tool || !fs.existsSync(tool.script_path)) {
@@ -1757,11 +1775,14 @@ export async function startUiServer(
             }
 
             if (!gateRes.passed) {
+              snapshot = buildUiSnapshot(ws, { anon: options.anon });
+              notifyChange();
               sendJsonResponse(res, 400, {
                 ok: false,
                 code: gateRes.error_code,
                 gate_failed: gateRes.gate_failed,
                 error: gateRes.message || 'Gatekeeper rejected content update',
+                snapshot,
               });
               return;
             }
@@ -1882,29 +1903,34 @@ export async function startUiServer(
   };
 }
 
-export function exportUiHtml(
+export function buildExportHtmlContent(
   workspaceRoot: string,
-  outPath: string,
   options?: { anon?: boolean }
-): void {
+): string {
   const ws = path.resolve(workspaceRoot);
   const snapshot = buildUiSnapshot(ws, { anon: options?.anon });
-  const rawHtml = renderUiClientHtml(snapshot, { isExport: true, anon: options?.anon });
+  const rawHtml = renderUiClientHtml(snapshot, { isExport: true, token: '', anon: options?.anon });
 
   const scriptMatch = rawHtml.match(/<script>([\s\S]*?)<\/script>/);
   if (!scriptMatch) {
-    fs.writeFileSync(outPath, rawHtml.replace(/\r\n/g, '\n'), 'utf8');
-    return;
+    return rawHtml.replace(/\r\n/g, '\n');
   }
 
   const scriptContent = scriptMatch[1].replace(/\r\n/g, '\n');
   const hash = crypto.createHash('sha256').update(scriptContent, 'utf8').digest('base64');
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; script-src 'sha256-${hash}'; connect-src 'none';">`;
 
-  const finalHtml = rawHtml
+  return rawHtml
     .replace('<meta name="viewport"', `${cspMeta}\n  <meta name="viewport"`)
     .replace(/\r\n/g, '\n');
+}
 
+export function exportUiHtml(
+  workspaceRoot: string,
+  outPath: string,
+  options?: { anon?: boolean }
+): void {
+  const finalHtml = buildExportHtmlContent(workspaceRoot, options);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, finalHtml, 'utf8');
 }
@@ -1931,9 +1957,13 @@ export async function runUiCli(workspaceRoot: string, args: string[]): Promise<v
   const logUi = (line: string) => console.log(formatTerminalOutput(line, termOpts));
   const errUi = (line: string) => console.error(formatTerminalOutput(line, termOpts));
 
+  const ideOpt = parseCliOption(args, '--ide');
   if (args.includes('--install-ide')) {
     logUi('🔌 Mounting EvoKernel IDE extension into detected IDEs...');
-    const mountRes = mountIdeExtensions(workspaceRoot);
+    const targetIdes = ideOpt.value
+      ? ideOpt.value.split(',').map((s) => s.trim()).filter(Boolean)
+      : undefined;
+    const mountRes = mountIdeExtensions(workspaceRoot, { ide: targetIdes });
     if (mountRes.mounts && mountRes.mounts.length > 0) {
       for (const m of mountRes.mounts) {
         logUi(`  ├─ ${m.name}: ${m.targetPath} (${m.method} - ${m.status})`);
@@ -1963,12 +1993,14 @@ export async function runUiCli(workspaceRoot: string, args: string[]): Promise<v
   if (portOpt.matched) {
     if (!portOpt.value) {
       errUi('❌ Missing value for --port. Please specify a port number (e.g. --port 4310).');
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     const parsed = parseInt(portOpt.value, 10);
     if (!Number.isFinite(parsed) || parsed < 0 || parsed > 65535) {
       errUi(`❌ Invalid port "${portOpt.value}". Must be a valid port number between 0 and 65535.`);
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     port = parsed;
   }
@@ -1977,14 +2009,16 @@ export async function runUiCli(workspaceRoot: string, args: string[]): Promise<v
   if (hostOpt.matched) {
     if (!hostOpt.value || !hostOpt.value.trim()) {
       errUi('❌ Missing value for --host. Please specify a loopback host (e.g. --host 127.0.0.1).');
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     const normalizedHost = hostOpt.value.trim().toLowerCase();
     if (normalizedHost !== '127.0.0.1' && normalizedHost !== 'localhost') {
       errUi(
         `❌ Invalid --host "${hostOpt.value}". Only loopback addresses (127.0.0.1 or localhost) are permitted.`
       );
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -1993,7 +2027,8 @@ export async function runUiCli(workspaceRoot: string, args: string[]): Promise<v
   if (tokenOpt.matched) {
     if (!tokenOpt.value || !tokenOpt.value.trim()) {
       errUi('❌ Missing value for --token. Please specify a non-empty token string.');
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     token = tokenOpt.value.trim();
   }

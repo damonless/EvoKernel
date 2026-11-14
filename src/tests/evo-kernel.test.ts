@@ -41,7 +41,9 @@ import {
   compareRuleClauses,
   detectDomainNumbersInRule,
   extractActionableClauses,
+  parseSkillSectionsFromMarkdown,
 } from '../core/gatekeeper.js';
+import { L0_META_RULE_SEED } from '../templates/meta-rule.js';
 
 function createTempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'evo-test-ws-'));
@@ -4763,13 +4765,563 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
     assert.ok(SOURCE_EXTENSIONS.has('.rb'), '.rb must be in SOURCE_EXTENSIONS');
     assert.ok(SOURCE_EXTENSIONS.has('.sql'), '.sql must be in SOURCE_EXTENSIONS');
   });
+
+  test('50. E1-E5: anti-poisoning session guard, pre-commit memory anchor warning & re-anchoring, evo_propose schema polymorphism, low_overlap tool script noise filtering, and legacy maxCoreRuleTokens migration', async () => {
+    const ws = createTempWorkspace();
+    try {
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+
+      // --- E5: Legacy maxCoreRuleTokens: 2400 config migration ---
+      fs.writeFileSync(
+        storage.configPath,
+        JSON.stringify(
+          {
+            maxCoreRuleTokens: 2400,
+            duplicateSimilarityThreshold: 0.62,
+            sandboxTimeoutMs: 5000,
+            telemetryEnabled: true,
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+      assert.equal(
+        storage.getConfig().maxCoreRuleTokens,
+        1500,
+        'getConfig() must migrate legacy maxCoreRuleTokens: 2400 to 1500'
+      );
+      storage.ensureInitialized();
+      const persistedCfg = JSON.parse(fs.readFileSync(storage.configPath, 'utf8'));
+      assert.equal(
+        persistedCfg.maxCoreRuleTokens,
+        1500,
+        'ensureInitialized() must persist migrated maxCoreRuleTokens: 1500 to disk'
+      );
+
+      // Initialize git repo for E2/E3 tests
+      spawnSync('git', ['init'], { cwd: ws, stdio: 'ignore' });
+      spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: ws, stdio: 'ignore' });
+      spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: ws, stdio: 'ignore' });
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'mppt.c'),
+        'void sDeratingChargeCurr(int vpv) {\n  int limit = vpv + 20;\n}\n',
+        'utf8'
+      );
+      spawnSync('git', ['add', 'src/mppt.c'], { cwd: ws, stdio: 'ignore' });
+      spawnSync('git', ['commit', '-m', 'feat: initial mppt'], { cwd: ws, stdio: 'ignore' });
+      const commit1 = spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: ws,
+        encoding: 'utf8',
+      }).stdout.trim();
+
+      const dispatcher = new EvoMcpDispatcher(ws);
+
+      // --- E3.1: Omitted title fallback to l0_summary & inheritance from existing/superseded capability ---
+      const ruleNoTitle = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'mppt-table-index-guard',
+        l0_summary: 'Verify active model enum index before reading multi-model parameter tables.',
+        scope_glob: '**/*.{c,h}',
+        transfer_scenarios: [
+          'Multi-model struct array initializer lookup by hardware ID',
+          'ADC calibration gain table indexing across product variants',
+        ],
+        content:
+          'Always verify the active model index against the struct initializer array before computing loop gain ratios.',
+      });
+      assert.equal(Boolean(ruleNoTitle.isError), false, ruleNoTitle.content[0]?.text);
+      assert.equal(
+        storage.getRule('mppt-table-index-guard')?.title,
+        'Verify active model enum index before reading multi-model parameter tables.'
+      );
+
+      // Give it a distinct custom title, then supersede it without passing title
+      dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'mppt-table-index-guard',
+        supersedes_id: 'mppt-table-index-guard',
+        title: 'Custom Multi-Model Initializer Guard Title',
+        l0_summary: 'Verify active model enum index before reading multi-model parameter tables.',
+        scope_glob: '**/*.{c,h}',
+        transfer_scenarios: [
+          'Multi-model struct array initializer lookup by hardware ID',
+          'ADC calibration gain table indexing across product variants',
+        ],
+        content:
+          'Always verify the active model index against the struct initializer array before computing loop gain ratios.',
+      });
+      const ruleInheritedTitle = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'mppt-table-index-guard',
+        supersedes_id: 'mppt-table-index-guard',
+        l0_summary:
+          'Verify active model index and Boost diode pass-through boundary before loop tuning.',
+        scope_glob: '**/*.{c,h}',
+        transfer_scenarios: [
+          'Multi-model struct array initializer lookup by hardware ID',
+          'Boost topology diode pass-through when input voltage approaches bus voltage',
+        ],
+        content:
+          'Verify active model index in initializer tables and check physical Boost diode pass-through boundary.',
+      });
+      assert.equal(Boolean(ruleInheritedTitle.isError), false, ruleInheritedTitle.content[0]?.text);
+      assert.equal(
+        storage.getRule('mppt-table-index-guard')?.title,
+        'Custom Multi-Model Initializer Guard Title',
+        'Omitting title when superseding an existing capability must inherit its existing title'
+      );
+
+      // --- E3.2: Skill polymorphism (extract ## L1 Contract & ## L2 SOP from content, inherit missing sections) ---
+      const skillFromContent = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'skill',
+        id: 'mppt-audit-sop',
+        title: 'MPPT Loop & Topology Audit SOP',
+        l0_summary: 'SOP for auditing MPPT power overshoot and hardware pass-through boundaries.',
+        content:
+          '## L1 Contract\nUse when diagnosing PV input power overshoot or MPPT current limit anomalies.\n\n## L2 SOP\n1. Check active model index in Initial.c.\n2. Compare Vpv against Vbus for Boost diode conduction.',
+      });
+      assert.equal(Boolean(skillFromContent.isError), false, skillFromContent.content[0]?.text);
+      const savedSkill1 = storage.getSkill('mppt-audit-sop');
+      assert.ok(savedSkill1);
+      assert.match(savedSkill1!.l1_contract, /diagnosing PV input power overshoot/);
+      assert.match(savedSkill1!.l2_sop, /Compare Vpv against Vbus/);
+
+      // Update skill with only content (no ## L1 Contract header and no title) -> inherits title & l1_contract
+      const skillPartialUpdate = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'skill',
+        id: 'mppt-audit-sop',
+        supersedes_id: 'mppt-audit-sop',
+        l0_summary: 'SOP for auditing MPPT power overshoot and hardware pass-through boundaries.',
+        content:
+          '1. Verify active model index in Initial.c.\n2. Check Boost diode physical conduction when Vpv approaches Vbus.\n3. Verify line-mode battery feed load deduction.',
+      });
+      assert.equal(Boolean(skillPartialUpdate.isError), false, skillPartialUpdate.content[0]?.text);
+      const savedSkill2 = storage.getSkill('mppt-audit-sop');
+      assert.ok(savedSkill2);
+      assert.equal(savedSkill2!.title, 'MPPT Loop & Topology Audit SOP');
+      assert.match(savedSkill2!.l1_contract, /diagnosing PV input power overshoot/);
+      assert.match(savedSkill2!.l2_sop, /Verify line-mode battery feed load deduction/);
+
+      // Update skill with only ## L1 Contract in content -> must inherit existing l2_sop without overwriting l2_sop with L1
+      const skillL1OnlyUpdate = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'skill',
+        id: 'mppt-audit-sop',
+        supersedes_id: 'mppt-audit-sop',
+        content:
+          '## L1 Contract\nUse when diagnosing PV input power overshoot, MPPT current limit, or Boost diode conduction.',
+      });
+      assert.equal(Boolean(skillL1OnlyUpdate.isError), false, skillL1OnlyUpdate.content[0]?.text);
+      const savedSkill3 = storage.getSkill('mppt-audit-sop');
+      assert.ok(savedSkill3);
+      assert.match(savedSkill3!.l1_contract, /Boost diode conduction/);
+      assert.match(
+        savedSkill3!.l2_sop,
+        /Verify line-mode battery feed load deduction/,
+        'Updating only ## L1 Contract in content must preserve existing l2_sop'
+      );
+      assert.doesNotMatch(
+        savedSkill3!.l2_sop,
+        /## L1 Contract/,
+        'l2_sop must not be overwritten with ## L1 Contract when content only contains L1'
+      );
+
+      // Brand-new skill with only ## L1 Contract in content and no L2 must fail Gate 1
+      const incompleteNewSkill = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'skill',
+        id: 'incomplete-l1-only-skill',
+        title: 'Incomplete L1 Only Skill',
+        l0_summary: 'Skill missing L2 SOP section.',
+        content: '## L1 Contract\nOnly L1 contract provided without L2 SOP.',
+      });
+      assert.equal(Boolean(incompleteNewSkill.isError), true);
+
+      // Skill content with YAML frontmatter must strip frontmatter cleanly, and explicit l2_sop must take priority over content
+      const skillFrontmatterAndExplicitL2 = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'skill',
+        supersedes_id: 'mppt-audit-sop',
+        content:
+          '---\nid: mppt-audit-sop\ntitle: Ignored Frontmatter\n---\n## L1 Contract\nUse when diagnosing PV input power overshoot or MPPT current limit.\n\n## L2 SOP\n1. Fallback L2 in content that should be overridden by explicit l2_sop.',
+        l2_sop:
+          '1. Read sDeratingChargeCurr.\n2. Verify line-mode battery feed load deduction and explicit l2_sop precedence.',
+      });
+      assert.equal(
+        Boolean(skillFrontmatterAndExplicitL2.isError),
+        false,
+        skillFrontmatterAndExplicitL2.content[0]?.text
+      );
+      const savedSkill4 = storage.getSkill('mppt-audit-sop');
+      assert.ok(savedSkill4);
+      assert.doesNotMatch(savedSkill4!.l1_contract, /Ignored Frontmatter/);
+      assert.match(savedSkill4!.l2_sop, /explicit l2_sop precedence/);
+
+      // Superseding scoped rule without passing scope_glob or content inherits both
+      const ruleScopeInherit = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'mppt-table-index-guard',
+        supersedes_id: 'mppt-table-index-guard',
+        l0_summary: 'Verify active model index and Boost diode pass-through boundary before loop tuning.',
+      });
+      assert.equal(Boolean(ruleScopeInherit.isError), false, ruleScopeInherit.content[0]?.text);
+      assert.equal(
+        storage.getRule('mppt-table-index-guard')?.scope_glob,
+        '**/*.{c,h}',
+        'Omitting scope_glob when superseding a scoped rule must preserve its existing scope_glob'
+      );
+
+      // --- E2 & E3.3: Dirty worktree pre-commit anchor warning, {file, symbol} # normalization, and post-commit re-anchoring ---
+      fs.writeFileSync(
+        path.join(ws, 'src', 'mppt.c'),
+        'void sDeratingChargeCurr(int vpv) {\n  int limit = vpv;\n}\n',
+        'utf8'
+      );
+      const dirtyMemRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        id: 'pv-derating-headroom',
+        l0_summary: 'Remove +2A headroom offset in sDeratingChargeCurr causing 5400W PV overshoot.',
+        symptom: 'PV input power reaches 5400W at 450V high PV voltage.',
+        root_cause: 'Legacy +2A headroom offset in sDeratingChargeCurr allowed extra PV current.',
+        solution: 'Remove +2A offset in sDeratingChargeCurr.',
+        target_symbols: [{ file: 'src/mppt.c', symbol: 'sDeratingChargeCurr' }],
+        tags: ['mppt', 'derating'],
+      });
+      assert.equal(Boolean(dirtyMemRes.isError), false, dirtyMemRes.content[0]?.text);
+      const dirtyMemParsed = JSON.parse(dirtyMemRes.content[0].text);
+      assert.match(
+        dirtyMemParsed.message,
+        /\[PRE-COMMIT ANCHOR WARNING\]/,
+        'Proposing memory on dirty worktree must warn about pre-commit anchor'
+      );
+      assert.equal(dirtyMemParsed.diagnostics.uncommitted_worktree, true);
+      assert.ok(
+        Array.isArray(dirtyMemParsed.diagnostics.dirty_target_files) &&
+          dirtyMemParsed.diagnostics.dirty_target_files.includes('src/mppt.c'),
+        'dirty_target_files must report modified target file src/mppt.c'
+      );
+      const memBeforeCommit = storage.getMemory('pv-derating-headroom');
+      assert.ok(memBeforeCommit);
+      assert.deepEqual(
+        memBeforeCommit!.target_symbols,
+        ['src/mppt.c#sDeratingChargeCurr'],
+        'Object {file, symbol} target must normalize with #'
+      );
+      assert.equal(memBeforeCommit!.created_commit, commit1);
+
+      // Approve the memory and verify that if src/mppt.c is reverted to commit1 (pre-fix +2A),
+      // verifyMemoryFreshness does NOT falsely report VERIFIED via structural skeleton when histFp.ast_hash !== recorded.ast_hash
+      storage.saveMemory({ ...memBeforeCommit!, review_status: 'approved' });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'mppt.c'),
+        'void sDeratingChargeCurr(int vpv) {\n  int limit = vpv + 2;\n}\n',
+        'utf8'
+      );
+      clearMemoryVerificationCache();
+      const revertedReport = verifyMemoryFreshness(ws, storage.getMemory('pv-derating-headroom')!);
+      assert.equal(
+        revertedReport.overall_status,
+        'STALE',
+        'Dirty-anchored memory must report STALE when live file is reverted to pre-fix commit1 whose ast_hash differs from recorded.ast_hash'
+      );
+      // Restore the fix before committing
+      fs.writeFileSync(
+        path.join(ws, 'src', 'mppt.c'),
+        'void sDeratingChargeCurr(int vpv) {\n  int limit = vpv;\n}\n',
+        'utf8'
+      );
+
+      // Commit the fix and re-propose the memory using minimal re-anchoring call (omitting id/symptom/root_cause/solution/target_symbols) -> created_commit must update to commit2 and preserve tags & review_status
+      spawnSync('git', ['add', 'src/mppt.c'], { cwd: ws, stdio: 'ignore' });
+      spawnSync('git', ['commit', '-m', 'fix(mppt): remove +2A offset'], {
+        cwd: ws,
+        stdio: 'ignore',
+      });
+      const commit2 = spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: ws,
+        encoding: 'utf8',
+      }).stdout.trim();
+      assert.notEqual(commit2, commit1);
+
+      const cleanMemRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        supersedes_id: 'pv-derating-headroom',
+      });
+      assert.equal(Boolean(cleanMemRes.isError), false, cleanMemRes.content[0]?.text);
+      const cleanMemParsed = JSON.parse(cleanMemRes.content[0].text);
+      assert.doesNotMatch(cleanMemParsed.message, /\[PRE-COMMIT ANCHOR WARNING\]/);
+      const memAfterCommit = storage.getMemory('pv-derating-headroom');
+      assert.equal(
+        memAfterCommit?.created_commit,
+        commit2,
+        'Re-proposing memory after git commit with minimal payload must inherit fields and update created_commit to HEAD (commit2)'
+      );
+      assert.deepEqual(
+        memAfterCommit?.tags,
+        ['mppt', 'derating'],
+        'Minimal memory re-anchor must preserve existing tags'
+      );
+      assert.equal(
+        memAfterCommit?.review_status,
+        'approved',
+        'Minimal memory re-anchor must preserve existing review_status'
+      );
+
+      // --- E1 & E4: Anti-poisoning session reminder & low_overlap tool script noise filtering ---
+      assert.match(
+        L0_META_RULE_SEED,
+        /Never crystallize unverified guesses prematurely; if later turns or user feedback overturn\/refine an earlier session proposal, immediately update it via `supersedes_id`/,
+        'L0_META_RULE_SEED must forbid premature crystallization of unverified hypotheses'
+      );
+
+      // Propose an unrelated xlsx tool whose script_code happens to contain PV/MPPT/power words
+      const unrelatedToolRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'tool',
+        id: 'xlsx-style-cloner',
+        title: 'Excel Worksheet Style Cloner',
+        l0_summary: 'Clones Excel .xlsx cell borders, fonts, and column widths across sheets.',
+        scope_glob: '**/*',
+        runtime: 'node',
+        script_code:
+          'if (process.argv.includes("--self-test") || process.env.EVO_SELF_TEST === "1") process.exit(0);\n// Unrelated comment mentioning PV MPPT power overshoot sDeratingChargeCurr limit\nconsole.log("xlsx style cloner ok");\n',
+      });
+      assert.equal(Boolean(unrelatedToolRes.isError), false, unrelatedToolRes.content[0]?.text);
+
+      const mpptSearch = dispatcher.handleToolCall('evo_search', {
+        workspace: ws,
+        query: 'PV MPPT power overshoot sDeratingChargeCurr',
+      });
+      const mpptSearchText = mpptSearch.content[0].text;
+      assert.match(mpptSearchText, /pv-derating-headroom/);
+      assert.match(mpptSearchText, /mppt-audit-sop/);
+      assert.doesNotMatch(
+        mpptSearchText,
+        /\[TOOL\].*xlsx-style-cloner/,
+        'Unrelated xlsx-style-cloner tool must NOT appear as a search hit via script_code token leakage'
+      );
+      assert.match(
+        mpptSearchText,
+        /🔄 Anti-Poisoning Guard: Earlier in this session you crystallized \[.*pv-derating-headroom.*\]/,
+        'Subsequent evo_search in the same session must include the Anti-Poisoning Guard reminder'
+      );
+
+      const inspectAfterPropose = dispatcher.handleToolCall('evo_inspect', {
+        workspace: ws,
+        id: 'pv-derating-headroom',
+        tier: 'L2',
+      });
+      assert.match(
+        inspectAfterPropose.content[0].text,
+        /🔄 Anti-Poisoning Guard: Earlier in this session you crystallized \[.*pv-derating-headroom.*\]/,
+        'Subsequent evo_inspect in the same session must include the Anti-Poisoning Guard reminder'
+      );
+
+      const runAfterPropose = await dispatcher.handleToolCall('evo_run', {
+        workspace: ws,
+        tool_id: 'xlsx-style-cloner',
+      });
+      assert.match(
+        runAfterPropose.content[0].text,
+        /🔄 Anti-Poisoning Guard: Earlier in this session you crystallized \[.*pv-derating-headroom.*\]/,
+        'Subsequent evo_run in the same session must include the Anti-Poisoning Guard reminder'
+      );
+
+      // Superseding pv-derating-headroom with a new ID replaces the old ID in sessionProposedIds
+      const supersedeNewIdRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'memory',
+        id: 'pv-derating-headroom-v2',
+        supersedes_id: 'pv-derating-headroom',
+        l0_summary: 'Refined diagnosis for sDeratingChargeCurr PV power overshoot.',
+        symptom: 'PV input power reaches 5400W at 450V high PV voltage.',
+        root_cause: 'Legacy +2A headroom offset in sDeratingChargeCurr allowed extra PV current.',
+        solution: 'Remove +2A offset in sDeratingChargeCurr.',
+        target_symbols: ['src/mppt.c#sDeratingChargeCurr'],
+      });
+      assert.equal(Boolean(supersedeNewIdRes.isError), false, supersedeNewIdRes.content[0]?.text);
+      const inspectAfterSupersede = dispatcher.handleToolCall('evo_inspect', {
+        workspace: ws,
+        id: 'pv-derating-headroom-v2',
+        tier: 'L2',
+      });
+      assert.match(
+        inspectAfterSupersede.content[0].text,
+        /🔄 Anti-Poisoning Guard: Earlier in this session you crystallized \[.*pv-derating-headroom-v2.*\]/
+      );
+      assert.doesNotMatch(
+        inspectAfterSupersede.content[0].text,
+        /Earlier in this session you crystallized \[[^\]]*\bpv-derating-headroom\b(?!-v2)/,
+        'Superseded old ID must be removed from sessionProposedIds'
+      );
+
+      dispatcher.close();
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test('51. Branch & Gatekeeper hardening: cross-kind ID collision, bogus supersedes_id, fenced skill markdown, symmetric inheritance', () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-branch-gk-hardening-'));
+    try {
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, 'src', 'calc.ts'),
+        'export function computeClamp(x: number): number {\n  return x < 0 ? 0 : x;\n}\n',
+        'utf8'
+      );
+
+      const storage = new EvoStorage(ws);
+      storage.ensureInitialized();
+      const dispatcher = new EvoMcpDispatcher(ws);
+
+      try {
+        // 1. Propose a valid skill, pause/approve it on disk, and test cross-kind ID collision
+        const skillRes = dispatcher.handleToolCall('evo_propose', {
+          workspace: ws,
+          kind: 'skill',
+          id: 'calc-audit-sop',
+          title: 'Clamp Verification SOP',
+          l0_summary: 'Procedural checklist for verifying clamp helper boundary behavior.',
+          trigger_cue: 'When reviewing numeric clamping logic in helpers',
+          contrastive_evidence:
+            'src/calc.ts#computeClamp failed negative input before clamping -> passed after zero clamp at src/calc.ts',
+          l1_contract: 'Apply when auditing numeric normalization or clamping boundaries.',
+          l2_sop: '1. Inspect lower-bound handling in computeClamp.\n2. Verify caller expectations.',
+        });
+        assert.equal(Boolean(skillRes.isError), false, skillRes.content[0]?.text);
+
+        const crossKindRes = dispatcher.handleToolCall('evo_propose', {
+          workspace: ws,
+          kind: 'rule',
+          id: 'calc-audit-sop',
+          title: 'Colliding Rule ID',
+          l0_summary: 'Validate clamp input invariants before normalization passes.',
+          scope_glob: 'src/**/*.ts',
+          core: false,
+          transfer_scenarios: [
+            'Sensor scaling input normalization before hardware register output',
+            'Battery telemetry bounds clamping prior to estimator accumulation',
+          ],
+          contrastive_evidence:
+            'src/calc.ts#computeClamp failed negative input before clamping -> passed after zero clamp at src/calc.ts',
+          content: '- Always validate clamping input boundaries before normalization transforms.\n',
+        });
+        assert.equal(crossKindRes.isError, true, 'Cross-kind ID collision must be rejected');
+        assert.match(crossKindRes.content[0]?.text || '', /already belongs to kind 'skill'/i);
+
+        // 2. Symmetric inheritance of enabled, review_status, and origin when superseding skill
+        const initialSkill = storage.getSkill('calc-audit-sop');
+        assert.ok(initialSkill);
+        storage.saveSkill({
+          ...initialSkill,
+          enabled: false,
+          review_status: 'approved',
+          origin: 'bootstrap',
+        });
+
+        const supersedeSkillRes = dispatcher.handleToolCall('evo_propose', {
+          workspace: ws,
+          kind: 'skill',
+          supersedes_id: 'calc-audit-sop',
+          l2_sop: '1. Inspect lower-bound and upper-bound handling in computeClamp.\n2. Verify NaN handling.',
+        });
+        assert.equal(Boolean(supersedeSkillRes.isError), false, supersedeSkillRes.content[0]?.text);
+        const updatedSkill = storage.getSkill('calc-audit-sop');
+        assert.ok(updatedSkill);
+        assert.equal(updatedSkill.enabled, false, 'Supersede must inherit enabled: false on skill');
+        assert.equal(updatedSkill.review_status, 'approved', 'Supersede must inherit review_status: approved on skill');
+        assert.equal(updatedSkill.origin, 'bootstrap', 'Supersede must inherit origin on skill');
+        assert.match(updatedSkill.l2_sop, /Verify NaN handling/);
+
+        // 3. Fenced markdown inside ## L1 Contract must not trigger false ## L2 SOP split
+        const fencedSkillMd = [
+          '## L1 Contract',
+          'Inspect payload sections cleanly.',
+          '```markdown',
+          '## L2 SOP',
+          'Fake heading inside code fence.',
+          '```',
+          '## L2 SOP',
+          '1. Real step.',
+        ].join('\n');
+        const parsedSec = parseSkillSectionsFromMarkdown(fencedSkillMd);
+        assert.equal(parsedSec.hasL1Header, true);
+        assert.match(parsedSec.l1, /Fake heading inside code fence/);
+        assert.equal(parsedSec.l2, '1. Real step.');
+
+        // 4. Non-existent supersedes_id must NOT bypass Gate 3 duplicate check
+        const firstRuleRes = dispatcher.handleToolCall('evo_propose', {
+          workspace: ws,
+          kind: 'rule',
+          id: 'clamp-boundary-rule',
+          title: 'Clamp Boundary Rule',
+          l0_summary: 'Validate clamping lower bounds across helper entrypoints.',
+          core: true,
+          contrastive_evidence:
+            'src/calc.ts#computeClamp failed negative input before clamping -> passed after zero clamp at src/calc.ts',
+          content:
+            '- Always enforce monotonic lower-bound clamping before scaling pipeline transforms run.\n',
+        });
+        assert.equal(Boolean(firstRuleRes.isError), false, firstRuleRes.content[0]?.text);
+
+        const bogusSupersedeDup = dispatcher.handleToolCall('evo_propose', {
+          workspace: ws,
+          kind: 'rule',
+          id: 'clamp-boundary-rule-dup',
+          title: 'Clamp Boundary Rule Duplicate',
+          l0_summary: 'Validate clamping lower bounds across helper entrypoints.',
+          core: true,
+          supersedes_id: 'nonexistent-rule-id',
+          contrastive_evidence:
+            'src/calc.ts#computeClamp failed negative input before clamping -> passed after zero clamp at src/calc.ts',
+          content:
+            '- Always enforce monotonic lower-bound clamping before scaling pipeline transforms run.\n',
+        });
+        assert.equal(bogusSupersedeDup.isError, true, 'Bogus supersedes_id must not bypass Gate 3 duplicate guard');
+        assert.match(bogusSupersedeDup.content[0]?.text || '', /ERR_DUPLICATE/);
+
+        // 5. Rule supersede inherits priority, enabled, review_status, and origin
+        const baseRule = storage.getRule('clamp-boundary-rule');
+        assert.ok(baseRule);
+        storage.saveRule({
+          ...baseRule,
+          priority: 88,
+          enabled: false,
+          review_status: 'approved',
+          origin: 'bootstrap',
+        });
+        const supersedeRuleRes = dispatcher.handleToolCall('evo_propose', {
+          workspace: ws,
+          kind: 'rule',
+          supersedes_id: 'clamp-boundary-rule',
+          content:
+            '- Always enforce monotonic lower-bound and upper-bound clamping before scaling pipeline transforms run.\n',
+        });
+        assert.equal(Boolean(supersedeRuleRes.isError), false, supersedeRuleRes.content[0]?.text);
+        const updatedRule = storage.getRule('clamp-boundary-rule');
+        assert.ok(updatedRule);
+        assert.equal(updatedRule.priority, 88, 'Supersede must inherit priority on rule');
+        assert.equal(updatedRule.enabled, false, 'Supersede must inherit enabled: false on rule');
+        assert.equal(updatedRule.review_status, 'approved', 'Supersede must inherit review_status: approved on rule');
+        assert.equal(updatedRule.origin, 'bootstrap', 'Supersede must inherit origin on rule');
+      } finally {
+        dispatcher.close();
+      }
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 });
-
-
-
-
-
-
-
-
 

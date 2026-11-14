@@ -231,6 +231,10 @@ try {
     </g>
   </svg>`;
 
+  const verifiedPct =
+    scoreReport.capabilities.memoriesCount > 0
+      ? Math.round((scoreReport.capabilities.verifiedMemoriesCount / scoreReport.capabilities.memoriesCount) * 100)
+      : 100;
   const heroHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -428,7 +432,7 @@ try {
           <div class="ast-lbl">Context Health</div>
         </div>
         <div class="ast-stat">
-          <div class="ast-val">100<span style="font-size:14px;color:#38bdf8;">%</span></div>
+          <div class="ast-val">${verifiedPct}<span style="font-size:14px;color:#38bdf8;">%</span></div>
           <div class="ast-lbl">AST* Memories Verified</div>
         </div>
         <div class="ast-stat">

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -42,6 +43,67 @@ function hasWorkspaceMcpConfig(workspaceRoot: string): boolean {
   return WORKSPACE_MCP_CONFIG_REL_PATHS.some((rel) =>
     fs.existsSync(path.join(workspaceRoot, rel))
   );
+}
+
+function resolveGlobalWorkspaceRoot(): string {
+  return process.env.EVO_GLOBAL_DIR
+    ? path.resolve(process.env.EVO_GLOBAL_DIR)
+    : path.join(os.homedir(), '.evo', 'global');
+}
+
+function mergeCapabilitiesById<T extends { id: string }>(localItems: T[], globalItems: T[]): T[] {
+  const seen = new Set(localItems.map((item) => item.id));
+  return [...localItems, ...globalItems.filter((item) => !seen.has(item.id))];
+}
+
+function loadActiveStatsSnapshot(workspaceRoot: string, includeGlobal: boolean) {
+  const storage = new EvoStorage(workspaceRoot);
+  const hasEvo = hasValidEvoStructure(storage.evoDir);
+  const localTMap = hasEvo ? loadReadOnlyTelemetryMap(storage.telemetryDbPath) : new Map();
+
+  let rules = hasEvo ? storage.listRules().filter((r) => r.enabled !== false) : [];
+  let skills = hasEvo ? storage.listSkills().filter((s) => s.enabled !== false) : [];
+  let tools = hasEvo ? storage.listTools().filter((t) => t.enabled !== false) : [];
+  const localMemories = hasEvo ? storage.listMemories().filter((m) => m.enabled !== false) : [];
+  let globalOnlyMemories: typeof localMemories = [];
+  let globalRoot: string | undefined;
+
+  if (includeGlobal) {
+    const candidateGlobal = resolveGlobalWorkspaceRoot();
+    if (
+      path.resolve(candidateGlobal) !== path.resolve(storage.rootDir) &&
+      hasValidEvoStructure(path.join(candidateGlobal, '.evo'))
+    ) {
+      globalRoot = candidateGlobal;
+      const gStorage = new EvoStorage(candidateGlobal);
+      rules = mergeCapabilitiesById(rules, gStorage.listRules().filter((r) => r.enabled !== false));
+      skills = mergeCapabilitiesById(skills, gStorage.listSkills().filter((s) => s.enabled !== false));
+      tools = mergeCapabilitiesById(tools, gStorage.listTools().filter((t) => t.enabled !== false));
+      const seenMem = new Set(localMemories.map((m) => m.id));
+      globalOnlyMemories = gStorage
+        .listMemories()
+        .filter((m) => m.enabled !== false && !seenMem.has(m.id));
+      const globalTMap = loadReadOnlyTelemetryMap(gStorage.telemetryDbPath);
+      for (const [id, rec] of globalTMap.entries()) {
+        if (!localTMap.has(id)) {
+          localTMap.set(id, rec);
+        }
+      }
+    }
+  }
+
+  return {
+    storage,
+    hasEvo,
+    tMap: localTMap,
+    rules,
+    skills,
+    tools,
+    localMemories,
+    globalOnlyMemories,
+    memories: [...localMemories, ...globalOnlyMemories],
+    globalRoot,
+  };
 }
 
 function loadReadOnlyTelemetryMap(telemetryDbPath: string): Map<string, ReadOnlyTelemetryStat> {
@@ -128,10 +190,10 @@ export function renderEvoTree(
   const hasEvo = hasValidEvoStructure(storage.evoDir);
   const tMap = hasEvo ? loadReadOnlyTelemetryMap(storage.telemetryDbPath) : new Map();
 
-  const rules = hasEvo ? storage.listRules() : [];
-  const skills = hasEvo ? storage.listSkills() : [];
-  const tools = hasEvo ? storage.listTools() : [];
-  const memories = hasEvo ? storage.listMemories() : [];
+  const rules = hasEvo ? storage.listRules().filter((r) => r.enabled !== false) : [];
+  const skills = hasEvo ? storage.listSkills().filter((s) => s.enabled !== false) : [];
+  const tools = hasEvo ? storage.listTools().filter((t) => t.enabled !== false) : [];
+  const memories = hasEvo ? storage.listMemories().filter((m) => m.enabled !== false) : [];
   const config = hasEvo ? storage.getConfig() : { ...DEFAULT_EVO_CONFIG };
   const { totalTokens } = hasEvo ? storage.getCoreRulesTokenUsage() : { totalTokens: 0 };
 
@@ -249,16 +311,21 @@ export function renderEvoTree(
 
 export function renderEvoStats(
   workspaceRoot: string,
-  options?: { color?: boolean; ascii?: boolean }
+  options?: { color?: boolean; ascii?: boolean; includeGlobal?: boolean }
 ): string {
-  const storage = new EvoStorage(workspaceRoot);
-  const hasEvo = hasValidEvoStructure(storage.evoDir);
-  const tMap = hasEvo ? loadReadOnlyTelemetryMap(storage.telemetryDbPath) : new Map();
-
-  const rules = hasEvo ? storage.listRules() : [];
-  const skills = hasEvo ? storage.listSkills() : [];
-  const tools = hasEvo ? storage.listTools() : [];
-  const memories = hasEvo ? storage.listMemories() : [];
+  const includeGlobal = Boolean(options?.includeGlobal);
+  const {
+    storage,
+    hasEvo,
+    tMap,
+    rules,
+    skills,
+    tools,
+    localMemories,
+    globalOnlyMemories,
+    memories,
+    globalRoot,
+  } = loadActiveStatsSnapshot(workspaceRoot, includeGlobal);
   const archivedCount = hasEvo ? storage.listArchivedCount() : 0;
   const config = hasEvo ? storage.getConfig() : { ...DEFAULT_EVO_CONFIG };
   const { totalTokens } = hasEvo ? storage.getCoreRulesTokenUsage() : { totalTokens: 0 };
@@ -285,7 +352,7 @@ export function renderEvoStats(
   };
 
   try {
-    for (const m of memories) {
+    for (const m of localMemories) {
       const rep = verifyMemoryFreshness(storage.rootDir, m, {
         includeCallers: false,
         cacheDb: statsCacheDb,
@@ -293,9 +360,16 @@ export function renderEvoStats(
       if (rep.overall_status === 'VERIFIED') verifiedMemories++;
       else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
     }
-    if (hasEvo || hasMcpConfig) {
+    if (globalRoot && globalOnlyMemories.length > 0) {
+      for (const gm of globalOnlyMemories) {
+        const rep = verifyMemoryFreshness(globalRoot, gm, { includeCallers: false });
+        if (rep.overall_status === 'VERIFIED') verifiedMemories++;
+        else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
+      }
+    }
+    if (hasEvo || hasMcpConfig || includeGlobal) {
       const scoreRep = buildScoreReport(storage.rootDir, {
-        includeGlobal: false,
+        includeGlobal,
         cacheDb: statsCacheDb,
       });
       sessionStartSavings = scoreRep.contextSavings;
@@ -333,13 +407,15 @@ export function renderEvoStats(
       : '— (0 runs)';
 
   const promptCacheStability =
-    hasEvo || hasMcpConfig
+    hasEvo || hasMcpConfig || includeGlobal
       ? `Fixed 5-Tool Meta-MCP (~${META_MCP_5_TOOLS_TOKENS.toLocaleString('en-US')} tok)`
       : '— (not initialized)';
 
   const sessionTaxSummary =
-    hasEvo || hasMcpConfig
-      ? `Saved ${sessionStartSavings.savingsPercent}% · ${sessionStartSavings.beforeTokens.toLocaleString()} → ${sessionStartSavings.afterTokens.toLocaleString()} tok/turn`
+    hasEvo || hasMcpConfig || includeGlobal
+      ? sessionStartSavings.afterTokens > sessionStartSavings.beforeTokens
+        ? `Fixed L0 Gateway (${sessionStartSavings.afterTokens.toLocaleString()} tok/turn · 100% KV-shielded)`
+        : `Saved ${sessionStartSavings.savingsPercent}% · ${sessionStartSavings.beforeTokens.toLocaleString()} → ${sessionStartSavings.afterTokens.toLocaleString()} tok/turn`
       : '— (not initialized)';
 
   let enabledHarnessesStr = 'none (run evo init)';
@@ -378,7 +454,7 @@ export function renderMemoryVerifyReport(
 ): string {
   const storage = new EvoStorage(workspaceRoot);
   const hasEvo = hasValidEvoStructure(storage.evoDir);
-  const memories = hasEvo ? storage.listMemories() : [];
+  const memories = hasEvo ? storage.listMemories().filter((m) => m.enabled !== false) : [];
 
   const lines: string[] = [
     '╭──────────────────────────────────────────────────────────────────────────╮',
@@ -447,10 +523,10 @@ export function buildEvoTreeJson(workspaceRoot: string): object {
   const hasEvo = hasValidEvoStructure(storage.evoDir);
   const tMap = hasEvo ? loadReadOnlyTelemetryMap(storage.telemetryDbPath) : new Map();
 
-  const rules = hasEvo ? storage.listRules() : [];
-  const skills = hasEvo ? storage.listSkills() : [];
-  const tools = hasEvo ? storage.listTools() : [];
-  const memories = hasEvo ? storage.listMemories() : [];
+  const rules = hasEvo ? storage.listRules().filter((r) => r.enabled !== false) : [];
+  const skills = hasEvo ? storage.listSkills().filter((s) => s.enabled !== false) : [];
+  const tools = hasEvo ? storage.listTools().filter((t) => t.enabled !== false) : [];
+  const memories = hasEvo ? storage.listMemories().filter((m) => m.enabled !== false) : [];
   const config = hasEvo ? storage.getConfig() : { ...DEFAULT_EVO_CONFIG };
   const { totalTokens } = hasEvo ? storage.getCoreRulesTokenUsage() : { totalTokens: 0 };
 
@@ -545,15 +621,23 @@ export function buildEvoTreeJson(workspaceRoot: string): object {
   };
 }
 
-export function buildEvoStatsJson(workspaceRoot: string): object {
-  const storage = new EvoStorage(workspaceRoot);
-  const hasEvo = hasValidEvoStructure(storage.evoDir);
-  const tMap = hasEvo ? loadReadOnlyTelemetryMap(storage.telemetryDbPath) : new Map();
-
-  const rules = hasEvo ? storage.listRules() : [];
-  const skills = hasEvo ? storage.listSkills() : [];
-  const tools = hasEvo ? storage.listTools() : [];
-  const memories = hasEvo ? storage.listMemories() : [];
+export function buildEvoStatsJson(
+  workspaceRoot: string,
+  options?: { includeGlobal?: boolean }
+): object {
+  const includeGlobal = Boolean(options?.includeGlobal);
+  const {
+    storage,
+    hasEvo,
+    tMap,
+    rules,
+    skills,
+    tools,
+    localMemories,
+    globalOnlyMemories,
+    memories,
+    globalRoot,
+  } = loadActiveStatsSnapshot(workspaceRoot, includeGlobal);
   const archivedCount = hasEvo ? storage.listArchivedCount() : 0;
   const config = hasEvo ? storage.getConfig() : { ...DEFAULT_EVO_CONFIG };
   const { totalTokens } = hasEvo ? storage.getCoreRulesTokenUsage() : { totalTokens: 0 };
@@ -582,7 +666,7 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
   };
 
   try {
-    for (const m of memories) {
+    for (const m of localMemories) {
       const rep = verifyMemoryFreshness(storage.rootDir, m, {
         includeCallers: false,
         cacheDb: statsCacheDb,
@@ -590,9 +674,16 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
       if (rep.overall_status === 'VERIFIED') verifiedMemories++;
       else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
     }
-    if (hasEvo || hasMcpConfig) {
+    if (globalRoot && globalOnlyMemories.length > 0) {
+      for (const gm of globalOnlyMemories) {
+        const rep = verifyMemoryFreshness(globalRoot, gm, { includeCallers: false });
+        if (rep.overall_status === 'VERIFIED') verifiedMemories++;
+        else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
+      }
+    }
+    if (hasEvo || hasMcpConfig || includeGlobal) {
       const scoreRep = buildScoreReport(storage.rootDir, {
-        includeGlobal: false,
+        includeGlobal,
         cacheDb: statsCacheDb,
       });
       sessionStartSavings = scoreRep.contextSavings;
@@ -635,6 +726,7 @@ export function buildEvoStatsJson(workspaceRoot: string): object {
   return {
     workspace: storage.rootDir,
     hasEvo,
+    includeGlobal,
     metaMcpTokens: META_MCP_5_TOOLS_TOKENS,
     budget: {
       coreRuleTokens: totalTokens,

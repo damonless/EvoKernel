@@ -16,6 +16,27 @@ export interface SandboxExecutionResult {
 
 const MAX_OUTPUT_CHARS = 12000;
 
+let cachedPythonBinary: string | undefined;
+
+export function resolvePythonBinary(): string {
+  if (cachedPythonBinary) return cachedPythonBinary;
+  const candidates = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+  for (const bin of candidates) {
+    try {
+      const probe = spawnSync(bin, ['--version'], {
+        encoding: 'utf8',
+        timeout: 2000,
+      });
+      if (!probe.error && probe.status === 0) {
+        cachedPythonBinary = bin;
+        return bin;
+      }
+    } catch {}
+  }
+  cachedPythonBinary = candidates[0];
+  return cachedPythonBinary;
+}
+
 export function checkScriptSyntax(
   runtime: ScriptRuntime,
   scriptCode: string
@@ -37,7 +58,7 @@ export function checkScriptSyntax(
     }
 
     if (runtime === 'python') {
-      const res = spawnSync('python', ['-m', 'py_compile', scriptPath], {
+      const res = spawnSync(resolvePythonBinary(), ['-m', 'py_compile', scriptPath], {
         encoding: 'utf8',
         timeout: 4000,
       });
@@ -89,12 +110,16 @@ export function sanitizeSandboxEnv(rawEnv: NodeJS.ProcessEnv = process.env): Rec
     /((?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|PRIVATE|COOKIE|SESSION|JWT|BEARER)|^(?:AWS_|GITHUB_|GH_|ANTHROPIC_|OPENAI_|GEMINI_|AZURE_|SLACK_|STRIPE_|NPM_TOKEN))/i;
   const allowedExact = new Set([
     'PATH',
+    'PATHEXT',
+    'COMSPEC',
     'TMP',
     'TEMP',
     'SYSTEMROOT',
     'SYSTEMDRIVE',
     'HOME',
     'USERPROFILE',
+    'LANG',
+    'LC_ALL',
   ]);
   const allowedPrefixes = ['EVO_', 'NODE_'];
 
@@ -308,7 +333,7 @@ function resolveSandboxInvocation(
       cmdArgs = [scriptPath, ...cliArgs];
       break;
     case 'python':
-      cmd = 'python';
+      cmd = resolvePythonBinary();
       cmdArgs = [scriptPath, ...cliArgs];
       break;
     case 'powershell':
@@ -338,6 +363,8 @@ function resolveSandboxInvocation(
     timeoutMs,
     env: {
       ...sanitizedEnv,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
       EVO_ARGS: serializedArgs,
       EVO_SANDBOX: '1',
       EVO_SELF_TEST: options.selfTest ? '1' : '0',

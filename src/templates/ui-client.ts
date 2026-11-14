@@ -649,6 +649,61 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     return s;
   }
 
+  function matchScopeGlobUi(globPat, filePath) {
+    var nlSlash = '/';
+    var bSlash = String.fromCharCode(92);
+    var g = String(globPat || '').trim().split(bSlash).join(nlSlash).toLowerCase();
+    var p = String(filePath || '').trim().split(bSlash).join(nlSlash).toLowerCase();
+    while (g.slice(0, 2) === './') g = g.slice(2);
+    while (p.slice(0, 2) === './') p = p.slice(2);
+    if (!g || g === '*' || g === '**/*') return true;
+    var reSrc = '^';
+    var gi = 0;
+    while (gi < g.length) {
+      if (g.slice(gi, gi + 3) === '**/') {
+        reSrc += '(?:.+/)?';
+        gi += 3;
+      } else if (g.slice(gi, gi + 2) === '**') {
+        reSrc += '.*';
+        gi += 2;
+      } else {
+        var ch = g.charAt(gi);
+        if (ch === '*') {
+          reSrc += '[^/]*';
+        } else if (ch === '?') {
+          reSrc += '[^/]';
+        } else if (('.+^' + String.fromCharCode(36) + '{}()|[]/').indexOf(ch) !== -1 || ch === bSlash) {
+          reSrc += bSlash + ch;
+        } else {
+          reSrc += ch;
+        }
+        gi += 1;
+      }
+    }
+    reSrc += '$';
+    try {
+      return new RegExp(reSrc).test(p);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function rerenderAllViews() {
+    renderTelemetry();
+    renderCapabilitiesTable();
+    renderCardTopology();
+    renderHotspotsTable();
+    renderGatekeeperStream();
+    if (selectedCapability && selectedCapability.item) {
+      var list = snapshot[selectedCapability.kind] || [];
+      var foundItem = list.find(function(it) { return it.id === selectedCapability.item.id; });
+      if (foundItem) {
+        selectedCapability.item = foundItem;
+      }
+      renderInspector();
+    }
+  }
+
   // ==========================================
   // DUAL-MODE BRIDGE (VS CODE & STANDALONE HTTP)
   // ==========================================
@@ -663,6 +718,11 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   if (vscodeApi) {
     window.addEventListener('message', function(event) {
       var msg = event.data;
+      if (msg && msg.type === 'evoSnapshotPush' && msg.snapshot) {
+        snapshot = msg.snapshot;
+        rerenderAllViews();
+        return;
+      }
       if (msg && msg.type === 'evoActionResult' && msg.reqId && pendingActionCallbacks[msg.reqId]) {
         pendingActionCallbacks[msg.reqId](msg);
         delete pendingActionCallbacks[msg.reqId];
@@ -693,7 +753,14 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         pendingActionCallbacks[reqId] = function(msg) {
           clearTimeout(timer);
           if (msg.error) {
-            resolve({ ok: false, error: msg.error });
+            resolve({
+              ok: false,
+              error: msg.error,
+              code: msg.code,
+              gate_failed: msg.gate_failed,
+              details: msg.details,
+              snapshot: msg.snapshot
+            });
           } else {
             resolve({ ok: true, data: msg.data, result: msg.result, snapshot: msg.snapshot, tokenUsage: msg.tokenUsage, action: action });
           }
@@ -714,7 +781,14 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     .then(function(res) {
       return res.json().then(function(data) {
         if (!res.ok) {
-          return { ok: false, error: data.error || ('HTTP ' + res.status), code: data.code, details: data.details };
+          return {
+            ok: false,
+            error: data.error || ('HTTP ' + res.status),
+            code: data.code,
+            gate_failed: data.gate_failed,
+            details: data.details,
+            snapshot: data.snapshot
+          };
         }
         return data;
       });
@@ -781,18 +855,15 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         if (selectedCapability && selectedCapability.item && selectedCapability.item.id === itemId) {
           selectedCapability = null;
         }
-        renderTelemetry();
-        renderCapabilitiesTable();
-        renderInspector();
+        rerenderAllViews();
+        if (!selectedCapability) renderInspector();
         showToast('success', (lang === 'zh' ? '已归档 ' : 'Archived ') + itemId, 5500, {
           label: dict.undoArchive,
           run: function() {
             callKernelAction('restore-item', { kind: sKind, id: itemId }).then(function(rRes) {
               if (rRes.ok) {
                 if (rRes.snapshot) snapshot = rRes.snapshot;
-                renderTelemetry();
-                renderCapabilitiesTable();
-                renderInspector();
+                rerenderAllViews();
                 showToast('success', (lang === 'zh' ? '已恢复 ' : 'Restored ') + itemId);
               } else if (!rRes.offlineExport) {
                 showToast('error', rRes.error || dict.errRestoreFailed);
@@ -884,18 +955,28 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     if (el('bento-health-grade')) el('bento-health-grade').textContent = hasScore ? (dict.gradePrefix + grade) : '—';
     if (el('bento-health-sub')) el('bento-health-sub').textContent = dict.healthSub;
 
-    // 2. Positive Token Savings Framing (S2.2)
+    // 2. Positive Token Savings Framing (S2.2 / [SCORE-1])
     var hasSavings = savings && typeof savings.savingsPercent === 'number' && (savings.beforeTokens > 0 || savings.afterTokens > 0 || savings.savingsPercent !== 0);
+    var isFixedGateway = Boolean(
+      savings &&
+      ((savings.afterTokens || 0) > (savings.beforeTokens || 0) || savings.savingsPercent < 0)
+    );
     var savedHeadline = '—';
     var savedTransition = '—';
     var savedCombined = '—';
-    if (hasSavings) {
-      var pct = Math.abs(savings.savingsPercent);
+    if (hasSavings || isFixedGateway) {
       var beforeCompact = formatCompactTok(savings.beforeTokens || 0);
       var afterCompact = formatCompactTok(savings.afterTokens || 0);
-      savedHeadline = pct > 0 ? (dict.savedPctPrefix + pct + '%') : '0%';
-      savedTransition = beforeCompact + ' → ' + afterCompact + ' tok';
-      savedCombined = savedHeadline + ' · ' + savedTransition;
+      if (isFixedGateway) {
+        savedHeadline = lang === 'zh' ? '固定 L0 网关' : 'Fixed L0 Gateway';
+        savedTransition = afterCompact + ' tok (KV-shielded)';
+        savedCombined = savedHeadline + ' · ' + afterCompact + ' tok';
+      } else {
+        var pct = Math.max(0, savings.savingsPercent || 0);
+        savedHeadline = pct > 0 ? (dict.savedPctPrefix + pct + '%') : '0%';
+        savedTransition = beforeCompact + ' → ' + afterCompact + ' tok';
+        savedCombined = savedHeadline + ' · ' + savedTransition;
+      }
     }
     if (el('bento-saved-pct')) el('bento-saved-pct').textContent = savedHeadline;
     if (el('bento-saved-detail')) el('bento-saved-detail').textContent = savedTransition;
@@ -1093,6 +1174,30 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           '<span class="diag-chip-cta">' + esc(dict.diagReviewCta) + '</span>' +
         '</button>'
       );
+    }
+    var scoreObj = snapshot.score || {};
+    var scoreOverall = typeof scoreObj.overallScore === 'number' ? scoreObj.overallScore : 100;
+    var scoreDeductions = Array.isArray(scoreObj.deductions) ? scoreObj.deductions : [];
+    if (scoreOverall < 90 && scoreDeductions.length > 0) {
+      scoreDeductions.forEach(function(dedText) {
+        var low = String(dedText || '').toLowerCase();
+        var coveredHotspot = unprotHotspots.length > 0 && low.indexOf('hotspot') !== -1;
+        var coveredStale = staleMems.length > 0 && low.indexOf('stale') !== -1;
+        if (!coveredHotspot && !coveredStale) {
+          itemsHtml.push(
+            '<div class="diag-chip diag-chip-warn">' +
+              ICONS.warn + '<span>' + esc(dedText) + '</span>' +
+            '</div>'
+          );
+        }
+      });
+      if (itemsHtml.length === 0) {
+        itemsHtml.push(
+          '<div class="diag-chip diag-chip-warn">' +
+            ICONS.warn + '<span>' + esc(scoreDeductions[0]) + '</span>' +
+          '</div>'
+        );
+      }
     }
     if (itemsHtml.length === 0) {
       itemsHtml.push(
@@ -1467,12 +1572,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             if (res.ok) {
               if (res.snapshot) snapshot = res.snapshot;
               else it.review_status = 'approved';
-              renderTelemetry();
-              renderCapabilitiesTable();
-              if (selectedCapability && selectedCapability.item && selectedCapability.item.id === it.id) {
-                selectedCapability.item.review_status = 'approved';
-                renderInspector();
-              }
+              rerenderAllViews();
               showToast('success', (lang === 'zh' ? '已确认 ' : 'Approved ') + it.id);
             } else if (!res.offlineExport) {
               showToast('error', res.error || curDict.errApproveFailed);
@@ -1491,12 +1591,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             if (res.ok) {
               if (res.snapshot) snapshot = res.snapshot;
               else it.enabled = nextEnabled;
-              renderTelemetry();
-              renderCapabilitiesTable();
-              if (selectedCapability && selectedCapability.item && selectedCapability.item.id === it.id) {
-                selectedCapability.item.enabled = nextEnabled;
-                renderInspector();
-              }
+              rerenderAllViews();
               showToast('success', (nextEnabled ? (lang === 'zh' ? '已启用 ' : 'Enabled ') : (lang === 'zh' ? '已搁置 ' : 'Paused ')) + it.id);
             } else if (!res.offlineExport) {
               showToast('error', res.error || curDict.errToggleFailed);
@@ -1521,8 +1616,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             var curDict = i18n[lang] || i18n.en;
             if (res.ok) {
               if (res.snapshot) snapshot = res.snapshot;
-              renderTelemetry();
-              renderCapabilitiesTable();
+              rerenderAllViews();
               showToast('success', (lang === 'zh' ? '已从回收站恢复 ' : 'Restored ') + it.id);
             } else if (!res.offlineExport) {
               showToast('error', res.error || curDict.errRestoreFailed);
@@ -1573,9 +1667,16 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         kind: 'memories',
         label: m.title || m.id,
         sub: formatMemoryStatusLabel(rawStatus),
-        status: rawStatus
+        status: rawStatus,
+        symbolNodeIds: []
       };
       midNodes.push(mNode);
+
+      function addMemSymId(nodeId) {
+        if (mNode.symbolNodeIds.indexOf(nodeId) === -1) {
+          mNode.symbolNodeIds.push(nodeId);
+        }
+      }
 
       var fps = m.ast_fingerprints || {};
       var syms = m.target_symbols || [];
@@ -1591,7 +1692,10 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           : (normSym !== fileOnly ? normSym : '');
         var canonicalSym = (fileOnly && symTail) ? (fileOnly + '#' + symTail) : (fileOnly || normSym);
         if (fileOnly) rightFileSet[fileOnly] = canonicalSym;
-        if (!rightMap[canonicalSym] && !rightMap[normSym]) {
+        var existingSymNode = rightMap[canonicalSym] || rightMap[normSym];
+        if (existingSymNode) {
+          addMemSymId(existingSymNode.id);
+        } else {
           var hashStr = fpEntry.ast_hash || fpEntry.structural_hash || '';
           var fileBase = (fileOnly || normSym).replace(/^.*[\\\\/]/, '');
           var nodeEntry = {
@@ -1607,13 +1711,17 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           rightMap[canonicalSym] = nodeEntry;
           rightMap[normSym] = nodeEntry;
           rightNodes.push(nodeEntry);
+          addMemSymId(nodeEntry.id);
         }
       });
       Object.keys(fps).forEach(function(k) {
         var fp = fps[k] || {};
         var fpath = String(fp.file_path || fp.file || '').replace(/\\\\/g, '/');
         var normKey = String(k || '').replace(/\\\\/g, '/');
-        if (!fpath || rightMap[normKey] || rightMap[fpath] || rightFileSet[fpath]) {
+        if (!fpath) return;
+        var existingFpNode = rightMap[normKey] || rightMap[fpath] || (rightFileSet[fpath] && rightMap[rightFileSet[fpath]]);
+        if (existingFpNode) {
+          addMemSymId(existingFpNode.id);
           return;
         }
         var hashVal = fp.ast_hash || fp.structural_hash || '';
@@ -1629,8 +1737,24 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           callers: []
         };
         rightNodes.push(rightMap[fpath]);
+        addMemSymId(rightMap[fpath].id);
       });
     });
+
+    if (leftNodes.length === 0 && midNodes.length === 0 && rightNodes.length === 0) {
+      svg.setAttribute('width', '980');
+      svg.setAttribute('height', '220');
+      svg.setAttribute('viewBox', '0 0 980 220');
+      var emptyTxt = document.createElementNS(ns, 'text');
+      emptyTxt.setAttribute('x', '490');
+      emptyTxt.setAttribute('y', '110');
+      emptyTxt.setAttribute('text-anchor', 'middle');
+      emptyTxt.setAttribute('fill', 'var(--text-muted)');
+      emptyTxt.setAttribute('font-size', '13');
+      emptyTxt.textContent = lang === 'zh' ? '暂无可展示的活跃规则、记忆或 AST 拓扑节点。' : 'No active Rules, Memories, or AST topology nodes to display yet.';
+      svg.appendChild(emptyTxt);
+      return;
+    }
 
     var col1X = 40;
     var col2X = 370;
@@ -1677,13 +1801,18 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     leftNodes.forEach(function(ln) {
       midNodes.forEach(function(mn) {
         var matched = false;
-        if (ln.kind === 'rules' && ln.raw.scope_glob && ln.raw.scope_glob !== '*') {
-          var globPrefix = ln.raw.scope_glob.replace(/\\*.*$/, '');
+        if (ln.kind === 'rules' && ln.raw.scope_glob && ln.raw.scope_glob !== '*' && ln.raw.scope_glob !== '**/*') {
           var fps = mn.raw.ast_fingerprints || {};
           Object.keys(fps).forEach(function(k) {
             var f = (fps[k] && (fps[k].file_path || fps[k].file)) || '';
-            if (f.indexOf(globPrefix) !== -1) matched = true;
+            if (f && matchScopeGlobUi(ln.raw.scope_glob, f)) matched = true;
           });
+          if (!matched) {
+            (mn.raw.target_symbols || []).forEach(function(sym) {
+              var symFile = String(sym || '').split('#')[0];
+              if (symFile && matchScopeGlobUi(ln.raw.scope_glob, symFile)) matched = true;
+            });
+          }
         }
         if (matched || (ln.raw.core && midNodes.indexOf(mn) < 3)) {
           addEdge(ln.id, mn.id, ln, mn);
@@ -1693,14 +1822,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
 
     midNodes.forEach(function(mn) {
       rightNodes.forEach(function(rn) {
-        var syms = (mn.raw.target_symbols || []).map(function(s) { return String(s || '').replace(/\\\\/g, '/'); });
-        var fps = mn.raw.ast_fingerprints || {};
-        var hasSym = syms.indexOf(rn.fullSymbol) !== -1 || (rn.rawSymbol && syms.indexOf(rn.rawSymbol) !== -1);
-        var hasFp = Object.keys(fps).some(function(k) {
-          var fpFile = String((fps[k] && (fps[k].file_path || fps[k].file)) || '').replace(/\\\\/g, '/');
-          return fpFile === rn.fullSymbol || fpFile === rn.fileOnly;
-        });
-        if (hasSym || hasFp) {
+        if (mn.symbolNodeIds && mn.symbolNodeIds.indexOf(rn.id) !== -1) {
           addEdge(mn.id, rn.id, mn, rn);
         }
       });
@@ -1930,16 +2052,33 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       });
     });
 
+    var activeScopedRules = (snapshot.rules || []).filter(function(r) {
+      return r.enabled !== false && r.scope_glob && r.scope_glob !== '*' && r.scope_glob !== '**/*';
+    });
+    function getBoundRulesForHotspot(filePath) {
+      return activeScopedRules.filter(function(r) {
+        return matchScopeGlobUi(r.scope_glob, filePath);
+      });
+    }
+
     var hq = (hotspotsSearchQuery || '').toLowerCase().trim();
     var filteredHotspots = hotspots.filter(function(h) {
       if (!hq) return true;
-      var bound = fileToMem[h.filePath.replace(/\\\\/g, '/')] || [];
+      var normH = h.filePath.replace(/\\\\/g, '/');
+      var bound = fileToMem[normH] || [];
+      var boundR = getBoundRulesForHotspot(normH);
       var memIds = bound.map(function(b) { return b.id; }).join(' ').toLowerCase();
-      return h.filePath.toLowerCase().indexOf(hq) !== -1 || memIds.indexOf(hq) !== -1;
+      var ruleIds = boundR.map(function(r) { return r.id; }).join(' ').toLowerCase();
+      return h.filePath.toLowerCase().indexOf(hq) !== -1 || memIds.indexOf(hq) !== -1 || ruleIds.indexOf(hq) !== -1;
     });
 
     if (filteredHotspots.length === 0) {
-      if (emptyState) emptyState.style.display = 'block';
+      if (emptyState) {
+        emptyState.textContent = (hotspots.length > 0 && hq)
+          ? (lang === 'zh' ? '没有匹配搜索条件的热点文件。' : 'No hotspots match the current filter.')
+          : dict.hotspotsEmptyState;
+        emptyState.style.display = 'block';
+      }
       return;
     }
     if (emptyState) emptyState.style.display = 'none';
@@ -1951,14 +2090,16 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       tr.setAttribute('role', 'button');
       tr.setAttribute('data-path', h.filePath);
 
-      var boundMems = fileToMem[h.filePath.replace(/\\\\/g, '/')] || [];
+      var normHPath = h.filePath.replace(/\\\\/g, '/');
+      var boundMems = fileToMem[normHPath] || [];
+      var boundRules = getBoundRulesForHotspot(normHPath);
       var statusHtml = h.unprotected
         ? '<span class="badge-status"><span class="dot dot-danger"></span> ' + esc(dict.hotspotUnprotected) + '</span>'
         : '<span class="badge-status"><span class="dot dot-ok"></span> ' + esc(dict.hotspotProtected) + '</span>';
 
       var memChipsWrap = document.createElement('div');
       memChipsWrap.className = 'mem-chips-wrap';
-      if (boundMems.length > 0) {
+      if (boundMems.length > 0 || boundRules.length > 0) {
         boundMems.forEach(function(bm) {
           var chip = document.createElement('span');
           chip.className = 'chip-memory';
@@ -1969,6 +2110,18 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             selectCapability('memories', bm);
           });
           memChipsWrap.appendChild(chip);
+        });
+        boundRules.forEach(function(br) {
+          var rChip = document.createElement('span');
+          rChip.className = 'chip-rule';
+          rChip.textContent = '@' + br.id;
+          rChip.setAttribute('data-rule-id', br.id);
+          rChip.title = (br.scope_glob || '') + ' — ' + (br.l0_summary || '');
+          rChip.addEventListener('click', function(e) {
+            e.stopPropagation();
+            selectCapability('rules', br);
+          });
+          memChipsWrap.appendChild(rChip);
         });
       } else {
         memChipsWrap.innerHTML = '<span style="color:var(--text-muted); font-size:var(--text-xs);">' + esc(dict.noneBound) + '</span>';
@@ -2051,9 +2204,24 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       return;
     }
 
-    events.forEach(function(ev) {
-      if (activeGkFilter === 'pass' && !ev.passed) return;
-      if (activeGkFilter === 'fail' && ev.passed) return;
+    var filteredEvents = events.filter(function(ev) {
+      if (activeGkFilter === 'pass' && !ev.passed) return false;
+      if (activeGkFilter === 'fail' && ev.passed) return false;
+      return true;
+    });
+
+    if (filteredEvents.length === 0) {
+      var emptyCard = document.createElement('div');
+      emptyCard.className = 'gk-event-card';
+      var emptyMsg = activeGkFilter === 'fail'
+        ? (lang === 'zh' ? '当前记录中无被拒绝的提案。' : 'No rejected proposals in Gatekeeper history.')
+        : (lang === 'zh' ? '当前记录中无已通过的提案。' : 'No passed proposals in Gatekeeper history.');
+      emptyCard.innerHTML = '<div style="color:var(--text-muted); font-size:var(--text-sm);">' + esc(emptyMsg) + '</div>';
+      boxEl.appendChild(emptyCard);
+      return;
+    }
+
+    filteredEvents.forEach(function(ev) {
 
       var card = document.createElement('div');
       card.className = 'gk-event-card';
@@ -2191,9 +2359,8 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             } else {
               selectedCapability = null;
             }
-            renderTelemetry();
-            renderCapabilitiesTable();
-            renderInspector();
+            rerenderAllViews();
+            if (!selectedCapability) renderInspector();
             showToast('success', (lang === 'zh' ? '已从回收站恢复 ' : 'Restored ') + item.id);
           } else if (!res.offlineExport) {
             showToast('error', res.error || dict.errRestoreFailed);
@@ -2215,9 +2382,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             if (res.ok) {
               item.review_status = 'approved';
               if (res.snapshot) snapshot = res.snapshot;
-              renderTelemetry();
-              renderCapabilitiesTable();
-              renderInspector();
+              rerenderAllViews();
               showToast('success', (lang === 'zh' ? '已确认 ' : 'Approved ') + item.id);
             } else if (!res.offlineExport) {
               showToast('error', res.error || dict.errApproveFailed);
@@ -2238,9 +2403,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           if (res.ok) {
             item.enabled = nextEnabled;
             if (res.snapshot) snapshot = res.snapshot;
-            renderTelemetry();
-            renderCapabilitiesTable();
-            renderInspector();
+            rerenderAllViews();
             showToast('success', (nextEnabled ? (lang === 'zh' ? '已启用 ' : 'Enabled ') : (lang === 'zh' ? '已搁置 ' : 'Paused ')) + item.id);
           } else if (!res.offlineExport) {
             showToast('error', res.error || dict.errToggleFailed);
@@ -2259,11 +2422,30 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
         var line = 1;
         if (kind === 'memories') {
           var anchors = (item.freshness && item.freshness.topology_anchors) || [];
-          if (anchors[0]) {
+          if (anchors[0] && anchors[0].file_path && anchors[0].file_path !== '(unrecorded)') {
             filePath = anchors[0].file_path;
             line = parseInt(String(anchors[0].lines || '1').split('-')[0].replace(/[^0-9]/g, ''), 10) || 1;
-          } else if (item.target_symbols && item.target_symbols[0]) {
-            filePath = item.target_symbols[0].split('#')[0];
+          }
+          if (!filePath && item.ast_fingerprints) {
+            var fpKeys = Object.keys(item.ast_fingerprints);
+            for (var fi = 0; fi < fpKeys.length; fi++) {
+              var fpHit = item.ast_fingerprints[fpKeys[fi]] || {};
+              var fpCandidate = String(fpHit.file_path || fpHit.file || '');
+              if (fpCandidate && fpCandidate !== '(unrecorded)') {
+                filePath = fpCandidate;
+                line = Number(fpHit.start_line || 1) || 1;
+                break;
+              }
+            }
+          }
+          if (!filePath && item.target_symbols && item.target_symbols[0]) {
+            var symCandidate = String(item.target_symbols[0]).split('#')[0];
+            if (symCandidate && (symCandidate.indexOf('/') !== -1 || symCandidate.indexOf(String.fromCharCode(92)) !== -1 || /\\.[a-z0-9]{1,8}$/i.test(symCandidate))) {
+              filePath = symCandidate;
+            }
+          }
+          if (!filePath) {
+            filePath = '.evo/memories/' + item.id + '.md';
           }
         } else if (kind === 'rules') {
           filePath = item.core ? ('.evo/rules/' + item.id + '.md') : ('.evo/rules/scoped/' + item.id + '.md');
@@ -2294,10 +2476,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             btnVerify.textContent = dict.verifyAst;
             if (res.ok && res.snapshot) {
               snapshot = res.snapshot;
-              var updated = (snapshot.memories || []).find(function(m) { return m.id === item.id; });
-              if (updated) selectedCapability.item = updated;
-              renderInspector();
-              renderCapabilitiesTable();
+              rerenderAllViews();
               showToast('success', lang === 'zh' ? 'AST 源码锚点校验完成' : 'AST verification complete');
             } else if (!res.offlineExport) {
               showToast('error', res.error || dict.errVerifyFailed);
@@ -2318,14 +2497,10 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             if (res.ok) {
               if (res.snapshot) {
                 snapshot = res.snapshot;
-                var updatedRule = (snapshot.rules || []).find(function(r) { return r.id === item.id; });
-                if (updatedRule) selectedCapability.item = updatedRule;
               } else {
                 item.core = !item.core;
               }
-              renderInspector();
-              renderCapabilitiesTable();
-              renderTelemetry();
+              rerenderAllViews();
               var tokNow = (res.data && res.data.tokenUsage !== undefined) ? res.data.tokenUsage : (res.tokenUsage || 0);
               showToast(
                 'success',
@@ -2413,11 +2588,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             btnRebind.innerHTML = ICONS.refresh + '<span>' + esc(dict.rebindAst) + '</span>';
             if (res.ok && res.snapshot) {
               snapshot = res.snapshot;
-              var updated = (snapshot.memories || []).find(function(m) { return m.id === item.id; });
-              if (updated) selectedCapability.item = updated;
-              renderTelemetry();
-              renderCapabilitiesTable();
-              renderInspector();
+              rerenderAllViews();
               showToast('success', lang === 'zh' ? '已重新锚定当前分支源码' : 'AST re-bound to current branch');
             } else if (!res.offlineExport) {
               showToast('error', res.error || dict.errRebindFailed);
@@ -2508,10 +2679,12 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       bodyEl.appendChild(bodySection);
 
       var txtInput = bodySection.querySelector('#inspector-editor-input');
-      var rawText = item.content || item.script_code ||
-        (item.l1_contract ? ('## L1 Contract\\n' + item.l1_contract + '\\n\\n## L2 SOP\\n' + item.l2_sop) :
-        (item.symptom ? ('## Symptom\\n' + item.symptom + '\\n\\n## Root Cause\\n' + item.root_cause + '\\n\\n## Solution\\n' + item.solution) :
-        JSON.stringify(item, null, 2)));
+      var rawText = kind === 'tools'
+        ? (item.script_code || '')
+        : (item.content ||
+          (item.l1_contract ? ('## L1 Contract\\n' + item.l1_contract + '\\n\\n## L2 SOP\\n' + item.l2_sop) :
+          (item.symptom ? ('## Symptom\\n' + item.symptom + '\\n\\n## Root Cause\\n' + item.root_cause + '\\n\\n## Solution\\n' + item.solution) :
+          '')));
       txtInput.value = rawText;
 
       var tokenEstEl = bodySection.querySelector('#editor-token-est');
@@ -2544,18 +2717,20 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
             showToast('success', (lang === 'zh' ? '已保存变更：' : 'Changes saved to ') + item.id);
             if (res.snapshot) {
               snapshot = res.snapshot;
-              var updatedItem = (snapshot[kind] || []).find(function(x) { return x.id === item.id; });
-              if (updatedItem) selectedCapability.item = updatedItem;
-              else item.content = nextBody;
             } else {
-              item.content = nextBody;
+              if (kind === 'tools') item.script_code = nextBody;
+              else item.content = nextBody;
             }
             inspectorMode = 'preview';
-            renderTelemetry();
-            renderCapabilitiesTable();
-            renderInspector();
-          } else if (!res.offlineExport) {
-            showToast('error', res.error || dict.errSaveFailed);
+            rerenderAllViews();
+          } else {
+            if (res.snapshot) {
+              snapshot = res.snapshot;
+              rerenderAllViews();
+            }
+            if (!res.offlineExport) {
+              showToast('error', res.error || dict.errSaveFailed);
+            }
           }
         });
       });
@@ -2584,6 +2759,15 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           '<div class="bento-card-preview">' +
             '<div class="bento-card-label" style="color:var(--status-ok);">' + esc(dict.l2SopLabel) + '</div>' +
             '<div class="bento-card-content">' + formatRichText(item.l2_sop) + '</div>' +
+          '</div>';
+      } else if (kind === 'tools') {
+        var toolCode = item.script_code || '';
+        bodySection.innerHTML =
+          '<div class="bento-card-preview">' +
+            '<div class="bento-card-label">' + esc(item.entry_script || 'run.mjs') + '</div>' +
+            (toolCode
+              ? '<pre class="code-block">' + esc(toolCode) + '</pre>'
+              : '<div class="bento-card-content" style="color:var(--text-muted);">' + esc(item.l0_summary || '') + '</div>') +
           '</div>';
       } else {
         bodySection.innerHTML =
@@ -2775,8 +2959,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
           callKernelAction('verify-memory', {}).then(function(res) {
             if (res.ok && res.snapshot) {
               snapshot = res.snapshot;
-              renderTelemetry();
-              renderCapabilitiesTable();
+              rerenderAllViews();
               showToast('success', lang === 'zh' ? '已完成全部 AST 记忆校验' : 'Verified AST memories');
             } else if (!res.offlineExport) {
               showToast('error', res.error || dict.errVerifyFailed);
@@ -3138,9 +3321,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       callKernelAction('approve-item', { approveAll: true }).then(function(res) {
         if (res.ok) {
           if (res.snapshot) snapshot = res.snapshot;
-          renderTelemetry();
-          renderCapabilitiesTable();
-          if (selectedCapability) renderInspector();
+          rerenderAllViews();
           var approvedCount = (res.data && res.data.approvedCount !== undefined) ? res.data.approvedCount : (res.approvedCount || 0);
           showToast('success', (lang === 'zh' ? '已批量确认 ' : 'Approved ') + approvedCount + (lang === 'zh' ? ' 项待审能力' : ' pending capabilities'));
         }
@@ -3161,9 +3342,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       callKernelAction('toggle-enabled', { items: staleList, enabled: false }).then(function(res) {
         if (res.ok) {
           if (res.snapshot) snapshot = res.snapshot;
-          renderTelemetry();
-          renderCapabilitiesTable();
-          if (selectedCapability) renderInspector();
+          rerenderAllViews();
           showToast('success', (lang === 'zh' ? '已搁置 ' : 'Paused ') + staleList.length + (lang === 'zh' ? ' 条失效记忆' : ' stale memories'));
         }
       });
@@ -3299,8 +3478,26 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
   if (btnExport) {
     btnExport.addEventListener('click', function() {
       var dict = i18n[lang] || i18n.en;
-      if (isExport) {
+      if (isExport && !vscodeApi) {
         showToast('info', dict.exportViewingToast);
+      } else if (vscodeApi) {
+        callKernelAction('export-html', {}).then(function(res) {
+          if (res.ok) {
+            var outPathVal = (res.data && res.data.path) || (res.result && res.result.path) || '';
+            showToast('success', (lang === 'zh' ? '已导出独立 HTML 报告' : 'Exported standalone HTML') + (outPathVal ? ': ' + outPathVal : ''));
+          } else if (res.error && res.error !== 'Export cancelled') {
+            showToast('error', res.error);
+          }
+        });
+      } else if (token) {
+        var dlUrl = '/api/export?token=' + encodeURIComponent(token);
+        var dlLink = document.createElement('a');
+        dlLink.href = dlUrl;
+        dlLink.download = 'evokernel-cockpit-snapshot.html';
+        document.body.appendChild(dlLink);
+        dlLink.click();
+        document.body.removeChild(dlLink);
+        showToast('success', lang === 'zh' ? '正在导出独立 HTML 报告...' : 'Downloading standalone HTML report...');
       } else {
         showToast('info', dict.exportCliHintToast);
       }
@@ -3317,19 +3514,7 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
       })
       .then(function(data) {
         snapshot = data;
-        renderTelemetry();
-        renderCapabilitiesTable();
-        renderCardTopology();
-        renderHotspotsTable();
-        renderGatekeeperStream();
-        if (selectedCapability) {
-          var list = snapshot[selectedCapability.kind] || [];
-          var found = list.find(function(it) { return it.id === selectedCapability.item.id; });
-          if (found) {
-            selectedCapability.item = found;
-            renderInspector();
-          }
-        }
+        rerenderAllViews();
         return true;
       })
       .catch(function() { return false; });
@@ -4725,6 +4910,36 @@ export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {})
     }
     .chip-memory:hover {
       border-color: var(--kind-memory);
+    }
+    .chip-rule {
+      display: inline-block;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      color: var(--kind-rule);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin: 2px;
+      cursor: pointer;
+      transition: border-color 120ms ease;
+    }
+    .chip-rule:hover {
+      border-color: var(--kind-rule);
+    }
+    .code-block {
+      background: #09090b;
+      border: 1px solid var(--border-subtle);
+      padding: 10px 12px;
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-x: auto;
+      max-height: 420px;
+      margin: 0;
     }
 
     /* Gatekeeper Stream */

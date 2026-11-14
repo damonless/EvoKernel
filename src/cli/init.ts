@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { EVO_KERNEL_VERSION, EvoStorage, estimateTokens } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { resolveGitPaths } from '../core/memory.js';
@@ -618,6 +619,7 @@ export const BOOT_MCP_STUB = `#!/usr/bin/env node
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import * as url from 'node:url';
 import { spawnSync } from 'node:child_process';
 
@@ -1088,7 +1090,7 @@ export function runInit(
     } catch {}
   }
 
-  const shouldMountIde = Boolean(opts.installIde && !opts.noIde);
+  const shouldMountIde = Boolean((opts.installIde || (opts.ide && opts.ide.length > 0)) && !opts.noIde);
   let ideMounts: IdeMountDetail[] | undefined;
   if (shouldMountIde && !opts.noIde) {
     try {
@@ -1233,13 +1235,167 @@ export function detectInstalledIdeExtensionsDirs(
   return results;
 }
 
+export function isEphemeralNpxCachePath(targetPath: string): boolean {
+  const norm = path.resolve(targetPath);
+  return /[\\/]_npx(?:[\\/]|$)/i.test(norm) || /[\\/]npm-cache[\\/]_npx(?:[\\/]|$)/i.test(norm);
+}
+
+const IDE_EXTENSION_ID = 'damonless.evo-kernel-cockpit';
+const IDE_EXTENSION_FOLDER = 'damonless.evo-kernel-cockpit';
+
+function readExtensionPkgMeta(extDir: string): { id: string; version: string; publisher: string } {
+  try {
+    const pkgPath = path.join(extDir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      const publisher = typeof parsed?.publisher === 'string' && parsed.publisher.trim()
+        ? parsed.publisher.trim()
+        : 'damonless';
+      const name = typeof parsed?.name === 'string' && parsed.name.trim()
+        ? parsed.name.trim()
+        : 'evo-kernel-cockpit';
+      const version = typeof parsed?.version === 'string' && parsed.version.trim()
+        ? parsed.version.trim()
+        : EVO_KERNEL_VERSION;
+      return { id: `${publisher}.${name}`, version, publisher };
+    }
+  } catch {}
+  return { id: IDE_EXTENSION_ID, version: EVO_KERNEL_VERSION, publisher: 'damonless' };
+}
+
+function clearObsoleteRegistryEntry(extensionsDir: string, extId: string, folderName: string): void {
+  const obsoleteFile = path.join(extensionsDir, '.obsolete');
+  if (!fs.existsSync(obsoleteFile)) return;
+  try {
+    const raw = fs.readFileSync(obsoleteFile, 'utf8').trim();
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+    let changed = false;
+    for (const key of Object.keys(obj)) {
+      const lowerKey = key.toLowerCase();
+      if (
+        lowerKey === folderName.toLowerCase() ||
+        lowerKey === extId.toLowerCase() ||
+        lowerKey.startsWith(`${extId.toLowerCase()}-`)
+      ) {
+        delete obj[key];
+        changed = true;
+      }
+    }
+    if (changed) {
+      fs.writeFileSync(obsoleteFile, JSON.stringify(obj, null, 2), 'utf8');
+    }
+  } catch {}
+}
+
+export function syncIdeExtensionRegistry(
+  extensionsDir: string,
+  folderName: string = IDE_EXTENSION_FOLDER,
+  mountedPath?: string
+): void {
+  const targetDir = mountedPath || path.join(extensionsDir, folderName);
+  const meta = readExtensionPkgMeta(targetDir);
+  clearObsoleteRegistryEntry(extensionsDir, meta.id, folderName);
+
+  const registryFile = path.join(extensionsDir, 'extensions.json');
+  let entries: any[] = [];
+  if (fs.existsSync(registryFile)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+      if (!Array.isArray(parsed)) return;
+      entries = parsed;
+    } catch {
+      return;
+    }
+  }
+
+  const extIdLower = meta.id.toLowerCase();
+  const folderLower = folderName.toLowerCase();
+  const filtered = entries.filter((entry) => {
+    const entryId = typeof entry?.identifier?.id === 'string' ? entry.identifier.id.toLowerCase() : '';
+    const relLoc = typeof entry?.relativeLocation === 'string' ? entry.relativeLocation.toLowerCase() : '';
+    return entryId !== extIdLower && relLoc !== folderLower;
+  });
+
+  const fileUrlPath = pathToFileURL(path.resolve(targetDir)).pathname;
+  filtered.push({
+    identifier: { id: meta.id },
+    version: meta.version,
+    location: {
+      $mid: 1,
+      path: fileUrlPath,
+      scheme: 'file',
+    },
+    relativeLocation: folderName,
+    metadata: {
+      installedTimestamp: Date.now(),
+      pinned: false,
+      source: 'vsix',
+      publisherDisplayName: meta.publisher,
+      targetPlatform: 'undefined',
+      updated: false,
+      private: false,
+      isPreReleaseVersion: false,
+      hasPreReleaseVersion: false,
+    },
+  });
+
+  try {
+    fs.writeFileSync(registryFile, JSON.stringify(filtered, null, 2), 'utf8');
+  } catch {}
+}
+
+export function pruneIdeExtensionRegistry(
+  extensionsDir: string,
+  extId: string = IDE_EXTENSION_ID,
+  folderName: string = IDE_EXTENSION_FOLDER
+): void {
+  clearObsoleteRegistryEntry(extensionsDir, extId, folderName);
+  const registryFile = path.join(extensionsDir, 'extensions.json');
+  if (!fs.existsSync(registryFile)) return;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+    if (!Array.isArray(parsed)) return;
+    const extIdLower = extId.toLowerCase();
+    const folderLower = folderName.toLowerCase();
+    const filtered = parsed.filter((entry) => {
+      const entryId = typeof entry?.identifier?.id === 'string' ? entry.identifier.id.toLowerCase() : '';
+      const relLoc = typeof entry?.relativeLocation === 'string' ? entry.relativeLocation.toLowerCase() : '';
+      return entryId !== extIdLower && relLoc !== folderLower;
+    });
+    if (filtered.length !== parsed.length) {
+      fs.writeFileSync(registryFile, JSON.stringify(filtered, null, 2), 'utf8');
+    }
+  } catch {}
+}
+
+function bundleRuntimeIntoCopiedExtension(bundleSourceDir: string, targetPath: string): void {
+  try {
+    const pkgRoot = path.resolve(bundleSourceDir, '..', '..');
+    const distDir = path.join(pkgRoot, 'dist');
+    const runtimeEntry = path.join(distDir, 'ide', 'vscode-extension.js');
+    if (!fs.existsSync(runtimeEntry)) return;
+
+    const runtimeDir = path.join(targetPath, 'runtime');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.cpSync(distDir, path.join(runtimeDir, 'dist'), { recursive: true, force: true });
+
+    const rootPkg = path.join(pkgRoot, 'package.json');
+    if (fs.existsSync(rootPkg)) {
+      fs.copyFileSync(rootPkg, path.join(runtimeDir, 'package.json'));
+    }
+  } catch {}
+}
+
 export function mountIdeExtensionIntoDir(
   extensionsDir: string,
   bundleSourceDir: string,
   options?: { forceCopy?: boolean }
 ): { method: 'junction' | 'symlink' | 'copy' | 'already-mounted'; status: 'installed' | 'updated' | 'skipped' } {
   fs.mkdirSync(extensionsDir, { recursive: true });
-  const targetPath = path.join(extensionsDir, 'damonless.evo-kernel-cockpit');
+  const targetPath = path.join(extensionsDir, IDE_EXTENSION_FOLDER);
+  const effectiveForceCopy = Boolean(options?.forceCopy || isEphemeralNpxCachePath(bundleSourceDir));
 
   const safeReal = (p: string) => {
     try {
@@ -1262,23 +1418,23 @@ export function mountIdeExtensionIntoDir(
   if (isLink) {
     try {
       const currentReal = safeReal(targetPath);
-      if (!options?.forceCopy && currentReal.toLowerCase() === expectedReal.toLowerCase()) {
+      if (!effectiveForceCopy && currentReal.toLowerCase() === expectedReal.toLowerCase()) {
+        syncIdeExtensionRegistry(extensionsDir, IDE_EXTENSION_FOLDER, targetPath);
         return { method: 'already-mounted', status: 'skipped' };
       }
       fs.unlinkSync(targetPath);
     } catch {}
   } else if (exists) {
     try {
-      if (!options?.forceCopy) {
-        fs.rmSync(targetPath, { recursive: true, force: true });
-      }
+      fs.rmSync(targetPath, { recursive: true, force: true });
     } catch {}
   }
 
-  if (!options?.forceCopy) {
+  if (!effectiveForceCopy) {
     try {
       const linkType = process.platform === 'win32' ? 'junction' : 'dir';
       fs.symlinkSync(bundleSourceDir, targetPath, linkType);
+      syncIdeExtensionRegistry(extensionsDir, IDE_EXTENSION_FOLDER, targetPath);
       return { method: linkType, status: exists ? 'updated' : 'installed' };
     } catch {
       // Junction/symlink failed (cross-drive EXDEV or permission), fallback to copy
@@ -1286,6 +1442,8 @@ export function mountIdeExtensionIntoDir(
   }
 
   fs.cpSync(bundleSourceDir, targetPath, { recursive: true, force: true });
+  bundleRuntimeIntoCopiedExtension(bundleSourceDir, targetPath);
+  syncIdeExtensionRegistry(extensionsDir, IDE_EXTENSION_FOLDER, targetPath);
   return { method: 'copy', status: exists ? 'updated' : 'installed' };
 }
 
@@ -1348,20 +1506,22 @@ export function mountIdeExtensions(
   return Object.assign([...details], { mounts: details, totalMounted }) as MountIdeResult;
 }
 
-export function unmountIdeExtensions(): { cleanedTargets: string[]; errors: string[] } {
+export function unmountIdeExtensions(
+  options?: { ide?: string[] }
+): { cleanedTargets: string[]; errors: string[] } {
   if (
     Boolean(process.env.NODE_TEST_CONTEXT || process.env.EVO_TEST_MODE) &&
     !process.env.EVO_IDE_EXTENSIONS_DIR
   ) {
     return { cleanedTargets: [], errors: [] };
   }
-  const detected = detectInstalledIdeExtensionsDirs();
+  const detected = detectInstalledIdeExtensionsDirs(os.homedir(), options?.ide);
   const cleanedTargets: string[] = [];
   const errors: string[] = [];
 
   for (const item of detected) {
     const extensionDir = item.extensionsDir;
-    const targetPath = path.join(extensionDir, 'damonless.evo-kernel-cockpit');
+    const targetPath = path.join(extensionDir, IDE_EXTENSION_FOLDER);
     try {
       let isLink = false;
       let exists = false;
@@ -1379,6 +1539,7 @@ export function unmountIdeExtensions(): { cleanedTargets: string[]; errors: stri
         }
         cleanedTargets.push(targetPath);
       }
+      pruneIdeExtensionRegistry(extensionDir, IDE_EXTENSION_ID, IDE_EXTENSION_FOLDER);
     } catch (err: any) {
       errors.push(`${targetPath}: ${err?.message || String(err)}`);
     }
@@ -1389,7 +1550,7 @@ export function unmountIdeExtensions(): { cleanedTargets: string[]; errors: stri
 
 export function runUninstall(
   workspaceRoot: string,
-  options?: { patterns?: string[] }
+  options?: { patterns?: string[]; unmountIde?: boolean; ide?: string[] }
 ): { cleanedFiles: string[] } {
   const cleanedFilesList: string[] = [];
   const dirsToPrune: string[] = [
@@ -1418,7 +1579,9 @@ export function runUninstall(
     cleanedFilesList.push(...cleaned);
   }
 
-  unmountIdeExtensions();
+  if (options?.unmountIde) {
+    unmountIdeExtensions({ ide: options?.ide });
+  }
 
   pruneEmptyDirs(workspaceRoot, dirsToPrune);
 
