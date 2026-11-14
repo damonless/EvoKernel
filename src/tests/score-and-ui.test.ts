@@ -1527,7 +1527,7 @@ Widget issue
       fs.rmSync(ws, { recursive: true, force: true });
     }
 
-    // 4. .github/workflows/publish.yml has concurrency group and stdout-verified npm view idempotency check
+    // 4. .github/workflows/publish.yml has concurrency group, stdout-verified npm view idempotency check, and tag-guarded GitHub Release automation
     const publishYmlPath = path.resolve(process.cwd(), '.github', 'workflows', 'publish.yml');
     const publishYml = fs.readFileSync(publishYmlPath, 'utf8');
     assert.ok(publishYml.includes('concurrency:'), 'publish.yml must define concurrency group');
@@ -1535,6 +1535,8 @@ Widget issue
     assert.ok(publishYml.includes('npm view "evo-kernel@$PKG_VERSION" version'), 'publish.yml must check npm registry before publishing');
     assert.ok(!publishYml.includes('if npm view "evo-kernel@$PKG_VERSION" version >/dev/null'), 'publish.yml must not rely on bare npm view exit code (npm exits 0 with empty stdout for missing versions)');
     assert.ok(publishYml.includes('PUBLISHED_VER=') && publishYml.includes('"$PUBLISHED_VER" = "$PKG_VERSION"'), 'publish.yml must compare trimmed npm view stdout against PKG_VERSION');
+    assert.ok(publishYml.includes('contents: write'), 'publish.yml must request contents: write to publish GitHub Releases');
+    assert.ok(publishYml.includes('gh release create "$TAG_NAME"') && publishYml.includes('if gh release view "$TAG_NAME"'), 'publish.yml must create GitHub Releases idempotently for v* tag pushes');
   });
 
   test('24. Issue #23 Regression: Flexbox text overflow protection, AST symbol deduplication, and CJK visual truncation', () => {

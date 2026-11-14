@@ -2,14 +2,14 @@
 id: node-strip-types-parameter-property
 title: "TypeScript parameter property not supported in Node strip-only mode"
 l0_summary: "Avoid parameter properties in TypeScript constructors when compiling with node:module.stripTypeScriptTypes"
-created_commit: "ade71f3"
+created_commit: "1961d80"
 created_branch: "main"
 target_symbols: ["scripts/build.mjs","src/tests/score-and-ui.test.ts"]
-ast_fingerprints: {"scripts/build.mjs":{"symbol":"scripts/build.mjs","file_path":"scripts/build.mjs","file":"scripts/build.mjs","kind":"file","start_line":1,"end_line":226,"signature":"file scripts/build.mjs (226 lines)","ast_hash":"40a1d0fd344aaa35"},"src/tests/score-and-ui.test.ts":{"symbol":"src/tests/score-and-ui.test.ts","file_path":"src/tests/score-and-ui.test.ts","file":"src/tests/score-and-ui.test.ts","kind":"file","start_line":1,"end_line":2466,"signature":"file src/tests/score-and-ui.test.ts (2466 lines)","ast_hash":"2dcb61853833ecd3"}}
+ast_fingerprints: {"scripts/build.mjs":{"symbol":"scripts/build.mjs","file_path":"scripts/build.mjs","file":"scripts/build.mjs","kind":"file","start_line":1,"end_line":226,"signature":"file scripts/build.mjs (226 lines)","ast_hash":"40a1d0fd344aaa35"},"src/tests/score-and-ui.test.ts":{"symbol":"src/tests/score-and-ui.test.ts","file_path":"src/tests/score-and-ui.test.ts","file":"src/tests/score-and-ui.test.ts","kind":"file","start_line":1,"end_line":2468,"signature":"file src/tests/score-and-ui.test.ts (2468 lines)","ast_hash":"4c9b808f31b93ad9"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-05T09:01:04.321Z"
-updated_at: "2026-11-14T17:58:35.414Z"
+updated_at: "2026-11-14T18:09:36.565Z"
 ---
 
 ## Symptom

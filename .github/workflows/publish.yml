@@ -14,7 +14,7 @@ on:
         default: 'latest'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: npm-publish
@@ -59,3 +59,40 @@ jobs:
           fi
           rm -f README.zh-CN.md
           NODE_AUTH_TOKEN="$CLEAN_TOKEN" npm publish --access public --tag "$NPM_DIST_TAG"
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Notice: GitHub Release $TAG_NAME already exists. Skipping creation idempotently."
+            exit 0
+          fi
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          NOTES_FILE="$(mktemp)"
+          node -e '
+            const fs = require("fs");
+            const ver = process.argv[1];
+            const out = process.argv[2];
+            if (!fs.existsSync("CHANGELOG.md")) process.exit(0);
+            const lines = fs.readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
+            const start = lines.findIndex((l) => l.startsWith(`## [${ver}]`));
+            if (start >= 0) {
+              const rest = lines.slice(start + 1);
+              const endRel = rest.findIndex((l) => /^## \[/.test(l));
+              const slice = (endRel >= 0 ? rest.slice(0, endRel) : rest).join("\n").trim();
+              if (slice) fs.writeFileSync(out, slice + "\n");
+            }
+          ' "$PKG_VERSION" "$NOTES_FILE"
+          PRERELEASE_FLAG=""
+          if printf '%s' "$TAG_NAME" | grep -q '-'; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          if [ -s "$NOTES_FILE" ]; then
+            gh release create "$TAG_NAME" --verify-tag --title "$TAG_NAME" --notes-file "$NOTES_FILE" $PRERELEASE_FLAG
+          else
+            gh release create "$TAG_NAME" --verify-tag --title "$TAG_NAME" --generate-notes $PRERELEASE_FLAG
+          fi
+          rm -f "$NOTES_FILE"
