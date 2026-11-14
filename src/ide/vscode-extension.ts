@@ -7,7 +7,15 @@ import { DatabaseSync } from 'node:sqlite';
 import { buildUiSnapshot, exportUiHtml } from '../cli/ui.js';
 import type { UiSnapshot } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { EvoStorage, estimateTokens, findNearestEvoWorkspace, openSqliteReadOnly, parseFrontmatter, sanitizeId } from '../core/storage.js';
+import {
+  EvoStorage,
+  estimateTokens,
+  findNearestEvoWorkspace,
+  hasValidEvoStructure,
+  openSqliteReadOnly,
+  parseFrontmatter,
+  sanitizeId,
+} from '../core/storage.js';
 import type { ConfidenceLevel, EvoKind, ProposalPayload, SymbolFingerprint } from '../core/types.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import {
@@ -165,55 +173,165 @@ export function resolveVsCode(injected?: any): any {
   }
 }
 
+const IGNORED_CHILD_SCAN_DIRS = new Set([
+  'node_modules',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  'target',
+  'vendor',
+]);
+
+function parseUriQueryPath(uri: any): string {
+  if (typeof uri?.query !== 'string' || !uri.query.trim()) return '';
+  try {
+    const parsed = JSON.parse(uri.query) as { path?: unknown };
+    if (typeof parsed?.path === 'string') {
+      const trimmed = parsed.path.trim();
+      if (trimmed && path.isAbsolute(trimmed)) return trimmed;
+    }
+  } catch {}
+  return '';
+}
+
+function extractEditorFsPath(uri: any): string {
+  if (!uri || typeof uri !== 'object') return '';
+  const scheme = typeof uri.scheme === 'string' ? uri.scheme.trim().toLowerCase() : '';
+  if (scheme === 'untitled' || scheme === 'output' || scheme === 'vscode-webview' || scheme === 'webview' || scheme === 'inmemory') {
+    return '';
+  }
+
+  const queryPath = parseUriQueryPath(uri);
+  if (scheme === 'git' && queryPath) {
+    return queryPath;
+  }
+
+  if (typeof uri.fsPath === 'string') {
+    const fsPath = uri.fsPath.trim();
+    if (fsPath && path.isAbsolute(fsPath)) {
+      return fsPath;
+    }
+  }
+
+  if (queryPath) {
+    return queryPath;
+  }
+
+  if (scheme === 'file' && typeof uri.path === 'string') {
+    const rawPath = uri.path.trim();
+    if (rawPath && path.isAbsolute(rawPath)) {
+      return rawPath;
+    }
+  }
+
+  return '';
+}
+
+function findChildEvoWorkspace(parentDir: string, maxDepth = 2): string | null {
+  if (!parentDir) return null;
+  if (hasValidEvoStructure(path.join(parentDir, '.evo'))) {
+    return parentDir;
+  }
+
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: parentDir, depth: 0 }];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current.depth >= maxDepth) continue;
+
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs
+        .readdirSync(current.dir, { withFileTypes: true })
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch {
+      continue;
+    }
+
+    const nextDirs: Array<{ dir: string; depth: number }> = [];
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || IGNORED_CHILD_SCAN_DIRS.has(entry.name)) {
+        continue;
+      }
+      const childPath = path.join(current.dir, entry.name);
+      let isDir = entry.isDirectory();
+      if (!isDir && entry.isSymbolicLink()) {
+        try {
+          isDir = fs.statSync(childPath).isDirectory();
+        } catch {
+          isDir = false;
+        }
+      }
+      if (!isDir) continue;
+      if (hasValidEvoStructure(path.join(childPath, '.evo'))) {
+        return childPath;
+      }
+      if (current.depth + 1 < maxDepth) {
+        nextDirs.push({ dir: childPath, depth: current.depth + 1 });
+      }
+    }
+    queue.push(...nextDirs);
+  }
+
+  return null;
+}
+
 export function resolveActiveWorkspaceRoot(vscode: any, fallbackCwd: string = process.cwd()): string {
   const activeDocUri = vscode?.window?.activeTextEditor?.document?.uri;
-  if (activeDocUri && (activeDocUri.scheme === 'file' || activeDocUri.fsPath)) {
-    const folder = vscode.workspace?.getWorkspaceFolder?.(activeDocUri);
-    if (folder) {
-      const folderPath = folder.uri?.fsPath || folder.fsPath;
-      if (folderPath) {
-        const nearest = findNearestEvoWorkspace(folderPath);
-        if (nearest) return nearest;
-        return folderPath;
-      }
+  const docFsPath = extractEditorFsPath(activeDocUri);
+  if (docFsPath) {
+    const nearestFromDoc = findNearestEvoWorkspace(docFsPath);
+    if (nearestFromDoc) return nearestFromDoc;
+  }
+
+  let activeFolderFallback = '';
+  if (activeDocUri) {
+    const folder = vscode?.workspace?.getWorkspaceFolder?.(activeDocUri);
+    const folderPath = folder?.uri?.fsPath || folder?.fsPath || '';
+    if (folderPath) {
+      const nearestFromFolder = findNearestEvoWorkspace(folderPath);
+      if (nearestFromFolder) return nearestFromFolder;
+      const childFromFolder = findChildEvoWorkspace(folderPath, 2);
+      if (childFromFolder) return childFromFolder;
+      activeFolderFallback = folderPath;
     }
   }
 
   const folders = vscode?.workspace?.workspaceFolders;
-  if (folders && folders.length > 0) {
+  if (Array.isArray(folders) && folders.length > 0) {
     for (const f of folders) {
-      const fsPath = f.uri?.fsPath || f.fsPath;
-      if (fsPath && fs.existsSync(path.join(fsPath, '.evo'))) {
-        return fsPath;
-      }
-    }
-    // Check immediate subdirectories if parent directory was opened
-    for (const f of folders) {
-      const fsPath = f.uri?.fsPath || f.fsPath;
+      const fsPath = f?.uri?.fsPath || f?.fsPath;
       if (fsPath) {
-        try {
-          const entries = fs.readdirSync(fsPath, { withFileTypes: true });
-          for (const entry of entries) {
-            if (entry.isDirectory() && !entry.name.startsWith('.')) {
-              const childPath = path.join(fsPath, entry.name);
-              if (fs.existsSync(path.join(childPath, '.evo'))) {
-                return childPath;
-              }
-            }
-          }
-        } catch {}
+        if (hasValidEvoStructure(path.join(fsPath, '.evo'))) {
+          return fsPath;
+        }
+        const nearest = findNearestEvoWorkspace(fsPath);
+        if (nearest) return nearest;
       }
     }
-    const firstPath = folders[0].uri?.fsPath || folders[0].fsPath;
-    if (firstPath) {
-      const nearest = findNearestEvoWorkspace(firstPath);
-      if (nearest) return nearest;
-      return firstPath;
+    // Check depth 1-2 subdirectories when a parent/umbrella directory was opened
+    for (const f of folders) {
+      const fsPath = f?.uri?.fsPath || f?.fsPath;
+      if (fsPath) {
+        const childWs = findChildEvoWorkspace(fsPath, 2);
+        if (childWs) return childWs;
+      }
     }
+    const firstPath = folders[0]?.uri?.fsPath || folders[0]?.fsPath || '';
+    if (activeFolderFallback || firstPath) {
+      return activeFolderFallback || firstPath;
+    }
+  }
+
+  if (activeFolderFallback) {
+    return activeFolderFallback;
   }
 
   const nearestCwd = findNearestEvoWorkspace(fallbackCwd);
   if (nearestCwd) return nearestCwd;
+
+  const childCwd = findChildEvoWorkspace(fallbackCwd, 2);
+  if (childCwd) return childCwd;
 
   return fallbackCwd;
 }
@@ -1127,6 +1245,35 @@ export async function activate(
     }
   };
 
+  const syncResolvedWorkspace = (
+    forcePush = false,
+    hasActiveEditor = Boolean(vscode?.window?.activeTextEditor)
+  ) => {
+    if (!activePanel) return;
+    // Switching focus to a non-text view (e.g., the Workbench Webview itself) leaves activeTextEditor
+    // undefined; preserve an already-valid active workspace instead of jumping to the first child folder.
+    if (!hasActiveEditor && currentWs && hasValidEvoStructure(path.join(currentWs, '.evo'))) {
+      if (forcePush) {
+        pushSnapshot();
+      }
+      return;
+    }
+    const nextWs = resolveActiveWorkspaceRoot(vscode, currentWs || process.cwd());
+    if (nextWs && nextWs !== currentWs) {
+      const nextHasEvo = hasValidEvoStructure(path.join(nextWs, '.evo'));
+      const currHasEvo = currentWs ? hasValidEvoStructure(path.join(currentWs, '.evo')) : false;
+      if (nextHasEvo || !currHasEvo) {
+        currentWs = nextWs;
+        attachWatchers(currentWs);
+        pushSnapshot();
+        return;
+      }
+    }
+    if (forcePush) {
+      pushSnapshot();
+    }
+  };
+
   const openWorkbenchHandler = async () => {
     const ws = resolveActiveWorkspaceRoot(vscode);
     if (!ws) {
@@ -1165,12 +1312,7 @@ export async function activate(
     panel.onDidChangeViewState?.((e: any) => {
       const isVisible = e?.webviewPanel?.visible ?? panel.visible;
       if (!isVisible) return;
-      const nextWs = resolveActiveWorkspaceRoot(vscode, currentWs);
-      if (nextWs && nextWs !== currentWs) {
-        currentWs = nextWs;
-        attachWatchers(currentWs);
-      }
-      pushSnapshot();
+      syncResolvedWorkspace(true);
     }, null, context?.subscriptions);
 
     panel.webview.html = renderWorkbenchHtml(currentWs);
@@ -1193,9 +1335,17 @@ export async function activate(
 
   const d1 = vscode.commands.registerCommand('evo.openWorkbench', openWorkbenchHandler);
   const d2 = vscode.commands.registerCommand('evo.viewCockpit', openWorkbenchHandler);
+  const dEditor = vscode?.window?.onDidChangeActiveTextEditor?.((editor: any) => {
+    syncResolvedWorkspace(false, Boolean(editor));
+  }, null, context?.subscriptions);
+  const dFolders = vscode?.workspace?.onDidChangeWorkspaceFolders?.(() => {
+    syncResolvedWorkspace(true, true);
+  }, null, context?.subscriptions);
 
   if (context?.subscriptions) {
     context.subscriptions.push(d1, d2);
+    if (dEditor) context.subscriptions.push(dEditor);
+    if (dFolders) context.subscriptions.push(dFolders);
   }
 }
 

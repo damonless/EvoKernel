@@ -21,7 +21,12 @@ import {
 } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import { runInit, runUninstall, mountIdeExtensions, unmountIdeExtensions, syncManagedRuleBlocks } from '../cli/init.js';
-import { handleWebviewAction } from '../ide/vscode-extension.js';
+import {
+  activate,
+  deactivate,
+  handleWebviewAction,
+  resolveActiveWorkspaceRoot,
+} from '../ide/vscode-extension.js';
 import { resolveCurrentGitCommit, resolveCurrentGitBranch } from '../core/memory.js';
 import { redactSensitiveDiagnostics, EvoTelemetry } from '../core/telemetry.js';
 import { EVO_KERNEL_VERSION, EvoStorage } from '../core/storage.js';
@@ -2229,6 +2234,230 @@ Widget issue
       }
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(fakeExtDir, { recursive: true, force: true });
+    }
+  });
+
+  test('32. [Regression] VS Code resolveActiveWorkspaceRoot & activate resolve child .evo workspace when parent umbrella folder or git diff tab is open', async () => {
+    const umbrellaDir = createTempDir('vscode-umbrella');
+    const umbrellaDir2 = createTempDir('vscode-umbrella-d2');
+    const externalDir = createTempDir('vscode-external');
+
+    try {
+      // Hollow .evo folder in parent directory must NOT fool hasValidEvoStructure
+      fs.mkdirSync(path.join(umbrellaDir, '.evo'), { recursive: true });
+      fs.writeFileSync(path.join(umbrellaDir, 'notes.md'), '# umbrella notes\n', 'utf8');
+
+      const evoChild = path.join(umbrellaDir, 'EvoKernel');
+      fs.mkdirSync(path.join(evoChild, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(evoChild, 'src', 'main.ts'), 'export const a = 1;\n', 'utf8');
+      const s1 = new EvoStorage(evoChild);
+      s1.ensureInitialized();
+      s1.saveRule({
+        id: 'umbrella-rule-a',
+        title: 'Umbrella Rule A',
+        l0_summary: 'First child rule',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        priority: 10,
+        tags: ['test'],
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        content: 'Enforce structured boundary checks across child modules.',
+      });
+
+      const secondChild = path.join(umbrellaDir, 'SecondRepo');
+      fs.mkdirSync(path.join(secondChild, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(secondChild, 'src', 'index.ts'), 'export const b = 2;\n', 'utf8');
+      const s2 = new EvoStorage(secondChild);
+      s2.ensureInitialized();
+      s2.saveRule({
+        id: 'umbrella-rule-b',
+        title: 'Umbrella Rule B',
+        l0_summary: 'Second child rule',
+        scope_glob: 'src/**/*.ts',
+        core: false,
+        priority: 10,
+        tags: ['test'],
+        origin: 'session',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        content: 'Enforce isolated telemetry updates on workspace switch.',
+      });
+
+      // Depth-2 child workspace under umbrellaDir2/group/SubRepo
+      const depth2Child = path.join(umbrellaDir2, 'group', 'SubRepo');
+      fs.mkdirSync(depth2Child, { recursive: true });
+      const s3 = new EvoStorage(depth2Child);
+      s3.ensureInitialized();
+
+      // 1. Git working-tree diff URI inside EvoKernel while parent umbrellaDir is open
+      const gitDiffUri = {
+        scheme: 'git',
+        fsPath: '',
+        query: JSON.stringify({
+          path: path.join(evoChild, '.evo', 'memories', 'case.md'),
+          ref: '~',
+        }),
+      };
+      const resolvedGitDiff = resolveActiveWorkspaceRoot({
+        window: { activeTextEditor: { document: { uri: gitDiffUri } } },
+        workspace: {
+          workspaceFolders: [{ uri: { fsPath: umbrellaDir } }],
+          getWorkspaceFolder: () => ({ uri: { fsPath: umbrellaDir } }),
+        },
+      });
+      assert.equal(
+        resolvedGitDiff,
+        evoChild,
+        'git: diff tab inside child repo must resolve to child EvoKernel instead of parent umbrella folder'
+      );
+
+      // 2. Unrelated loose file directly inside parent umbrellaDir must still descend to valid child EvoKernel
+      const looseFileUri = {
+        scheme: 'file',
+        fsPath: path.join(umbrellaDir, 'notes.md'),
+      };
+      const resolvedLooseFile = resolveActiveWorkspaceRoot({
+        window: { activeTextEditor: { document: { uri: looseFileUri } } },
+        workspace: {
+          workspaceFolders: [{ uri: { fsPath: umbrellaDir } }],
+          getWorkspaceFolder: () => ({ uri: { fsPath: umbrellaDir } }),
+        },
+      });
+      assert.equal(
+        resolvedLooseFile,
+        evoChild,
+        'Loose file in uninitialized parent umbrella folder must descend into valid child .evo instead of short-circuiting to hollow parent'
+      );
+
+      // 3. Depth-2 umbrella directory without active editor resolves to group/SubRepo
+      const resolvedDepth2 = resolveActiveWorkspaceRoot({
+        window: { activeTextEditor: undefined },
+        workspace: {
+          workspaceFolders: [{ uri: { fsPath: umbrellaDir2 } }],
+        },
+      });
+      assert.equal(resolvedDepth2, depth2Child, 'Depth-2 child .evo workspace must be discovered inside umbrella root');
+
+      // 4. activate live switching: initial open -> external non-evo ignore -> switch to SecondRepo -> focus Webview (undefined editor)
+      const extFile = path.join(externalDir, 'scratch.ts');
+      fs.writeFileSync(extFile, 'export const z = 0;\n', 'utf8');
+
+      const commands = new Map<string, () => Promise<void> | void>();
+      const postedMessages: any[] = [];
+      let activeEditorCb: ((e: any) => void) | undefined;
+      let viewStateCb: ((e: any) => void) | undefined;
+      let createdPanel: any;
+
+      const mockVscode: any = {
+        ViewColumn: { One: 1 },
+        commands: {
+          registerCommand(id: string, cb: () => Promise<void> | void) {
+            commands.set(id, cb);
+            return { dispose: () => {} };
+          },
+        },
+        window: {
+          activeTextEditor: {
+            document: { uri: { scheme: 'file', fsPath: path.join(evoChild, 'src', 'main.ts') } },
+          },
+          onDidChangeActiveTextEditor(cb: (e: any) => void) {
+            activeEditorCb = cb;
+            return { dispose: () => {} };
+          },
+          createWebviewPanel(_viewType: string, _title: string, _col: number, _opts: any) {
+            createdPanel = {
+              visible: true,
+              reveal() {},
+              dispose() {},
+              onDidDispose() {
+                return { dispose: () => {} };
+              },
+              onDidChangeViewState(cb: (e: any) => void) {
+                viewStateCb = cb;
+                return { dispose: () => {} };
+              },
+              webview: {
+                html: '',
+                onDidReceiveMessage() {
+                  return { dispose: () => {} };
+                },
+                async postMessage(msg: any) {
+                  postedMessages.push(msg);
+                  return true;
+                },
+              },
+            };
+            return createdPanel;
+          },
+        },
+        workspace: {
+          workspaceFolders: [{ uri: { fsPath: umbrellaDir } }],
+          getWorkspaceFolder(uri: any) {
+            const p = uri?.fsPath || '';
+            if (p.startsWith(umbrellaDir)) return { uri: { fsPath: umbrellaDir } };
+            return undefined;
+          },
+          onDidChangeWorkspaceFolders() {
+            return { dispose: () => {} };
+          },
+        },
+      };
+
+      const context = { subscriptions: [] as any[] };
+      await activate(context, mockVscode);
+
+      const openHandler = commands.get('evo.openWorkbench');
+      assert.ok(openHandler, 'evo.openWorkbench must be registered');
+      await openHandler!();
+      assert.ok(createdPanel, 'Webview panel must be created');
+      assert.ok(
+        String(createdPanel.webview.html).includes('umbrella-rule-a'),
+        'Initial Workbench HTML must bind to child EvoKernel and include umbrella-rule-a'
+      );
+
+      // Switching to external non-Evo file must NOT clobber valid currentWs
+      postedMessages.length = 0;
+      mockVscode.window.activeTextEditor = { document: { uri: { scheme: 'file', fsPath: extFile } } };
+      mockVscode.workspace.workspaceFolders = [];
+      activeEditorCb?.(mockVscode.window.activeTextEditor);
+      assert.equal(
+        postedMessages.length,
+        0,
+        'Switching to uninitialized external file must not overwrite valid active Evo workspace'
+      );
+
+      // Switching to SecondRepo file updates currentWs and pushes snapshot for SecondRepo
+      mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: umbrellaDir } }];
+      mockVscode.window.activeTextEditor = {
+        document: { uri: { scheme: 'file', fsPath: path.join(secondChild, 'src', 'index.ts') } },
+      };
+      activeEditorCb?.(mockVscode.window.activeTextEditor);
+      assert.equal(postedMessages.length, 1, 'Switching to SecondRepo editor must push snapshot');
+      assert.equal(postedMessages[0].type, 'evoSnapshotPush');
+      assert.ok(
+        postedMessages[0].snapshot.rules.some((c: any) => c.id === 'umbrella-rule-b'),
+        'Snapshot after editor switch must contain SecondRepo umbrella-rule-b'
+      );
+
+      // Focusing the Workbench Webview itself leaves activeTextEditor undefined; panel must keep SecondRepo
+      postedMessages.length = 0;
+      mockVscode.window.activeTextEditor = undefined;
+      activeEditorCb?.(undefined);
+      viewStateCb?.({ webviewPanel: { visible: true } });
+      assert.equal(postedMessages.length, 1, 'ViewState refresh pushes snapshot');
+      assert.ok(
+        postedMessages[0].snapshot.rules.some((c: any) => c.id === 'umbrella-rule-b'),
+        'Focusing Workbench Webview (undefined activeTextEditor) must preserve SecondRepo instead of flipping alphabetically to EvoKernel'
+      );
+    } finally {
+      deactivate();
+      try {
+        fs.rmSync(umbrellaDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        fs.rmSync(umbrellaDir2, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        fs.rmSync(externalDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      } catch {}
     }
   });
 });
