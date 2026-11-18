@@ -13,7 +13,7 @@ You are connected to **EvoKernel** (`evo-kernel` MCP + `.evo/` capability & memo
 - When inspecting >5 files, validating schemas, or running diagnostics, prefer executing a verified Micro-Tool via `evo_run(tool_id, args, workspace)` over dumping raw files into context.
 
 ## 3. Mandatory Experience Crystallization (`evo_propose` & `evo_compact`)
-Call `evo_propose(..., workspace)` after a root-cause diagnosis is confirmed (including read-only white-box troubleshooting or log-forensic sessions without code edits), after an initial hypothesis is overturned/corrected, or after verifying a fix/deliverable — before your final response:
+Call `evo_propose(..., workspace)` after a root-cause diagnosis is confirmed (including read-only white-box troubleshooting or log-forensic sessions without code edits), after an initial hypothesis is overturned/corrected, or after verifying a fix/deliverable — before your final response (write-disabled subagent sandboxes: return findings for the parent session to propose):
 - **Episodic Troubleshooting Case (`memory`)**: Diagnosed a concrete bug symptom, symbol, or threshold defect (even read-only) — crystallize as `kind: "memory"` (`symptom`, `root_cause`, `solution`, `target_symbols`) with AST fingerprints at **0 core token cost**. Never crystallize unverified guesses prematurely; if later turns or user feedback overturn/refine an earlier session proposal, immediately update it via `supersedes_id`.
 - **1-Level-Up Architectural Guardrail (`rule`)**: Discovered a cross-module methodology or class-of-bug invariant — distill as `kind: "rule"` (`l0_summary`, wildcard `scope_glob`, `core: false` by default, `transfer_scenarios`). **SSOT Exclusion Principle**: Source code is the Single Source of Truth; NEVER copy magic numbers or >=3 concrete identifiers into a rule body (use `kind: "memory"` or `Case Anchor:`).
 - **User Correction / Deliverable Feedback (`rule` / `skill`)**: When the user corrects an assumption, workflow step, or deliverable/toolchain rule (`.xls`/`.xlsx`/`.docx`, QA reports), codify immediately as a `rule` or `skill` (`supersedes_id` when upgrading; NEVER stop at `kind: "memory"` for general methodologies).
@@ -28,7 +28,7 @@ Call `evo_propose(..., workspace)` after a root-cause diagnosis is confirmed (in
   - The script MUST check `process.env.EVO_SELF_TEST === "1"` or `process.argv.includes("--self-test")` and run a side-effect-free verification check exiting with code `0`.
   - Never hardcode user-specific absolute paths; read workspace root from `process.env.EVO_WORKSPACE || process.cwd()`.
 
-### 5. Registered Micro-Tools via `evo_run`
+### 5. Registered Micro-Tools via `evo_run` (### 5. 已注册受控微工具目录)
 - `[tool] agy-config-auditor`: Audits host rule token budgets, Gate 1.5 rule compliance, memory AST symbols, and local/global split-brain divergence.
 - `[tool] deliverable-canonical-inspector`: Zero-dep canonical reader & defect detector for .xlsx, .docx, .pptx, .csv, .json, and .md deliverable artifacts.
 - `[tool] git-hotspot-analyzer`: Identifies top 10 most frequently modified files in recent git history to pinpoint fragile modules.

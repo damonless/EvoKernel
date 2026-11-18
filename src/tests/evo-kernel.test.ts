@@ -1498,7 +1498,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(Boolean(memRes.isError), false, memRes.content[0]?.text);
       const savedMem = storage.getMemory('mode-switch-semicolon-comment-case');
       assert.ok(savedMem);
-      assert.match(savedMem.symptom, /<WORKSPACE>\/Project\\mode_switch\.c/);
+      assert.match(savedMem.symptom, /<USER_HOME>[\\/]+Project[\\/]+mode_switch\.c/);
 
       // Module 4.2: Mid-session code mutation after crystallization triggers Anti-Poisoning Alert in hook
       runCli(['node', 'evo', 'hook', 'post-tool', '--tool', 'edit_file', '--workspace', ws]);

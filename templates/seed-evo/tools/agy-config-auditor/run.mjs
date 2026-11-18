@@ -972,6 +972,13 @@ function stripPureImports(code) {
     .replace(/^\s*from\s+[\w.]+\s+import\s+[^\r\n]+/gm, '');
 }
 
+function stripRelativeReexports(code) {
+  return code.replace(
+    /(?:^|[\n\r;])\s*export\s+(?:type\s+)?(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\{[^}]*\})\s+from\s+['"]\.[^'"]+['"]\s*;?/g,
+    ' '
+  );
+}
+
 function findSingleColonIndex(spec) {
   for (let i = spec.length - 1; i > 1; i--) {
     if (spec[i] === ':' && spec[i - 1] !== ':' && spec[i + 1] !== ':') {
@@ -979,6 +986,169 @@ function findSingleColonIndex(spec) {
     }
   }
   return -1;
+}
+
+const AUDITOR_BARREL_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx'];
+const AUDITOR_BARREL_JS_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.jsx']);
+const AUDITOR_BARREL_INDEX_EXTENSIONS = ['.ts', '.tsx', '.js', '.mjs'];
+
+function stripCommentsPreserveStrings(input) {
+  if (!input) return '';
+  let out = '';
+  let i = 0;
+  const len = input.length;
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  while (i < len) {
+    const ch = input[i];
+    const next = i + 1 < len ? input[i + 1] : '';
+    if (inSingle) {
+      if (ch === '\\' && i + 1 < len) {
+        out += ch + next;
+        i += 2;
+        continue;
+      }
+      if (ch === "'" || ch === '\n' || ch === '\r') inSingle = false;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === '\\' && i + 1 < len) {
+        out += ch + next;
+        i += 2;
+        continue;
+      }
+      if (ch === '"' || ch === '\n' || ch === '\r') inDouble = false;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (inTemplate) {
+      if (ch === '\\' && i + 1 < len) {
+        out += ch + next;
+        i += 2;
+        continue;
+      }
+      if (ch === '`') inTemplate = false;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < len && input[i] !== '\n') i++;
+      out += ' ';
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i + 1 < len && !(input[i] === '*' && input[i + 1] === '/')) i++;
+      i += 2;
+      out += ' ';
+      continue;
+    }
+    if (ch === "'") inSingle = true;
+    else if (ch === '"') inDouble = true;
+    else if (ch === '`') inTemplate = true;
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+function isAuditorRealSubpathOf(rootDir, candidatePath) {
+  try {
+    const resolvedRoot = fs.existsSync(rootDir) ? fs.realpathSync(rootDir) : path.resolve(rootDir);
+    const targetPath = fs.existsSync(candidatePath) ? fs.realpathSync(candidatePath) : path.resolve(candidatePath);
+    const rel = path.relative(resolvedRoot, targetPath);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  } catch {
+    return false;
+  }
+}
+
+function safeAuditorRealpath(targetPath) {
+  try {
+    return typeof fs.realpathSync.native === 'function'
+      ? fs.realpathSync.native(targetPath)
+      : fs.realpathSync(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+function resolveAuditorRelativeBarrelFile(fromDir, specifier) {
+  const rawTarget = path.resolve(fromDir, specifier);
+  const specExt = path.extname(specifier).toLowerCase();
+  const candidates = [];
+
+  if (AUDITOR_BARREL_JS_EXTENSIONS.has(specExt)) {
+    const stem = rawTarget.slice(0, -specExt.length);
+    for (const ext of AUDITOR_BARREL_EXTENSIONS) {
+      candidates.push(stem + ext);
+    }
+  } else if (!specExt) {
+    for (const ext of AUDITOR_BARREL_EXTENSIONS) {
+      candidates.push(rawTarget + ext);
+    }
+    for (const idxExt of AUDITOR_BARREL_INDEX_EXTENSIONS) {
+      candidates.push(path.join(rawTarget, `index${idxExt}`));
+    }
+  } else {
+    candidates.push(rawTarget);
+  }
+
+  for (const cand of candidates) {
+    if (isAuditorRealSubpathOf(root, cand) && fs.existsSync(cand)) {
+      try {
+        if (fs.statSync(cand).isFile()) {
+          return cand;
+        }
+      } catch {}
+    }
+  }
+  return null;
+}
+
+function resolveBarrelTargets(filePath, content, maxDepth = 2) {
+  if (maxDepth <= 0 || !content || !content.includes('from')) return [];
+  const startFile = path.resolve(filePath);
+  if (!isAuditorRealSubpathOf(root, startFile)) return [];
+
+  const visited = new Set([safeAuditorRealpath(startFile)]);
+  const targets = [];
+  const queue = [{ file: startFile, content, depth: 0 }];
+  const reexportRe =
+    /(?:^|[\n\r;])\s*export\s+(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\{[^}]*\})\s+from\s+['"](\.[^'"]+)['"]/g;
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current.depth >= maxDepth) continue;
+    const stripped = stripCommentsPreserveStrings(current.content);
+    const fromDir = path.dirname(current.file);
+    reexportRe.lastIndex = 0;
+    let m;
+    while ((m = reexportRe.exec(stripped)) !== null) {
+      const spec = (m[1] || '').trim();
+      if (!spec) continue;
+      const resolved = resolveAuditorRelativeBarrelFile(fromDir, spec);
+      if (!resolved) continue;
+      const canonical = safeAuditorRealpath(resolved);
+      if (visited.has(canonical)) continue;
+      visited.add(canonical);
+      targets.push(resolved);
+      if (current.depth + 1 < maxDepth) {
+        try {
+          const nextContent = fs.readFileSync(resolved, 'utf8');
+          queue.push({ file: resolved, content: nextContent, depth: current.depth + 1 });
+        } catch {}
+      }
+    }
+  }
+
+  return targets;
 }
 
 function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = '', createdBranch = '') {
@@ -1041,9 +1211,23 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
       if (isWholeFile) {
         return { exists: true, file: normalizedRecorded };
       }
-      const content = stripCodeComments(fs.readFileSync(fullRecorded, 'utf8'));
+      const rawContent = fs.readFileSync(fullRecorded, 'utf8');
+      const content = stripCodeComments(
+        stripRelativeReexports(stripCommentsPreserveStrings(rawContent))
+      );
       if (hasSymbolIdentifier(content, symbolName)) {
         return { exists: true, file: normalizedRecorded };
+      }
+      for (const targetFile of resolveBarrelTargets(fullRecorded, rawContent, 2)) {
+        try {
+          const targetRaw = fs.readFileSync(targetFile, 'utf8');
+          const targetContent = stripCodeComments(
+            stripRelativeReexports(stripCommentsPreserveStrings(targetRaw))
+          );
+          if (hasSymbolIdentifier(targetContent, symbolName)) {
+            return { exists: true, file: path.relative(root, targetFile).replace(/\\/g, '/') };
+          }
+        } catch {}
       }
       if (!normalizedHint || normalizedHint === normalizedRecorded) {
         if (
@@ -1072,12 +1256,26 @@ function checkSymbolInWorkspace(rawSpec, createdCommit = '', recordedFilePath = 
       if (isWholeFile) {
         return { exists: true, file: normalizedHint };
       }
-      const content = stripCodeComments(fs.readFileSync(fullHint, 'utf8'));
+      const rawContent = fs.readFileSync(fullHint, 'utf8');
+      const content = stripCodeComments(
+        stripRelativeReexports(stripCommentsPreserveStrings(rawContent))
+      );
       if (hasSymbolIdentifier(content, symbolName)) {
         return {
           exists: true,
           file: normalizedHint,
         };
+      }
+      for (const targetFile of resolveBarrelTargets(fullHint, rawContent, 2)) {
+        try {
+          const targetRaw = fs.readFileSync(targetFile, 'utf8');
+          const targetContent = stripCodeComments(
+            stripRelativeReexports(stripCommentsPreserveStrings(targetRaw))
+          );
+          if (hasSymbolIdentifier(targetContent, symbolName)) {
+            return { exists: true, file: path.relative(root, targetFile).replace(/\\/g, '/') };
+          }
+        } catch {}
       }
       if (
         checkSymbolAtParallelBranchCommit(

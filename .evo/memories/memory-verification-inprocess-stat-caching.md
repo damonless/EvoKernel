@@ -2,14 +2,14 @@
 id: memory-verification-inprocess-stat-caching
 title: "In-Process Memory Freshness Stat & Git Path Caching"
 l0_summary: "Fast sub-millisecond in-process memory freshness verification via short TTL stat & Git path caching and fast shallow cloning."
-created_commit: "6c7266d"
+created_commit: "18dae2b"
 created_branch: "main"
 target_symbols: ["src/core/memory.ts:verifyMemoryFreshness","src/core/memory.ts:clearMemoryVerificationCache"]
-ast_fingerprints: {"src/core/memory.ts:verifyMemoryFreshness":{"symbol":"src/core/memory.ts:verifyMemoryFreshness","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":3468,"end_line":4174,"signature":"export function verifyMemoryFreshness(","ast_hash":"9e6310300f077be0"},"src/core/memory.ts:clearMemoryVerificationCache":{"symbol":"src/core/memory.ts:clearMemoryVerificationCache","file_path":"src/core/memory.ts","file":"src/core/memory.ts","kind":"function","start_line":3442,"end_line":3447,"signature":"export function clearMemoryVerificationCache(): void","ast_hash":"71667cc589bbd3d5"}}
+ast_fingerprints: {"src/core/memory.ts:verifyMemoryFreshness":{"symbol":"src/core/memory.ts:verifyMemoryFreshness","file_path":"src/core/memory/freshness-verifier.ts","file":"src/core/memory/freshness-verifier.ts","kind":"function","start_line":1181,"end_line":1780,"signature":"export function verifyMemoryFreshness(","ast_hash":"1ade475f7015081e"},"src/core/memory.ts:clearMemoryVerificationCache":{"symbol":"src/core/memory.ts:clearMemoryVerificationCache","file_path":"src/core/memory/freshness-verifier.ts","file":"src/core/memory/freshness-verifier.ts","kind":"function","start_line":682,"end_line":687,"signature":"export function clearMemoryVerificationCache(): void","ast_hash":"35a5a45e33051628"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-02T03:50:28.090Z"
-updated_at: "2026-11-14T20:17:34.551Z"
+updated_at: "2026-11-18T17:14:26.000Z"
 ---
 
 ## Symptom

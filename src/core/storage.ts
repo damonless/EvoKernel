@@ -39,19 +39,29 @@ export function openSqliteReadOnly(
     missingErr.code = 'ENOENT';
     throw missingErr;
   }
+  let db: DatabaseSync;
+  let usedFallbackReadWrite = false;
   try {
-    return new DbCtor(dbPath, { readOnly: true });
+    db = new DbCtor(dbPath, { readOnly: true });
   } catch (err: any) {
     const code = String(err?.code || '');
     const isUnsupportedOption =
       err instanceof TypeError ||
       code.startsWith('ERR_INVALID_ARG') ||
-      /readonly|options|unknown|invalid/i.test(String(err?.message || ''));
+      (!code.startsWith('ERR_SQLITE') && /readonly|options|unknown|invalid/i.test(String(err?.message || '')));
     if (!isUnsupportedOption) {
       throw err;
     }
-    return new DbCtor(dbPath);
+    db = new DbCtor(dbPath);
+    usedFallbackReadWrite = true;
   }
+  if (db && typeof (db as any).exec === 'function') {
+    if (usedFallbackReadWrite) {
+      try { (db as any).exec('PRAGMA query_only = ON;'); } catch {}
+    }
+    try { (db as any).exec('PRAGMA busy_timeout = 3000;'); } catch {}
+  }
+  return db;
 }
 
 export const DEFAULT_EVO_CONFIG: EvoConfig = {
@@ -234,6 +244,10 @@ export function sanitizeId(rawId: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+function parseVisibility(val: unknown): 'local' | 'public' | undefined {
+  return val === 'local' || val === 'public' ? val : undefined;
 }
 
 export function getExtensionForRuntime(runtime: ScriptRuntime): string {
@@ -558,6 +572,9 @@ export class EvoStorage {
         : []),
       ...(rule.enabled === false ? ['enabled: false'] : []),
       ...(rule.review_status === 'pending' ? ['review_status: "pending"'] : []),
+      ...(rule.visibility === 'local' || rule.visibility === 'public'
+        ? [`visibility: ${JSON.stringify(rule.visibility)}`]
+        : []),
       `created_at: ${JSON.stringify(rule.created_at)}`,
       `updated_at: ${JSON.stringify(rule.updated_at)}`,
       '---',
@@ -638,6 +655,7 @@ export class EvoStorage {
         contrastive_evidence: meta.contrastive_evidence ? String(meta.contrastive_evidence) : undefined,
         enabled: meta.enabled === false || meta.enabled === 'false' ? false : true,
         review_status: meta.review_status === 'pending' ? 'pending' : 'approved',
+        ...(parseVisibility(meta.visibility) ? { visibility: parseVisibility(meta.visibility) } : {}),
         created_at: String(meta.created_at || new Date().toISOString()),
         updated_at: String(meta.updated_at || new Date().toISOString()),
       };
@@ -695,6 +713,9 @@ export class EvoStorage {
       ...(skill.supersedes_id ? [`supersedes_id: ${JSON.stringify(skill.supersedes_id)}`] : []),
       ...(skill.enabled === false ? ['enabled: false'] : []),
       ...(skill.review_status === 'pending' ? ['review_status: "pending"'] : []),
+      ...(skill.visibility === 'local' || skill.visibility === 'public'
+        ? [`visibility: ${JSON.stringify(skill.visibility)}`]
+        : []),
       `created_at: ${JSON.stringify(skill.created_at)}`,
       `updated_at: ${JSON.stringify(skill.updated_at)}`,
       '---',
@@ -759,6 +780,7 @@ export class EvoStorage {
         supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,
         enabled: meta.enabled === false || meta.enabled === 'false' ? false : true,
         review_status: meta.review_status === 'pending' ? 'pending' : 'approved',
+        ...(parseVisibility(meta.visibility) ? { visibility: parseVisibility(meta.visibility) } : {}),
         created_at: String(meta.created_at || new Date().toISOString()),
         updated_at: String(meta.updated_at || new Date().toISOString()),
       };
@@ -791,11 +813,14 @@ export class EvoStorage {
     const {
       enabled: rawEnabled,
       review_status: rawReviewStatus,
+      visibility: rawVisibility,
       ...restManifest
     } = manifest;
+    const visibility = parseVisibility(rawVisibility);
     const updatedManifest: EvoToolManifest = {
       ...restManifest,
       entry_script: entryScript,
+      ...(visibility ? { visibility } : {}),
       ...(rawEnabled === false ? { enabled: false } : {}),
       ...(rawReviewStatus === 'pending' ? { review_status: 'pending' as const } : {}),
     };
@@ -824,8 +849,11 @@ export class EvoStorage {
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as EvoToolManifest;
       const scriptPath = path.join(dir, manifest.entry_script);
       const scriptCode = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf8') : '';
+      const { visibility: rawVisibility, ...restManifest } = manifest;
+      const visibility = parseVisibility(rawVisibility);
       return {
-        ...manifest,
+        ...restManifest,
+        ...(visibility ? { visibility } : {}),
         enabled: manifest.enabled === false ? false : true,
         review_status: manifest.review_status === 'pending' ? 'pending' : 'approved',
         script_code: scriptCode,
@@ -899,6 +927,9 @@ export class EvoStorage {
       ...(memory.supersedes_id ? [`supersedes_id: ${JSON.stringify(memory.supersedes_id)}`] : []),
       ...(memory.enabled === false ? ['enabled: false'] : []),
       ...(memory.review_status === 'pending' ? ['review_status: "pending"'] : []),
+      ...(memory.visibility === 'local' || memory.visibility === 'public'
+        ? [`visibility: ${JSON.stringify(memory.visibility)}`]
+        : []),
       `created_at: ${JSON.stringify(memory.created_at)}`,
       `updated_at: ${JSON.stringify(memory.updated_at)}`,
       '---',
@@ -949,6 +980,7 @@ export class EvoStorage {
         supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,
         enabled: meta.enabled === false || meta.enabled === 'false' ? false : true,
         review_status: meta.review_status === 'pending' ? 'pending' : 'approved',
+        ...(parseVisibility(meta.visibility) ? { visibility: parseVisibility(meta.visibility) } : {}),
         created_at: String(meta.created_at || new Date().toISOString()),
         updated_at: String(meta.updated_at || new Date().toISOString()),
       };
@@ -1213,6 +1245,7 @@ export class EvoStorage {
     const preservedEnabled = latest.enabled === false || latest.enabled === 'false' ? false : true;
     const preservedReviewStatus: 'pending' | 'approved' =
       latest.review_status === 'pending' ? 'pending' : 'approved';
+    const preservedVisibility = parseVisibility(latest.visibility);
 
     const restoreExtraDirFiles = (targetBaseDir: string, extraObj: unknown) => {
       if (!extraObj || typeof extraObj !== 'object') return;
@@ -1248,6 +1281,7 @@ export class EvoStorage {
         contrastive_evidence: latest.contrastive_evidence ? String(latest.contrastive_evidence) : undefined,
         enabled: preservedEnabled,
         review_status: preservedReviewStatus,
+        ...(preservedVisibility ? { visibility: preservedVisibility } : {}),
         created_at: String(latest.created_at || now),
         updated_at: now,
       });
@@ -1268,6 +1302,7 @@ export class EvoStorage {
         contrastive_evidence: latest.contrastive_evidence ? String(latest.contrastive_evidence) : undefined,
         enabled: preservedEnabled,
         review_status: preservedReviewStatus,
+        ...(preservedVisibility ? { visibility: preservedVisibility } : {}),
         created_at: String(latest.created_at || now),
         updated_at: now,
       });
@@ -1289,6 +1324,7 @@ export class EvoStorage {
         hook_trigger: latest.hook_trigger as EvoHookTrigger | undefined,
         enabled: preservedEnabled,
         review_status: preservedReviewStatus,
+        ...(preservedVisibility ? { visibility: preservedVisibility } : {}),
         created_at: String(latest.created_at || now),
         updated_at: now,
       };
@@ -1314,6 +1350,7 @@ export class EvoStorage {
         supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
         enabled: preservedEnabled,
         review_status: preservedReviewStatus,
+        ...(preservedVisibility ? { visibility: preservedVisibility } : {}),
         created_at: String(latest.created_at || now),
         updated_at: now,
       });

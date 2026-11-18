@@ -312,5 +312,237 @@ export function getCanonicalToken(
     workspaceRootOrLexicon && typeof workspaceRootOrLexicon === 'object'
       ? workspaceRootOrLexicon
       : loadWorkspaceLexicon(workspaceRootOrLexicon);
-  return lexicon.canonicalMap.get(lower) || lower;
+  const direct = lexicon.canonicalMap.get(lower);
+  if (direct) return direct;
+  const stemmed = stemEnglishToken(lower);
+  if (stemmed && stemmed !== lower) {
+    const fromStem = lexicon.canonicalMap.get(stemmed);
+    if (fromStem) return fromStem;
+  }
+  return lower;
+}
+
+export function splitCompoundIdentifier(token: string): string[] {
+  if (!token) return [];
+  const rawSegments = token.split(/[_\-./\\#:@,;()\[\]{}<>+=*&|!?'"`\s]+/);
+  const result: string[] = [];
+  const seen = new Set<string>();
+
+  for (const seg of rawSegments) {
+    if (!seg) continue;
+    if (/^0x[0-9a-f]+$/i.test(seg)) {
+      const hex = seg.toLowerCase();
+      if (hex.length >= 2 && !seen.has(hex)) {
+        seen.add(hex);
+        result.push(hex);
+      }
+      continue;
+    }
+    const spaced = seg
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .replace(/([0-9])([A-Z][a-z])/g, '$1 $2');
+    for (const part of spaced.split(' ')) {
+      const lower = part.toLowerCase();
+      if (lower.length >= 2 && !seen.has(lower)) {
+        seen.add(lower);
+        result.push(lower);
+      }
+    }
+  }
+
+  return result;
+}
+
+const PROTECTED_STEM_WORDS = new Set([
+  'args',
+  'https',
+  'http',
+  'tls',
+  'dns',
+  'cors',
+  'bus',
+  'gas',
+  'status',
+  'class',
+  'pass',
+  'process',
+  'postgres',
+  'redis',
+  'axios',
+  'express',
+  'less',
+  'css',
+  'scss',
+  'sass',
+  'js',
+  'ts',
+  'mjs',
+  'cjs',
+  'rs',
+  'cs',
+  'os',
+  'fs',
+  'path',
+  'bias',
+  'alias',
+  'canvas',
+  'atlas',
+  'nexus',
+  'mutex',
+  'regex',
+  'linux',
+  'unix',
+  'nginx',
+  'macos',
+  'windows',
+  'ios',
+  'this',
+  'has',
+  'was',
+  'is',
+  'as',
+  'us',
+  'its',
+  'yes',
+  'plus',
+  'minus',
+  'focus',
+  'radius',
+  'series',
+  'species',
+  'success',
+  'access',
+  'address',
+  'progress',
+  'harness',
+  'unless',
+  'always',
+  'across',
+  'others',
+  'aws',
+  'gcs',
+  'k8s',
+  'fps',
+  'bps',
+  'qps',
+  'rps',
+  'tps',
+  'ops',
+  'sys',
+  'string',
+  'spring',
+  'bring',
+  'thing',
+  'ceiling',
+  'sibling',
+  'nothing',
+  'anything',
+  'something',
+  'everything',
+  'morning',
+  'evening',
+  'during',
+  'meaning',
+  'embed',
+  'speed',
+  'need',
+  'seed',
+  'feed',
+  'bleed',
+  'exceed',
+  'proceed',
+  'succeed',
+  'false',
+  'there',
+  'where',
+  'these',
+  'those',
+  'whose',
+  'while',
+  'since',
+  'above',
+  'hence',
+  'quite',
+  'maybe',
+  'alone',
+  'issue',
+  'value',
+  'queue',
+  'continue',
+  'true',
+]);
+
+function restoreSilentTrailingE(stem: string): string {
+  if (
+    /(?:ch|dg|lv|rv|iz|at|ut|et|ot|gl|pl|bl|tl|dl|kl|zl|ns|rs|rc|nc|rg|gur)$/.test(stem)
+  ) {
+    return `${stem}e`;
+  }
+  return stem;
+}
+
+export function stemEnglishToken(token: string): string {
+  let w = String(token || '').trim().toLowerCase();
+  if (!w || w.length < 4 || !/^[a-z]+$/.test(w) || PROTECTED_STEM_WORDS.has(w)) {
+    return w;
+  }
+  if (/(?:ss|us|is|as|os)$/.test(w)) {
+    return w;
+  }
+
+  if (w.endsWith('izations') && w.length > 10) w = w.slice(0, -1);
+  else if (w.endsWith('ications') && w.length > 10) w = w.slice(0, -1);
+  else if (w.endsWith('ations') && w.length > 8) w = w.slice(0, -1);
+
+  if (w.endsWith('ization') && w.length > 9) return restoreSilentTrailingE(w.slice(0, -5));
+  if (w.endsWith('ication') && w.length > 9) return `${w.slice(0, -7)}y`;
+  if (/(?:at|ut|et)ion$/.test(w) && w.length > 7) return restoreSilentTrailingE(w.slice(0, -3));
+  if (w.endsWith('ation') && w.length > 7) return restoreSilentTrailingE(w.slice(0, -5));
+
+  if (w.endsWith('ies') && w.length > 4) return `${w.slice(0, -3)}y`;
+  if (w.endsWith('ied') && w.length > 4) return `${w.slice(0, -3)}y`;
+
+  if (w.endsWith('ing') && w.length >= 6) {
+    let stem = w.slice(0, -3);
+    let collapsed = false;
+    if (/([bdgmnprt])\1$/.test(stem) && !(stem.endsWith('dd') && stem.length <= 3)) {
+      stem = stem.slice(0, -1);
+      collapsed = true;
+    }
+    if (!collapsed && stem.length === 3 && /^[bcdfghjklmnpqrstvwxz][aeiouy][bcdfglmnprstvz]$/.test(stem)) {
+      return `${stem}e`;
+    }
+    return collapsed ? stem : restoreSilentTrailingE(stem);
+  }
+
+  if (w.endsWith('ed') && w.length >= 5 && !w.endsWith('eed')) {
+    let stem = w.slice(0, -2);
+    let collapsed = false;
+    if (/([bdgmnprt])\1$/.test(stem) && !(stem.endsWith('dd') && stem.length <= 3)) {
+      stem = stem.slice(0, -1);
+      collapsed = true;
+    }
+    if (!collapsed && stem.length === 3 && /^[bcdfghjklmnpqrstvwxz][aeiouy][bcdfglmnprstvz]$/.test(stem)) {
+      return `${stem}e`;
+    }
+    return collapsed ? stem : restoreSilentTrailingE(stem);
+  }
+
+  if (w.endsWith('es') && w.length >= 5) {
+    const baseWithoutEs = w.slice(0, -2);
+    if (PROTECTED_STEM_WORDS.has(baseWithoutEs)) {
+      return baseWithoutEs;
+    }
+    if (/(?:ches|shes|xes|zes|sses)$/.test(w)) {
+      return baseWithoutEs;
+    }
+    return w.slice(0, -1);
+  }
+
+  if (w.endsWith('s') && !w.endsWith('ss') && w.length >= 4) {
+    return w.slice(0, -1);
+  }
+
+  return w;
 }

@@ -62,6 +62,7 @@ export interface EvoMemory {
   supersedes_id?: string;
   enabled?: boolean;
   review_status?: 'pending' | 'approved';
+  visibility?: 'local' | 'public';
   created_at: string;
   updated_at: string;
 }
@@ -89,6 +90,7 @@ export interface MemoryVerificationReport {
   overall_status: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE';
   confidence_tag:
     | '[置信度: HIGH (≥80%)]'
+    | '[置信度: MID (50–80%)]'
     | '[置信度: MID (50–80%) · OTHER_BRANCH]'
     | '[置信度: LOW (20–50%) · STALE]';
   commit_match: boolean;
@@ -133,6 +135,8 @@ export interface EvoConfig {
   enabledHarnesses: string[];
   sharedEvoDir?: string;
   externalServers?: Record<string, ExternalMcpServerConfig>;
+  allowNetworkTools?: boolean;
+  anonExcludeIds?: string[];
 }
 
 export interface EvoRule {
@@ -151,6 +155,7 @@ export interface EvoRule {
   contrastive_evidence?: string;
   enabled?: boolean;
   review_status?: 'pending' | 'approved';
+  visibility?: 'local' | 'public';
   created_at: string;
   updated_at: string;
 }
@@ -171,6 +176,7 @@ export interface EvoSkill {
   contrastive_evidence?: string;
   enabled?: boolean;
   review_status?: 'pending' | 'approved';
+  visibility?: 'local' | 'public';
   created_at: string;
   updated_at: string;
 }
@@ -190,6 +196,7 @@ export interface EvoToolManifest {
   hook_trigger?: EvoHookTrigger;
   enabled?: boolean;
   review_status?: 'pending' | 'approved';
+  visibility?: 'local' | 'public';
   created_at: string;
   updated_at: string;
 }
@@ -228,6 +235,7 @@ export interface ProposalPayload {
   hook_trigger?: EvoHookTrigger;
   enabled?: boolean;
   review_status?: 'pending' | 'approved';
+  visibility?: 'local' | 'public';
   // For rules:
   scope_glob?: string;
   core?: boolean;
@@ -250,6 +258,7 @@ export interface ProposalPayload {
   solution?: string;
   target_symbols?: string[];
   created_branch?: string;
+  created_commit?: string;
 }
 
 export interface TelemetryRecord {

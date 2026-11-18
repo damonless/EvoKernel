@@ -104,6 +104,137 @@ export function checkScriptSyntax(
   }
 }
 
+function spawnSyntaxCheckAsync(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  defaultFailMsg: string,
+  runtimeErrorPrefix?: string
+): Promise<{ valid: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timedOut = false;
+    let stdout = '';
+    let stderr = '';
+    let child: ReturnType<typeof spawn> | null = null;
+    let timer: NodeJS.Timeout | null = null;
+
+    const finalize = (code: number | null, spawnErr?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (spawnErr) {
+        const msg = runtimeErrorPrefix
+          ? `${runtimeErrorPrefix}: ${spawnErr.message}`
+          : (stderr || stdout || spawnErr.message || defaultFailMsg).trim();
+        resolve({ valid: false, error: msg });
+        return;
+      }
+      if (timedOut || code !== 0) {
+        const fallback = timedOut ? `${defaultFailMsg} (timed out after ${timeoutMs}ms)` : defaultFailMsg;
+        resolve({ valid: false, error: (stderr || stdout || fallback).trim() });
+        return;
+      }
+      resolve({ valid: true });
+    };
+
+    try {
+      child = spawn(cmd, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+      });
+
+      if (child.stdout) {
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk: string) => {
+          stdout += chunk;
+        });
+      }
+      if (child.stderr) {
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', (chunk: string) => {
+          stderr += chunk;
+        });
+      }
+
+      timer = setTimeout(() => {
+        if (settled) return;
+        timedOut = true;
+        void killProcessTreeAsync(child?.pid).finally(() => {
+          try {
+            child?.stdout?.destroy();
+            child?.stderr?.destroy();
+          } catch {
+            // ignore
+          }
+          finalize(124);
+        });
+      }, timeoutMs);
+
+      child.on('error', (err) => finalize(1, err));
+      child.on('close', (code) => finalize(code));
+    } catch (err) {
+      finalize(1, err instanceof Error ? err : new Error(String(err)));
+    }
+  });
+}
+
+export async function checkScriptSyntaxAsync(
+  runtime: ScriptRuntime,
+  scriptCode: string
+): Promise<{ valid: boolean; error?: string }> {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'evo-syntax-'));
+  const scriptPath = path.join(tmpDir, `check${getExtensionForRuntime(runtime)}`);
+  try {
+    await fs.promises.writeFile(scriptPath, scriptCode, 'utf8');
+
+    if (runtime === 'node') {
+      return await spawnSyntaxCheckAsync(
+        process.execPath,
+        ['--check', scriptPath],
+        4000,
+        'Node syntax check failed'
+      );
+    }
+
+    if (runtime === 'python') {
+      return await spawnSyntaxCheckAsync(
+        resolvePythonBinary(),
+        ['-m', 'py_compile', scriptPath],
+        4000,
+        'Python syntax check failed',
+        'Python runtime error'
+      );
+    }
+
+    if (runtime === 'powershell') {
+      const psCmd = `$errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('${scriptPath.replace(/'/g, "''")}', [ref]$null, [ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }`;
+      const shell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
+      return await spawnSyntaxCheckAsync(
+        shell,
+        ['-NoProfile', '-NonInteractive', '-Command', psCmd],
+        4000,
+        'PowerShell AST check failed'
+      );
+    }
+
+    if (runtime === 'bash') {
+      return await spawnSyntaxCheckAsync(
+        'bash',
+        ['-n', scriptPath],
+        4000,
+        'Bash syntax check failed',
+        'Bash runtime error'
+      );
+    }
+
+    return { valid: true };
+  } finally {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
 export function sanitizeSandboxEnv(rawEnv: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const sanitized: Record<string, string> = {};
   const sensitivePattern =
@@ -114,6 +245,7 @@ export function sanitizeSandboxEnv(rawEnv: NodeJS.ProcessEnv = process.env): Rec
     'COMSPEC',
     'TMP',
     'TEMP',
+    'TMPDIR',
     'SYSTEMROOT',
     'SYSTEMDRIVE',
     'HOME',
@@ -143,6 +275,7 @@ export interface SandboxExecutionOptions {
   workspaceRoot?: string;
   timeoutMs?: number;
   selfTest?: boolean;
+  tmpDir?: string;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -355,21 +488,34 @@ function resolveSandboxInvocation(
   }
 
   const sanitizedEnv = sanitizeSandboxEnv(options.env ?? process.env);
+  const env: Record<string, string> = {
+    ...sanitizedEnv,
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUTF8: '1',
+    EVO_ARGS: serializedArgs,
+    EVO_SANDBOX: '1',
+    EVO_SELF_TEST: options.selfTest ? '1' : '0',
+    EVO_WORKSPACE: options.workspaceRoot ?? cwd,
+  };
+
+  if (typeof options.tmpDir === 'string' && options.tmpDir.trim().length > 0) {
+    for (const k of Object.keys(env)) {
+      const upper = k.toUpperCase();
+      if (upper === 'TMP' || upper === 'TEMP' || upper === 'TMPDIR') {
+        delete env[k];
+      }
+    }
+    env.TMP = options.tmpDir;
+    env.TEMP = options.tmpDir;
+    env.TMPDIR = options.tmpDir;
+  }
 
   return {
     cmd,
     cmdArgs,
     cwd,
     timeoutMs,
-    env: {
-      ...sanitizedEnv,
-      PYTHONIOENCODING: 'utf-8',
-      PYTHONUTF8: '1',
-      EVO_ARGS: serializedArgs,
-      EVO_SANDBOX: '1',
-      EVO_SELF_TEST: options.selfTest ? '1' : '0',
-      EVO_WORKSPACE: cwd,
-    },
+    env,
   };
 }
 

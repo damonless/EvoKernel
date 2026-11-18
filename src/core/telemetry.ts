@@ -18,6 +18,8 @@ import {
   compileLexiconConfig,
   loadWorkspaceLexicon,
   getCanonicalToken,
+  splitCompoundIdentifier,
+  stemEnglishToken,
 } from './lexicon.js';
 
 export interface RecallWindowStats {
@@ -46,18 +48,20 @@ export function readRecallWindowStatsFromDb(db: DatabaseSync, days = 7): RecallW
   const safeDays = Math.max(1, Math.floor(Number(days) || 7));
   const cutoffIso = new Date(Date.now() - safeDays * 86400000).toISOString();
   try {
-    const row = db
-      .prepare(
-        `SELECT
-           COALESCE(SUM(CASE WHEN event_type = 'search' THEN 1 ELSE 0 END), 0) AS searchEvents,
-           COALESCE(SUM(CASE WHEN event_type = 'inspect' THEN 1 ELSE 0 END), 0) AS inspectEvents,
-           COALESCE(SUM(CASE WHEN event_type = 'run' THEN 1 ELSE 0 END), 0) AS runEvents,
-           COALESCE(SUM(CASE WHEN helped > 0 AND event_type IN ('inspect', 'run') THEN 1 ELSE 0 END), 0) AS helpedCount,
-           COUNT(DISTINCT CASE WHEN capability_id != '' AND capability_id != '__zero_hit__' THEN capability_id ELSE NULL END) AS uniqueCapabilities
-         FROM recall_events
-         WHERE timestamp >= ?`
-      )
-      .get(cutoffIso) as
+    const row = withSqliteBusyRetry(() =>
+      db
+        .prepare(
+          `SELECT
+             COALESCE(SUM(CASE WHEN event_type = 'search' THEN 1 ELSE 0 END), 0) AS searchEvents,
+             COALESCE(SUM(CASE WHEN event_type = 'inspect' THEN 1 ELSE 0 END), 0) AS inspectEvents,
+             COALESCE(SUM(CASE WHEN event_type = 'run' THEN 1 ELSE 0 END), 0) AS runEvents,
+             COALESCE(SUM(CASE WHEN helped > 0 AND event_type IN ('inspect', 'run') THEN 1 ELSE 0 END), 0) AS helpedCount,
+             COUNT(DISTINCT CASE WHEN capability_id != '' AND capability_id != '__zero_hit__' THEN capability_id ELSE NULL END) AS uniqueCapabilities
+           FROM recall_events
+           WHERE timestamp >= ?`
+        )
+        .get(cutoffIso)
+    ) as
       | {
           searchEvents?: number;
           inspectEvents?: number;
@@ -83,6 +87,110 @@ export function readRecallWindowStatsFromDb(db: DatabaseSync, days = 7): RecallW
     };
   } catch {
     return emptyRecallWindowStats(safeDays);
+  }
+}
+
+export function readMergedRecallWindowStatsFromDbs(
+  dbs: DatabaseSync[],
+  days = 7
+): RecallWindowStats {
+  const safeDays = Math.max(1, Math.floor(Number(days) || 7));
+  const cutoffIso = new Date(Date.now() - safeDays * 86400000).toISOString();
+  let searchEvents = 0;
+  let inspectEvents = 0;
+  let runEvents = 0;
+  let helpedCount = 0;
+  const uniqueCapabilities = new Set<string>();
+
+  for (const db of dbs) {
+    if (!db) continue;
+    try {
+      const { row, capRows } = withSqliteBusyRetry(() => {
+        const statsRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(CASE WHEN event_type = 'search' THEN 1 ELSE 0 END), 0) AS searchEvents,
+               COALESCE(SUM(CASE WHEN event_type = 'inspect' THEN 1 ELSE 0 END), 0) AS inspectEvents,
+               COALESCE(SUM(CASE WHEN event_type = 'run' THEN 1 ELSE 0 END), 0) AS runEvents,
+               COALESCE(SUM(CASE WHEN helped > 0 AND event_type IN ('inspect', 'run') THEN 1 ELSE 0 END), 0) AS helpedCount
+             FROM recall_events
+             WHERE timestamp >= ?`
+          )
+          .get(cutoffIso) as
+          | {
+              searchEvents?: number;
+              inspectEvents?: number;
+              runEvents?: number;
+              helpedCount?: number;
+            }
+          | undefined;
+
+        const distinctCaps = db
+          .prepare(
+            `SELECT DISTINCT capability_id
+             FROM recall_events
+             WHERE timestamp >= ?
+               AND capability_id != ''
+               AND capability_id != '__zero_hit__'`
+          )
+          .all(cutoffIso) as Array<{ capability_id?: unknown }>;
+
+        return { row: statsRow, capRows: distinctCaps };
+      });
+      if (row) {
+        searchEvents += Number(row.searchEvents || 0);
+        inspectEvents += Number(row.inspectEvents || 0);
+        runEvents += Number(row.runEvents || 0);
+        helpedCount += Number(row.helpedCount || 0);
+      }
+
+      for (const capRow of capRows) {
+        const capId = String(capRow.capability_id || '').trim();
+        if (capId && capId !== '__zero_hit__') {
+          uniqueCapabilities.add(capId);
+        }
+      }
+    } catch {
+      // Skip unreadable or uninitialized DB safely
+    }
+  }
+
+  return {
+    days: safeDays,
+    searchEvents,
+    inspectEvents,
+    runEvents,
+    adoptedCount: inspectEvents + runEvents,
+    helpedCount,
+    uniqueCapabilities: uniqueCapabilities.size,
+  };
+}
+
+function isSqliteBusyError(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown } | null | undefined;
+  return (
+    String(e?.code || '').includes('SQLITE_BUSY') ||
+    /database is locked|SQLITE_BUSY/i.test(String(e?.message || ''))
+  );
+}
+
+function withSqliteBusyRetry<T>(fn: () => T, maxRetries = 3): T {
+  const waitBuf = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (!isSqliteBusyError(err) || attempt >= maxRetries) {
+        throw err;
+      }
+      Atomics.wait(waitBuf, 0, 0, 15 * (attempt + 1));
+    }
+  }
+}
+
+function logTelemetryDebugError(context: string, err: unknown): void {
+  if (process.env.EVO_DEBUG === '1') {
+    console.warn(`[EvoTelemetry:${context}]`, err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -268,6 +376,130 @@ function resolveLexicon(workspaceRootOrLexicon?: string | DomainLexiconConfig) {
   return loadWorkspaceLexicon(workspaceRootOrLexicon);
 }
 
+const SUBTOKEN_STOP_WORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'from',
+  'that',
+  'this',
+  'not',
+  'into',
+  'onto',
+  'when',
+  'then',
+  'else',
+]);
+
+function buildNormalizedKeywords(parts: Array<string | undefined>): string {
+  const existingStandalone = new Set<string>();
+  for (const part of parts) {
+    if (!part) continue;
+    for (const tok of part.match(/[A-Za-z0-9]{2,}/g) || []) {
+      existingStandalone.add(tok.toLowerCase());
+    }
+  }
+  const derivedTokens = new Set<string>();
+  const addDerived = (tok: string) => {
+    if (!tok || tok.length < 2) return;
+    if (!existingStandalone.has(tok)) {
+      derivedTokens.add(tok);
+    }
+  };
+  for (const part of parts) {
+    if (!part) continue;
+    const asciiMatches = part.match(/[A-Za-z0-9_./#:-]{2,}/g) || [];
+    for (const raw of asciiMatches) {
+      const lower = raw.toLowerCase();
+      for (const sub of splitCompoundIdentifier(raw)) {
+        if (sub !== lower) {
+          addDerived(sub);
+        }
+        if (/^[a-z]+$/.test(sub)) {
+          const stemmed = stemEnglishToken(sub);
+          if (stemmed && stemmed !== sub) {
+            addDerived(stemmed);
+          }
+        }
+      }
+      if (/^[a-z]+$/i.test(raw)) {
+        const stemmedRaw = stemEnglishToken(lower);
+        if (stemmedRaw && stemmedRaw !== lower) {
+          addDerived(stemmedRaw);
+        }
+      }
+    }
+  }
+  return Array.from(derivedTokens).join(' ');
+}
+
+function extractVocabularyTokens(text: string): string[] {
+  if (!text) return [];
+  const seen = new Set<string>();
+  const matches = text.match(/[A-Za-z0-9_./#:-]{2,}/g) || [];
+  for (const raw of matches) {
+    const lower = raw.toLowerCase();
+    if (/^[a-z0-9]{4,}$/.test(lower)) {
+      seen.add(lower);
+    }
+    for (const sub of splitCompoundIdentifier(raw)) {
+      if (/^[a-z0-9]{4,}$/.test(sub)) {
+        seen.add(sub);
+      }
+    }
+  }
+  return Array.from(seen);
+}
+
+function trigramOverlapCount(a: string, b: string): number {
+  if (a.length < 3 || b.length < 3) return 0;
+  const aTrigrams = new Set<string>();
+  for (let i = 0; i <= a.length - 3; i++) {
+    aTrigrams.add(a.slice(i, i + 3));
+  }
+  let overlap = 0;
+  const seenB = new Set<string>();
+  for (let i = 0; i <= b.length - 3; i++) {
+    const tri = b.slice(i, i + 3);
+    if (!seenB.has(tri)) {
+      seenB.add(tri);
+      if (aTrigrams.has(tri)) overlap++;
+    }
+  }
+  return overlap;
+}
+
+function boundedDamerauLevenshtein(a: string, b: string, maxDist: number): number {
+  const m = a.length;
+  const n = b.length;
+  if (Math.abs(m - n) > maxDist) return maxDist + 1;
+  if (a === b) return 0;
+  if (m === 0) return n <= maxDist ? n : maxDist + 1;
+  if (n === 0) return m <= maxDist ? m : maxDist + 1;
+
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    let rowMin = maxDist + 1;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let val = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        val = Math.min(val, dp[i - 2][j - 2] + 1);
+      }
+      dp[i][j] = val;
+      if (val < rowMin) rowMin = val;
+    }
+    if (rowMin > maxDist && i < m - maxDist) {
+      return maxDist + 1;
+    }
+  }
+  return dp[m][n];
+}
+
 export function extractQueryTokens(
   query: string,
   workspaceRootOrLexicon?: string | DomainLexiconConfig
@@ -278,9 +510,34 @@ export function extractQueryTokens(
   const lexicon = resolveLexicon(workspaceRootOrLexicon);
 
   const asciiMatches = trimmed.match(/[A-Za-z0-9_-]{2,}/g) || [];
+  const expandedAscii: string[] = [];
+  const seenAscii = new Set<string>();
+  const pushAscii = (tok: string) => {
+    if (!tok || tok.length < 2) return;
+    const key = tok.toLowerCase();
+    if (!seenAscii.has(key)) {
+      seenAscii.add(key);
+      expandedAscii.push(tok);
+    }
+  };
+  for (const t of asciiMatches.slice(0, 16)) {
+    pushAscii(t);
+    for (const sub of splitCompoundIdentifier(t)) {
+      pushAscii(sub);
+      if (/^[a-z]+$/.test(sub)) {
+        const stemmedSub = stemEnglishToken(sub);
+        if (stemmedSub) pushAscii(stemmedSub);
+      }
+    }
+    if (/^[a-z]+$/i.test(t)) {
+      const stemmed = stemEnglishToken(t);
+      if (stemmed) pushAscii(stemmed);
+    }
+  }
+
   const allCjkBigrams = extractCjkBigrams(trimmed);
 
-  const allLiterals = new Set<string>([...asciiMatches, ...allCjkBigrams]);
+  const allLiterals = new Set<string>([...expandedAscii, ...allCjkBigrams]);
   const techCjkBigrams: string[] = [];
   const otherCjkBigrams: string[] = [];
   for (const bg of allCjkBigrams) {
@@ -303,7 +560,11 @@ export function extractQueryTokens(
   }
 
   for (const lit of allLiterals) {
-    const syns = lexicon.synonyms[lit] || lexicon.synonyms[lit.toLowerCase()];
+    const lowerLit = lit.toLowerCase();
+    const syns =
+      lexicon.synonyms[lit] ||
+      lexicon.synonyms[lowerLit] ||
+      lexicon.synonyms[stemEnglishToken(lowerLit)];
     if (syns) {
       for (const s of syns) {
         expansionTokens.add(s);
@@ -312,13 +573,13 @@ export function extractQueryTokens(
   }
 
   const finalTokens = new Set<string>();
-  for (const t of asciiMatches.slice(0, 16)) {
+  for (const t of expandedAscii.slice(0, 28)) {
     finalTokens.add(t);
   }
   for (const bg of techCjkBigrams) {
     finalTokens.add(bg);
   }
-  const literalBudget = expansionTokens.size > 0 ? 20 : 48;
+  const literalBudget = expansionTokens.size > 0 ? 32 : 48;
   for (const bg of otherCjkBigrams) {
     if (finalTokens.size >= literalBudget) break;
     finalTokens.add(bg);
@@ -390,20 +651,35 @@ export function buildQueryConceptGroups(
   const trimmed = query.trim();
   if (!trimmed) return [];
   const lexicon = resolveLexicon(workspaceRootOrLexicon);
-  const asciiLiterals = (trimmed.match(/[A-Za-z0-9_-]{2,}/g) || []).map((t) => t.toLowerCase());
+  const rawAsciiLiterals = trimmed.match(/[A-Za-z0-9_-]{2,}/g) || [];
   const cjkBigrams = extractCjkBigrams(trimmed);
   const seen = new Set<string>();
   const groups: QueryConceptGroup[] = [];
 
-  for (const lit of [...asciiLiterals, ...cjkBigrams]) {
+  for (const rawLit of [...rawAsciiLiterals, ...cjkBigrams]) {
+    const lit = rawLit.toLowerCase();
     if (seen.has(lit)) continue;
     seen.add(lit);
-    const canon = lexicon.canonicalMap.get(lit) || lexicon.canonicalMap.get(lit.toLowerCase());
-    const syns =
-      lexicon.synonyms[lit] ||
-      lexicon.synonyms[lit.toLowerCase()] ||
-      (canon ? lexicon.synonyms[canon] || lexicon.synonyms[canon.toLowerCase()] : undefined) ||
-      [];
+
+    const stemmedLit = /^[a-z]+$/.test(lit) ? stemEnglishToken(lit) : lit;
+    const subTokens = splitCompoundIdentifier(rawLit).filter(
+      (sub) => sub !== lit && !SUBTOKEN_STOP_WORDS.has(sub)
+    );
+    const candidateLookupKeys = [lit, stemmedLit, ...subTokens];
+
+    const canonSet = new Set<string>();
+    const synSet = new Set<string>();
+    for (const k of candidateLookupKeys) {
+      const c = lexicon.canonicalMap.get(k);
+      if (c) {
+        canonSet.add(c.toLowerCase());
+        const cSyns = lexicon.synonyms[c] || lexicon.synonyms[c.toLowerCase()];
+        if (cSyns) cSyns.forEach((s) => synSet.add(s.toLowerCase()));
+      }
+      const kSyns = lexicon.synonyms[k];
+      if (kSyns) kSyns.forEach((s) => synSet.add(s.toLowerCase()));
+    }
+
     const expTerms: string[] = [];
     for (const exp of lexicon.patternExpansions) {
       exp.regex.lastIndex = 0;
@@ -411,17 +687,26 @@ export function buildQueryConceptGroups(
         for (const tok of exp.tokens) expTerms.push(tok.toLowerCase());
       }
     }
+
+    const subStems = subTokens
+      .filter((sub) => /^[a-z]+$/.test(sub))
+      .map((sub) => stemEnglishToken(sub));
+
     const terms = Array.from(
       new Set([
         lit,
-        ...(canon ? [canon.toLowerCase()] : []),
-        ...syns.map((s) => s.toLowerCase()),
+        ...(stemmedLit ? [stemmedLit] : []),
+        ...subTokens,
+        ...subStems,
+        ...canonSet,
+        ...synSet,
         ...expTerms,
       ])
-    );
+    ).filter((t) => t.length >= 2);
+
     groups.push({
       literal: lit,
-      isGeneric: GENERIC_QUERY_CONCEPT_TOKENS.has(lit),
+      isGeneric: GENERIC_QUERY_CONCEPT_TOKENS.has(lit) || GENERIC_QUERY_CONCEPT_TOKENS.has(stemmedLit),
       terms,
     });
   }
@@ -446,13 +731,22 @@ function evaluateConceptOverlap(
     .join(' ')
     .toLowerCase();
 
+  const searchableStems = new Set<string>();
+  for (const tok of searchable.match(/[a-z]+/g) || []) {
+    if (tok.length >= 4) {
+      searchableStems.add(stemEnglishToken(tok));
+    }
+  }
+
   let matchedConcepts = 0;
   let matchedSpecific = 0;
   let totalSpecific = 0;
 
   for (const g of conceptGroups) {
     if (!g.isGeneric) totalSpecific++;
-    const hit = g.terms.some((term) => term.length >= 2 && searchable.includes(term));
+    const hit = g.terms.some(
+      (term) => term.length >= 2 && (searchable.includes(term) || searchableStems.has(term))
+    );
     if (hit) {
       matchedConcepts++;
       if (!g.isGeneric) matchedSpecific++;
@@ -645,7 +939,10 @@ export class EvoTelemetry {
 
   private initSchema(): void {
     try {
-      this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;');
+      withSqliteBusyRetry(() => {
+        this.db.exec('PRAGMA busy_timeout = 3000;');
+        this.db.exec('PRAGMA journal_mode = WAL;');
+      });
     } catch {
       // ignore pragma errors
     }
@@ -762,21 +1059,25 @@ export class EvoTelemetry {
     }
 
     try {
-      this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS capability_fts USING fts5(
-          id UNINDEXED,
-          kind UNINDEXED,
-          title,
-          l0_summary,
-          keywords,
-          body
-        );
-      `);
-      this.db.prepare('SELECT count(*) FROM capability_fts').get();
+      withSqliteBusyRetry(() => {
+        this.db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS capability_fts USING fts5(
+            id UNINDEXED,
+            kind UNINDEXED,
+            title,
+            l0_summary,
+            keywords,
+            body
+          );
+        `);
+        this.db.prepare('SELECT count(*) FROM capability_fts').get();
+      });
       this.fts5Enabled = true;
-    } catch {
+    } catch (err) {
       // Node.js v22.5 ~ v22.14 on Windows compiled node:sqlite without SQLITE_ENABLE_FTS5
-      this.fts5Enabled = false;
+      if (!isSqliteBusyError(err)) {
+        this.fts5Enabled = false;
+      }
     }
   }
 
@@ -784,19 +1085,29 @@ export class EvoTelemetry {
 
   public syncFromDisk(force = false): void {
     const diskDigest = computeDiskSyncDigest(this.storage.evoDir);
+    let versionMatches = false;
     if (!force) {
       if (this.lastSyncDigest && this.lastSyncDigest === diskDigest) {
         return;
       }
       try {
-        const stmt = this.db.prepare('SELECT value FROM session_state WHERE key = ?');
-        const row = stmt.get('disk_sync_digest') as { value: string } | undefined;
-        if (row && row.value === diskDigest) {
+        const stateRows = withSqliteBusyRetry(() =>
+          this.db
+            .prepare(
+              "SELECT key, value FROM session_state WHERE key IN ('disk_sync_digest', 'fts_index_version')"
+            )
+            .all()
+        ) as Array<{ key: string; value: string }>;
+        const stateMap = new Map(stateRows.map((r) => [r.key, r.value]));
+        versionMatches = stateMap.get('fts_index_version') === '4';
+        if (versionMatches && stateMap.get('disk_sync_digest') === diskDigest) {
           this.lastSyncDigest = diskDigest;
           return;
         }
       } catch {}
     }
+
+    const effectiveForce = force || !versionMatches;
 
     const rules = this.storage.listRules();
     const skills = this.storage.listSkills();
@@ -813,53 +1124,57 @@ export class EvoTelemetry {
 
     const activeMemoryIds = new Set<string>(memories.map((m) => m.id));
 
-    this.db.exec('BEGIN IMMEDIATE;');
-    try {
-      const existingFallbackMap = new Map<string, string>();
-      let fullRebuild = force;
+    withSqliteBusyRetry(() => {
+      this.db.exec('BEGIN IMMEDIATE;');
+      try {
+        const existingFallbackMap = new Map<string, string>();
+        let fullRebuild = effectiveForce;
 
-      if (!force) {
-        const existingFallbackRows = this.db
-          .prepare('SELECT id, kind, title, l0_summary, keywords, body FROM capability_fts_fallback')
-          .all() as Array<{
-            id: string;
-            kind: string;
-            title: string;
-            l0_summary: string;
-            keywords: string;
-            body: string;
-          }>;
-        for (const row of existingFallbackRows) {
-          existingFallbackMap.set(
-            row.id,
-            `${row.kind}\0${row.title}\0${row.l0_summary}\0${row.keywords}\0${row.body}`
-          );
-        }
-      }
-
-      let insertFts: ReturnType<DatabaseSync['prepare']> | null = null;
-      let deleteFtsById: ReturnType<DatabaseSync['prepare']> | null = null;
-      if (this.fts5Enabled) {
-        try {
-          if (!fullRebuild) {
-            const ftsCountRow = this.db
-              .prepare('SELECT count(*) as cnt FROM capability_fts')
-              .get() as { cnt?: number } | undefined;
-            const ftsCount = Number(ftsCountRow?.cnt ?? 0);
-            if (ftsCount !== existingFallbackMap.size) {
-              fullRebuild = true;
-            }
+        if (!effectiveForce) {
+          const existingFallbackRows = this.db
+            .prepare('SELECT id, kind, title, l0_summary, keywords, body FROM capability_fts_fallback')
+            .all() as Array<{
+              id: string;
+              kind: string;
+              title: string;
+              l0_summary: string;
+              keywords: string;
+              body: string;
+            }>;
+          for (const row of existingFallbackRows) {
+            existingFallbackMap.set(
+              row.id,
+              `${row.kind}\0${row.title}\0${row.l0_summary}\0${row.keywords}\0${row.body}`
+            );
           }
-          insertFts = this.db.prepare(
-            'INSERT INTO capability_fts (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
-          );
-          deleteFtsById = this.db.prepare('DELETE FROM capability_fts WHERE id = ?');
-        } catch {
-          this.fts5Enabled = false;
-          insertFts = null;
-          deleteFtsById = null;
         }
-      }
+
+        let insertFts: ReturnType<DatabaseSync['prepare']> | null = null;
+        let deleteFtsById: ReturnType<DatabaseSync['prepare']> | null = null;
+        if (this.fts5Enabled) {
+          try {
+            if (!fullRebuild) {
+              const ftsCountRow = this.db
+                .prepare('SELECT count(*) as cnt FROM capability_fts')
+                .get() as { cnt?: number } | undefined;
+              const ftsCount = Number(ftsCountRow?.cnt ?? 0);
+              if (ftsCount !== existingFallbackMap.size) {
+                fullRebuild = true;
+              }
+            }
+            insertFts = this.db.prepare(
+              'INSERT INTO capability_fts (id, kind, title, l0_summary, keywords, body) VALUES (?, ?, ?, ?, ?, ?)'
+            );
+            deleteFtsById = this.db.prepare('DELETE FROM capability_fts WHERE id = ?');
+          } catch (err) {
+            if (isSqliteBusyError(err)) {
+              throw err;
+            }
+            this.fts5Enabled = false;
+            insertFts = null;
+            deleteFtsById = null;
+          }
+        }
 
       if (fullRebuild) {
         this.db.exec('DELETE FROM capability_fts_fallback;');
@@ -982,7 +1297,8 @@ export class EvoTelemetry {
       for (const r of rules) {
         const idTokens = r.id.replace(/[-_]+/g, ' ');
         const cjkKw = extractCjkBigrams(`${r.title} ${r.l0_summary} ${r.content}`).join(' ');
-        const kw = `${idTokens} ${r.scope_glob} ${cjkKw}`.trim();
+        const normKw = buildNormalizedKeywords([r.id, r.title, r.l0_summary, r.scope_glob]);
+        const kw = [idTokens, r.scope_glob, cjkKw, normKw].filter(Boolean).join(' ').trim();
         upsertFtsRow(r.id, 'rule', r.title, r.l0_summary, kw, r.content);
         upsertTelemetry.run(r.id, 'rule', r.title, r.l0_summary, r.scope_glob, now, r.created_at || now);
       }
@@ -992,7 +1308,8 @@ export class EvoTelemetry {
         const triggerCue = s.trigger_cue || '';
         const bodyText = `${s.l1_contract}\n${s.l2_sop}\n${triggerCue}`.trim();
         const cjkKw = extractCjkBigrams(`${s.title} ${s.l0_summary} ${s.l1_contract} ${s.l2_sop} ${triggerCue}`).join(' ');
-        const kw = `${idTokens} ${s.tags.join(' ')} ${triggerCue} ${cjkKw}`.trim();
+        const normKw = buildNormalizedKeywords([s.id, s.title, s.l0_summary, s.tags.join(' '), triggerCue]);
+        const kw = [idTokens, s.tags.join(' '), triggerCue, cjkKw, normKw].filter(Boolean).join(' ').trim();
         upsertFtsRow(s.id, 'skill', s.title, s.l0_summary, kw, bodyText);
         upsertTelemetry.run(s.id, 'skill', s.title, s.l0_summary, '**/*', now, s.created_at || now);
       }
@@ -1019,7 +1336,8 @@ export class EvoTelemetry {
         const cjkKw = extractCjkBigrams(
           `${toolTitle} ${toolSummary} ${tagsText} ${schemaPropsText}`
         ).join(' ');
-        const kw = `${idTokens} ${t.runtime} ${tagsText} ${schemaPropsText} ${cjkKw}`.trim();
+        const normKw = buildNormalizedKeywords([t.id, toolTitle, toolSummary, tagsText, schemaPropsText]);
+        const kw = [idTokens, t.runtime, tagsText, schemaPropsText, cjkKw, normKw].filter(Boolean).join(' ').trim();
         const toolBody = `${schemaText}\n${t.script_code || ''}`.trim();
         upsertFtsRow(t.id, 'tool', toolTitle, toolSummary, kw, toolBody);
         upsertTelemetry.run(t.id, 'tool', toolTitle, toolSummary, '**/*', now, t.created_at || now);
@@ -1043,7 +1361,26 @@ export class EvoTelemetry {
           .join(' ');
         const schemaText = JSON.stringify(et.inputSchema);
         const cjkKw = extractCjkBigrams(`${et.title} ${et.description} ${etSchemaPropsText}`).join(' ');
-        const kw = `${idTokens} external proxy mcp ${et.serverName} ${et.originalName} ${etSchemaPropsText} ${cjkKw}`.trim();
+        const normKw = buildNormalizedKeywords([
+          et.id,
+          et.title,
+          et.description,
+          et.serverName,
+          et.originalName,
+          etSchemaPropsText,
+        ]);
+        const kw = [
+          idTokens,
+          'external proxy mcp',
+          et.serverName,
+          et.originalName,
+          etSchemaPropsText,
+          cjkKw,
+          normKw,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
         const l0 = (et.description || `External MCP tool from ${et.serverName}`).slice(0, 140);
         upsertFtsRow(et.id, 'tool', et.title, l0, kw, schemaText);
         upsertTelemetry.run(et.id, 'tool', et.title, l0, '**/*', now, et.cachedAt || now);
@@ -1054,6 +1391,13 @@ export class EvoTelemetry {
         const cjkKw = extractCjkBigrams(
           `${m.title} ${m.l0_summary} ${m.symptom} ${m.root_cause} ${m.solution}`
         ).join(' ');
+        const normKw = buildNormalizedKeywords([
+          m.id,
+          m.title,
+          m.l0_summary,
+          ...m.target_symbols,
+          ...m.tags,
+        ]);
         const keywords = [
           idTokens,
           ...m.target_symbols,
@@ -1061,6 +1405,7 @@ export class EvoTelemetry {
           m.created_commit,
           m.created_branch,
           cjkKw,
+          normKw,
         ]
           .filter(Boolean)
           .join(' ');
@@ -1087,9 +1432,10 @@ export class EvoTelemetry {
       try {
         const stmt = this.db.prepare(`
           INSERT OR REPLACE INTO session_state (key, value, updated_at)
-          VALUES ('disk_sync_digest', ?, ?)
+          VALUES (?, ?, ?)
         `);
-        stmt.run(diskDigest, now);
+        stmt.run('disk_sync_digest', diskDigest, now);
+        stmt.run('fts_index_version', '4', now);
         this.lastSyncDigest = diskDigest;
       } catch {}
     } catch (err) {
@@ -1100,6 +1446,7 @@ export class EvoTelemetry {
       }
       throw err;
     }
+    });
   }
 
   public recordGatekeeperEvent(
@@ -1118,27 +1465,31 @@ export class EvoTelemetry {
         event.diagnostics,
         workspaceRoot || this.storage.rootDir
       );
-      const stmt = this.db.prepare(`
-        INSERT INTO gatekeeper_events (timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      stmt.run(
-        new Date().toISOString(),
-        event.kind,
-        event.targetId || null,
-        event.targetName || null,
-        event.passed ? 1 : 0,
-        event.stageFailed || null,
-        redactedDiag
-      );
-      // Cap ring buffer to 200 items
-      this.db.exec(`
-        DELETE FROM gatekeeper_events
-        WHERE id NOT IN (
-          SELECT id FROM gatekeeper_events ORDER BY id DESC LIMIT 200
+      withSqliteBusyRetry(() => {
+        const stmt = this.db.prepare(`
+          INSERT INTO gatekeeper_events (timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        stmt.run(
+          new Date().toISOString(),
+          event.kind,
+          event.targetId || null,
+          event.targetName || null,
+          event.passed ? 1 : 0,
+          event.stageFailed || null,
+          redactedDiag
         );
-      `);
-    } catch {}
+        // Cap ring buffer to 200 items
+        this.db.exec(`
+          DELETE FROM gatekeeper_events
+          WHERE id NOT IN (
+            SELECT id FROM gatekeeper_events ORDER BY id DESC LIMIT 200
+          );
+        `);
+      });
+    } catch (err) {
+      logTelemetryDebugError('recordGatekeeperEvent', err);
+    }
   }
 
   public getGatekeeperEvents(limit = 200): Array<{
@@ -1152,22 +1503,24 @@ export class EvoTelemetry {
     diagnostics: string;
   }> {
     try {
-      const stmt = this.db.prepare(`
-        SELECT id, timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics
-        FROM gatekeeper_events
-        ORDER BY id DESC
-        LIMIT ?
-      `);
-      const rows = stmt.all(limit) as Array<{
-        id: number;
-        timestamp: string;
-        kind: string;
-        target_id: string | null;
-        target_name: string | null;
-        passed: number;
-        stage_failed: string | null;
-        diagnostics: string;
-      }>;
+      const rows = withSqliteBusyRetry(() => {
+        const stmt = this.db.prepare(`
+          SELECT id, timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics
+          FROM gatekeeper_events
+          ORDER BY id DESC
+          LIMIT ?
+        `);
+        return stmt.all(limit) as Array<{
+          id: number;
+          timestamp: string;
+          kind: string;
+          target_id: string | null;
+          target_name: string | null;
+          passed: number;
+          stage_failed: string | null;
+          diagnostics: string;
+        }>;
+      });
       return rows.map((r) => ({
         id: r.id,
         timestamp: r.timestamp,
@@ -1222,12 +1575,16 @@ export class EvoTelemetry {
             `;
 
         try {
-          const stmt = this.db.prepare(sql);
-          rows = (kind === 'all' ? stmt.all(ftsQuery, fetchLimit) : stmt.all(ftsQuery, kind, fetchLimit)) as Array<
-            Record<string, unknown>
-          >;
-        } catch {
-          this.fts5Enabled = false;
+          rows = withSqliteBusyRetry(() => {
+            const stmt = this.db.prepare(sql);
+            return (kind === 'all' ? stmt.all(ftsQuery, fetchLimit) : stmt.all(ftsQuery, kind, fetchLimit)) as Array<
+              Record<string, unknown>
+            >;
+          }, 1);
+        } catch (err) {
+          if (!isSqliteBusyError(err)) {
+            this.fts5Enabled = false;
+          }
           rows = [];
         }
       }
@@ -1243,8 +1600,12 @@ export class EvoTelemetry {
           kind === 'all'
             ? `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, helped_count, hurt_count, contested_count, 0.0 as rank FROM telemetry ORDER BY hit_count DESC, created_at DESC LIMIT ?`
             : `SELECT id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, helped_count, hurt_count, contested_count, 0.0 as rank FROM telemetry WHERE kind = ? ORDER BY hit_count DESC, created_at DESC LIMIT ?`;
-        const stmt = this.db.prepare(fallbackSql);
-        rows = (kind === 'all' ? stmt.all(fetchLimit) : stmt.all(kind, fetchLimit)) as Array<Record<string, unknown>>;
+        rows = withSqliteBusyRetry(() => {
+          const stmt = this.db.prepare(fallbackSql);
+          return (kind === 'all' ? stmt.all(fetchLimit) : stmt.all(kind, fetchLimit)) as Array<
+            Record<string, unknown>
+          >;
+        });
       } else {
         rows = [];
       }
@@ -1288,34 +1649,51 @@ export class EvoTelemetry {
     const updateActiveStmt = this.db.prepare(
       'UPDATE episodic_memories SET is_active = ?, last_verified_at = ? WHERE id = ?'
     );
+    const selectActiveStmt = this.db.prepare('SELECT is_active FROM episodic_memories WHERE id = ?');
     const now = new Date().toISOString();
 
-    const hits: SearchHit[] = filteredRows.map((r) => {
+    const buildSearchHit = (
+      r: Record<string, unknown>,
+      fuzzyOverride?: { score: number; matchedConcepts: number; lowOverlap: boolean }
+    ): SearchHit => {
       const id = String(r.id);
       const itemKind = String(r.kind) as EvoKind;
       const succ = Number(r.success_count || 0);
       const fail = Number(r.fail_count || 0);
       const total = succ + fail;
       const rate = total > 0 ? `${((succ / total) * 100).toFixed(0)}%` : '100% (verified)';
-      let rawScore = Math.abs(Number(r.rank || 0));
-      if (rawScore === 0) rawScore = 1.0;
-      if (r._score === undefined) {
-        const helped = Number(r.helped_count || 0);
-        const hurt = Number(r.hurt_count || 0);
-        const contested = Number(r.contested_count || 0);
-        const outcomes = helped + hurt + contested;
-        if (outcomes >= 2 && (hurt + contested) > helped) {
-          rawScore *= 0.65;
-        } else if (helped >= 3 && hurt === 0 && contested === 0) {
-          rawScore *= 1.10;
-        }
-      }
 
-      const overlap = evaluateConceptOverlap(conceptGroups, r);
-      if (overlap.lowOverlap) {
-        rawScore *= 0.25;
-      } else if (conceptGroups.length >= 2 && overlap.matchedConcepts >= 2) {
-        rawScore *= 1 + Math.min(overlap.matchedConcepts - 1, 3) * 0.15;
+      let rawScore: number;
+      let lowOverlap: boolean | undefined;
+      let matchedConcepts: number;
+
+      if (fuzzyOverride) {
+        rawScore = fuzzyOverride.lowOverlap ? fuzzyOverride.score * 0.25 : fuzzyOverride.score;
+        lowOverlap = fuzzyOverride.lowOverlap || undefined;
+        matchedConcepts = fuzzyOverride.matchedConcepts;
+      } else {
+        rawScore = Math.abs(Number(r.rank || 0));
+        if (rawScore === 0) rawScore = 1.0;
+        if (r._score === undefined) {
+          const helped = Number(r.helped_count || 0);
+          const hurt = Number(r.hurt_count || 0);
+          const contested = Number(r.contested_count || 0);
+          const outcomes = helped + hurt + contested;
+          if (outcomes >= 2 && (hurt + contested) > helped) {
+            rawScore *= 0.65;
+          } else if (helped >= 3 && hurt === 0 && contested === 0) {
+            rawScore *= 1.10;
+          }
+        }
+
+        const overlap = evaluateConceptOverlap(conceptGroups, r);
+        if (overlap.lowOverlap) {
+          rawScore *= 0.25;
+        } else if (conceptGroups.length >= 2 && overlap.matchedConcepts >= 2) {
+          rawScore *= 1 + Math.min(overlap.matchedConcepts - 1, 3) * 0.15;
+        }
+        lowOverlap = overlap.lowOverlap || undefined;
+        matchedConcepts = overlap.matchedConcepts;
       }
 
       if (itemKind === 'memory') {
@@ -1326,12 +1704,12 @@ export class EvoTelemetry {
             cacheDb: this.db,
           });
           const isActive = ver.overall_status !== 'STALE' ? 1 : 0;
-          const memRow = this.db
-            .prepare('SELECT is_active FROM episodic_memories WHERE id = ?')
-            .get(id) as { is_active: number } | undefined;
-          if (memRow && memRow.is_active !== isActive) {
-            updateActiveStmt.run(isActive, now, id);
-          }
+          withSqliteBusyRetry(() => {
+            const memRow = selectActiveStmt.get(id) as { is_active: number } | undefined;
+            if (memRow && memRow.is_active !== isActive) {
+              updateActiveStmt.run(isActive, now, id);
+            }
+          });
 
           if (ver.overall_status === 'VERIFIED') {
             return {
@@ -1343,8 +1721,8 @@ export class EvoTelemetry {
               hit_count: Number(r.hit_count || 0),
               success_rate: rate,
               score: rawScore,
-              low_overlap: overlap.lowOverlap || undefined,
-              matched_concepts: overlap.matchedConcepts,
+              low_overlap: lowOverlap,
+              matched_concepts: matchedConcepts,
               memory_status: 'VERIFIED',
               memory_badge: `[VERIFIED ${ver.verified_count}/${ver.total_symbols} symbols @ ${ver.current_commit}]`,
             };
@@ -1359,8 +1737,8 @@ export class EvoTelemetry {
               hit_count: Number(r.hit_count || 0),
               success_rate: `BRANCH:${branchLabel}`,
               score: rawScore * 0.9,
-              low_overlap: overlap.lowOverlap || undefined,
-              matched_concepts: overlap.matchedConcepts,
+              low_overlap: lowOverlap,
+              matched_concepts: matchedConcepts,
               memory_status: 'OTHER_BRANCH',
               memory_badge: `[BRANCH: ${branchLabel}@${ver.recorded_commit} (${ver.verified_count}/${ver.total_symbols} in HEAD)]`,
             };
@@ -1378,8 +1756,8 @@ export class EvoTelemetry {
               hit_count: Number(r.hit_count || 0),
               success_rate: 'STALE (needs re-verification)',
               score: rawScore * 0.25, // Demote stale memories in ranking
-              low_overlap: overlap.lowOverlap || undefined,
-              matched_concepts: overlap.matchedConcepts,
+              low_overlap: lowOverlap,
+              matched_concepts: matchedConcepts,
               memory_status: 'STALE',
               memory_badge: `[STALE: ${drifted || 'symbols drifted'}]`,
             };
@@ -1396,10 +1774,50 @@ export class EvoTelemetry {
         hit_count: Number(r.hit_count || 0),
         success_rate: rate,
         score: rawScore,
-        low_overlap: overlap.lowOverlap || undefined,
-        matched_concepts: overlap.matchedConcepts,
+        low_overlap: lowOverlap,
+        matched_concepts: matchedConcepts,
       };
-    });
+    };
+
+    let hits: SearchHit[] = filteredRows.map((r) => buildSearchHit(r));
+
+    // Lazy fuzzy fallback ONLY when primary search produced 0 non-low-overlap hits
+    // and the query contains at least 1 ASCII token of length >= 4.
+    if (query.trim() && hits.filter((h) => !h.low_overlap).length === 0) {
+      const fuzzyRows = this.searchFuzzyFallback(
+        query,
+        conceptGroups,
+        kind,
+        fetchLimit,
+        pausedIds,
+        wsForScope,
+        workspaceCodeExts
+      );
+      if (fuzzyRows.length > 0) {
+        const fuzzyHits = fuzzyRows
+          .filter((r) => !(hits.length > 0 && Boolean(r._fuzzyLowOverlap)))
+          .map((r) =>
+            buildSearchHit(r, {
+              score: Number(r._fuzzyScore || 0.2),
+              matchedConcepts: Number(r._fuzzyMatchedConcepts || 1),
+              lowOverlap: Boolean(r._fuzzyLowOverlap),
+            })
+          );
+        if (fuzzyHits.length > 0) {
+          const byKey = new Map<string, SearchHit>();
+          for (const h of hits) {
+            byKey.set(`${h.kind}:${h.id}`, h);
+          }
+          for (const fh of fuzzyHits) {
+            const key = `${fh.kind}:${fh.id}`;
+            if (!byKey.has(key) || (byKey.get(key)?.low_overlap && !fh.low_overlap)) {
+              byKey.set(key, fh);
+            }
+          }
+          hits = Array.from(byKey.values());
+        }
+      }
+    }
 
     // Sort VERIFIED / active capabilities first, OTHER_BRANCH second, and STALE memories last
     const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
@@ -1419,6 +1837,172 @@ export class EvoTelemetry {
         if (tierDiff !== 0) return tierDiff;
         return b.score - a.score || b.hit_count - a.hit_count;
       })
+      .slice(0, limit);
+  }
+
+  private searchFuzzyFallback(
+    query: string,
+    conceptGroups: QueryConceptGroup[],
+    kind: EvoKind | 'all',
+    limit: number,
+    pausedIds: Set<string>,
+    wsForScope: string,
+    workspaceCodeExts?: Set<string>
+  ): Array<Record<string, unknown>> {
+    const rawMatches = query.match(/[A-Za-z0-9_-]{2,}/g) || [];
+    const fuzzyTokenSet = new Set<string>();
+    for (const raw of rawMatches) {
+      const lower = raw.toLowerCase();
+      if (/^[a-z0-9]{4,}$/.test(lower)) {
+        fuzzyTokenSet.add(lower);
+      }
+      for (const sub of splitCompoundIdentifier(raw)) {
+        if (/^[a-z0-9]{4,}$/.test(sub)) {
+          fuzzyTokenSet.add(sub);
+        }
+      }
+    }
+    const fuzzyQueryTokens = Array.from(fuzzyTokenSet);
+    if (fuzzyQueryTokens.length === 0) {
+      return [];
+    }
+
+    const sql =
+      kind === 'all'
+        ? `
+          SELECT f.id, f.kind, f.title, f.l0_summary, f.keywords, f.body,
+                 t.scope_glob, t.hit_count, t.success_count, t.fail_count,
+                 t.helped_count, t.hurt_count, t.contested_count
+          FROM capability_fts_fallback f
+          JOIN telemetry t ON f.id = t.id
+        `
+        : `
+          SELECT f.id, f.kind, f.title, f.l0_summary, f.keywords, f.body,
+                 t.scope_glob, t.hit_count, t.success_count, t.fail_count,
+                 t.helped_count, t.hurt_count, t.contested_count
+          FROM capability_fts_fallback f
+          JOIN telemetry t ON f.id = t.id
+          WHERE f.kind = ?
+        `;
+    const candidates = withSqliteBusyRetry(() =>
+      kind === 'all' ? this.db.prepare(sql).all() : this.db.prepare(sql).all(kind)
+    ) as Array<Record<string, unknown>>;
+
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const totalSpecificGroups = conceptGroups.filter((g) => !g.isGeneric).length;
+    const scored: Array<
+      Record<string, unknown> & {
+        _fuzzyScore: number;
+        _fuzzyMatchedConcepts: number;
+        _fuzzyLowOverlap: boolean;
+      }
+    > = [];
+
+    for (const row of candidates) {
+      if (pausedIds.has(`${String(row.kind)}:${String(row.id)}`)) {
+        continue;
+      }
+      if (
+        String(row.kind) === 'rule' &&
+        !isScopeCompatibleWithWorkspace(String(row.scope_glob || '**/*'), wsForScope, workspaceCodeExts)
+      ) {
+        continue;
+      }
+
+      const vocab = extractVocabularyTokens(
+        `${String(row.id || '')} ${String(row.title || '')} ${String(row.l0_summary || '')} ${String(row.keywords || '')}`
+      );
+      if (vocab.length === 0) continue;
+
+      const bestSimForToken = (qTok: string): number => {
+        const maxDist = qTok.length >= 7 ? 2 : 1;
+        let bestSim = 0;
+        for (const candTok of vocab) {
+          if (Math.abs(qTok.length - candTok.length) > maxDist) continue;
+          if (qTok === candTok) {
+            return 1.0;
+          }
+          const triOverlap = trigramOverlapCount(qTok, candTok);
+          if (qTok.length === 4) {
+            if (triOverlap < 1 && qTok[0] !== candTok[0]) continue;
+          } else {
+            if (triOverlap < 1) continue;
+          }
+          const dist = boundedDamerauLevenshtein(qTok, candTok, maxDist);
+          if (dist <= maxDist) {
+            if (qTok.length >= 7 && dist === 2) {
+              const minTrigrams = Math.max(2, Math.floor((qTok.length - 2) * 0.25));
+              if (triOverlap < minTrigrams) continue;
+            }
+            const sim = 1 - dist / Math.max(qTok.length, candTok.length);
+            if (sim > bestSim) bestSim = sim;
+          }
+        }
+        return bestSim;
+      };
+
+      let matchedQueryTokens = 0;
+      let totalSim = 0;
+      for (const qTok of fuzzyQueryTokens) {
+        const bestSim = bestSimForToken(qTok);
+        if (bestSim >= 0.55) {
+          matchedQueryTokens++;
+          totalSim += bestSim;
+        }
+      }
+
+      if (matchedQueryTokens === 0) continue;
+      if (fuzzyQueryTokens.length >= 3 && matchedQueryTokens <= 1) continue;
+
+      let matchedConcepts = 0;
+      let matchedSpecificConcepts = 0;
+      if (conceptGroups.length > 0) {
+        const vocabSet = new Set(vocab);
+        for (const g of conceptGroups) {
+          const asciiCandidates = [g.literal, ...g.terms]
+            .map((t) => t.toLowerCase())
+            .filter((t) => /^[a-z0-9]{4,}$/.test(t));
+          const hit = asciiCandidates.some((t) => vocabSet.has(t) || bestSimForToken(t) >= 0.55);
+          if (hit) {
+            matchedConcepts++;
+            if (!g.isGeneric) matchedSpecificConcepts++;
+          }
+        }
+      } else {
+        matchedConcepts = matchedQueryTokens;
+      }
+
+      const fuzzyLowOverlap =
+        matchedConcepts === 0 ||
+        (conceptGroups.length >= 2 && totalSpecificGroups >= 1 && matchedSpecificConcepts === 0) ||
+        (conceptGroups.length >= 3 && matchedConcepts <= 1);
+
+      const avgSim = totalSim / matchedQueryTokens;
+      const coverage = matchedQueryTokens / fuzzyQueryTokens.length;
+      const helped = Number(row.helped_count || 0);
+      const hurt = Number(row.hurt_count || 0);
+      const contested = Number(row.contested_count || 0);
+      const outcomes = helped + hurt + contested;
+      let outcomeMultiplier = 1.0;
+      if (outcomes >= 2 && hurt + contested > helped) {
+        outcomeMultiplier = 0.65;
+      } else if (helped >= 3 && hurt === 0 && contested === 0) {
+        outcomeMultiplier = 1.1;
+      }
+      const fuzzyScore = Math.min(0.45, (0.15 + 0.30 * avgSim * coverage) * outcomeMultiplier);
+      scored.push({
+        ...row,
+        _fuzzyScore: fuzzyScore,
+        _fuzzyMatchedConcepts: matchedConcepts,
+        _fuzzyLowOverlap: fuzzyLowOverlap,
+      });
+    }
+
+    return scored
+      .sort((a, b) => b._fuzzyScore - a._fuzzyScore || Number(b.hit_count || 0) - Number(a.hit_count || 0))
       .slice(0, limit);
   }
 
@@ -1444,7 +2028,7 @@ export class EvoTelemetry {
           JOIN telemetry t ON f.id = t.id
           WHERE f.kind = ?
         `;
-    const candidates = (
+    const candidates = withSqliteBusyRetry(() =>
       kind === 'all' ? this.db.prepare(sql).all() : this.db.prepare(sql).all(kind)
     ) as Array<Record<string, unknown>>;
 
@@ -1497,7 +2081,7 @@ export class EvoTelemetry {
         String(row.id || '').length * 0.5 +
         String(row.title || '').length +
         String(row.l0_summary || '').length +
-        String(row.keywords || '').length +
+        String(row.keywords || '').length * 0.25 +
         String(row.body || '').length * 0.2;
       docLengths.set(row, len);
       totalDocLen += len;
@@ -1591,20 +2175,22 @@ export class EvoTelemetry {
     candidateBody = ''
   ): Array<{ id: string; similarity: number; l0_summary: string }> {
     this.syncFromDisk();
-    const existing = this.db
-      .prepare(
-        `SELECT t.id, t.title, t.l0_summary, f.keywords, f.body
-         FROM telemetry t
-         LEFT JOIN capability_fts_fallback f ON t.id = f.id
-         WHERE t.kind = ?`
-      )
-      .all(kind) as Array<{
-        id: string;
-        title: string;
-        l0_summary: string;
-        keywords?: string;
-        body?: string;
-      }>;
+    const existing = withSqliteBusyRetry(() =>
+      this.db
+        .prepare(
+          `SELECT t.id, t.title, t.l0_summary, f.keywords, f.body
+           FROM telemetry t
+           LEFT JOIN capability_fts_fallback f ON t.id = f.id
+           WHERE t.kind = ?`
+        )
+        .all(kind)
+    ) as Array<{
+      id: string;
+      title: string;
+      l0_summary: string;
+      keywords?: string;
+      body?: string;
+    }>;
 
     const rootDir = this.storage.rootDir;
     const targetTokens = tokenizeForSimilarity(`${title} ${l0Summary} ${extraText}`, rootDir);
@@ -1684,23 +2270,28 @@ export class EvoTelemetry {
   }
 
   public recordUsage(id: string, success: boolean, tokensSavedEstimate = 450): void {
+    if (this.closed) return;
     const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
-      UPDATE telemetry
-      SET hit_count = hit_count + 1,
-          success_count = success_count + ?,
-          fail_count = fail_count + ?,
-          tokens_saved = tokens_saved + ?,
-          last_used_at = ?
-      WHERE id = ?
-    `);
-    stmt.run(success ? 1 : 0, success ? 0 : 1, tokensSavedEstimate, now, id);
-    this.db.prepare('UPDATE episodic_memories SET hit_count = hit_count + 1 WHERE id = ?').run(id);
+    withSqliteBusyRetry(() => {
+      const stmt = this.db.prepare(`
+        UPDATE telemetry
+        SET hit_count = hit_count + 1,
+            success_count = success_count + ?,
+            fail_count = fail_count + ?,
+            tokens_saved = tokens_saved + ?,
+            last_used_at = ?
+        WHERE id = ?
+      `);
+      stmt.run(success ? 1 : 0, success ? 0 : 1, tokensSavedEstimate, now, id);
+      this.db.prepare('UPDATE episodic_memories SET hit_count = hit_count + 1 WHERE id = ?').run(id);
+    });
   }
 
   public getTelemetryMap(): Map<string, TelemetryRecord> {
     this.syncFromDisk();
-    const rows = this.db.prepare('SELECT * FROM telemetry').all() as Array<Record<string, unknown>>;
+    const rows = withSqliteBusyRetry(() =>
+      this.db.prepare('SELECT * FROM telemetry').all()
+    ) as Array<Record<string, unknown>>;
     const map = new Map<string, TelemetryRecord>();
     for (const r of rows) {
       map.set(String(r.id), {
@@ -1776,10 +2367,67 @@ export class EvoTelemetry {
   }
 
   public clearRecalledCapabilities(): void {
-    this.db.prepare("DELETE FROM session_state WHERE key = 'recalled_capabilities'").run();
+    if (this.closed) return;
+    withSqliteBusyRetry(() => {
+      this.db.prepare("DELETE FROM session_state WHERE key = 'recalled_capabilities'").run();
+    });
   }
 
-  public recordCapabilityOutcome(id: string, outcome: CapabilityOutcome): void {
+  public pruneRecalledCapabilitiesUpTo(cutoffMs?: number): void {
+    if (this.closed) return;
+    if (cutoffMs === undefined || !Number.isFinite(cutoffMs) || cutoffMs <= 0) {
+      this.clearRecalledCapabilities();
+      return;
+    }
+    const list = this.getRecalledCapabilities();
+    const kept = list.filter((item) => {
+      const tsMs =
+        typeof (item as any).at === 'number'
+          ? (item as any).at
+          : Date.parse(String(item.ts || ''));
+      return Number.isFinite(tsMs) && tsMs > cutoffMs;
+    });
+    if (kept.length === 0) {
+      this.clearRecalledCapabilities();
+    } else {
+      this.setSessionFlag('recalled_capabilities', JSON.stringify(kept));
+    }
+  }
+
+  public markRecallEventHelped(id: string): void {
+    if (this.closed) return;
+    const rawId = String(id || '').trim();
+    if (!rawId) return;
+    try {
+      const recentCutoff = new Date(Date.now() - 86400000).toISOString();
+      withSqliteBusyRetry(() => {
+        this.db
+          .prepare(
+            `UPDATE recall_events
+             SET helped = 1
+             WHERE id = (
+               SELECT id FROM recall_events
+               WHERE (capability_id = ? OR lower(capability_id) = ?)
+                 AND helped = 0
+                 AND event_type IN ('inspect', 'run')
+                 AND timestamp >= ?
+               ORDER BY id DESC
+               LIMIT 1
+             )`
+          )
+          .run(rawId, rawId.toLowerCase(), recentCutoff);
+      });
+    } catch (err) {
+      logTelemetryDebugError('markRecallEventHelped', err);
+    }
+  }
+
+  public recordCapabilityOutcome(
+    id: string,
+    outcome: CapabilityOutcome,
+    options?: { skipRecallEventsUpdate?: boolean }
+  ): void {
+    if (this.closed) return;
     if (outcome === 'neutral') return;
     const col =
       outcome === 'helped'
@@ -1792,53 +2440,62 @@ export class EvoTelemetry {
     if (!col) return;
     const rawId = id.trim();
     const cleanId = rawId.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-');
-    const stmt = this.db.prepare(
-      `UPDATE telemetry SET ${col} = ${col} + 1 WHERE id = ? OR id = ?`
-    );
-    const res = stmt.run(rawId, cleanId);
-    if (res.changes === 0) {
-      const rule = this.storage.getRule(cleanId);
-      const skill = this.storage.getSkill(cleanId);
-      const tool = this.storage.getTool(cleanId);
-      const memory = this.storage.getMemory(cleanId);
-      const cap = rule || skill || tool || memory;
-      const kind = rule ? 'rule' : skill ? 'skill' : tool ? 'tool' : memory ? 'memory' : 'rule';
-      const title = cap?.title || cleanId;
-      const l0_summary = cap?.l0_summary || '';
-      const scope_glob = rule?.scope_glob || '';
-      const now = new Date().toISOString();
-      try {
-        const insertStmt = this.db.prepare(`
-          INSERT INTO telemetry (id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, tokens_saved, last_used_at, created_at, ${col})
-          VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, ?, ?, 1)
-          ON CONFLICT(id) DO UPDATE SET ${col} = ${col} + 1
-        `);
-        insertStmt.run(cleanId, kind, title, l0_summary, scope_glob, now, now);
-      } catch {
-        // Ignore fallback insert collision
-      }
+    try {
+      withSqliteBusyRetry(() => {
+        const stmt = this.db.prepare(
+          `UPDATE telemetry SET ${col} = ${col} + 1 WHERE id = ? OR id = ?`
+        );
+        const res = stmt.run(rawId, cleanId);
+        if (res.changes === 0) {
+          const rule = this.storage.getRule(cleanId);
+          const skill = this.storage.getSkill(cleanId);
+          const tool = this.storage.getTool(cleanId);
+          const memory = this.storage.getMemory(cleanId);
+          const cap = rule || skill || tool || memory;
+          const kind = rule ? 'rule' : skill ? 'skill' : tool ? 'tool' : memory ? 'memory' : 'rule';
+          const title = cap?.title || cleanId;
+          const l0_summary = cap?.l0_summary || '';
+          const scope_glob = rule?.scope_glob || '';
+          const now = new Date().toISOString();
+          try {
+            const insertStmt = this.db.prepare(`
+              INSERT INTO telemetry (id, kind, title, l0_summary, scope_glob, hit_count, success_count, fail_count, tokens_saved, last_used_at, created_at, ${col})
+              VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, ?, ?, 1)
+              ON CONFLICT(id) DO UPDATE SET ${col} = ${col} + 1
+            `);
+            insertStmt.run(cleanId, kind, title, l0_summary, scope_glob, now, now);
+          } catch (err) {
+            if (isSqliteBusyError(err)) throw err;
+            logTelemetryDebugError('recordCapabilityOutcome.insert', err);
+          }
+        }
+      });
+    } catch (err) {
+      logTelemetryDebugError('recordCapabilityOutcome', err);
     }
 
-    if (outcome === 'helped') {
+    if (outcome === 'helped' && !options?.skipRecallEventsUpdate) {
       try {
         const recentCutoff = new Date(Date.now() - 86400000).toISOString();
-        this.db
-          .prepare(
-            `UPDATE recall_events
-             SET helped = 1
-             WHERE id = (
-               SELECT id FROM recall_events
-               WHERE (capability_id = ? OR capability_id = ?)
-                 AND helped = 0
-                 AND event_type IN ('inspect', 'run')
-                 AND timestamp >= ?
-               ORDER BY id DESC
-               LIMIT 1
-             )`
-          )
-          .run(rawId, cleanId, recentCutoff);
-      } catch {
-        // Ignore if DB is read-only or closed
+        withSqliteBusyRetry(() => {
+          this.db
+            .prepare(
+              `UPDATE recall_events
+               SET helped = 1
+               WHERE id = (
+                 SELECT id FROM recall_events
+                 WHERE (capability_id = ? OR capability_id = ?)
+                   AND helped = 0
+                   AND event_type IN ('inspect', 'run')
+                   AND timestamp >= ?
+                 ORDER BY id DESC
+                 LIMIT 1
+               )`
+            )
+            .run(rawId, cleanId, recentCutoff);
+        });
+      } catch (err) {
+        logTelemetryDebugError('recordCapabilityOutcome.recall_events', err);
       }
     }
   }
@@ -1854,26 +2511,28 @@ export class EvoTelemetry {
     const capId = String(event.capabilityId || '').trim();
     if (!capId) return;
     try {
-      const res = this.db
-        .prepare(
-          `INSERT INTO recall_events (timestamp, event_type, capability_id, kind, tier, helped)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          new Date().toISOString(),
-          event.eventType,
-          capId,
-          String(event.kind || 'rule'),
-          event.tier ? String(event.tier) : null,
-          event.helped ? 1 : 0
-        );
-      if (Number(res.lastInsertRowid) % 100 === 0) {
-        this.db.exec(
-          'DELETE FROM recall_events WHERE id NOT IN (SELECT id FROM recall_events ORDER BY id DESC LIMIT 5000)'
-        );
-      }
-    } catch {
-      // Ignore write failures
+      withSqliteBusyRetry(() => {
+        const res = this.db
+          .prepare(
+            `INSERT INTO recall_events (timestamp, event_type, capability_id, kind, tier, helped)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            new Date().toISOString(),
+            event.eventType,
+            capId,
+            String(event.kind || 'rule'),
+            event.tier ? String(event.tier) : null,
+            event.helped ? 1 : 0
+          );
+        if (Number(res.lastInsertRowid) % 100 === 0) {
+          this.db.exec(
+            'DELETE FROM recall_events WHERE id NOT IN (SELECT id FROM recall_events ORDER BY id DESC LIMIT 5000)'
+          );
+        }
+      });
+    } catch (err) {
+      logTelemetryDebugError('recordRecallEvent', err);
     }
   }
 
@@ -1883,20 +2542,26 @@ export class EvoTelemetry {
   }
 
   public setSessionFlag(key: string, value: string): void {
+    if (this.closed) return;
     const now = new Date().toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO session_state (key, value, updated_at) VALUES (?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-      )
-      .run(key, value, now);
+    withSqliteBusyRetry(() => {
+      this.db
+        .prepare(
+          `INSERT INTO session_state (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        )
+        .run(key, value, now);
+    });
   }
 
   public getSessionFlag(key: string): string | null {
-    const row = this.db.prepare('SELECT value FROM session_state WHERE key = ?').get(key) as
-      | { value: string }
-      | undefined;
-    return row ? row.value : null;
+    if (this.closed) return null;
+    return withSqliteBusyRetry(() => {
+      const row = this.db.prepare('SELECT value FROM session_state WHERE key = ?').get(key) as
+        | { value: string }
+        | undefined;
+      return row ? row.value : null;
+    });
   }
 
   public isClosed(): boolean {
@@ -1915,16 +2580,38 @@ export class EvoTelemetry {
 }
 
 function tokenizeForSimilarity(text: string, workspaceRoot?: string): Set<string> {
-  const normalized = text.toLowerCase();
   const lexicon = loadWorkspaceLexicon(workspaceRoot);
-  const asciiWords = normalized.match(/[a-z0-9_-]{2,}/g) || [];
-  const cjkBigrams = extractCjkBigrams(normalized);
+  const rawAsciiWords = text.match(/[A-Za-z0-9_-]{2,}/g) || [];
+  const cjkBigrams = extractCjkBigrams(text.toLowerCase());
   const stopWords = new Set(['the', 'and', 'for', 'with', 'when', 'use', 'rule', 'skill', 'tool', 'from', 'that', 'this']);
   const tokenSet = new Set<string>();
-  for (const w of [...asciiWords, ...cjkBigrams]) {
-    if (stopWords.has(w)) continue;
-    tokenSet.add(w);
-    const canonical = getCanonicalToken(w, lexicon);
+
+  for (const raw of rawAsciiWords) {
+    const lower = raw.toLowerCase();
+    if (stopWords.has(lower)) continue;
+    const subs = splitCompoundIdentifier(raw);
+    if (subs.length > 1) {
+      for (const sub of subs) {
+        if (stopWords.has(sub)) continue;
+        const subStem = /^[a-z]+$/.test(sub) ? stemEnglishToken(sub) : sub;
+        if (!stopWords.has(subStem)) tokenSet.add(subStem);
+        const subCanon = getCanonicalToken(sub, lexicon);
+        if (subCanon && !stopWords.has(subCanon)) tokenSet.add(subCanon);
+      }
+    } else {
+      const stemmed = /^[a-z]+$/.test(lower) ? stemEnglishToken(lower) : lower;
+      if (!stopWords.has(stemmed)) tokenSet.add(stemmed);
+      const canonical = getCanonicalToken(lower, lexicon);
+      if (canonical && !stopWords.has(canonical)) {
+        tokenSet.add(canonical);
+      }
+    }
+  }
+
+  for (const bg of cjkBigrams) {
+    if (stopWords.has(bg)) continue;
+    tokenSet.add(bg);
+    const canonical = getCanonicalToken(bg, lexicon);
     if (canonical && !stopWords.has(canonical)) {
       tokenSet.add(canonical);
     }

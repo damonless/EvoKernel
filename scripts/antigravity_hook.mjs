@@ -15,6 +15,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 
 const TAIL_BYTES = 128 * 1024;
 const COOLDOWN_STEPS = 4;
@@ -24,6 +25,9 @@ const CORRECTION_REGEX =
 
 const CMD_ERROR_OUTPUT_REGEX =
   /(?:Traceback \(most recent call last\)|SyntaxError:|TypeError:|ValueError:|AttributeError:|KeyError:|ModuleNotFoundError:|ImportError:|PermissionError:|FileNotFoundError:|Command exited with code [1-9]|Exception calling|At line:\d+ char:\d+)/i;
+
+const CMD_FATAL_SEARCH_ERROR_REGEX =
+  /(?:command not found|not recognized as an internal or external command|SyntaxError:|PermissionError:|invalid option|unrecognized option|fatal:)/i;
 
 const DELIVERABLE_CMD_REGEX =
   /(?:\.(?:xlsx?|docx?|pptx?|pdf|csv)\b|openpyxl|xlsxwriter|pandas|python-docx|win32com|New-Object\s+-ComObject\s+Excel)/i;
@@ -43,6 +47,14 @@ const READ_TOOL_NAMES = new Set([
   'view_code_item',
   'grep_search',
   'find_by_name',
+]);
+
+const EVO_MCP_TOOL_NAMES = new Set([
+  'evo_search',
+  'evo_inspect',
+  'evo_run',
+  'evo_propose',
+  'evo_compact',
 ]);
 
 export function normalizeTranscriptString(val) {
@@ -90,6 +102,43 @@ export function parseTranscriptObject(val) {
 
 export function normalizePath(val) {
   return normalizeTranscriptString(val).replace(/[\\/]+/g, '/');
+}
+
+export function normalizeCandidatePath(raw) {
+  if (typeof raw !== 'string') return '';
+  let s = normalizeTranscriptString(raw);
+  if (!s) return '';
+  if (/^file:\/\//i.test(s)) {
+    try {
+      s = fileURLToPath(s);
+    } catch {
+      return '';
+    }
+  }
+  try {
+    return path.resolve(s);
+  } catch {
+    return '';
+  }
+}
+
+function isSameDbPath(a, b) {
+  if (!a || !b) return false;
+  const resolveReal = (p) => {
+    const resolved = path.resolve(p);
+    try {
+      if (fs.existsSync(resolved)) {
+        return fs.realpathSync.native ? fs.realpathSync.native(resolved) : fs.realpathSync(resolved);
+      }
+    } catch {}
+    return resolved;
+  };
+  const ra = resolveReal(a);
+  const rb = resolveReal(b);
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    return ra.toLowerCase() === rb.toLowerCase();
+  }
+  return ra === rb;
 }
 
 function readStdinJson(initialTimeoutMs = 200, chunkTimeoutMs = 300) {
@@ -195,24 +244,78 @@ function readTranscriptTailSteps(transcriptPath) {
   }
 }
 
-function loadHookState(statePath) {
+function sleepSyncMs(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    // Fallback if SharedArrayBuffer is unavailable
+  }
+}
+
+function loadHookStateSafe(statePath) {
+  let parseFailed = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      if (!fs.existsSync(statePath)) return {};
+      if (!fs.existsSync(statePath)) return { state: {}, parseFailed: false };
+      const stat = fs.statSync(statePath);
       const raw = fs.readFileSync(statePath, 'utf8');
-      if (!raw.trim()) continue;
-      return JSON.parse(raw);
+      if (!raw.trim()) {
+        if (stat.size > 0) parseFailed = true;
+        if (attempt < 2) sleepSyncMs(10);
+        continue;
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return { state: parsed, parseFailed: false };
+      }
+      parseFailed = true;
     } catch {
-      // Retry briefly if another process is mid-write
+      parseFailed = true;
     }
+    if (attempt < 2) sleepSyncMs(10);
   }
-  return {};
+  try {
+    if (fs.existsSync(statePath) && fs.statSync(statePath).size > 0) {
+      return { state: {}, parseFailed: true };
+    }
+  } catch {}
+  return { state: {}, parseFailed };
+}
+
+function loadHookState(statePath) {
+  return loadHookStateSafe(statePath).state;
 }
 
 function saveHookState(statePath, state, conversationId, convState) {
+  let lockFd = null;
+  const lockPath = `${statePath}.lock`;
   try {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    const merged = { ...state, ...loadHookState(statePath) };
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        lockFd = fs.openSync(lockPath, 'wx');
+        break;
+      } catch (err) {
+        if (err && err.code === 'EEXIST') {
+          try {
+            const st = fs.statSync(lockPath);
+            if (Date.now() - st.mtimeMs > 2000) {
+              fs.unlinkSync(lockPath);
+              continue;
+            }
+          } catch {}
+          sleepSyncMs(10);
+          continue;
+        }
+        break;
+      }
+    }
+
+    const { state: diskState, parseFailed } = loadHookStateSafe(statePath);
+    if (parseFailed) {
+      return;
+    }
+    const merged = { ...state, ...diskState };
     if (conversationId && convState) {
       merged[conversationId] = convState;
     }
@@ -231,20 +334,326 @@ function saveHookState(statePath, state, conversationId, convState) {
     }
   } catch {
     // Ignore write errors
+  } finally {
+    if (lockFd !== null) {
+      try {
+        fs.closeSync(lockFd);
+      } catch {}
+      try {
+        fs.unlinkSync(lockPath);
+      } catch {}
+    }
   }
 }
 
-function resolveTelemetryDbsForStop(input) {
-  const rawWs =
-    (Array.isArray(input.workspacePaths) && input.workspacePaths[0]) ||
-    (Array.isArray(input.workspace_paths) && input.workspace_paths[0]) ||
-    input.workspace ||
-    input.workspaceRoot ||
-    input.workspace_root ||
-    input.cwd ||
-    process.cwd();
-  const wsRoot = path.resolve(String(rawWs || process.cwd()));
-  const localDbPath = path.join(wsRoot, '.evo', '.cache', 'telemetry.db');
+export function findNearestEvoTelemetryDb(startDir) {
+  const normStart = normalizeCandidatePath(startDir);
+  if (!normStart) return '';
+  let dir = normStart;
+  try {
+    if (fs.existsSync(dir) && fs.statSync(dir).isFile()) {
+      dir = path.dirname(dir);
+    }
+  } catch {}
+
+  const homeDir = os.homedir();
+  const tmpDir = os.tmpdir();
+  const globalHome = process.env.EVO_GLOBAL_DIR
+    ? path.resolve(process.env.EVO_GLOBAL_DIR)
+    : path.join(homeDir, '.evo', 'global');
+  const startIsGlobalDir = isSameDbPath(dir, globalHome);
+
+  for (let depth = 0; depth < 32; depth++) {
+    const isFirst = depth === 0;
+    const isBoundaryStop =
+      isSameDbPath(dir, homeDir) ||
+      isSameDbPath(dir, tmpDir) ||
+      /[\\/]\.(?:gemini|claude|cursor)(?:[\\/]|$)/i.test(dir);
+
+    if (isBoundaryStop && !(isFirst && startIsGlobalDir)) {
+      break;
+    }
+
+    const dbCand = path.join(dir, '.evo', '.cache', 'telemetry.db');
+    if (fs.existsSync(dbCand)) {
+      return dbCand;
+    }
+    if (isFirst && startIsGlobalDir) {
+      const globalCacheCand = path.join(dir, '.cache', 'telemetry.db');
+      if (fs.existsSync(globalCacheCand)) {
+        return globalCacheCand;
+      }
+    }
+
+    const parent = path.dirname(dir);
+    if (!parent || parent === dir) break;
+    dir = parent;
+  }
+  return '';
+}
+
+function isSameOrSubpath(childPath, parentPath) {
+  const normChild = normalizeCandidatePath(childPath);
+  const normParent = normalizeCandidatePath(parentPath);
+  if (!normChild || !normParent) return false;
+  const isCaseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
+  const c = isCaseInsensitive ? normChild.toLowerCase() : normChild;
+  const p = isCaseInsensitive ? normParent.toLowerCase() : normParent;
+  if (c === p) return true;
+  const pWithSep = p.endsWith(path.sep) ? p : p + path.sep;
+  return c.startsWith(pWithSep);
+}
+
+function extractWorkspaceDbFromTranscriptSteps(steps, allowedRoots = []) {
+  if (!Array.isArray(steps) || steps.length === 0) return '';
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i];
+    const toolCalls = Array.isArray(step?.tool_calls) ? step.tool_calls : [];
+    for (let j = toolCalls.length - 1; j >= 0; j--) {
+      const tc = toolCalls[j];
+      const toolName = normalizeTranscriptString(tc?.name || tc?.tool_name || tc?.ToolName || '');
+      const args = parseTranscriptObject(tc?.arguments || tc?.args || tc?.Arguments || {});
+      const innerToolName = normalizeTranscriptString(args.ToolName || args.tool_name || '');
+      const innerArgs = parseTranscriptObject(args.Arguments || args);
+      const isEvoCall =
+        EVO_MCP_TOOL_NAMES.has(toolName) ||
+        EVO_MCP_TOOL_NAMES.has(innerToolName) ||
+        [...EVO_MCP_TOOL_NAMES].some((t) => toolName.endsWith(`_${t}`) || toolName.includes(t));
+      if (!isEvoCall) continue;
+      const wsCand =
+        innerArgs.workspace ||
+        innerArgs.workspace_path ||
+        args.workspace ||
+        args.workspace_path ||
+        '';
+      const dbPath = findNearestEvoTelemetryDb(wsCand);
+      if (dbPath) return dbPath;
+    }
+  }
+
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i];
+    const toolCalls = Array.isArray(step?.tool_calls) ? step.tool_calls : [];
+    for (let j = toolCalls.length - 1; j >= 0; j--) {
+      const tc = toolCalls[j];
+      const toolName = normalizeTranscriptString(tc?.name || tc?.tool_name || tc?.ToolName || '');
+      const args = parseTranscriptObject(tc?.arguments || tc?.args || tc?.Arguments || {});
+      const innerToolName = normalizeTranscriptString(args.ToolName || args.tool_name || '');
+      const innerArgs = parseTranscriptObject(args.Arguments || args);
+      const isTrackedFileOrCmdTool =
+        EDIT_TOOL_NAMES.has(toolName) ||
+        EDIT_TOOL_NAMES.has(innerToolName) ||
+        READ_TOOL_NAMES.has(toolName) ||
+        READ_TOOL_NAMES.has(innerToolName) ||
+        toolName === 'run_command' ||
+        innerToolName === 'run_command';
+      if (!isTrackedFileOrCmdTool) continue;
+
+      const pathCandidates = [
+        innerArgs.AbsolutePath,
+        innerArgs.Path,
+        innerArgs.path,
+        innerArgs.TargetFile,
+        innerArgs.target_file,
+        innerArgs.DirectoryPath,
+        innerArgs.SearchDirectory,
+        innerArgs.Cwd,
+        innerArgs.cwd,
+        args.AbsolutePath,
+        args.Path,
+        args.path,
+        args.TargetFile,
+        args.target_file,
+        args.DirectoryPath,
+        args.SearchDirectory,
+        args.Cwd,
+        args.cwd,
+      ];
+      for (const rawCand of pathCandidates) {
+        if (typeof rawCand !== 'string' || !rawCand.trim()) continue;
+        const normCand = normalizeCandidatePath(rawCand);
+        if (!normCand) continue;
+        if (
+          allowedRoots.length > 0 &&
+          !allowedRoots.some((root) => isSameOrSubpath(normCand, root))
+        ) {
+          continue;
+        }
+        const dbPath = findNearestEvoTelemetryDb(normCand);
+        if (dbPath) return dbPath;
+      }
+    }
+  }
+  return '';
+}
+
+function parseTimestampMs(raw) {
+  if (typeof raw === 'number') return raw;
+  if (typeof raw !== 'string') return NaN;
+  const trimmed = raw.trim();
+  if (!trimmed) return NaN;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+    return Date.parse(trimmed.replace(' ', 'T') + 'Z');
+  }
+  return Date.parse(trimmed);
+}
+
+function isChildTelemetryDbActive(dbPath, cutoffMs) {
+  let db;
+  try {
+    try {
+      db = new DatabaseSync(dbPath, { readOnly: true, timeout: 1000 });
+    } catch {
+      db = new DatabaseSync(dbPath, { timeout: 1000 });
+    }
+    let row;
+    try {
+      row = db
+        .prepare("SELECT value, updated_at FROM session_state WHERE key = 'recalled_capabilities'")
+        .get();
+    } catch {
+      row = db
+        .prepare("SELECT value FROM session_state WHERE key = 'recalled_capabilities'")
+        .get();
+    }
+    if (!row || typeof row.value !== 'string' || !row.value.trim()) return false;
+    let parsed;
+    try {
+      parsed = JSON.parse(row.value);
+    } catch {
+      return false;
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0) return false;
+    const validItems = parsed.filter(
+      (item) => item && typeof item === 'object' && typeof item.id === 'string' && item.id.trim() !== ''
+    );
+    if (validItems.length === 0) return false;
+
+    const rowUpdatedAtMs = parseTimestampMs(row.updated_at);
+    if (Number.isFinite(rowUpdatedAtMs) && rowUpdatedAtMs >= cutoffMs) {
+      return true;
+    }
+    return validItems.some((item) => {
+      const tsMs = typeof item.at === 'number' ? item.at : parseTimestampMs(item.ts);
+      return Number.isFinite(tsMs) && tsMs >= cutoffMs;
+    });
+  } catch {
+    return false;
+  } finally {
+    try {
+      db?.close();
+    } catch {}
+  }
+}
+
+function findSingleActiveChildTelemetryDb(candidateRoots) {
+  if (!Array.isArray(candidateRoots) || candidateRoots.length === 0) return '';
+  const homeDir = os.homedir();
+  const tmpDir = os.tmpdir();
+  const skipDirNames = new Set(['node_modules', '.git', 'dist', 'build']);
+  const isCaseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
+  const visitedDirs = new Set();
+  const seenDbs = new Set();
+  const candidateDbs = [];
+  const queue = [];
+
+  for (const root of candidateRoots) {
+    let dir = root;
+    try {
+      if (!fs.existsSync(dir)) continue;
+      if (fs.statSync(dir).isFile()) dir = path.dirname(dir);
+    } catch {
+      continue;
+    }
+    if (isSameDbPath(dir, homeDir) || isSameDbPath(dir, tmpDir)) continue;
+    const key = isCaseInsensitive ? dir.toLowerCase() : dir;
+    if (visitedDirs.has(key)) continue;
+    visitedDirs.add(key);
+    queue.push({ dir, depth: 0 });
+  }
+
+  let scannedEntries = 0;
+  const MAX_SCANNED_ENTRIES = 64;
+  while (queue.length > 0 && scannedEntries < MAX_SCANNED_ENTRIES) {
+    const { dir, depth } = queue.shift();
+    if (depth >= 2) continue;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (scannedEntries >= MAX_SCANNED_ENTRIES) break;
+      scannedEntries++;
+      if (!entry.isDirectory()) continue;
+      const name = entry.name;
+      if (skipDirNames.has(name)) continue;
+      if (name.startsWith('.') && name !== '.evo') continue;
+      if (name === '.evo') continue;
+
+      const childPath = path.join(dir, name);
+      if (isSameDbPath(childPath, homeDir) || isSameDbPath(childPath, tmpDir)) continue;
+      const childKey = isCaseInsensitive ? childPath.toLowerCase() : childPath;
+      if (visitedDirs.has(childKey)) continue;
+      visitedDirs.add(childKey);
+
+      const candDb = path.join(childPath, '.evo', '.cache', 'telemetry.db');
+      try {
+        if (fs.existsSync(candDb)) {
+          const dbKey = isCaseInsensitive ? candDb.toLowerCase() : candDb;
+          if (!seenDbs.has(dbKey)) {
+            seenDbs.add(dbKey);
+            candidateDbs.push(candDb);
+          }
+        }
+      } catch {}
+
+      if (depth + 1 < 2) {
+        queue.push({ dir: childPath, depth: depth + 1 });
+      }
+    }
+  }
+
+  if (candidateDbs.length === 0) return '';
+  const cutoffMs = Date.now() - 1_800_000;
+  const activeDbs = candidateDbs.filter((candDb) => isChildTelemetryDbActive(candDb, cutoffMs));
+  return activeDbs.length === 1 ? activeDbs[0] : '';
+}
+
+function resolveTelemetryDbsForStop(input, steps = []) {
+  const rawCandidates = [
+    ...(Array.isArray(input.workspacePaths) ? input.workspacePaths : []),
+    ...(Array.isArray(input.workspace_paths) ? input.workspace_paths : []),
+    input.workspace,
+    input.workspaceRoot,
+    input.workspace_root,
+    input.cwd,
+  ];
+  const seen = new Set();
+  const normalizedCandidates = [];
+  let localDbPath = '';
+  for (const raw of rawCandidates) {
+    const norm = normalizeCandidatePath(raw);
+    if (!norm) continue;
+    const key =
+      process.platform === 'win32' || process.platform === 'darwin' ? norm.toLowerCase() : norm;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalizedCandidates.push(norm);
+    if (!localDbPath) {
+      const found = findNearestEvoTelemetryDb(norm);
+      if (found) {
+        localDbPath = found;
+      }
+    }
+  }
+  if (!localDbPath && Array.isArray(steps) && steps.length > 0) {
+    localDbPath = extractWorkspaceDbFromTranscriptSteps(steps, normalizedCandidates);
+  }
+  if (!localDbPath && normalizedCandidates.length > 0) {
+    localDbPath = findSingleActiveChildTelemetryDb(normalizedCandidates);
+  }
 
   const globalHome = process.env.EVO_GLOBAL_DIR
     ? path.resolve(process.env.EVO_GLOBAL_DIR)
@@ -262,7 +671,58 @@ function resolveTelemetryDbsForStop(input) {
   return { localDbPath, globalDbPath };
 }
 
-function applyStopOutcomeToDb(db, cleanId, kind, outcome) {
+function isSqliteBusyError(err) {
+  if (!err) return false;
+  const code = String(err.code || err.errcode || '');
+  const msg = String(err.message || err);
+  return /SQLITE_BUSY|database is locked|database table is locked/i.test(`${code} ${msg}`);
+}
+
+function withSqliteBusyRetry(fn, maxRetries = 3) {
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isSqliteBusyError(err) || attempt >= maxRetries) {
+        throw err;
+      }
+      sleepSyncMs(25 * (attempt + 1));
+    }
+  }
+  throw lastErr;
+}
+
+function openTelemetryDb(dbPath) {
+  const db = new DatabaseSync(dbPath, { timeout: 3000 });
+  try {
+    db.exec('PRAGMA busy_timeout = 3000;');
+  } catch {}
+  return db;
+}
+
+function markRecallEventHelpedInDb(db, rawId, cleanId = rawId) {
+  const raw = String(rawId || cleanId || '');
+  const clean = String(cleanId || rawId || '');
+  if (!raw && !clean) return;
+  const recentCutoff = new Date(Date.now() - 86_400_000).toISOString();
+  db.prepare(
+    `UPDATE recall_events
+     SET helped = 1
+     WHERE id = (
+       SELECT id FROM recall_events
+       WHERE (capability_id = ? OR lower(capability_id) = ? OR capability_id = ?)
+         AND helped = 0
+         AND event_type IN ('inspect', 'run')
+         AND timestamp >= ?
+       ORDER BY id DESC
+       LIMIT 1
+     )`
+  ).run(raw, raw.toLowerCase(), clean, recentCutoff);
+}
+
+function applyStopOutcomeToDb(db, cleanId, kind, outcome, options = {}) {
   const col = outcome === 'helped' ? 'helped_count' : 'contested_count';
   const res = db
     .prepare(`UPDATE telemetry SET ${col} = ${col} + 1 WHERE id = ? OR lower(id) = ?`)
@@ -279,38 +739,115 @@ function applyStopOutcomeToDb(db, cleanId, kind, outcome) {
       // ignore insert failure on partial schema
     }
   }
-  if (outcome === 'helped') {
-    const recentCutoff = new Date(Date.now() - 86_400_000).toISOString();
-    db.prepare(
-      `UPDATE recall_events
-       SET helped = 1
-       WHERE id = (
-         SELECT id FROM recall_events
-         WHERE (capability_id = ? OR lower(capability_id) = ?)
-           AND helped = 0
-           AND event_type IN ('inspect', 'run')
-           AND timestamp >= ?
-         ORDER BY id DESC
-         LIMIT 1
-       )`
-    ).run(cleanId, cleanId, recentCutoff);
+  if (outcome === 'helped' && options.updateRecallEvents !== false) {
+    markRecallEventHelpedInDb(db, options.rawId || cleanId, cleanId);
   }
 }
 
-function closeRecalledTelemetryOnStop(input, hadTurnCorrection) {
+function createSessionStateUpserter(db) {
+  let hasUpdatedAt = false;
+  try {
+    const cols = db.prepare('PRAGMA table_info(session_state)').all();
+    hasUpdatedAt = Array.isArray(cols) && cols.some((col) => col && col.name === 'updated_at');
+  } catch {
+    hasUpdatedAt = false;
+  }
+  if (hasUpdatedAt) {
+    const stmt = db.prepare(
+      'INSERT INTO session_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    );
+    return (key, value) => stmt.run(key, String(value), new Date().toISOString());
+  }
+  const stmt = db.prepare(
+    'INSERT INTO session_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  );
+  return (key, value) => stmt.run(key, String(value));
+}
+
+function syncSessionStateToTelemetryDb(dbPath, syncInfo) {
+  const result = { alreadySettledByPropose: false, synced: false };
+  if (!dbPath || !fs.existsSync(dbPath)) return result;
+  if (
+    !syncInfo.setUserCorrectionTrue &&
+    !syncInfo.clearUserCorrection &&
+    syncInfo.hadCommandErrorValue === null &&
+    syncInfo.unproposedEditCountValue === null &&
+    !syncInfo.sessionEpoch
+  ) {
+    return result;
+  }
+  let db;
+  try {
+    db = openTelemetryDb(dbPath);
+    const getFlag = (key) => {
+      const row = db.prepare('SELECT value FROM session_state WHERE key = ?').get(key);
+      return row && row.value !== undefined ? String(row.value) : undefined;
+    };
+    if (syncInfo.hasProposeAfterCorrection) {
+      const contestedAttr = getFlag('contested_attributed') === 'true';
+      const cliProposeAt = getFlag('last_propose_at');
+      const userCorrFlag = getFlag('user_correction_detected');
+      if (contestedAttr || (cliProposeAt && userCorrFlag === 'false')) {
+        result.alreadySettledByPropose = true;
+      }
+    }
+    withSqliteBusyRetry(() => {
+      const upsert = createSessionStateUpserter(db);
+      if (syncInfo.clearUserCorrection) {
+        upsert('user_correction_detected', 'false');
+      } else if (syncInfo.setUserCorrectionTrue && !result.alreadySettledByPropose) {
+        upsert('user_correction_detected', 'true');
+      }
+      if (syncInfo.hadCommandErrorValue !== null) {
+        upsert('had_command_error', syncInfo.hadCommandErrorValue);
+      }
+      if (syncInfo.unproposedEditCountValue !== null) {
+        upsert('unproposed_edit_count', syncInfo.unproposedEditCountValue);
+      }
+      if (syncInfo.sessionEpoch) {
+        upsert('active_session_epoch', syncInfo.sessionEpoch);
+      }
+    });
+    result.synced = true;
+  } catch {
+    // Non-fatal: partial DB or read-only environment
+  } finally {
+    try {
+      db?.close();
+    } catch {}
+  }
+  return result;
+}
+
+function closeRecalledTelemetryOnStop(
+  input,
+  hadTurnCorrection,
+  resolvedDbs = null,
+  partitionInfo = null
+) {
   let localDb;
   let globalDb;
   try {
-    const { localDbPath, globalDbPath } = resolveTelemetryDbsForStop(input);
-    if (!fs.existsSync(localDbPath)) {
+    const { localDbPath, globalDbPath } = resolvedDbs || resolveTelemetryDbsForStop(input);
+    if (!localDbPath || !fs.existsSync(localDbPath)) {
       return;
     }
-    localDb = new DatabaseSync(localDbPath, { timeout: 2000 });
+    localDb = openTelemetryDb(localDbPath);
     const getFlag = (key) => {
       const row = localDb.prepare('SELECT value FROM session_state WHERE key = ?').get(key);
       return row && row.value !== undefined ? String(row.value) : undefined;
     };
+    const rawSetFlag = createSessionStateUpserter(localDb);
+    const setFlag = (key, value) => withSqliteBusyRetry(() => rawSetFlag(key, value));
+
+    const userCorrectionFlag = getFlag('user_correction_detected') === 'true';
+    const hadCommandErrorFlag = getFlag('had_command_error') === 'true';
+    const contestedAttributed = getFlag('contested_attributed') === 'true';
+    const contestedAt = parseInt(getFlag('contested_at') || '0', 10);
+    const hasCorrection = hadTurnCorrection || userCorrectionFlag;
+
     const recalledRaw = getFlag('recalled_capabilities');
+    let validEntries = [];
     if (recalledRaw) {
       let parsed = [];
       try {
@@ -318,61 +855,109 @@ function closeRecalledTelemetryOnStop(input, hadTurnCorrection) {
         if (Array.isArray(candidate)) parsed = candidate;
       } catch {}
       const now = Date.now();
-      const validEntries = parsed.filter((item) => {
+      validEntries = parsed.filter((item) => {
         if (!item || typeof item.id !== 'string') return false;
         const tsMs = typeof item.at === 'number' ? item.at : Date.parse(String(item.ts || ''));
         if (Number.isFinite(tsMs) && now - tsMs > 86_400_000) return false;
         return true;
       });
-
-      const userCorrectionFlag = getFlag('user_correction_detected') === 'true';
-      const hadCommandErrorFlag = getFlag('had_command_error') === 'true';
-      const contestedAttributed = getFlag('contested_attributed') === 'true';
-      const contestedAt = parseInt(getFlag('contested_at') || '0', 10);
-      const hasCorrection = hadTurnCorrection || userCorrectionFlag;
-
-      let targetOutcome = null;
-      let entriesToRecord = validEntries;
-      if (hasCorrection) {
-        if (!contestedAttributed) {
-          targetOutcome = 'contested';
-        } else {
-          entriesToRecord = [];
-        }
-      } else if (!hadCommandErrorFlag) {
-        entriesToRecord = validEntries.filter((c) => {
-          const tsMs = typeof c.at === 'number' ? c.at : Date.parse(String(c.ts || ''));
-          return !contestedAttributed || (contestedAt > 0 && Number.isFinite(tsMs) && tsMs > contestedAt);
-        });
-        if (entriesToRecord.length > 0) {
-          targetOutcome = 'helped';
-        }
-      } else {
-        entriesToRecord = [];
-      }
-
-      if (targetOutcome && entriesToRecord.length > 0) {
-        for (const entry of entriesToRecord) {
-          const cleanId = String(entry.id || '')
-            .trim()
-            .toLowerCase()
-            .replace(/[^a-z0-9_.-]+/g, '-');
-          if (!cleanId) continue;
-          const kind = String(entry.kind || 'rule');
-          if (entry.tier === 'GLOBAL' && globalDbPath) {
-            if (!globalDb) {
-              globalDb = new DatabaseSync(globalDbPath, { timeout: 2000 });
-            }
-            applyStopOutcomeToDb(globalDb, cleanId, kind, targetOutcome);
-          } else {
-            applyStopOutcomeToDb(localDb, cleanId, kind, targetOutcome);
-          }
-        }
-      }
     }
-    localDb.exec(
-      "DELETE FROM session_state WHERE key IN ('recalled_capabilities', 'contested_attributed', 'contested_at', 'user_correction_detected', 'had_command_error')"
-    );
+
+    const recordEntries = (entries, targetOutcome) => {
+      for (const entry of entries) {
+        const rawId = String(entry.id || '').trim();
+        const cleanId = rawId.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-');
+        if (!cleanId) continue;
+        const kind = String(entry.kind || 'rule');
+        if (entry.tier === 'GLOBAL') {
+          if (globalDbPath && !isSameDbPath(localDbPath, globalDbPath)) {
+            if (!globalDb) {
+              globalDb = openTelemetryDb(globalDbPath);
+            }
+            withSqliteBusyRetry(() => {
+              applyStopOutcomeToDb(globalDb, cleanId, kind, targetOutcome, {
+                updateRecallEvents: false,
+                rawId,
+              });
+            });
+            if (targetOutcome === 'helped') {
+              withSqliteBusyRetry(() => {
+                markRecallEventHelpedInDb(localDb, rawId, cleanId);
+              });
+            }
+          } else if (!globalDbPath) {
+            if (targetOutcome === 'helped') {
+              withSqliteBusyRetry(() => {
+                markRecallEventHelpedInDb(localDb, rawId, cleanId);
+              });
+            }
+          } else {
+            withSqliteBusyRetry(() => {
+              applyStopOutcomeToDb(localDb, cleanId, kind, targetOutcome, { rawId });
+            });
+          }
+        } else {
+          withSqliteBusyRetry(() => {
+            applyStopOutcomeToDb(localDb, cleanId, kind, targetOutcome, { rawId });
+          });
+        }
+      }
+    };
+
+    if (hasCorrection) {
+      if (!contestedAttributed && validEntries.length > 0) {
+        const proposeCutoff =
+          partitionInfo && partitionInfo.isPartitioned && partitionInfo.proposeCutoffMs > 0
+            ? partitionInfo.proposeCutoffMs
+            : 0;
+        let entriesToRecord = validEntries;
+        let keptAfterPropose = null;
+        if (proposeCutoff > 0) {
+          entriesToRecord = validEntries.filter((c) => {
+            const tsMs = typeof c.at === 'number' ? c.at : Date.parse(String(c.ts || ''));
+            return !Number.isFinite(tsMs) || tsMs <= proposeCutoff;
+          });
+          keptAfterPropose = validEntries.filter((c) => {
+            const tsMs = typeof c.at === 'number' ? c.at : Date.parse(String(c.ts || ''));
+            return Number.isFinite(tsMs) && tsMs > proposeCutoff;
+          });
+        }
+        if (entriesToRecord.length > 0) {
+          recordEntries(entriesToRecord, 'contested');
+        }
+        if (keptAfterPropose !== null) {
+          if (keptAfterPropose.length > 0) {
+            setFlag('recalled_capabilities', JSON.stringify(keptAfterPropose));
+            setFlag('contested_attributed', 'true');
+            setFlag('contested_at', String(proposeCutoff));
+          } else {
+            withSqliteBusyRetry(() => {
+              localDb.exec("DELETE FROM session_state WHERE key = 'recalled_capabilities'");
+            });
+            setFlag('contested_attributed', 'true');
+            setFlag('contested_at', String(Date.now()));
+          }
+        } else {
+          setFlag('contested_attributed', 'true');
+          setFlag('contested_at', String(Date.now()));
+        }
+      }
+      setFlag('user_correction_detected', 'false');
+    } else if (!hadCommandErrorFlag) {
+      const entriesToRecord = validEntries.filter((c) => {
+        const tsMs = typeof c.at === 'number' ? c.at : Date.parse(String(c.ts || ''));
+        return !contestedAttributed || (contestedAt > 0 && Number.isFinite(tsMs) && tsMs > contestedAt);
+      });
+      if (entriesToRecord.length > 0) {
+        recordEntries(entriesToRecord, 'helped');
+      }
+      withSqliteBusyRetry(() => {
+        localDb.exec(
+          "DELETE FROM session_state WHERE key IN ('recalled_capabilities', 'contested_attributed', 'contested_at', 'user_correction_detected')"
+        );
+      });
+    }
+    // When hadCommandErrorFlag === true && !hasCorrection: defer attribution and preserve session_state
   } catch {
     // Non-fatal: Stop hook must never block or fail host IDE
   } finally {
@@ -385,83 +970,82 @@ function closeRecalledTelemetryOnStop(input, hadTurnCorrection) {
   }
 }
 
-async function main() {
-  if (
-    process.argv.includes('--help') ||
-    process.argv.includes('-h') ||
-    process.argv[2] === 'help' ||
-    process.argv[2] === '--help' ||
-    process.argv[2] === '-h'
-  ) {
-    process.stdout.write(`Usage: node scripts/antigravity_hook.mjs [PreInvocation|Stop] [options]
-
-Antigravity native hook handler for EvoKernel evolution reminder injection and session stop handling.
-
-Options:
-  -h, --help  Show this help message
-`);
-    return;
-  }
-  const event = process.argv[2] || 'PreInvocation';
-  const input = await readStdinJson();
-  const conversationId = String(input.conversationId || input.conversation_id || 'default');
-  const userHash =
-    typeof process.getuid === 'function'
-      ? String(process.getuid())
-      : crypto.createHash('sha1').update(os.homedir()).digest('hex').slice(0, 8);
-  const statePath = process.env.EVO_AGY_HOOK_STATE_PATH
-    ? path.resolve(process.env.EVO_AGY_HOOK_STATE_PATH)
-    : path.join(os.tmpdir(), `evo-agy-hook-state-${userHash}.json`);
-
-  if (event === 'Stop') {
-    const allState = loadHookState(statePath);
-    const cs = allState[conversationId];
-    const hadTurnCorrection = Boolean(
-      cs && (cs.lastCorrectionStep ?? -1) > (cs.clearedCorrectionStep ?? -1)
-    );
-    if (cs) {
-      cs.clearedCorrectionStep = cs.lastCorrectionStep ?? -1;
-      cs.clearedDirtyEditStep = cs.lastDirtyEditStep ?? -1;
-      cs.clearedErrorRecoveryStep = cs.lastErrorRecoveryStep ?? -1;
-      cs.clearedAuditStep = cs.lastAuditStep ?? -1;
-      saveHookState(statePath, allState, conversationId, allState[conversationId]);
-    }
-    closeRecalledTelemetryOnStop(input, hadTurnCorrection);
-    process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
-    return;
-  }
-
-  const transcriptPath = String(input.transcriptPath || input.transcript_path || '');
-  const steps = readTranscriptTailSteps(transcriptPath);
-
-  if (steps.length === 0) {
-    process.stdout.write('{}\n');
-    return;
-  }
-
-  const allState = loadHookState(statePath);
-  const convState = allState[conversationId] || {
+function createDefaultConvState() {
+  return {
     lastRemindedStep: -999,
     lastCorrectionStep: -1,
     clearedCorrectionStep: -1,
+    clearedTelemetryCorrectionStep: -1,
+    lastObservedUserStep: -1,
     lastDirtyEditStep: -1,
     clearedDirtyEditStep: -1,
     lastErrorRecoveryStep: -1,
     clearedErrorRecoveryStep: -1,
     lastAuditStep: -1,
     clearedAuditStep: -1,
+    lastProposeStepForAt: -1,
+    lastProposeAtMs: 0,
+    maxMonotonicStep: -1,
+    tailAnchors: [],
+    syncedEpoch: '',
   };
+}
 
+function computeStepFingerprint(step) {
+  const createdAt = step?.created_at ?? '';
+  const type = step?.type ?? '';
+  const content = normalizeTranscriptString(step?.content || '').slice(0, 120);
+  return crypto
+    .createHash('sha1')
+    .update(`${createdAt}|${type}|${content}`)
+    .digest('hex')
+    .slice(0, 12);
+}
+
+function resolveSyntheticBaseOffset(steps, convState) {
+  const hasSynthetic = steps.some((s) => typeof s?.step_index !== 'number');
+  if (!hasSynthetic) return 0;
+
+  const anchors = Array.isArray(convState?.tailAnchors) ? convState.tailAnchors : [];
+  if (anchors.length === 0) {
+    return (convState?.maxMonotonicStep ?? -1) >= 0 ? (convState.maxMonotonicStep ?? -1) + 1 : 0;
+  }
+
+  const fps = steps.map((s) => (typeof s?.step_index === 'number' ? null : computeStepFingerprint(s)));
+  for (let i = 0; i < steps.length; i++) {
+    const fp = fps[i];
+    if (!fp) continue;
+    // Prefer a 2-step anchor match when possible to disambiguate identical empty steps
+    if (i + 1 < steps.length && fps[i + 1]) {
+      for (let a = 0; a + 1 < anchors.length; a++) {
+        if (anchors[a][0] === fp && anchors[a + 1][0] === fps[i + 1]) {
+          return Math.max(0, anchors[a][1] - i);
+        }
+      }
+    }
+    for (let a = 0; a < anchors.length; a++) {
+      if (anchors[a][0] === fp) {
+        return Math.max(0, anchors[a][1] - i);
+      }
+    }
+  }
+
+  return (convState?.maxMonotonicStep ?? -1) >= 0 ? (convState.maxMonotonicStep ?? -1) + 1 : 0;
+}
+
+function analyzeTranscriptSteps(steps, convState) {
   let latestStepIndex = steps.length;
   let latestUserContent = '';
   let latestUserStepIndex = -1;
-  let seenModelStep = false;
   let userInputHadPriorModelStep = false;
+  let lastCorrectionInTranscriptStep = -1;
+  let seenModelStep = false;
   let editCountSinceLastPropose = 0;
   let codeReadCountSinceLastPropose = 0;
   let scratchScriptCountSinceLastPropose = 0;
   let deliverableRunCountSinceLastPropose = 0;
   let hadCommandErrorSinceLastPropose = false;
+  let hasUnrecoveredCmdError = false;
   let hasCommandErrorRecovery = false;
   let latestErrorRecoveryStepIndex = -1;
   let latestAuditStepIndex = -1;
@@ -469,8 +1053,13 @@ Options:
   let latestDirtyEditStepIndex = -1;
   let lastProposeId = '';
   let lastProposeStepIndex = -1;
+  let lastProposeStepCreatedAtMs = 0;
   let seenPropose = false;
   let toolWorkStepsAfterUserCorrection = 0;
+
+  const syntheticBaseOffset = resolveSyntheticBaseOffset(steps, convState);
+  const newTailAnchors = [];
+  let maxSyntheticIdx = convState?.maxMonotonicStep ?? -1;
 
   const initialPersistedCorrectionStep =
     (convState.lastCorrectionStep ?? -1) > (convState.clearedCorrectionStep ?? -1)
@@ -479,7 +1068,14 @@ Options:
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const idx = typeof step.step_index === 'number' ? step.step_index : i;
+    let idx;
+    if (typeof step.step_index === 'number') {
+      idx = step.step_index;
+    } else {
+      idx = syntheticBaseOffset + i;
+      newTailAnchors.push([computeStepFingerprint(step), idx]);
+      if (idx > maxSyntheticIdx) maxSyntheticIdx = idx;
+    }
     latestStepIndex = idx;
 
     if (
@@ -506,11 +1102,17 @@ Options:
       }
     }
 
-    if (step.type === 'USER_INPUT' || step.source === 'USER_EXPLICIT') {
+    if (
+      (step.type === 'USER_INPUT' || step.source === 'USER_EXPLICIT') &&
+      step.source !== 'SYSTEM'
+    ) {
       latestUserContent = normalizeTranscriptString(step.content || '');
       latestUserStepIndex = idx;
       userInputHadPriorModelStep = seenModelStep;
       toolWorkStepsAfterUserCorrection = 0;
+      if (seenModelStep && CORRECTION_REGEX.test(latestUserContent)) {
+        lastCorrectionInTranscriptStep = idx;
+      }
     }
 
     const toolCalls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
@@ -521,6 +1123,7 @@ Options:
     const activeUserTurnStep =
       latestUserStepIndex >= 0 ? latestUserStepIndex : initialPersistedCorrectionStep;
 
+    let separateOutputOffset = 0;
     for (let tcIdx = 0; tcIdx < toolCalls.length; tcIdx++) {
       const tc = toolCalls[tcIdx];
       const toolName = normalizeTranscriptString(tc.name || tc.tool_name || tc.ToolName || '');
@@ -528,6 +1131,46 @@ Options:
       const innerArgs = parseTranscriptObject(args.Arguments || args);
       const innerToolName = normalizeTranscriptString(args.ToolName || args.tool_name || '');
       const serverName = normalizeTranscriptString(args.ServerName || args.server_name || '');
+
+      const inlineOutput = normalizeTranscriptString(tc.output || tc.result || step.output || '');
+      let matchedOutputStep = null;
+      if (!inlineOutput) {
+        const tcCallId = normalizeTranscriptString(tc.id || tc.call_id || '');
+        if (tcCallId) {
+          for (let j = i + 1; j < steps.length; j++) {
+            const cand = steps[j];
+            const candType = String(cand?.type || '');
+            const candSource = String(cand?.source || '');
+            if (
+              candType === 'USER_INPUT' ||
+              candType === 'PLANNER_RESPONSE' ||
+              candSource === 'USER_EXPLICIT' ||
+              Array.isArray(cand?.tool_calls)
+            ) {
+              break;
+            }
+            const candCallId = normalizeTranscriptString(cand?.call_id || cand?.tool_call_id || '');
+            if (candCallId && candCallId === tcCallId) {
+              matchedOutputStep = cand;
+              break;
+            }
+          }
+        }
+        if (!matchedOutputStep && i + 1 + separateOutputOffset < steps.length) {
+          const cand = steps[i + 1 + separateOutputOffset];
+          const candType = String(cand?.type || '');
+          const candSource = String(cand?.source || '');
+          if (
+            candType !== 'USER_INPUT' &&
+            candType !== 'PLANNER_RESPONSE' &&
+            candSource !== 'USER_EXPLICIT' &&
+            !Array.isArray(cand?.tool_calls)
+          ) {
+            matchedOutputStep = cand;
+          }
+        }
+        separateOutputOffset++;
+      }
 
       const isEvoPropose =
         toolName.includes('evo_propose') ||
@@ -538,11 +1181,20 @@ Options:
       if (isEvoPropose) {
         seenPropose = true;
         lastProposeStepIndex = idx;
+        const rawCreatedAt = tc.created_at ?? step.created_at;
+        if (rawCreatedAt !== undefined && rawCreatedAt !== null) {
+          const parsedMs =
+            typeof rawCreatedAt === 'number' ? rawCreatedAt : Date.parse(String(rawCreatedAt));
+          if (Number.isFinite(parsedMs) && parsedMs > 0) {
+            lastProposeStepCreatedAtMs = parsedMs;
+          }
+        }
         editCountSinceLastPropose = 0;
         codeReadCountSinceLastPropose = 0;
         scratchScriptCountSinceLastPropose = 0;
         deliverableRunCountSinceLastPropose = 0;
         hadCommandErrorSinceLastPropose = false;
+        hasUnrecoveredCmdError = false;
         hasCommandErrorRecovery = false;
         latestErrorRecoveryStepIndex = -1;
         latestAuditStepIndex = -1;
@@ -558,37 +1210,6 @@ Options:
           idx > activeUserTurnStep
         ) {
           toolWorkStepsAfterUserCorrection++;
-        }
-
-        if (toolName === 'invoke_subagent') {
-          const subagentKind = normalizeTranscriptString(
-            args.AgentName ||
-              args.SubagentType ||
-              args.TypeName ||
-              args.agent_name ||
-              args.subagent_type ||
-              args.type_name ||
-              ''
-          ).toLowerCase();
-          const subagentTask = normalizeTranscriptString(
-            args.Task ||
-              args.Prompt ||
-              args.Message ||
-              args.Role ||
-              args.task ||
-              args.prompt ||
-              args.role ||
-              ''
-          );
-          const isUtilitySubagent =
-            /^(?:browser|image-generator|image_generator|media|web_search)$/.test(subagentKind);
-          const isAuditIntent =
-            /(?:audit|review|verif|root[\s_-]*cause|diagnos|bug|defect|security|forensic|排查|核查|审计|取证|定位|验证|复核)/i.test(
-              `${subagentKind} ${subagentTask}`
-            );
-          if (!isUtilitySubagent && isAuditIntent) {
-            latestAuditStepIndex = idx;
-          }
         }
 
         const targetToolId = normalizeTranscriptString(
@@ -654,43 +1275,62 @@ Options:
           const cmdLine = normalizeTranscriptString(
             args.CommandLine || args.command_line || args.command || ''
           );
-          let cmdOutput = normalizeTranscriptString(
-            tc.output || tc.result || step.output || ''
-          );
-          let nextStepStatus = '';
-          if (!cmdOutput && i + 1 + tcIdx < steps.length) {
-            const nextStep = steps[i + 1 + tcIdx];
-            const nextType = String(nextStep?.type || '');
-            const nextSource = String(nextStep?.source || '');
-            if (
-              nextType !== 'USER_INPUT' &&
-              nextType !== 'PLANNER_RESPONSE' &&
-              nextSource !== 'USER_EXPLICIT' &&
-              !Array.isArray(nextStep?.tool_calls)
-            ) {
-              cmdOutput = normalizeTranscriptString(
-                nextStep.content || nextStep.output || nextStep.result || ''
-              );
-              nextStepStatus = String(nextStep.status || '');
-            }
-          }
-          const isCmdError =
+          const cmdOutput = inlineOutput
+            ? inlineOutput
+            : matchedOutputStep
+              ? normalizeTranscriptString(
+                  matchedOutputStep.content || matchedOutputStep.output || matchedOutputStep.result || ''
+                )
+              : '';
+          const nextStepStatus = matchedOutputStep ? String(matchedOutputStep.status || '') : '';
+
+          const exitedZero =
+            /Command exited with code 0\b/i.test(cmdOutput) ||
+            tc.exit_code === 0 ||
+            matchedOutputStep?.exit_code === 0;
+          const explicitNonZeroExit =
+            (typeof tc.exit_code === 'number' && tc.exit_code !== 0) ||
+            (typeof matchedOutputStep?.exit_code === 'number' && matchedOutputStep.exit_code !== 0) ||
+            /Command exited with code [1-9]\d*\b/i.test(cmdOutput);
+
+          let isCmdError =
             tc.status === 'ERROR' ||
             nextStepStatus === 'ERROR' ||
-            CMD_ERROR_OUTPUT_REGEX.test(cmdOutput);
+            explicitNonZeroExit ||
+            (!exitedZero && CMD_ERROR_OUTPUT_REGEX.test(cmdOutput));
+
+          if (isCmdError) {
+            const isSearchOrDiff =
+              /^\s*(?:rg|grep|git\s+diff)\b/i.test(cmdLine) || /\|\s*(?:rg|grep)\b/i.test(cmdLine);
+            const isExitCode1 =
+              tc.exit_code === 1 ||
+              matchedOutputStep?.exit_code === 1 ||
+              /Command exited with code 1\b/i.test(cmdOutput) ||
+              (tc.exit_code === undefined &&
+                matchedOutputStep?.exit_code === undefined &&
+                !/Command exited with code (?:[2-9]|\d{2,})\b/i.test(cmdOutput));
+            if (isSearchOrDiff && isExitCode1 && !CMD_FATAL_SEARCH_ERROR_REGEX.test(cmdOutput)) {
+              isCmdError = false;
+            }
+          }
+
           const isCmdSuccess =
             !isCmdError &&
             (tc.status === 'COMPLETED' ||
               nextStepStatus === 'DONE' ||
               nextStepStatus === 'COMPLETED' ||
-              cmdOutput.includes('Command exited with code 0') ||
+              exitedZero ||
               cmdOutput.length > 0);
 
           if (isCmdError) {
             hadCommandErrorSinceLastPropose = true;
-          } else if (hadCommandErrorSinceLastPropose && isCmdSuccess) {
-            hasCommandErrorRecovery = true;
-            latestErrorRecoveryStepIndex = idx;
+            hasUnrecoveredCmdError = true;
+          } else if (isCmdSuccess) {
+            hasUnrecoveredCmdError = false;
+            if (hadCommandErrorSinceLastPropose) {
+              hasCommandErrorRecovery = true;
+              latestErrorRecoveryStepIndex = idx;
+            }
           }
 
           if (DELIVERABLE_CMD_REGEX.test(cmdLine)) {
@@ -701,31 +1341,355 @@ Options:
     }
   }
 
+  return {
+    latestStepIndex,
+    latestUserContent,
+    latestUserStepIndex,
+    userInputHadPriorModelStep,
+    lastCorrectionInTranscriptStep,
+    editCountSinceLastPropose,
+    codeReadCountSinceLastPropose,
+    scratchScriptCountSinceLastPropose,
+    deliverableRunCountSinceLastPropose,
+    hadCommandErrorSinceLastPropose,
+    hasUnrecoveredCmdError,
+    hasCommandErrorRecovery,
+    latestErrorRecoveryStepIndex,
+    latestAuditStepIndex,
+    editsAfterPropose,
+    latestDirtyEditStepIndex,
+    lastProposeId,
+    lastProposeStepIndex,
+    lastProposeStepCreatedAtMs,
+    seenPropose,
+    toolWorkStepsAfterUserCorrection,
+    newTailAnchors: newTailAnchors.slice(-64),
+    maxSyntheticIdx,
+  };
+}
+
+function applyObservedUserTurnReplacement(convState, analysis) {
+  let dirty = false;
+  let clearedInterruptedCorrection = false;
+  if (
+    analysis.latestUserStepIndex >= 0 &&
+    analysis.latestUserStepIndex > (convState.lastObservedUserStep ?? -1)
+  ) {
+    const prevObservedStep = convState.lastObservedUserStep ?? -1;
+    convState.lastObservedUserStep = analysis.latestUserStepIndex;
+    dirty = true;
+    if (!CORRECTION_REGEX.test(analysis.latestUserContent)) {
+      const maxCorr = Math.max(
+        convState.lastCorrectionStep ?? -1,
+        analysis.lastCorrectionInTranscriptStep
+      );
+      if (maxCorr > (convState.clearedCorrectionStep ?? -1)) {
+        convState.clearedCorrectionStep = maxCorr;
+      }
+      if (maxCorr > (convState.clearedTelemetryCorrectionStep ?? -1)) {
+        convState.clearedTelemetryCorrectionStep = maxCorr;
+        clearedInterruptedCorrection = true;
+      } else if (prevObservedStep >= 0 && maxCorr >= 0) {
+        clearedInterruptedCorrection = true;
+      }
+    }
+  }
+  return { dirty, clearedInterruptedCorrection };
+}
+
+function applyAnchorState(convState, analysis) {
+  let dirty = false;
+  if (analysis.newTailAnchors.length > 0) {
+    const prevJson = JSON.stringify(convState.tailAnchors || []);
+    const nextJson = JSON.stringify(analysis.newTailAnchors);
+    if (prevJson !== nextJson) {
+      convState.tailAnchors = analysis.newTailAnchors;
+      dirty = true;
+    }
+  }
+  if (analysis.maxSyntheticIdx > (convState.maxMonotonicStep ?? -1)) {
+    convState.maxMonotonicStep = analysis.maxSyntheticIdx;
+    dirty = true;
+  }
+  return dirty;
+}
+
+function applyProposeTimestampState(convState, analysis) {
+  let dirty = false;
+  if (
+    analysis.lastProposeStepIndex >= 0 &&
+    analysis.lastProposeStepIndex > (convState.lastProposeStepForAt ?? -1)
+  ) {
+    convState.lastProposeStepForAt = analysis.lastProposeStepIndex;
+    convState.lastProposeAtMs =
+      analysis.lastProposeStepCreatedAtMs > 0 ? analysis.lastProposeStepCreatedAtMs : Date.now();
+    dirty = true;
+  }
+  return dirty;
+}
+
+async function main() {
+  if (
+    process.argv.includes('--help') ||
+    process.argv.includes('-h') ||
+    process.argv[2] === 'help' ||
+    process.argv[2] === '--help' ||
+    process.argv[2] === '-h'
+  ) {
+    process.stdout.write(`Usage: node scripts/antigravity_hook.mjs [PreInvocation|Stop] [options]
+
+Antigravity native hook handler for EvoKernel evolution reminder injection and session stop handling.
+
+Options:
+  -h, --help  Show this help message
+`);
+    return;
+  }
+  const event = process.argv[2] || 'PreInvocation';
+  const input = await readStdinJson();
+  const explicitConversationId = String(input.conversationId || input.conversation_id || '').trim();
+  const conversationId = explicitConversationId || 'default';
+  const userHash =
+    typeof process.getuid === 'function'
+      ? String(process.getuid())
+      : crypto.createHash('sha1').update(os.homedir()).digest('hex').slice(0, 8);
+  const convHash = crypto.createHash('sha1').update(conversationId).digest('hex').slice(0, 8);
+  const statePath = process.env.EVO_AGY_HOOK_STATE_PATH
+    ? path.resolve(process.env.EVO_AGY_HOOK_STATE_PATH)
+    : path.join(os.tmpdir(), `evo-agy-hook-state-${userHash}-${convHash}.json`);
+
+  const transcriptPath = String(input.transcriptPath || input.transcript_path || '');
+  const steps = readTranscriptTailSteps(transcriptPath);
+
+  if (event === 'Stop') {
+    const allState = loadHookState(statePath);
+    const hasExistingState = Boolean(allState[conversationId]);
+    const cs = { ...createDefaultConvState(), ...(allState[conversationId] || {}) };
+    const resolvedDbs = resolveTelemetryDbsForStop(input, steps);
+
+    let analysis = null;
+    let hadTurnCorrection = (cs.lastCorrectionStep ?? -1) > (cs.clearedTelemetryCorrectionStep ?? -1);
+    let effectiveTelemetryCorrStep = cs.lastCorrectionStep ?? -1;
+
+    if (steps.length > 0) {
+      analysis = analyzeTranscriptSteps(steps, cs);
+      applyAnchorState(cs, analysis);
+      const turnRepl = applyObservedUserTurnReplacement(cs, analysis);
+      applyProposeTimestampState(cs, analysis);
+
+      const transcriptCorrActive =
+        analysis.lastCorrectionInTranscriptStep >= 0 &&
+        analysis.lastCorrectionInTranscriptStep === analysis.latestUserStepIndex;
+      effectiveTelemetryCorrStep = Math.max(
+        cs.lastCorrectionStep ?? -1,
+        transcriptCorrActive ? analysis.lastCorrectionInTranscriptStep : -1
+      );
+      hadTurnCorrection = effectiveTelemetryCorrStep > (cs.clearedTelemetryCorrectionStep ?? -1);
+
+      const hadCommandErrorValue = analysis.hasUnrecoveredCmdError
+        ? 'true'
+        : analysis.lastProposeStepIndex >= 0 || analysis.hasCommandErrorRecovery
+          ? 'false'
+          : null;
+      const unproposedEditCountValue =
+        analysis.editCountSinceLastPropose > 0
+          ? String(analysis.editCountSinceLastPropose)
+          : analysis.lastProposeStepIndex >= 0
+            ? '0'
+            : null;
+      const needsEpochSync =
+        Boolean(explicitConversationId) && cs.syncedEpoch !== explicitConversationId;
+
+      const syncRes = syncSessionStateToTelemetryDb(resolvedDbs.localDbPath, {
+        setUserCorrectionTrue: hadTurnCorrection,
+        clearUserCorrection: turnRepl.clearedInterruptedCorrection && !hadTurnCorrection,
+        hasProposeAfterCorrection:
+          hadTurnCorrection &&
+          analysis.lastProposeStepIndex >= 0 &&
+          analysis.lastProposeStepIndex > effectiveTelemetryCorrStep,
+        hadCommandErrorValue,
+        unproposedEditCountValue,
+        sessionEpoch: needsEpochSync ? explicitConversationId : undefined,
+      });
+      if (needsEpochSync && syncRes.synced) {
+        cs.syncedEpoch = explicitConversationId;
+      }
+      if (syncRes.alreadySettledByPropose) {
+        hadTurnCorrection = false;
+      }
+    }
+
+    const isPartitionedByPropose =
+      hadTurnCorrection &&
+      analysis !== null &&
+      analysis.lastProposeStepIndex >= 0 &&
+      analysis.lastProposeStepIndex > effectiveTelemetryCorrStep;
+    const proposeCutoffMs = isPartitionedByPropose
+      ? analysis.lastProposeStepCreatedAtMs > 0
+        ? analysis.lastProposeStepCreatedAtMs
+        : cs.lastProposeAtMs > 0
+          ? cs.lastProposeAtMs
+          : Date.now()
+      : 0;
+
+    closeRecalledTelemetryOnStop(input, hadTurnCorrection, resolvedDbs, {
+      isPartitioned: isPartitionedByPropose,
+      proposeCutoffMs,
+    });
+
+    if (hasExistingState || steps.length > 0) {
+      const maxCorrToClear = Math.max(
+        cs.lastCorrectionStep ?? -1,
+        analysis ? analysis.lastCorrectionInTranscriptStep : -1
+      );
+      cs.clearedCorrectionStep = Math.max(cs.clearedCorrectionStep ?? -1, maxCorrToClear);
+      cs.clearedTelemetryCorrectionStep = Math.max(
+        cs.clearedTelemetryCorrectionStep ?? -1,
+        maxCorrToClear
+      );
+      cs.clearedDirtyEditStep = cs.lastDirtyEditStep ?? -1;
+      cs.clearedErrorRecoveryStep = cs.lastErrorRecoveryStep ?? -1;
+      cs.clearedAuditStep = cs.lastAuditStep ?? -1;
+      allState[conversationId] = cs;
+      saveHookState(statePath, allState, conversationId, cs);
+    }
+
+    process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
+    return;
+  }
+
+  if (steps.length === 0) {
+    if (explicitConversationId) {
+      const allState = loadHookState(statePath);
+      const convState = { ...createDefaultConvState(), ...(allState[conversationId] || {}) };
+      if (convState.syncedEpoch !== explicitConversationId) {
+        const resolvedDbs = resolveTelemetryDbsForStop(input, []);
+        if (resolvedDbs.localDbPath && fs.existsSync(resolvedDbs.localDbPath)) {
+          const syncRes = syncSessionStateToTelemetryDb(resolvedDbs.localDbPath, {
+            setUserCorrectionTrue: false,
+            clearUserCorrection: false,
+            hasProposeAfterCorrection: false,
+            hadCommandErrorValue: null,
+            unproposedEditCountValue: null,
+            sessionEpoch: explicitConversationId,
+          });
+          if (syncRes.synced) {
+            convState.syncedEpoch = explicitConversationId;
+            allState[conversationId] = convState;
+            saveHookState(statePath, allState, conversationId, convState);
+          }
+        }
+      }
+    }
+    process.stdout.write('{}\n');
+    return;
+  }
+
+  const allState = loadHookState(statePath);
+  const convState = { ...createDefaultConvState(), ...(allState[conversationId] || {}) };
+  const analysis = analyzeTranscriptSteps(steps, convState);
+
+  let stateDirty = false;
+  if (applyAnchorState(convState, analysis)) stateDirty = true;
+  const preTurnRepl = applyObservedUserTurnReplacement(convState, analysis);
+  if (preTurnRepl.dirty) stateDirty = true;
+  if (applyProposeTimestampState(convState, analysis)) stateDirty = true;
+
+  const {
+    latestStepIndex,
+    latestUserContent,
+    latestUserStepIndex,
+    userInputHadPriorModelStep,
+    editCountSinceLastPropose,
+    codeReadCountSinceLastPropose,
+    scratchScriptCountSinceLastPropose,
+    deliverableRunCountSinceLastPropose,
+    hasUnrecoveredCmdError,
+    hasCommandErrorRecovery,
+    latestErrorRecoveryStepIndex,
+    latestAuditStepIndex,
+    editsAfterPropose,
+    latestDirtyEditStepIndex,
+    lastProposeId,
+    lastProposeStepIndex,
+    seenPropose,
+    toolWorkStepsAfterUserCorrection,
+  } = analysis;
+
   if (lastProposeStepIndex >= 0) {
-    let watermarkUpdated = false;
     if (lastProposeStepIndex > (convState.clearedCorrectionStep ?? -1)) {
       convState.clearedCorrectionStep = lastProposeStepIndex;
-      watermarkUpdated = true;
+      stateDirty = true;
     }
     if (lastProposeStepIndex > (convState.clearedDirtyEditStep ?? -1)) {
       convState.clearedDirtyEditStep = lastProposeStepIndex;
-      watermarkUpdated = true;
+      stateDirty = true;
     }
     if (lastProposeStepIndex > (convState.clearedErrorRecoveryStep ?? -1)) {
       convState.clearedErrorRecoveryStep = lastProposeStepIndex;
-      watermarkUpdated = true;
+      stateDirty = true;
     }
     if (lastProposeStepIndex > (convState.clearedAuditStep ?? -1)) {
       convState.clearedAuditStep = lastProposeStepIndex;
-      watermarkUpdated = true;
-    }
-    if (watermarkUpdated) {
-      allState[conversationId] = convState;
-      saveHookState(statePath, allState, conversationId, allState[conversationId]);
+      stateDirty = true;
     }
   }
 
+  const isCurrentUserCorrection =
+    latestUserStepIndex >= 0 &&
+    userInputHadPriorModelStep &&
+    CORRECTION_REGEX.test(latestUserContent) &&
+    latestUserStepIndex > (convState.clearedTelemetryCorrectionStep ?? -1);
+  const needsEpochSync =
+    Boolean(explicitConversationId) && convState.syncedEpoch !== explicitConversationId;
+  if (
+    isCurrentUserCorrection ||
+    preTurnRepl.clearedInterruptedCorrection ||
+    hasUnrecoveredCmdError ||
+    lastProposeStepIndex >= 0 ||
+    editCountSinceLastPropose > 0 ||
+    needsEpochSync
+  ) {
+    const resolvedDbs = resolveTelemetryDbsForStop(input, steps);
+    const hadCommandErrorValue = hasUnrecoveredCmdError
+      ? 'true'
+      : lastProposeStepIndex >= 0 || hasCommandErrorRecovery
+        ? 'false'
+        : null;
+    const unproposedEditCountValue =
+      editCountSinceLastPropose > 0
+        ? String(editCountSinceLastPropose)
+        : lastProposeStepIndex >= 0
+          ? '0'
+          : null;
+    const syncRes = syncSessionStateToTelemetryDb(resolvedDbs.localDbPath, {
+      setUserCorrectionTrue: isCurrentUserCorrection,
+      clearUserCorrection: preTurnRepl.clearedInterruptedCorrection && !isCurrentUserCorrection,
+      hasProposeAfterCorrection:
+        isCurrentUserCorrection && lastProposeStepIndex > latestUserStepIndex,
+      hadCommandErrorValue,
+      unproposedEditCountValue,
+      sessionEpoch: needsEpochSync ? explicitConversationId : undefined,
+    });
+    if (needsEpochSync && syncRes.synced) {
+      convState.syncedEpoch = explicitConversationId;
+      stateDirty = true;
+    }
+    if (syncRes.alreadySettledByPropose && latestUserStepIndex > (convState.clearedTelemetryCorrectionStep ?? -1)) {
+      convState.clearedTelemetryCorrectionStep = latestUserStepIndex;
+      stateDirty = true;
+    }
+  }
+
+  const persistIfDirty = () => {
+    if (stateDirty) {
+      allState[conversationId] = convState;
+      saveHookState(statePath, allState, conversationId, convState);
+    }
+  };
+
   if (latestStepIndex <= (convState.lastRemindedStep ?? -999)) {
+    persistIfDirty();
     process.stdout.write('{}\n');
     return;
   }
@@ -773,6 +1737,7 @@ Options:
     !hasCommandErrorRecovery &&
     !hasSubagentAudit
   ) {
+    persistIfDirty();
     process.stdout.write('{}\n');
     return;
   }
@@ -816,11 +1781,13 @@ Options:
       hasHeavyDiagnosticReads);
 
   if (!hasImmediateNewTrigger && !hasCooldownPendingTrigger) {
+    persistIfDirty();
     process.stdout.write('{}\n');
     return;
   }
 
   allState[conversationId] = {
+    ...convState,
     lastRemindedStep: latestStepIndex,
     lastCorrectionStep: hasUserCorrection
       ? effectiveCorrectionStep
@@ -886,7 +1853,7 @@ Options:
     );
   }
 
-  const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮根因诊断确认（含零代码修改的只读白盒排查）、假说证伪纠偏、代码修复或交付物验证后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，多变量修改缺乏因果隔离时使用 memory 或提供 contrastive_evidence，通用脚本沉淀为 tool，单点故障使用 memory），并在回复末尾输出 🧬 EvoKernel 演进回执。`;
+  const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮根因诊断确认（含零代码修改的只读白盒排查）、假说证伪纠偏、代码修复或交付物验证后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，多变量修改缺乏因果隔离时使用 memory 或提供 contrastive_evidence，通用脚本沉淀为 tool，单点故障使用 memory），并在回复末尾输出 🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)。`;
 
   process.stdout.write(
     JSON.stringify({

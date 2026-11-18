@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 
-import { buildUiSnapshot, exportUiHtml } from '../cli/ui.js';
+import { buildUiSnapshot, exportUiHtml, normalizeSymbolForCompare } from '../cli/ui.js';
 import type { UiSnapshot } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import {
@@ -32,6 +32,7 @@ import {
   resolveCurrentGitBranch,
   resolveCurrentGitCommit,
   verifyMemoryFreshness,
+  verifyMemoryFreshnessAsync,
 } from '../core/memory.js';
 import { executeSandboxedScriptAsync } from '../core/sandbox.js';
 import { syncManagedRuleBlocks } from '../cli/init.js';
@@ -855,6 +856,7 @@ export async function handleWebviewAction(
         let payload: ProposalPayload;
         let preservedEnabled = true;
         let preservedReviewStatus: 'pending' | 'approved' = 'pending';
+        let preserveMemoryAnchorOnEdit = false;
 
         if (rawKind === 'rule') {
           const existingRule = storage.getRule(cleanId);
@@ -891,6 +893,8 @@ export async function handleWebviewAction(
             meta.review_status === 'pending' || meta.review_status === 'approved'
               ? meta.review_status
               : existingRule.review_status;
+
+          preserveMemoryAnchorOnEdit = false;
 
           payload = {
             kind: 'rule',
@@ -949,6 +953,8 @@ export async function handleWebviewAction(
             : meta.description
               ? String(meta.description).trim()
               : (existingSkill.l0_summary || existingSkill.description || cleanId).trim().slice(0, 140);
+
+          preserveMemoryAnchorOnEdit = false;
 
           payload = {
             kind: 'skill',
@@ -1015,14 +1021,32 @@ export async function handleWebviewAction(
               ? meta.review_status
               : existingMem.review_status;
 
-          const nextTargetSymbols =
+          const nextTargetSymbols = (
             Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
-              ? meta.target_symbols.map((s) => String(s).trim()).filter(Boolean)
-              : existingMem.target_symbols;
-          const prevTargetSymbols = (existingMem.target_symbols || []).map((s) => s.trim()).filter(Boolean);
+              ? meta.target_symbols.map((s) => String(s))
+              : existingMem.target_symbols || []
+          )
+            .map(normalizeSymbolForCompare)
+            .filter(Boolean);
+          const prevTargetSymbols = (existingMem.target_symbols || [])
+            .map(normalizeSymbolForCompare)
+            .filter(Boolean);
           const sameTargetSymbols =
             prevTargetSymbols.length === nextTargetSymbols.length &&
             prevTargetSymbols.every((s, idx) => s === nextTargetSymbols[idx]);
+
+          const explicitMetaCommit =
+            typeof meta.created_commit === 'string' ? meta.created_commit.trim() : '';
+          const resolvedCreatedCommit = explicitMetaCommit
+            ? explicitMetaCommit !== 'uncommitted'
+              ? explicitMetaCommit
+              : undefined
+            : sameTargetSymbols && existingMem.created_commit && existingMem.created_commit !== 'uncommitted'
+              ? existingMem.created_commit
+              : undefined;
+
+          preserveMemoryAnchorOnEdit =
+            sameTargetSymbols && Boolean(resolvedCreatedCommit);
 
           payload = {
             kind: 'memory',
@@ -1040,18 +1064,14 @@ export async function handleWebviewAction(
             supersedes_id: cleanId,
             enabled: preservedEnabled,
             review_status: preservedReviewStatus,
-            ...(typeof meta.created_commit === 'string' && meta.created_commit.trim()
-              ? { created_commit: meta.created_commit.trim() }
-              : sameTargetSymbols && existingMem.created_commit
-                ? { created_commit: existingMem.created_commit }
-                : {}),
+            ...(resolvedCreatedCommit ? { created_commit: resolvedCreatedCommit } : {}),
             created_branch:
               typeof meta.created_branch === 'string' && meta.created_branch.trim()
                 ? meta.created_branch.trim()
                 : sameTargetSymbols
                   ? existingMem.created_branch
                   : undefined,
-          } as ProposalPayload;
+          };
         } else {
           const tool = storage.getTool(cleanId);
           if (!tool || !fs.existsSync(tool.script_path) || (!isSubpathOf(ws, tool.script_path) && !isSubpathOf(storage.evoDir, tool.script_path))) {
@@ -1060,6 +1080,8 @@ export async function handleWebviewAction(
 
           preservedEnabled = tool.enabled;
           preservedReviewStatus = tool.review_status;
+
+          preserveMemoryAnchorOnEdit = false;
 
           payload = {
             kind: 'tool',
@@ -1084,7 +1106,10 @@ export async function handleWebviewAction(
         let gateRes;
         try {
           const gatekeeper = new EvoGatekeeper(storage, telem);
-          gateRes = gatekeeper.evaluateAndCommit(payload, { bypassConfoundedCheck: true });
+          gateRes = await gatekeeper.evaluateAndCommitAsync(payload, {
+            bypassConfoundedCheck: true,
+            ...(preserveMemoryAnchorOnEdit ? { preserveAnchorOnMetadataEdit: true } : {}),
+          });
           if (gateRes.passed) {
             telem.syncFromDisk(true);
           }
@@ -1112,7 +1137,7 @@ export async function handleWebviewAction(
             let cacheDb: DatabaseSync | undefined;
             try {
               if (fs.existsSync(dbPath)) cacheDb = openSqliteReadOnly(dbPath);
-              verifyMemoryFreshness(ws, updatedMem, { includeCallers: true, cacheDb });
+              await verifyMemoryFreshnessAsync(ws, updatedMem, { includeCallers: true, cacheDb });
             } finally {
               if (cacheDb) try { cacheDb.close(); } catch {}
             }

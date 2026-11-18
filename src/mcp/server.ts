@@ -251,7 +251,7 @@ export function startMcpStdioServer(
               new Promise((r) => setTimeout(r, 150)),
             ]);
           }
-          const callResult = await dispatcher.handleToolCall(toolName, toolArgs);
+          const callResult = await dispatcher.handleToolCallAsync(toolName, toolArgs);
           sendResponse(id, callResult);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

@@ -74,6 +74,26 @@ export function isCapabilityRelevantToModifiedFiles(
   return checkRule() ?? checkTool() ?? checkMemory() ?? true;
 }
 
+function resolveRealPathWithFallback(p: string): string {
+  const resolved = path.resolve(p);
+  try {
+    return fs.realpathSync.native
+      ? fs.realpathSync.native(resolved)
+      : fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function isSameResolvedPath(a: string, b: string): boolean {
+  const ra = resolveRealPathWithFallback(a);
+  const rb = resolveRealPathWithFallback(b);
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    return ra.toLowerCase() === rb.toLowerCase();
+  }
+  return ra === rb;
+}
+
 export function recordRecalledOutcomeWithTierRouting(
   localStorage: EvoStorage,
   localTelemetry: EvoTelemetry,
@@ -113,7 +133,14 @@ export function recordRecalledOutcomeWithTierRouting(
       }
       const globalTelemetry = new EvoTelemetry(globalStorage);
       try {
-        globalTelemetry.recordCapabilityOutcome(entry.id, outcome);
+        if (!isSameResolvedPath(globalRoot, localStorage.rootDir)) {
+          globalTelemetry.recordCapabilityOutcome(entry.id, outcome, { skipRecallEventsUpdate: true });
+          if (outcome === 'helped') {
+            localTelemetry.markRecallEventHelped(entry.id);
+          }
+        } else {
+          globalTelemetry.recordCapabilityOutcome(entry.id, outcome);
+        }
       } finally {
         globalTelemetry.close();
       }
@@ -645,6 +672,16 @@ function openHookTelemetry(storage: EvoStorage, dryRun?: boolean): EvoTelemetry 
   return stub as unknown as EvoTelemetry;
 }
 
+function extractSessionEpoch(payload: Record<string, unknown>): string {
+  return String(
+    payload.conversationId ||
+      payload.conversation_id ||
+      payload.session_id ||
+      payload.sessionId ||
+      ''
+  ).trim();
+}
+
 export function handlePreTool(
   workspaceRoot: string,
   payload: Record<string, unknown>,
@@ -656,12 +693,23 @@ export function handlePreTool(
     return { event: 'pre-tool', success: true, exitCode: 0, output: '' };
   }
 
+  const sessionEpoch = extractSessionEpoch(payload);
   const isEvoTool =
     ctx.toolName.includes('evo_') ||
     ctx.innerToolName.includes('evo_') ||
     ctx.serverName.includes('evo') ||
     ctx.isInternalMeta;
   if (isEvoTool) {
+    if (sessionEpoch) {
+      const telemetry = openHookTelemetry(storage, options.dryRun);
+      try {
+        if (telemetry.getSessionFlag('active_session_epoch') !== sessionEpoch) {
+          telemetry.setSessionFlag('active_session_epoch', sessionEpoch);
+        }
+      } finally {
+        telemetry.close();
+      }
+    }
     return { event: 'pre-tool', success: true, exitCode: 0, output: '' };
   }
 
@@ -671,6 +719,9 @@ export function handlePreTool(
 
   const telemetry = openHookTelemetry(storage, options.dryRun);
   try {
+    if (sessionEpoch && telemetry.getSessionFlag('active_session_epoch') !== sessionEpoch) {
+      telemetry.setSessionFlag('active_session_epoch', sessionEpoch);
+    }
     const candidateTools = storage
       .listTools()
       .filter((t) => t.enabled !== false && t.hook_trigger?.event === 'pre-tool');
@@ -771,6 +822,10 @@ export function handlePostTool(
 
   const telemetry = openHookTelemetry(storage, options.dryRun);
   try {
+    const sessionEpoch = extractSessionEpoch(payload);
+    if (sessionEpoch && telemetry.getSessionFlag('active_session_epoch') !== sessionEpoch) {
+      telemetry.setSessionFlag('active_session_epoch', sessionEpoch);
+    }
     const currentStep = parseInt(telemetry.getSessionFlag('session_step_seq') || '0', 10) + 1;
     telemetry.setSessionFlag('session_step_seq', String(currentStep));
     telemetry.setSessionFlag('last_hook_event_at', String(Date.now()));
@@ -793,6 +848,33 @@ export function handlePostTool(
 
     if ((isEvoPropose || isEvoCompact) && !proposalRejected) {
       const proposedId = String(ctx.innerArgs.id || 'capability');
+      const wasContestedAttributed = telemetry.getSessionFlag('contested_attributed') === 'true';
+      const priorContestedAt = parseInt(telemetry.getSessionFlag('contested_at') || '0', 10);
+      if (wasContestedAttributed) {
+        telemetry.pruneRecalledCapabilitiesUpTo(priorContestedAt > 0 ? priorContestedAt : undefined);
+      } else {
+        const userPromptCandidate = String(
+          payload.user_message ||
+            payload.user_prompt ||
+            payload.prompt ||
+            payload.last_user_message ||
+            ctx.toolInput.user_message ||
+            ''
+        );
+        if (
+          telemetry.getSessionFlag('user_correction_detected') === 'true' ||
+          isUserCorrectionSignal(userPromptCandidate)
+        ) {
+          const recalled = telemetry.getRecalledCapabilities();
+          if (!options.dryRun && recalled.length > 0) {
+            const modifiedFiles = getSessionModifiedFiles(workspaceRoot, telemetry);
+            for (const c of recalled) {
+              recordRecalledOutcomeWithTierRouting(storage, telemetry, c, 'contested', modifiedFiles);
+            }
+          }
+          telemetry.clearRecalledCapabilities();
+        }
+      }
       telemetry.setSessionFlag('last_crystallized_id', proposedId);
       telemetry.setSessionFlag('last_propose_at', String(Date.now()));
       telemetry.setSessionFlag('last_propose_step', String(currentStep));
@@ -1082,6 +1164,8 @@ export function handleStop(
     const editCount = parseInt(telemetry.getSessionFlag('unproposed_edit_count') || '0', 10);
     const readCount = parseInt(telemetry.getSessionFlag('unproposed_read_count') || '0', 10);
     const persistedCorrection = telemetry.getSessionFlag('user_correction_detected') === 'true';
+    const lastProposeAt = parseInt(telemetry.getSessionFlag('last_propose_at') || '0', 10);
+    const userCorrectionFlag = telemetry.getSessionFlag('user_correction_detected');
 
     const inlineUserText = String(
       payload.user_message ||
@@ -1091,7 +1175,9 @@ export function handleStop(
       ''
     );
     const transcriptPath = payload.transcript_path || payload.transcriptPath;
-    const transcriptTail = readTranscriptTail(transcriptPath);
+    const shouldScanTranscriptTail =
+      !inlineUserText && !(lastProposeAt > 0 && userCorrectionFlag === 'false');
+    const transcriptTail = shouldScanTranscriptTail ? readTranscriptTail(transcriptPath) : '';
     const hasUserCorrection =
       persistedCorrection ||
       isUserCorrectionSignal(inlineUserText) ||
@@ -1225,7 +1311,7 @@ export function handleStop(
         `  ├─ 🛡️  Architectural Invariant  : evo_propose(kind: "rule", l0_summary: "...", scope_glob: "...") [zero magic numbers]\n` +
         `  ├─ ⚠️  Anti-Confounding Gate   : If multi-variable edits lack isolated causation, use kind: "memory" (or pass contrastive_evidence for rule/skill)\n` +
         `  └─ 🔧 Reusable Micro-Tool     : evo_propose(kind: "tool", ...) [--self-test verified]\n` +
-        `  Output receipt in response: 🧬 EvoKernel 演进回执：[<kind>] <id>（<新增/更新摘要>）`
+        `  Output receipt in response: 🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)`
       );
     }
 

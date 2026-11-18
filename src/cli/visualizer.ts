@@ -9,7 +9,7 @@ import {
   hasValidEvoStructure,
   openSqliteReadOnly,
 } from '../core/storage.js';
-import { emptyRecallWindowStats, readRecallWindowStatsFromDb } from '../core/telemetry.js';
+import { emptyRecallWindowStats, readMergedRecallWindowStatsFromDbs } from '../core/telemetry.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
 import { buildScoreReport } from './score.js';
 import { formatTerminalOutput, truncateTerminalLine } from './term.js';
@@ -71,7 +71,7 @@ function loadActiveStatsSnapshot(workspaceRoot: string, includeGlobal: boolean) 
   if (includeGlobal) {
     const candidateGlobal = resolveGlobalWorkspaceRoot();
     if (
-      path.resolve(candidateGlobal) !== path.resolve(storage.rootDir) &&
+      !isSameResolvedPath(candidateGlobal, storage.rootDir) &&
       hasValidEvoStructure(path.join(candidateGlobal, '.evo'))
     ) {
       globalRoot = candidateGlobal;
@@ -309,6 +309,122 @@ export function renderEvoTree(
     .join('\n');
 }
 
+function resolveRealPathWithFallback(p: string): string {
+  const resolved = path.resolve(p);
+  try {
+    return fs.realpathSync.native
+      ? fs.realpathSync.native(resolved)
+      : fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function isSameResolvedPath(a: string, b: string): boolean {
+  const ra = resolveRealPathWithFallback(a);
+  const rb = resolveRealPathWithFallback(b);
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    return ra.toLowerCase() === rb.toLowerCase();
+  }
+  return ra === rb;
+}
+
+function loadWindowAndFreshnessMetrics(params: {
+  storageRoot: string;
+  hasEvo: boolean;
+  includeGlobal: boolean;
+  globalRoot?: string;
+  localMemories: ReturnType<EvoStorage['listMemories']>;
+  globalOnlyMemories: ReturnType<EvoStorage['listMemories']>;
+  hasMcpConfig: boolean;
+}) {
+  const {
+    storageRoot,
+    hasEvo,
+    includeGlobal,
+    globalRoot,
+    localMemories,
+    globalOnlyMemories,
+    hasMcpConfig,
+  } = params;
+  let verifiedMemories = 0;
+  let branchMemories = 0;
+  let window7d = emptyRecallWindowStats(7);
+  let sessionStartSavings = {
+    beforeTokens: 0,
+    afterTokens: 0,
+    savedTokens: 0,
+    savingsPercent: 0,
+    userStaticRuleTokens: 0,
+    evoSeedTokens: 0,
+  };
+
+  const statsCacheDbPath = path.join(storageRoot, '.evo', '.cache', 'telemetry.db');
+  let statsCacheDb: DatabaseSync | undefined;
+  let globalCacheDb: DatabaseSync | undefined;
+
+  try {
+    if (hasEvo && fs.existsSync(statsCacheDbPath)) {
+      try {
+        statsCacheDb = openSqliteReadOnly(statsCacheDbPath);
+      } catch {}
+    }
+    if (includeGlobal && globalRoot) {
+      const globalCacheDbPath = path.join(globalRoot, '.evo', '.cache', 'telemetry.db');
+      if (
+        fs.existsSync(globalCacheDbPath) &&
+        !isSameResolvedPath(statsCacheDbPath, globalCacheDbPath)
+      ) {
+        try {
+          globalCacheDb = openSqliteReadOnly(globalCacheDbPath);
+        } catch {}
+      }
+    }
+    const activeDbs = [statsCacheDb, globalCacheDb].filter((db): db is DatabaseSync => Boolean(db));
+    if (activeDbs.length > 0) {
+      try {
+        window7d = readMergedRecallWindowStatsFromDbs(activeDbs, 7);
+      } catch {}
+    }
+
+    for (const m of localMemories) {
+      const rep = verifyMemoryFreshness(storageRoot, m, {
+        includeCallers: false,
+        cacheDb: statsCacheDb,
+      });
+      if (rep.overall_status === 'VERIFIED') verifiedMemories++;
+      else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
+    }
+    if (globalRoot && globalOnlyMemories.length > 0) {
+      for (const gm of globalOnlyMemories) {
+        const rep = verifyMemoryFreshness(globalRoot, gm, { includeCallers: false });
+        if (rep.overall_status === 'VERIFIED') verifiedMemories++;
+        else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
+      }
+    }
+    if (hasEvo || hasMcpConfig || includeGlobal) {
+      const scoreRep = buildScoreReport(storageRoot, {
+        includeGlobal,
+        cacheDb: statsCacheDb,
+      });
+      sessionStartSavings = scoreRep.contextSavings;
+    }
+  } finally {
+    if (statsCacheDb) {
+      try {
+        statsCacheDb.close();
+      } catch {}
+    }
+    if (globalCacheDb) {
+      try {
+        globalCacheDb.close();
+      } catch {}
+    }
+  }
+
+  return { verifiedMemories, branchMemories, window7d, sessionStartSavings };
+}
+
 export function renderEvoStats(
   workspaceRoot: string,
   options?: { color?: boolean; ascii?: boolean; includeGlobal?: boolean }
@@ -330,57 +446,17 @@ export function renderEvoStats(
   const config = hasEvo ? storage.getConfig() : { ...DEFAULT_EVO_CONFIG };
   const { totalTokens } = hasEvo ? storage.getCoreRulesTokenUsage() : { totalTokens: 0 };
 
-  let verifiedMemories = 0;
-  let branchMemories = 0;
-  let window7d = emptyRecallWindowStats(7);
-  const statsCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
-  let statsCacheDb: DatabaseSync | undefined;
-  if (hasEvo && fs.existsSync(statsCacheDbPath)) {
-    try {
-      statsCacheDb = openSqliteReadOnly(statsCacheDbPath);
-      window7d = readRecallWindowStatsFromDb(statsCacheDb, 7);
-    } catch {}
-  }
-
   const hasMcpConfig = hasWorkspaceMcpConfig(workspaceRoot);
-
-  let sessionStartSavings = {
-    beforeTokens: 0,
-    afterTokens: 0,
-    savedTokens: 0,
-    savingsPercent: 0,
-  };
-
-  try {
-    for (const m of localMemories) {
-      const rep = verifyMemoryFreshness(storage.rootDir, m, {
-        includeCallers: false,
-        cacheDb: statsCacheDb,
-      });
-      if (rep.overall_status === 'VERIFIED') verifiedMemories++;
-      else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
-    }
-    if (globalRoot && globalOnlyMemories.length > 0) {
-      for (const gm of globalOnlyMemories) {
-        const rep = verifyMemoryFreshness(globalRoot, gm, { includeCallers: false });
-        if (rep.overall_status === 'VERIFIED') verifiedMemories++;
-        else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
-      }
-    }
-    if (hasEvo || hasMcpConfig || includeGlobal) {
-      const scoreRep = buildScoreReport(storage.rootDir, {
-        includeGlobal,
-        cacheDb: statsCacheDb,
-      });
-      sessionStartSavings = scoreRep.contextSavings;
-    }
-  } finally {
-    if (statsCacheDb) {
-      try {
-        statsCacheDb.close();
-      } catch {}
-    }
-  }
+  const { verifiedMemories, branchMemories, window7d, sessionStartSavings } =
+    loadWindowAndFreshnessMetrics({
+      storageRoot: storage.rootDir,
+      hasEvo,
+      includeGlobal,
+      globalRoot,
+      localMemories,
+      globalOnlyMemories,
+      hasMcpConfig,
+    });
   const staleMemories = memories.length - verifiedMemories - branchMemories;
 
   let totalHits = 0;
@@ -642,59 +718,17 @@ export function buildEvoStatsJson(
   const config = hasEvo ? storage.getConfig() : { ...DEFAULT_EVO_CONFIG };
   const { totalTokens } = hasEvo ? storage.getCoreRulesTokenUsage() : { totalTokens: 0 };
 
-  let verifiedMemories = 0;
-  let branchMemories = 0;
-  let window7d = emptyRecallWindowStats(7);
-  const statsCacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
-  let statsCacheDb: DatabaseSync | undefined;
-  if (hasEvo && fs.existsSync(statsCacheDbPath)) {
-    try {
-      statsCacheDb = openSqliteReadOnly(statsCacheDbPath);
-      window7d = readRecallWindowStatsFromDb(statsCacheDb, 7);
-    } catch {}
-  }
-
   const hasMcpConfig = hasWorkspaceMcpConfig(workspaceRoot);
-
-  let sessionStartSavings = {
-    beforeTokens: 0,
-    afterTokens: 0,
-    savedTokens: 0,
-    savingsPercent: 0,
-    userStaticRuleTokens: 0,
-    evoSeedTokens: 0,
-  };
-
-  try {
-    for (const m of localMemories) {
-      const rep = verifyMemoryFreshness(storage.rootDir, m, {
-        includeCallers: false,
-        cacheDb: statsCacheDb,
-      });
-      if (rep.overall_status === 'VERIFIED') verifiedMemories++;
-      else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
-    }
-    if (globalRoot && globalOnlyMemories.length > 0) {
-      for (const gm of globalOnlyMemories) {
-        const rep = verifyMemoryFreshness(globalRoot, gm, { includeCallers: false });
-        if (rep.overall_status === 'VERIFIED') verifiedMemories++;
-        else if (rep.overall_status === 'OTHER_BRANCH') branchMemories++;
-      }
-    }
-    if (hasEvo || hasMcpConfig || includeGlobal) {
-      const scoreRep = buildScoreReport(storage.rootDir, {
-        includeGlobal,
-        cacheDb: statsCacheDb,
-      });
-      sessionStartSavings = scoreRep.contextSavings;
-    }
-  } finally {
-    if (statsCacheDb) {
-      try {
-        statsCacheDb.close();
-      } catch {}
-    }
-  }
+  const { verifiedMemories, branchMemories, window7d, sessionStartSavings } =
+    loadWindowAndFreshnessMetrics({
+      storageRoot: storage.rootDir,
+      hasEvo,
+      includeGlobal,
+      globalRoot,
+      localMemories,
+      globalOnlyMemories,
+      hasMcpConfig,
+    });
   const staleMemories = memories.length - verifiedMemories - branchMemories;
 
   let totalHits = 0;

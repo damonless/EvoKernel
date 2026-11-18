@@ -5,6 +5,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import { buildScoreReport, computeGitBugHotspots } from './score.js';
 import type { ScoreReport } from './score.js';
 import { EvoStorage, estimateTokens, hasValidEvoStructure, openSqliteReadOnly, parseFrontmatter, sanitizeId } from '../core/storage.js';
@@ -30,6 +31,7 @@ import {
   resolveCurrentGitBranch,
   resolveCurrentGitCommit,
   verifyMemoryFreshness,
+  verifyMemoryFreshnessAsync,
 } from '../core/memory.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import { executeSandboxedScriptAsync } from '../core/sandbox.js';
@@ -46,6 +48,21 @@ export interface UiSnapshot {
   memories: any[];
   archived: any[];
   gatekeeperEvents: any[];
+}
+
+/**
+ * Normalize a memory target symbol specifier for equality comparison by trimming,
+ * converting backslashes to forward slashes, and stripping leading `./` on the file segment.
+ */
+export function normalizeSymbolForCompare(spec: string): string {
+  const trimmed = spec.trim();
+  if (!trimmed) return '';
+  const hashIdx = trimmed.indexOf('#');
+  if (hashIdx !== -1) {
+    const filePart = trimmed.slice(0, hashIdx).trim().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+    return `${filePart}${trimmed.slice(hashIdx)}`;
+  }
+  return trimmed.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
 }
 
 function scrubAnonTextValue(val: string, ws: string, relativePathReplacements?: Array<[RegExp, string]>): string {
@@ -88,6 +105,55 @@ function deepScrubAnonObject<T>(
     return out as T;
   }
   return input;
+}
+
+function discoverBundledSeedIds(ws: string): Set<string> {
+  const ids = new Set<string>();
+  const currentDir =
+    (import.meta as { dirname?: string }).dirname || path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.join(ws, 'templates', 'seed-evo'),
+    path.resolve(currentDir, '..', '..', 'templates', 'seed-evo'),
+  ];
+  const seedDir = candidates.find((dir) => fs.existsSync(dir));
+  if (!seedDir) return ids;
+
+  const scanMdDir = (dir: string) => {
+    if (!fs.existsSync(dir)) return;
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith('.md')) {
+          ids.add(path.basename(entry.name, '.md'));
+        }
+      }
+    } catch {}
+  };
+  scanMdDir(path.join(seedDir, 'rules'));
+  scanMdDir(path.join(seedDir, 'rules', 'scoped'));
+
+  const skillsDir = path.join(seedDir, 'skills');
+  if (fs.existsSync(skillsDir)) {
+    try {
+      for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && fs.existsSync(path.join(skillsDir, entry.name, 'SKILL.md'))) {
+          ids.add(entry.name);
+        }
+      }
+    } catch {}
+  }
+
+  const toolsDir = path.join(seedDir, 'tools');
+  if (fs.existsSync(toolsDir)) {
+    try {
+      for (const entry of fs.readdirSync(toolsDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          ids.add(entry.name);
+        }
+      }
+    } catch {}
+  }
+
+  return ids;
 }
 
 export function buildUiSnapshot(
@@ -178,32 +244,65 @@ export function buildUiSnapshot(
     const isSelfEvoRepo =
       fs.existsSync(path.join(ws, 'templates', 'seed-evo')) &&
       fs.existsSync(path.join(ws, 'src', 'core', 'gatekeeper.ts'));
-    const seedAllowedIds = new Set([
-      'esm-typescript-imports',
-      'bug-to-guardrail-sop',
-      'evo-rule-architect',
-      'agy-config-auditor',
-      'deliverable-canonical-inspector',
-      'git-hotspot-analyzer',
-      'workspace-metrics-scanner',
-    ]);
-    const localOnlyIds = new Set([
-      'ceo-team-orchestrator',
-      'dual-agent-team',
-      'evo-dev-verification-sop',
-      'embedded-fsm-lookup-audit',
-      'evo-release-preflight',
-      'local-workflow-skill-isolation-guard',
-      'embedded-power-bms-guardrail',
-    ]);
-    const shouldIncludeAnonId = (id: string, origin?: string): boolean => {
+    const bundledSeedIds = discoverBundledSeedIds(ws);
+    const cfg = storage.getConfig() as Record<string, unknown>;
+    const configExcludeIds = new Set<string>(
+      Array.isArray(cfg?.anonExcludeIds) ? cfg.anonExcludeIds.map((x) => String(x)) : []
+    );
+    const shouldIncludeAnonItem = (
+      id: string,
+      origin?: string,
+      visibility?: string
+    ): boolean => {
       if (!options?.anon) return true;
-      if (localOnlyIds.has(id)) return false;
+      if (visibility === 'local' || configExcludeIds.has(id)) return false;
       if (isSelfEvoRepo) {
-        return origin === 'seed' || origin === 'demo' || seedAllowedIds.has(id);
+        return (
+          origin === 'seed' ||
+          origin === 'demo' ||
+          visibility === 'public' ||
+          bundledSeedIds.has(id)
+        );
       }
       return true;
     };
+
+    const hasValidEvo = hasValidEvoStructure(storage.evoDir);
+    let rawRules: any[] = [];
+    let rawSkills: any[] = [];
+    let rawTools: any[] = [];
+    let rawMemories: any[] = [];
+    let rawArchived: any[] = [];
+    const capMetaMap = new Map<string, { origin?: string; visibility?: string }>();
+    const hiddenAnonIds = new Set<string>(configExcludeIds);
+
+    if (hasValidEvo) {
+      try {
+        rawRules = storage.listRules();
+        rawSkills = storage.listSkills();
+        rawTools = storage.listTools();
+        rawMemories = storage.listMemories();
+        rawArchived = storage.listArchivedCapabilities() as any[];
+        for (const item of [
+          ...rawRules,
+          ...rawSkills,
+          ...rawTools,
+          ...rawMemories,
+          ...rawArchived,
+        ]) {
+          const itemId = String(item?.id || '');
+          if (!itemId) continue;
+          const origin = typeof item.origin === 'string' ? item.origin : undefined;
+          const visibility = typeof item.visibility === 'string' ? item.visibility : undefined;
+          if (!capMetaMap.has(itemId)) {
+            capMetaMap.set(itemId, { origin, visibility });
+          }
+          if (visibility === 'local' || configExcludeIds.has(itemId)) {
+            hiddenAnonIds.add(itemId);
+          }
+        }
+      } catch {}
+    }
 
     if (db) {
       try {
@@ -240,21 +339,54 @@ export function buildUiSnapshot(
         const gRows = db.prepare(
           'SELECT id, timestamp, kind, target_id, target_name, passed, stage_failed, diagnostics FROM gatekeeper_events ORDER BY id DESC LIMIT 200'
         ).all() as any[];
+        const anonCapIdMap = new Map<string, string>();
         gatekeeperEvents = gRows
-          .filter((r) => shouldIncludeAnonId(String(r.target_id || ''), isSelfEvoRepo ? undefined : 'demo'))
-          .map((r) => ({
-            ...r,
-            target_id: options?.anon && !seedAllowedIds.has(String(r.target_id || '')) && isSelfEvoRepo
-              ? 'sanitized-capability'
-              : r.target_id,
-            target_name: options?.anon
-              ? scrubAnonTextValue(r.target_name || '', ws)
-              : r.target_name,
-            passed: r.passed === 1,
-            diagnostics: options?.anon
-              ? scrubAnonTextValue(r.diagnostics || '', ws)
-              : redactSensitiveDiagnostics(r.diagnostics || '', ws),
-          }));
+          .filter((r) => {
+            if (!options?.anon) return true;
+            const targetId = String(r.target_id || '');
+            if (hiddenAnonIds.has(targetId)) return false;
+            const capMeta = capMetaMap.get(targetId);
+            if (capMeta && !shouldIncludeAnonItem(targetId, capMeta.origin, capMeta.visibility)) {
+              return false;
+            }
+            return true;
+          })
+          .map((r) => {
+            const rawTargetId = String(r.target_id || '');
+            const rawKind =
+              String(r.kind || 'cap')
+                .toLowerCase()
+                .replace(/[^a-z0-9_-]/g, '') || 'cap';
+            const capMeta = capMetaMap.get(rawTargetId);
+            let safeTargetId = r.target_id;
+            if (
+              options?.anon &&
+              isSelfEvoRepo &&
+              !bundledSeedIds.has(rawTargetId) &&
+              capMeta?.origin !== 'seed' &&
+              capMeta?.origin !== 'demo' &&
+              capMeta?.visibility !== 'public'
+            ) {
+              const mapKey = `${rawKind}:${rawTargetId}`;
+              let mappedId = anonCapIdMap.get(mapKey);
+              if (!mappedId) {
+                mappedId = `sanitized-${rawKind}-${anonCapIdMap.size + 1}`;
+                anonCapIdMap.set(mapKey, mappedId);
+              }
+              safeTargetId = mappedId;
+            }
+            return {
+              ...r,
+              target_id: safeTargetId,
+              target_name: options?.anon
+                ? scrubAnonTextValue(r.target_name || '', ws)
+                : r.target_name,
+              passed: r.passed === 1,
+              diagnostics: options?.anon
+                ? scrubAnonTextValue(r.diagnostics || '', ws)
+                : redactSensitiveDiagnostics(r.diagnostics || '', ws),
+            };
+          });
       } catch {}
     }
 
@@ -263,14 +395,20 @@ export function buildUiSnapshot(
       return { ...item, hit_count: t.hit_count, attribution: t.attribution };
     };
 
-    if (hasValidEvoStructure(storage.evoDir)) {
+    if (hasValidEvo) {
       try {
-        const filterAnon = <T extends { id: string; origin?: string }>(items: T[]): T[] =>
-          options?.anon ? items.filter((item) => shouldIncludeAnonId(item.id, item.origin)) : items;
+        const filterAnon = <
+          T extends { id: string; origin?: string; visibility?: string },
+        >(
+          items: T[]
+        ): T[] =>
+          options?.anon
+            ? items.filter((item) => shouldIncludeAnonItem(item.id, item.origin, item.visibility))
+            : items;
         const scrubAnonText = (val: unknown) =>
           options?.anon && typeof val === 'string' ? scrubAnonTextValue(val, ws) : val;
         rules.push(
-          ...filterAnon(storage.listRules()).map((rule) => {
+          ...filterAnon(rawRules).map((rule) => {
             const attached = attach(rule);
             if (options?.anon) {
               attached.title = scrubAnonText(attached.title);
@@ -289,7 +427,7 @@ export function buildUiSnapshot(
           })
         );
         skills.push(
-          ...filterAnon(storage.listSkills()).map((skill) => {
+          ...filterAnon(rawSkills).map((skill) => {
             const attached = attach(skill);
             if (options?.anon) {
               attached.name = scrubAnonText(attached.name);
@@ -309,7 +447,7 @@ export function buildUiSnapshot(
           })
         );
         tools.push(
-          ...filterAnon(storage.listTools()).map((tool) => {
+          ...filterAnon(rawTools).map((tool) => {
             const attached = attach(tool);
             if (options?.anon) {
               attached.title = scrubAnonText(attached.title);
@@ -325,7 +463,7 @@ export function buildUiSnapshot(
             return attached;
           })
         );
-        for (const m of filterAnon(storage.listMemories())) {
+        for (const m of filterAnon(rawMemories)) {
           const v = verifyMemoryFreshness(ws, m, { includeCallers: true, cacheDb: db });
           const callers = Array.from(new Set((v.topology_anchors || []).flatMap((a: any) => a.callers || [])));
           const attached = attach({ ...m, freshness: { ...v, callers } });
@@ -447,7 +585,7 @@ export function buildUiSnapshot(
           memories.push(attached);
         }
         archived.push(
-          ...filterAnon(storage.listArchivedCapabilities() as any[]).map((item) => {
+          ...filterAnon(rawArchived).map((item) => {
             if (!options?.anon) return item;
             return {
               ...item,
@@ -1528,6 +1666,7 @@ export async function startUiServer(
             let payload: ProposalPayload;
             let preservedEnabled: boolean | undefined;
             let preservedReviewStatus: 'pending' | 'approved' | undefined;
+            let preserveMemoryAnchorOnEdit = false;
 
             if (rawKind === 'rule') {
               const existingRule = storage.getRule(cleanId);
@@ -1568,6 +1707,8 @@ export async function startUiServer(
                 meta.review_status === 'pending' || meta.review_status === 'approved'
                   ? meta.review_status
                   : existingRule.review_status;
+
+              preserveMemoryAnchorOnEdit = false;
 
               payload = {
                 kind: 'rule',
@@ -1628,6 +1769,8 @@ export async function startUiServer(
                 : meta.description
                   ? String(meta.description).trim()
                   : (existingSkill.l0_summary || existingSkill.description || cleanId).trim().slice(0, 140);
+
+              preserveMemoryAnchorOnEdit = false;
 
               payload = {
                 kind: 'skill',
@@ -1696,14 +1839,32 @@ export async function startUiServer(
                   ? meta.review_status
                   : existingMem.review_status;
 
-              const nextTargetSymbols =
+              const nextTargetSymbols = (
                 Array.isArray(meta.target_symbols) && meta.target_symbols.length > 0
-                  ? meta.target_symbols.map((s) => String(s).trim()).filter(Boolean)
-                  : existingMem.target_symbols;
-              const prevTargetSymbols = (existingMem.target_symbols || []).map((s) => s.trim()).filter(Boolean);
+                  ? meta.target_symbols.map((s) => String(s))
+                  : existingMem.target_symbols || []
+              )
+                .map(normalizeSymbolForCompare)
+                .filter(Boolean);
+              const prevTargetSymbols = (existingMem.target_symbols || [])
+                .map(normalizeSymbolForCompare)
+                .filter(Boolean);
               const sameTargetSymbols =
                 prevTargetSymbols.length === nextTargetSymbols.length &&
                 prevTargetSymbols.every((s, idx) => s === nextTargetSymbols[idx]);
+
+              const explicitMetaCommit =
+                typeof meta.created_commit === 'string' ? meta.created_commit.trim() : '';
+              const resolvedCreatedCommit = explicitMetaCommit
+                ? explicitMetaCommit !== 'uncommitted'
+                  ? explicitMetaCommit
+                  : undefined
+                : sameTargetSymbols && existingMem.created_commit && existingMem.created_commit !== 'uncommitted'
+                  ? existingMem.created_commit
+                  : undefined;
+
+              preserveMemoryAnchorOnEdit =
+                sameTargetSymbols && Boolean(resolvedCreatedCommit);
 
               payload = {
                 kind: 'memory',
@@ -1721,18 +1882,14 @@ export async function startUiServer(
                 supersedes_id: cleanId,
                 enabled: preservedEnabled,
                 review_status: preservedReviewStatus,
-                ...(typeof meta.created_commit === 'string' && meta.created_commit.trim()
-                  ? { created_commit: meta.created_commit.trim() }
-                  : sameTargetSymbols && existingMem.created_commit
-                    ? { created_commit: existingMem.created_commit }
-                    : {}),
+                ...(resolvedCreatedCommit ? { created_commit: resolvedCreatedCommit } : {}),
                 created_branch:
                   typeof meta.created_branch === 'string' && meta.created_branch.trim()
                     ? meta.created_branch.trim()
                     : sameTargetSymbols
                       ? existingMem.created_branch
                       : undefined,
-              } as ProposalPayload;
+              };
             } else {
               const tool = storage.getTool(cleanId);
               if (!tool || !fs.existsSync(tool.script_path)) {
@@ -1742,6 +1899,8 @@ export async function startUiServer(
 
               preservedEnabled = tool.enabled;
               preservedReviewStatus = tool.review_status;
+
+              preserveMemoryAnchorOnEdit = false;
 
               payload = {
                 kind: 'tool',
@@ -1766,7 +1925,10 @@ export async function startUiServer(
             let gateRes;
             try {
               const gatekeeper = new EvoGatekeeper(storage, telem);
-              gateRes = gatekeeper.evaluateAndCommit(payload, { bypassConfoundedCheck: true });
+              gateRes = await gatekeeper.evaluateAndCommitAsync(payload, {
+                bypassConfoundedCheck: true,
+                ...(preserveMemoryAnchorOnEdit ? { preserveAnchorOnMetadataEdit: true } : {}),
+              });
               if (gateRes.passed) {
                 telem.syncFromDisk(true);
               }
@@ -1796,7 +1958,7 @@ export async function startUiServer(
                 let cacheDb: DatabaseSync | undefined;
                 try {
                   if (fs.existsSync(dbPath)) cacheDb = openSqliteReadOnly(dbPath);
-                  verifyMemoryFreshness(ws, updatedMem, { includeCallers: true, cacheDb });
+                  await verifyMemoryFreshnessAsync(ws, updatedMem, { includeCallers: true, cacheDb });
                 } finally {
                   if (cacheDb) try { cacheDb.close(); } catch {}
                 }
