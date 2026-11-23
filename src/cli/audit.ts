@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -180,12 +181,12 @@ export const EVO_RULE_ARCHITECT_PROPOSAL: ProposalPayload = {
   ].join('\n'),
   l2_sop: [
     '1. **Stage 1 — Global Rule Purification (全局提纯)**:',
-    '   - Strip all language-specific rules (`*.c`, `*.ts`, `*.py`), tool-specific routing (`CodeGraph`, `AOCI`), and business domain constraints from global files (`~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`).',
+    '   - Strip all language-specific file globs, code-indexing tool routing, and business domain constraints from global files (`~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`).',
     '   - Retain only: (a) EvoKernel L0 Meta-Rule Seed, (b) universal epistemic & anti-sycophancy protocol, and (c) concise communication style.',
     '2. **Stage 2 — Global Skill Desensitization (全局技能脱敏)**:',
     '   - Scan global `SKILL.md` files for project-specific macro names, repo paths, or domain terms and replace them with domain-neutral placeholders.',
     '3. **Stage 3 — Local Demotion & Scoped Splitting (局部下沉与 Scoped 拆分)**:',
-    '   - Move code workflow rules (e.g., `CodeGraph` threshold policy) into the project-local `AGENTS.md`.',
+    '   - Move code workflow and code-indexing tool rules into the project-local `AGENTS.md`.',
     '   - Convert domain/language-specific guardrails into on-demand scoped rules via `evo_propose(kind: "rule", core: false, scope_glob: "...")`.',
     '4. **Stage 4 — Local Skill STE-Lite Conversion (局部技能 STE-Lite 化)**:',
     '   - Remove paragraphs in local `.agents/skills/*/SKILL.md` that duplicate `AGENTS.md` invariants.',
@@ -315,6 +316,8 @@ function discoverAuditableFiles(
       path.join(globalHomeDir, '.roo', 'rules'),
     ]) {
       for (const f of collectMarkdownFiles(globalRuleDir, 2)) {
+        const base = path.basename(f).toLowerCase();
+        if (base === 'evo-user-profile.mdc' || base === 'evo-user-profile.md') continue;
         addFile('global', 'rule', f, globalHomeDir);
       }
     }
@@ -345,7 +348,9 @@ function discoverAuditableFiles(
 }
 
 function tokenizeContentForOverlap(text: string): Set<string> {
-  const withoutManaged = text.replace(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/g, '');
+  const withoutManaged = text
+    .replace(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/g, '')
+    .replace(/<!-- EVO:PROFILE:START -->[\s\S]*?<!-- EVO:PROFILE:END -->/g, '');
   const matches = withoutManaged.toLowerCase().match(/[a-z0-9_-]{3,}|[\u4e00-\u9fa5]{2,4}/g) || [];
   const stopWords = new Set([
     'the',
@@ -408,7 +413,7 @@ export function auditHarnessSurfaces(
   const codexHooksPath = path.join(root, '.codex', 'hooks.json');
   if (fs.existsSync(codexHooksPath)) {
     try {
-      const raw = fs.readFileSync(codexHooksPath, 'utf8');
+      const raw = fs.readFileSync(codexHooksPath, 'utf8').replace(/^\uFEFF/, '');
       let parsed: any;
       try {
         parsed = JSON.parse(raw);
@@ -812,6 +817,64 @@ export function auditHarnessSurfaces(
     }
   }
 
+  // 7. Windows cmd /c quote-safety check on EvoKernel-managed Antigravity hooks.json surfaces
+  const hooksCandidates: Array<{ fullPath: string; displayPath: string }> = [
+    { fullPath: path.join(root, '.agents', 'hooks.json'), displayPath: '.agents/hooks.json' },
+    { fullPath: path.join(root, 'hooks.json'), displayPath: 'hooks.json' },
+    {
+      fullPath: path.join(root, '.agents', 'plugins', 'evo-kernel', 'hooks.json'),
+      displayPath: '.agents/plugins/evo-kernel/hooks.json',
+    },
+  ];
+  if (options.includeGlobal) {
+    const globalHome = path.resolve(options.globalHomeDir || os.homedir());
+    hooksCandidates.push({
+      fullPath: path.join(globalHome, '.gemini', 'config', 'plugins', 'evo-kernel', 'hooks.json'),
+      displayPath: '~/.gemini/config/plugins/evo-kernel/hooks.json',
+    });
+  }
+  const seenHooksFiles = new Set<string>();
+  const isCaseInsensitivePath = process.platform === 'win32' || process.platform === 'darwin';
+  for (const cand of hooksCandidates) {
+    const resolved = path.resolve(cand.fullPath);
+    const seenKey = isCaseInsensitivePath ? resolved.toLowerCase() : resolved;
+    if (seenHooksFiles.has(seenKey) || !fs.existsSync(resolved)) continue;
+    seenHooksFiles.add(seenKey);
+    try {
+      if (!fs.statSync(resolved).isFile()) continue;
+      const raw = fs.readFileSync(resolved, 'utf8').replace(/^\uFEFF/, '');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const reminder = parsed?.['evo-evolution-reminder'];
+      if (!reminder || typeof reminder !== 'object' || Array.isArray(reminder)) continue;
+      const quotedEvents: string[] = [];
+      for (const [evName, entries] of Object.entries(reminder as Record<string, unknown>)) {
+        if (!Array.isArray(entries)) continue;
+        for (const entry of entries) {
+          if (
+            entry &&
+            typeof entry === 'object' &&
+            typeof (entry as Record<string, unknown>).command === 'string' &&
+            ((entry as Record<string, unknown>).command as string).includes('"')
+          ) {
+            quotedEvents.push(evName);
+            break;
+          }
+        }
+      }
+      if (quotedEvents.length > 0) {
+        violations.push({
+          harness: 'antigravity',
+          displayPath: cand.displayPath,
+          severity: 'warning',
+          code: 'ANTIGRAVITY_HOOK_UNSAFE_QUOTES',
+          message: `${cand.displayPath} evo-evolution-reminder (${quotedEvents.join(', ')}) contains embedded double quotes (") which break under Windows cmd /c; use quote-free hook commands (re-run \`evo init\`).`,
+        });
+      }
+    } catch {
+      // ignore unreadable or non-JSON hooks files
+    }
+  }
+
   return violations;
 }
 
@@ -847,7 +910,10 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   const files: AuditedFileMetric[] = [];
   const budgetViolations: AuditedFileMetric[] = [];
   const domainLeaks: DomainLeakWarning[] = [];
-  const fileContents = new Map<string, { meta: AuditedFileMetric; raw: string; tokens: Set<string> }>();
+  const fileContents = new Map<
+    string,
+    { meta: AuditedFileMetric; raw: string; normalizedHash: string; tokens: Set<string> }
+  >();
 
   for (const entry of entries) {
     try {
@@ -856,8 +922,12 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
       continue;
     }
     const raw = fs.readFileSync(entry.fullPath, 'utf8');
-    const markerMatch = raw.match(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/);
-    const textToMeasure = markerMatch ? markerMatch[0] : raw;
+    const rawWithoutProfile = raw.replace(
+      /<!-- EVO:PROFILE:START -->[\s\S]*?<!-- EVO:PROFILE:END -->/g,
+      ''
+    );
+    const markerMatch = rawWithoutProfile.match(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/);
+    const textToMeasure = markerMatch ? markerMatch[0] : rawWithoutProfile;
     const tokens = estimateTokens(textToMeasure);
     const effectiveLimit = markerMatch
       ? managedBlockBudgetLimit
@@ -867,7 +937,9 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     const overBudget = tokens > effectiveLimit;
     const totalTokens = estimateTokens(raw);
     const evoSeedTokens = markerMatch ? tokens : 0;
-    const userStaticTokens = markerMatch ? estimateTokens(raw.replace(markerMatch[0], '')) : tokens;
+    const userStaticTokens = markerMatch
+      ? estimateTokens(rawWithoutProfile.replace(markerMatch[0], ''))
+      : tokens;
     const metric: AuditedFileMetric = {
       scope: entry.scope,
       kind: entry.kind,
@@ -886,10 +958,18 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
       budgetViolations.push(metric);
     }
 
-    const strippedManaged = raw.replace(/<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/g, '');
+    const strippedManaged = rawWithoutProfile.replace(
+      /<!-- EVO:START -->[\s\S]*?<!-- EVO:END -->/g,
+      ''
+    );
+    const normalizedHash = crypto
+      .createHash('sha256')
+      .update(raw.replace(/^\uFEFF/, '').replace(/\r?\n/g, '\n').trim())
+      .digest('hex');
     fileContents.set(entry.displayPath, {
       meta: metric,
       raw: strippedManaged,
+      normalizedHash,
       tokens: tokenizeContentForOverlap(strippedManaged),
     });
 
@@ -934,6 +1014,30 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   // Redundancy overlap analysis between rule files and skill files (or across duplicate rule files)
   const redundancyOverlaps: RedundancyOverlap[] = [];
   const items = Array.from(fileContents.values());
+  const isDistributionRepo =
+    fs.existsSync(path.join(root, 'plugin.json')) ||
+    fs.existsSync(path.join(root, 'templates', 'seed-evo'));
+
+  const isManagedDistCopyOfGlobalSeed = (
+    itemA: (typeof items)[number],
+    itemB: (typeof items)[number]
+  ): boolean => {
+    if (!isDistributionRepo || itemA.meta.scope === itemB.meta.scope) return false;
+    const wsItem = itemA.meta.scope === 'workspace' ? itemA : itemB;
+    const glItem = itemA.meta.scope === 'global' ? itemA : itemB;
+    const wsRel = path.relative(root, wsItem.meta.fullPath).replace(/\\/g, '/');
+    const isDistSurface =
+      wsRel.startsWith('.evo/rules/') ||
+      wsRel.startsWith('.evo/skills/') ||
+      wsRel.startsWith('skills/') ||
+      wsRel.startsWith('rules/');
+    if (!isDistSurface) return false;
+    const glRel = path.relative(globalStorage.evoDir, glItem.meta.fullPath).replace(/\\/g, '/');
+    if (glRel.startsWith('..') || path.isAbsolute(glRel)) return false;
+    if (wsItem.normalizedHash === glItem.normalizedHash) return true;
+    const wsSeedRel = wsRel.startsWith('.evo/') ? wsRel.slice('.evo/'.length) : wsRel;
+    return wsSeedRel === glRel;
+  };
 
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
@@ -943,6 +1047,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
       const isRuleSkillPair = a.meta.kind !== b.meta.kind;
       const isGlobalLocalPair = a.meta.scope !== b.meta.scope;
       if (!isRuleSkillPair && !isGlobalLocalPair) continue;
+      if (isManagedDistCopyOfGlobalSeed(a, b)) continue;
       if (a.tokens.size < 8 || b.tokens.size < 8) continue;
 
       const shared: string[] = [];
@@ -1125,7 +1230,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
       `);
       const rows = stmt.all() as Array<{
         id: string;
-        kind: 'rule' | 'skill' | 'tool' | 'memory';
+        kind: 'rule' | 'skill' | 'tool' | 'memory' | 'preference';
         helped_count: number;
         hurt_count: number;
         contested_count: number;

@@ -448,8 +448,12 @@ export function stripJsonComments(text: string): string {
   return out;
 }
 
+export function parseJsonStripBom(raw: string): any {
+  return JSON.parse(raw.replace(/^\uFEFF/, ''));
+}
+
 export function parseJsonc(text: string, filePath?: string): any {
-  const stripped = stripJsonComments(text);
+  const stripped = stripJsonComments(text.replace(/^\uFEFF/, ''));
   try {
     return JSON.parse(stripped);
   } catch (err: any) {
@@ -836,7 +840,7 @@ export function upsertClaudeSettings(filePath: string, workspaceRoot: string): v
   let settings: Record<string, unknown> = {};
   if (fs.existsSync(filePath)) {
     try {
-      const parsedSettings: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const parsedSettings: unknown = parseJsonStripBom(fs.readFileSync(filePath, 'utf8'));
       if (!parsedSettings || typeof parsedSettings !== 'object' || Array.isArray(parsedSettings)) {
         throw new Error('settings root is not a JSON object');
       }
@@ -906,7 +910,7 @@ export function removeClaudeSettings(filePath: string): boolean {
   if (!fs.existsSync(filePath)) return false;
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
-    const settings = JSON.parse(raw) as Record<string, unknown>;
+    const settings = parseJsonStripBom(raw) as Record<string, unknown>;
     let modified = false;
 
     if (settings.hooks && typeof settings.hooks === 'object') {
@@ -1004,7 +1008,7 @@ export function syncDeclaredPreToolHooks(workspaceRoot: string): void {
       let settings: Record<string, unknown> = {};
       if (fs.existsSync(targetSettingsPath)) {
         try {
-          settings = JSON.parse(fs.readFileSync(targetSettingsPath, 'utf8')) as Record<string, unknown>;
+          settings = parseJsonStripBom(fs.readFileSync(targetSettingsPath, 'utf8')) as Record<string, unknown>;
         } catch {
           // Corrupt/unparseable user settings: never overwrite (data-loss guard).
           return;
@@ -1115,7 +1119,7 @@ export function syncDeclaredPreToolHooks(workspaceRoot: string): void {
       (() => {
         try {
           const raw = fs.readFileSync(claudeLocalSettingsPath, 'utf8');
-          const parsedLocal = JSON.parse(raw) as Record<string, unknown>;
+          const parsedLocal = parseJsonStripBom(raw) as Record<string, unknown>;
           if (
             parsedLocal &&
             typeof parsedLocal === 'object' &&
@@ -1154,7 +1158,7 @@ export function syncDeclaredPreToolHooks(workspaceRoot: string): void {
         if (fs.existsSync(codexHooksPath)) {
           // Corrupt/unparseable or non-object user file: never overwrite (data-loss guard).
           // JSON.parse errors propagate to the outer catch, aborting the Codex sync.
-          parsed = JSON.parse(fs.readFileSync(codexHooksPath, 'utf8'));
+          parsed = parseJsonStripBom(fs.readFileSync(codexHooksPath, 'utf8'));
           if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
             throw new Error('codex hooks.json is not a JSON object');
           }
@@ -1193,7 +1197,7 @@ export function syncDeclaredPreToolHooks(workspaceRoot: string): void {
       } else if (fs.existsSync(codexHooksPath)) {
         // Unparseable user file: JSON.parse throws to the outer catch so the file is
         // neither rewritten nor unlinked (data-loss guard).
-        const parsed = JSON.parse(fs.readFileSync(codexHooksPath, 'utf8')) as Record<string, unknown>;
+        const parsed = parseJsonStripBom(fs.readFileSync(codexHooksPath, 'utf8')) as Record<string, unknown>;
         let modified = false;
         if (
           parsed &&
@@ -1866,7 +1870,7 @@ export class CodexAdapter implements HarnessAdapter {
     if (fs.existsSync(codexHooksPath)) {
       try {
         const raw = fs.readFileSync(codexHooksPath, 'utf8');
-        const parsed = JSON.parse(raw);
+        const parsed = parseJsonStripBom(raw);
         let modified = false;
         if (parsed && typeof parsed === 'object' && parsed.hooks && typeof parsed.hooks === 'object') {
           const hooks = parsed.hooks as Record<string, unknown>;
@@ -2053,7 +2057,7 @@ export function upsertAntigravityHooks(ws: string): string[] {
   }
 
   const makeHookCmd = (event: 'PreInvocation' | 'Stop') =>
-    `node -e "const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),url=require('node:url'),p=[path.resolve('scripts/antigravity_hook.mjs'),path.resolve('.agents/scripts/antigravity_hook.mjs'),path.join(os.homedir(),'.gemini','config','plugins','evo-kernel','scripts','antigravity_hook.mjs'),path.join(os.homedir(),'.gemini','extensions','evo-kernel','scripts','antigravity_hook.mjs')].find(f=>fs.existsSync(f));if(p){process.argv=[process.argv[0],p,'${event}'];import(url.pathToFileURL(p).href);}else{process.stdout.write('{}\\n');}"`;
+    `node .agents/scripts/antigravity_hook.mjs ${event} || node scripts/antigravity_hook.mjs ${event}`;
 
   hooksObj['evo-evolution-reminder'] = {
     PreInvocation: [
@@ -2092,7 +2096,7 @@ export function removeAntigravityHooks(ws: string): string[] {
   const hooksPath = path.join(ws, '.agents', 'hooks.json');
   if (fs.existsSync(hooksPath)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+      const parsed = parseJsonStripBom(fs.readFileSync(hooksPath, 'utf8'));
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'evo-evolution-reminder' in parsed) {
         delete (parsed as Record<string, unknown>)['evo-evolution-reminder'];
         if (Object.keys(parsed).length === 0) {

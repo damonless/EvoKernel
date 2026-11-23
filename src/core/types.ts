@@ -1,6 +1,13 @@
-export type EvoKind = 'rule' | 'skill' | 'tool' | 'memory';
+export type EvoKind = 'rule' | 'skill' | 'tool' | 'memory' | 'preference';
 
 export type CapabilityKind = EvoKind;
+
+export type PreferenceCategory =
+  | 'style'
+  | 'formatting'
+  | 'communication'
+  | 'workflow'
+  | 'knowledge';
 
 export type ConfidenceLevel = 'high' | 'medium' | 'low' | 'confounded';
 
@@ -127,6 +134,7 @@ export interface ExternalToolDefinition {
 export interface EvoConfig {
   version: string;
   maxCoreRuleTokens: number;
+  maxGlobalProfileTokens?: number;
   maxScopedRulesPerBucket: number;
   maxTotalScopedRules: number;
   maxL0SummaryChars: number;
@@ -137,6 +145,24 @@ export interface EvoConfig {
   externalServers?: Record<string, ExternalMcpServerConfig>;
   allowNetworkTools?: boolean;
   anonExcludeIds?: string[];
+}
+
+export interface EvoPreference {
+  id: string;
+  title: string;
+  l0_summary: string;
+  category: PreferenceCategory;
+  always_on: boolean;
+  content: string;
+  tokens: number;
+  tags: string[];
+  origin: string;
+  supersedes_id?: string;
+  enabled?: boolean;
+  review_status?: 'pending' | 'approved';
+  visibility?: 'local' | 'public';
+  created_at: string;
+  updated_at: string;
 }
 
 export interface EvoRule {
@@ -259,6 +285,10 @@ export interface ProposalPayload {
   target_symbols?: string[];
   created_branch?: string;
   created_commit?: string;
+  // For preferences / global routing:
+  scope?: 'project' | 'global';
+  category?: PreferenceCategory;
+  always_on?: boolean;
 }
 
 export interface TelemetryRecord {
@@ -319,6 +349,7 @@ export interface GatekeeperResult {
     | 'ERR_SYMBOL_NOT_FOUND'
     | 'ERR_DUPLICATE_CAPABILITY'
     | 'ERR_BUDGET_EXCEEDED'
+    | 'ERR_PROFILE_BUDGET_EXCEEDED'
     | 'ERR_SCOPED_BUCKET_FULL';
   message: string;
   warning?: string;

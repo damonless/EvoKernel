@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 const workspace = process.env.EVO_WORKSPACE || process.cwd();
@@ -69,8 +70,24 @@ function scanDirectory(dir, depth = 0, stats = { files: 0, lines: 0, skippedCont
 }
 
 if (isSelfTest) {
-  console.log(JSON.stringify({ self_test: 'passed', scanned_files: 0 }));
-  process.exit(0);
+  const tmpFixture = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-metrics-selftest-'));
+  try {
+    fs.writeFileSync(path.join(tmpFixture, 'sample.txt'), 'line1\nline2\n', 'utf8');
+    const selfRes = scanDirectory(tmpFixture);
+    if (selfRes.files < 1) {
+      throw new Error(`Expected self-test scanDirectory files >= 1, got ${selfRes.files}`);
+    }
+    console.log(
+      JSON.stringify({
+        self_test: 'passed',
+        scanned_files: selfRes.files,
+        scanned_lines: selfRes.lines,
+      })
+    );
+    process.exit(0);
+  } finally {
+    fs.rmSync(tmpFixture, { recursive: true, force: true });
+  }
 }
 const result = scanDirectory(workspace);
 console.log(JSON.stringify({ workspace: path.basename(workspace), ...result }, null, 2));

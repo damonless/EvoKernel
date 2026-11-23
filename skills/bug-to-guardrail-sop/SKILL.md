@@ -21,7 +21,7 @@ updated_at: "2026-10-26T06:20:00.000Z"
 2. **Pre-Upgrade Inspection Requirement**:
    - If an existing rule already addresses the target subsystem and should be upgraded, **ALWAYS** call `evo_inspect(supersedes_id, "L2")` first to retrieve all existing actionable clauses before authoring the new proposal.
 3. **Enforce SSOT & Decide Modality (`memory` vs `rule` vs `tool`)**:
-   - **Concrete Bug Case (`kind: "memory"`)**: If the fix involves specific variable/macro names, state-machine branches, or physical thresholds (e.g., `wBatBusSw`, `>1500VA`, `26.5V`), crystallize an **Episodic Memory** (`symptom`, `root_cause`, `solution`, `target_symbols`) at **0 core token cost** with live AST grounding.
+   - **Concrete Bug Case (`kind: "memory"`)**: If the fix involves specific variable/macro names, state-machine branches, or physical thresholds (e.g., `sensorFlag`, `>1000ms`, `retryLimit=3`), crystallize an **Episodic Memory** (`symptom`, `root_cause`, `solution`, `target_symbols`) at **0 core token cost** with live AST grounding.
    - **Programmatic Check (`kind: "tool"`)**: If the failure can be caught deterministically by a script, register a Micro-Tool with `--self-test` verification.
    - **1-Level-Up Methodology (`kind: "rule"`)**: Propose a Rule only when the root cause generalizes across >=2 modules/scenarios (`transfer_scenarios`). Follow Gate 1.5 decoupling:
      - Use a wildcard `scope_glob` (never a single literal file).

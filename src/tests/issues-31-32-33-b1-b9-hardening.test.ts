@@ -1112,14 +1112,24 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
     }
 
     // Live agy-config-auditor verifies 0 broken memory symbols across split facades
-    const aud = spawnSync(process.execPath, [AUDITOR_SCRIPT, '--self-test'], {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      env: { ...process.env, EVO_WORKSPACE: process.cwd(), EVO_SELF_TEST: '1' },
-    });
-    assert.equal(aud.status, 0, `agy-config-auditor failed: ${aud.stderr}`);
-    const parsed = JSON.parse(aud.stdout);
-    assert.equal(parsed.status, 'HEALTHY');
-    assert.equal(parsed.summary.broken_memory_symbols, 0);
+    const audTmp = createTempDir('evo-b9-aud-');
+    try {
+      const aud = spawnSync(process.execPath, [AUDITOR_SCRIPT, '--self-test'], {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          EVO_WORKSPACE: process.cwd(),
+          EVO_SELF_TEST: '1',
+          EVO_GLOBAL_DIR: path.join(audTmp, 'global'),
+        },
+      });
+      assert.equal(aud.status, 0, `agy-config-auditor failed: ${aud.stderr}\n${aud.stdout}`);
+      const parsed = JSON.parse(aud.stdout);
+      assert.equal(parsed.status, 'HEALTHY');
+      assert.equal(parsed.summary.broken_memory_symbols, 0);
+    } finally {
+      safeCleanup(audTmp);
+    }
   });
 });

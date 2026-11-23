@@ -22,6 +22,7 @@ import {
   EvoGatekeeper,
   captureWorkspaceMutationSignature,
   captureWorkspaceRollbackSnapshot,
+  isGlobalFallbackRoot,
   parseSkillSectionsFromMarkdown,
   restoreWorkspaceFromSnapshot,
 } from '../core/gatekeeper.js';
@@ -35,7 +36,7 @@ import {
   verifyMemoryFreshnessAsync,
 } from '../core/memory.js';
 import { executeSandboxedScriptAsync } from '../core/sandbox.js';
-import { syncManagedRuleBlocks } from '../cli/init.js';
+import { syncGlobalUserProfile, syncManagedRuleBlocks } from '../cli/init.js';
 import { isSubpathOf } from '../mcp/handlers.js';
 
 // --- Ambient Structural Types for VS Code API (Zero Runtime Dependencies) ---
@@ -497,8 +498,8 @@ export async function handleWebviewAction(
       case 'archive-item': {
         const rawKind = typeof params?.kind === 'string' ? params.kind.trim().toLowerCase() : '';
         const rawId = typeof params?.id === 'string' ? params.id.trim() : '';
-        if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind)) {
-          return { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory` };
+        if (!['rule', 'skill', 'tool', 'memory', 'preference'].includes(rawKind)) {
+          return { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory|preference` };
         }
         if (!rawId) return { ok: false, error: 'Bad Request: Missing item id' };
 
@@ -512,7 +513,11 @@ export async function handleWebviewAction(
         const archived = storage.archiveCapability(cleanId, rawKind as EvoKind, reason);
         if (!archived) return { ok: false, error: `Not Found: ${rawKind} "${cleanId}" not found` };
 
-        if (rawKind !== 'memory') {
+        if (rawKind === 'preference') {
+          if (isGlobalFallbackRoot(ws)) {
+            syncGlobalUserProfile(ws);
+          }
+        } else if (rawKind !== 'memory') {
           syncManagedRuleBlocks(ws);
         }
 
@@ -530,8 +535,8 @@ export async function handleWebviewAction(
       case 'restore-item': {
         const rawKind = typeof params?.kind === 'string' ? params.kind.trim().toLowerCase() : '';
         const rawId = typeof params?.id === 'string' ? params.id.trim() : '';
-        if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind)) {
-          return { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory` };
+        if (!['rule', 'skill', 'tool', 'memory', 'preference'].includes(rawKind)) {
+          return { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory|preference` };
         }
         if (!rawId) return { ok: false, error: 'Bad Request: Missing item id' };
 
@@ -542,7 +547,11 @@ export async function handleWebviewAction(
           return { ok: false, error: `Not Found: Archived ${rawKind} "${cleanId}" not found` };
         }
 
-        if (rawKind !== 'memory') {
+        if (rawKind === 'preference') {
+          if (isGlobalFallbackRoot(ws)) {
+            syncGlobalUserProfile(ws);
+          }
+        } else if (rawKind !== 'memory') {
           syncManagedRuleBlocks(ws);
         }
         const telem = new EvoTelemetry(storage);
@@ -570,13 +579,14 @@ export async function handleWebviewAction(
 
         const storage = new EvoStorage(ws);
         let touchedManagedCatalog = false;
+        let touchedProfile = false;
         let updatedCount = 0;
         const now = new Date().toISOString();
 
         for (const entry of batchItems) {
           const rawKind = typeof entry?.kind === 'string' ? entry.kind.trim().toLowerCase() : '';
           const rawId = typeof entry?.id === 'string' ? entry.id.trim() : '';
-          if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind) || !rawId) {
+          if (!['rule', 'skill', 'tool', 'memory', 'preference'].includes(rawKind) || !rawId) {
             return { ok: false, error: 'Bad Request: Invalid kind or id in toggle-enabled' };
           }
           const cleanId = sanitizeId(rawId);
@@ -628,11 +638,35 @@ export async function handleWebviewAction(
             }
             storage.saveMemory({ ...mem, enabled: targetEnabled, updated_at: now });
             updatedCount++;
+          } else if (rawKind === 'preference') {
+            const pref = storage.getPreference(cleanId);
+            if (!pref) {
+              if (batchItems.length === 1) return { ok: false, error: `Not Found: Preference "${cleanId}" not found` };
+              continue;
+            }
+            if (targetEnabled && pref.always_on !== false && pref.enabled === false) {
+              const { totalTokens } = storage.getProfileTokenUsage();
+              const maxProfileBudget = storage.getConfig()?.maxGlobalProfileTokens ?? 500;
+              if (totalTokens + pref.tokens > maxProfileBudget) {
+                return {
+                  ok: false,
+                  error: `Bad Request: Global profile budget exceeded (${totalTokens + pref.tokens}/${maxProfileBudget} tokens)`,
+                  code: 'ERR_PROFILE_BUDGET_EXCEEDED',
+                  details: { currentTokens: totalTokens, candidateTokens: pref.tokens, maxTokens: maxProfileBudget },
+                };
+              }
+            }
+            storage.savePreference({ ...pref, enabled: targetEnabled, updated_at: now });
+            touchedProfile = true;
+            updatedCount++;
           }
         }
 
         if (touchedManagedCatalog) {
           syncManagedRuleBlocks(ws);
+        }
+        if (touchedProfile && isGlobalFallbackRoot(ws)) {
+          syncGlobalUserProfile(ws);
         }
         const telem = new EvoTelemetry(storage);
         try { telem.syncFromDisk(true); } finally { telem.close(); }
@@ -1251,7 +1285,7 @@ export async function activate(
             return;
           }
           const norm = String(f).replace(/\\/g, '/');
-          if (norm.startsWith('.cache') || norm.includes('telemetry.db') || norm.startsWith('optimize')) {
+          if (norm.startsWith('.cache') || norm.includes('telemetry.db')) {
             return;
           }
           scheduleSnapshotPush();

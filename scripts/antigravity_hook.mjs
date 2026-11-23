@@ -20,8 +20,11 @@ import { fileURLToPath } from 'node:url';
 const TAIL_BYTES = 128 * 1024;
 const COOLDOWN_STEPS = 4;
 
+const STYLE_PREFERENCE_REGEX =
+  /(?:太啰嗦|稍微精简|不美观|格式不对|排版|语言风格|文风|以后都这样|不要用表格)/i;
+
 const CORRECTION_REGEX =
-  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,])/i;
+  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|排版|语言风格|文风|以后都这样|不要用表格|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,])/i;
 
 const CMD_ERROR_OUTPUT_REGEX =
   /(?:Traceback \(most recent call last\)|SyntaxError:|TypeError:|ValueError:|AttributeError:|KeyError:|ModuleNotFoundError:|ImportError:|PermissionError:|FileNotFoundError:|Command exited with code [1-9]|Exception calling|At line:\d+ char:\d+)/i;
@@ -141,14 +144,18 @@ function isSameDbPath(a, b) {
   return ra === rb;
 }
 
+function parseJsonStripBom(raw) {
+  return JSON.parse(String(raw).replace(/^\uFEFF/, ''));
+}
+
 function readStdinJson(initialTimeoutMs = 200, chunkTimeoutMs = 300) {
   try {
     if (process.stdin.isTTY) return Promise.resolve({});
     const stat = fs.fstatSync(0);
     if (stat.isFile()) {
       if (stat.size === 0) return Promise.resolve({});
-      const raw = fs.readFileSync(0, 'utf8').trim();
-      return Promise.resolve(raw ? JSON.parse(raw) : {});
+      const raw = fs.readFileSync(0, 'utf8').replace(/^\uFEFF/, '').trim();
+      return Promise.resolve(raw ? parseJsonStripBom(raw) : {});
     }
   } catch {
     // fstat failed, proceed with stream
@@ -166,7 +173,8 @@ function readStdinJson(initialTimeoutMs = 200, chunkTimeoutMs = 300) {
         try { process.stdin.pause(); } catch {}
         try { process.stdin.destroy(); } catch {}
         try {
-          resolve(raw && raw.trim() ? JSON.parse(raw.trim()) : {});
+          const cleaned = raw ? raw.replace(/^\uFEFF/, '').trim() : '';
+          resolve(cleaned ? parseJsonStripBom(cleaned) : {});
         } catch {
           resolve({});
         }
@@ -181,7 +189,8 @@ function readStdinJson(initialTimeoutMs = 200, chunkTimeoutMs = 300) {
     process.stdin.on('data', (chunk) => {
       data += chunk;
       try {
-        const parsed = JSON.parse(data.trim());
+        const cleaned = data.replace(/^\uFEFF/, '').trim();
+        const parsed = parseJsonStripBom(cleaned);
         if (!settled) {
           settled = true;
           if (timer) clearTimeout(timer);
@@ -230,10 +239,10 @@ function readTranscriptTailSteps(transcriptPath) {
     }
     const steps = [];
     for (const line of rawLines) {
-      const trimmed = line.trim();
+      const trimmed = line.replace(/^\uFEFF/, '').trim();
       if (!trimmed.startsWith('{')) continue;
       try {
-        steps.push(JSON.parse(trimmed));
+        steps.push(parseJsonStripBom(trimmed));
       } catch {
         // Ignore malformed/truncated JSONL lines
       }
@@ -258,13 +267,13 @@ function loadHookStateSafe(statePath) {
     try {
       if (!fs.existsSync(statePath)) return { state: {}, parseFailed: false };
       const stat = fs.statSync(statePath);
-      const raw = fs.readFileSync(statePath, 'utf8');
+      const raw = fs.readFileSync(statePath, 'utf8').replace(/^\uFEFF/, '');
       if (!raw.trim()) {
         if (stat.size > 0) parseFailed = true;
         if (attempt < 2) sleepSyncMs(10);
         continue;
       }
-      const parsed = JSON.parse(raw);
+      const parsed = parseJsonStripBom(raw);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         return { state: parsed, parseFailed: false };
       }
@@ -621,6 +630,12 @@ function findSingleActiveChildTelemetryDb(candidateRoots) {
   return activeDbs.length === 1 ? activeDbs[0] : '';
 }
 
+function resolveWorkspaceCwd(rawCwd) {
+  const norm = normalizeCandidatePath(rawCwd);
+  if (!norm) return '';
+  return path.basename(norm) === '.agents' ? path.dirname(norm) : norm;
+}
+
 function resolveTelemetryDbsForStop(input, steps = []) {
   const rawCandidates = [
     ...(Array.isArray(input.workspacePaths) ? input.workspacePaths : []),
@@ -628,7 +643,7 @@ function resolveTelemetryDbsForStop(input, steps = []) {
     input.workspace,
     input.workspaceRoot,
     input.workspace_root,
-    input.cwd,
+    resolveWorkspaceCwd(input.cwd),
   ];
   const seen = new Set();
   const normalizedCandidates = [];
@@ -653,6 +668,16 @@ function resolveTelemetryDbsForStop(input, steps = []) {
   }
   if (!localDbPath && normalizedCandidates.length > 0) {
     localDbPath = findSingleActiveChildTelemetryDb(normalizedCandidates);
+  }
+  if (!localDbPath && normalizedCandidates.length === 0) {
+    const fallbackRoot = resolveWorkspaceCwd(process.cwd());
+    if (fallbackRoot) {
+      normalizedCandidates.push(fallbackRoot);
+      localDbPath = findNearestEvoTelemetryDb(fallbackRoot);
+      if (!localDbPath) {
+        localDbPath = findSingleActiveChildTelemetryDb([fallbackRoot]);
+      }
+    }
   }
 
   const globalHome = process.env.EVO_GLOBAL_DIR
@@ -1853,11 +1878,23 @@ Options:
     );
   }
 
-  const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮根因诊断确认（含零代码修改的只读白盒排查）、假说证伪纠偏、代码修复或交付物验证后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，多变量修改缺乏因果隔离时使用 memory 或提供 contrastive_evidence，通用脚本沉淀为 tool，单点故障使用 memory），并在回复末尾输出 🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)。`;
+  const isStylePreferenceCue =
+    (isNewCorrection || isPendingCorrectionAfterWork) &&
+    STYLE_PREFERENCE_REGEX.test(latestUserContent);
+  const preferenceCue = isStylePreferenceCue
+    ? '；若涉及跨项目通用的个人表达/排版/格式偏好，请调用 evo_propose(kind: "preference", scope: "global") 沉淀至全局 Profile Card'
+    : '';
+
+  const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮根因诊断确认（含零代码修改的只读白盒排查）、假说证伪纠偏、代码修复或交付物验证后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，多变量修改缺乏因果隔离时使用 memory 或提供 contrastive_evidence，通用脚本沉淀为 tool，单点故障使用 memory${preferenceCue}），并在回复末尾输出 🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)。`;
+
+  const stepPayload =
+    process.env.EVO_HOOK_STEP_FORMAT === 'systemMessage'
+      ? { systemMessage: { systemMessage: ephemeralMessage } }
+      : { ephemeralMessage };
 
   process.stdout.write(
     JSON.stringify({
-      injectSteps: [{ ephemeralMessage }],
+      injectSteps: [stepPayload],
     }) + '\n'
   );
 }

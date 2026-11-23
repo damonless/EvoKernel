@@ -37,6 +37,43 @@ export function resolvePythonBinary(): string {
   return cachedPythonBinary;
 }
 
+export async function resolvePythonBinaryAsync(): Promise<string> {
+  if (cachedPythonBinary) return cachedPythonBinary;
+  const candidates = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+  for (const bin of candidates) {
+    const ok = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      let proc: ReturnType<typeof spawn> | null = null;
+      let timer: NodeJS.Timeout | null = null;
+      const done = (result: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve(result);
+      };
+      try {
+        proc = spawn(bin, ['--version'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        timer = setTimeout(() => {
+          void killProcessTreeAsync(proc?.pid).finally(() => done(false));
+        }, 2000);
+        proc.on('error', () => done(false));
+        proc.on('close', (code) => done(code === 0));
+      } catch {
+        done(false);
+      }
+    });
+    if (ok) {
+      cachedPythonBinary = bin;
+      return bin;
+    }
+  }
+  cachedPythonBinary = candidates[0];
+  return cachedPythonBinary;
+}
+
 export function checkScriptSyntax(
   runtime: ScriptRuntime,
   scriptCode: string
@@ -199,8 +236,9 @@ export async function checkScriptSyntaxAsync(
     }
 
     if (runtime === 'python') {
+      const pythonBin = await resolvePythonBinaryAsync();
       return await spawnSyntaxCheckAsync(
-        resolvePythonBinary(),
+        pythonBin,
         ['-m', 'py_compile', scriptPath],
         4000,
         'Python syntax check failed',
@@ -416,7 +454,8 @@ function resolveSandboxInvocation(
   runtimeOrScriptPath: ScriptRuntime | string,
   scriptPathOrArgs?: string | Record<string, unknown> | unknown[],
   argsOrOptions?: Record<string, unknown> | unknown[] | SandboxExecutionOptions,
-  maybeOptions?: SandboxExecutionOptions
+  maybeOptions?: SandboxExecutionOptions,
+  pythonBinOverride?: string
 ): {
   cmd: string;
   cmdArgs: string[];
@@ -466,7 +505,7 @@ function resolveSandboxInvocation(
       cmdArgs = [scriptPath, ...cliArgs];
       break;
     case 'python':
-      cmd = resolvePythonBinary();
+      cmd = pythonBinOverride || resolvePythonBinary();
       cmdArgs = [scriptPath, ...cliArgs];
       break;
     case 'powershell':
@@ -496,6 +535,7 @@ function resolveSandboxInvocation(
     EVO_SANDBOX: '1',
     EVO_SELF_TEST: options.selfTest ? '1' : '0',
     EVO_WORKSPACE: options.workspaceRoot ?? cwd,
+    EVO_PACKAGE_ROOT: path.resolve(import.meta.dirname, '..', '..'),
   };
 
   if (typeof options.tmpDir === 'string' && options.tmpDir.trim().length > 0) {
@@ -592,17 +632,24 @@ export function executeSandboxedScript(
   );
 }
 
-export function executeSandboxedScriptAsync(
+export async function executeSandboxedScriptAsync(
   runtimeOrScriptPath: ScriptRuntime | string,
   scriptPathOrArgs?: string | Record<string, unknown> | unknown[],
   argsOrOptions?: Record<string, unknown> | unknown[] | SandboxExecutionOptions,
   maybeOptions?: SandboxExecutionOptions
 ): Promise<SandboxExecutionResult> {
+  const isPythonRuntime =
+    runtimeOrScriptPath === 'python' ||
+    (!(['node', 'python', 'powershell', 'bash'] as string[]).includes(String(runtimeOrScriptPath)) &&
+      path.extname(String(runtimeOrScriptPath)).toLowerCase() === '.py');
+  const pythonBin = isPythonRuntime ? await resolvePythonBinaryAsync() : undefined;
+
   const { cmd, cmdArgs, cwd, timeoutMs, env } = resolveSandboxInvocation(
     runtimeOrScriptPath,
     scriptPathOrArgs,
     argsOrOptions,
-    maybeOptions
+    maybeOptions,
+    pythonBin
   );
 
   return new Promise<SandboxExecutionResult>((resolve) => {

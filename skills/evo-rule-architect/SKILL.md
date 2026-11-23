@@ -18,12 +18,12 @@ updated_at: "2026-10-21T15:16:27.268Z"
 
 ## L2 SOP
 1. **Stage 1 — Global Rule Purification (全局提纯)**:
-   - Strip all language-specific rules (`*.c`, `*.ts`, `*.py`), tool-specific routing (`CodeGraph`, `AOCI`), and business domain constraints from global files (`~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`).
+   - Strip all language-specific file globs, code-indexing tool routing, and business domain constraints from global files (`~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`).
    - Retain only: (a) EvoKernel L0 Meta-Rule Seed, (b) universal epistemic & anti-sycophancy protocol, and (c) concise communication style.
 2. **Stage 2 — Global Skill Desensitization (全局技能脱敏)**:
    - Scan global `SKILL.md` files for project-specific macro names, repo paths, or domain terms and replace them with domain-neutral placeholders.
 3. **Stage 3 — Local Demotion & Scoped Splitting (局部下沉与 Scoped 拆分)**:
-   - Move code workflow rules (e.g., `CodeGraph` threshold policy) into the project-local `AGENTS.md`.
+   - Move code workflow and code-indexing tool rules into the project-local `AGENTS.md`.
    - Convert domain/language-specific guardrails into on-demand scoped rules via `evo_propose(kind: "rule", core: false, scope_glob: "...")`.
 4. **Stage 4 — Local Skill STE-Lite Conversion (局部技能 STE-Lite 化)**:
    - Remove paragraphs in local `.agents/skills/*/SKILL.md` that duplicate `AGENTS.md` invariants.

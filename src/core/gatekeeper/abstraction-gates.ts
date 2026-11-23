@@ -319,7 +319,8 @@ function capabilityExistsInDirectory(dir: string, id: string): boolean {
       fs.existsSync(path.join(c, 'skills', id, 'SKILL.md')) ||
       fs.existsSync(path.join(c, 'tools', id)) ||
       fs.existsSync(path.join(c, 'tools', id, 'manifest.json')) ||
-      fs.existsSync(path.join(c, 'memories', `${id}.md`))
+      fs.existsSync(path.join(c, 'memories', `${id}.md`)) ||
+      fs.existsSync(path.join(c, 'preferences', `${id}.md`))
     ) {
       return true;
     }
@@ -353,7 +354,8 @@ export function validateCapabilityReferences(
       storage.getRule(id) ||
       storage.getSkill(id) ||
       storage.getTool(id) ||
-      storage.getMemory(id)
+      storage.getMemory(id) ||
+      storage.getPreference(id)
     ) {
       continue;
     }

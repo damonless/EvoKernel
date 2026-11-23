@@ -30,7 +30,6 @@ import {
   scanCapabilityReferences,
 } from '../core/gatekeeper.js';
 import { redactSensitiveDiagnostics } from '../core/telemetry.js';
-import { runOptimizationCycle } from '../core/optimize.js';
 import type { EvoMemory, EvoRule, EvoSkill, EvoToolManifest } from '../core/types.js';
 
 function createTempWorkspace(): string {

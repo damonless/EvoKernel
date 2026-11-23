@@ -993,7 +993,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     }
   });
 
-  test('35. Dimension 8: CLI optimize --help and -h print help and exit 0 without running cycle', () => {
+  test('35. Dimension 8: CLI optimize --help and -h emit retirement notice and exit 0 without running cycle', () => {
     const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
     const optimizeCacheDir = path.join(ws, '.evo', '.cache', 'optimize');
     assert.equal(fs.existsSync(optimizeCacheDir), false);
@@ -1004,9 +1004,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         timeout: 5000,
       });
       assert.equal(proc.status, 0);
-      assert.match(proc.stdout, /Usage:/);
-      assert.match(proc.stdout, /evo optimize \[options\]/);
-      assert.match(proc.stdout, /Offline Git worktree optimization cycle/);
+      assert.match(`${proc.stdout}\n${proc.stderr}`, /retired|removed|deprecated/i);
       // Ensure no optimization cache run directory was created
       assert.equal(fs.existsSync(optimizeCacheDir), false);
     }

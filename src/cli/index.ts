@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { findGitRoot, parseInitTargets, runInit, runUninstall } from './init.js';
+import { findGitRoot, parseInitTargets, runInit, runUninstall, syncGlobalUserProfile } from './init.js';
 import { extractCodexTomlEvoEntry, hasStaleNpxMcpEntry, parseJsonc } from './harness.js';
 import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
@@ -26,11 +26,11 @@ import {
 const { spawnSync } = child_process;
 import { parseHookEvent, parseHookHarnessArg, parseHookPayloadArg, runHook } from './hook.js';
 import { renderVirtualizeReport, runVirtualize } from './virtualize.js';
-import { renderOptimizeHelp, runOptimizeCli } from './optimize.js';
 import { buildScoreReport, runScoreCli } from './score.js';
 import { runUiCli } from './ui.js';
 import { startMcpStdioServer } from '../mcp/server.js';
 import {
+  DEFAULT_EVO_CONFIG,
   EVO_KERNEL_VERSION,
   EvoStorage,
   findNearestEvoWorkspace,
@@ -38,7 +38,9 @@ import {
   isHostGlobalConfigDir,
   isPluginOrExtensionInstallDir,
   openSqliteReadOnly,
+  resolveGlobalFallbackDir,
 } from '../core/storage.js';
+export { resolveGlobalFallbackDir };
 import {
   EvoTelemetry,
   emptyRecallWindowStats,
@@ -82,8 +84,20 @@ Options:
   );
 }
 
+const RETIRED_OPTIMIZE_NOTICE =
+  'Notice: `evo optimize` (offline Git worktree optimization) has been retired to keep EvoKernel lean and deterministic.\n' +
+  'Use `evo memory verify`, `evo audit`, or `evo profile` instead.';
+
 export function printOptimizeHelp(args?: string[]): void {
-  logHelp(renderOptimizeHelp(), args);
+  logHelp(
+    `
+Usage:
+  evo optimize (retired)
+
+${RETIRED_OPTIMIZE_NOTICE}
+`,
+    args
+  );
 }
 
 export function printScoreHelp(args?: string[]): void {
@@ -357,6 +371,29 @@ Options:
   );
 }
 
+export function printProfileHelp(args?: string[]): void {
+  logHelp(
+    `
+Usage:
+  evo profile [list|show|sync|path] [options]
+
+Inspect or synchronize the User-Global Personal Preference Profile (~/.evo/global/.evo/preferences/).
+
+Subcommands:
+  show                 Show the rendered auto-managed User Profile Digest (default)
+  list                 List all global personal preferences & token budget usage
+  sync                 Rebuild profile-digest.md and sync host global rule files
+  path                 Print paths to global profile digest and preferences directory
+
+Options:
+  --dry-run            Preview sync targets without modifying files (sync only)
+  --json               Output structured JSON
+  -h, --help           Show this help message
+`,
+    args
+  );
+}
+
 export function readStdinTextWithTimeout(
   initialTimeoutMs: number = 200,
   chunkTimeoutMs: number = 300
@@ -485,12 +522,12 @@ Advanced & Automation Commands:
                       Fold third-party stdio MCPs into .evo/mcp-pool.json (preview first with --dry-run)
   refactor [--apply] [--local-only] [--token-budget <N>] [--skill-budget <N>]
                       Decouple bloated rules/skills via built-in evo-rule-architect workflow
+  profile [list|show|sync|path] [--json] [--dry-run]
+                      Inspect or synchronize User-Global personal preferences (~/.evo/global)
   tree [--full] [--json]
                       Render ASCII capability & cognitive memory tree (.evo/)
   check <file> [--json]
                       Canonical defect inspection for deliverables (.xlsx, .docx, .pptx, .csv, .json, .md)
-  optimize [--dim inv|dom|both] [-k <N>] [--proposer-cmd <cmd>] [--probe-cmd <cmd>] [--apply]
-                      Offline Git worktree optimization cycle with isolated probe verification
   hook <event>        Lifecycle hook router (pre-tool | post-tool | stop | pre-commit)
   mcp                 Start stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
   uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
@@ -535,14 +572,49 @@ function copyDirNonOverwriting(
   }
 }
 
-export function resolveGlobalFallbackDir(customGlobalDir?: string): string {
-  if (customGlobalDir) {
-    return path.resolve(customGlobalDir);
-  }
-  if (process.env.EVO_GLOBAL_DIR) {
-    return path.resolve(process.env.EVO_GLOBAL_DIR);
-  }
-  return path.join(os.homedir(), '.evo', 'global');
+const RETIRED_GLOBAL_SEED_FILES: RegExp[] = [/^bms-.*\.md$/i];
+const RETIRED_GLOBAL_SEED_DIRS: { skills: RegExp[]; tools: RegExp[] } = {
+  skills: [
+    /^bms-/i,
+    /^fsm-/i,
+    /^ceo-team-orchestrator$/i,
+    /^evo-dev-verification-sop$/i,
+  ],
+  tools: [/^evo-release-preflight$/i],
+};
+
+function pruneRetiredGlobalSeeds(evoDir: string): void {
+  const removeMatchingFiles = (dir: string) => {
+    if (!fs.existsSync(dir)) return;
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (RETIRED_GLOBAL_SEED_FILES.some((pat) => pat.test(entry.name))) {
+          try {
+            fs.unlinkSync(path.join(dir, entry.name));
+          } catch {}
+        }
+      }
+    } catch {}
+  };
+  removeMatchingFiles(path.join(evoDir, 'rules'));
+  removeMatchingFiles(path.join(evoDir, 'rules', 'scoped'));
+
+  const removeMatchingDirs = (dir: string, patterns: RegExp[]) => {
+    if (!fs.existsSync(dir)) return;
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (patterns.some((pat) => pat.test(entry.name))) {
+          try {
+            fs.rmSync(path.join(dir, entry.name), { recursive: true, force: true });
+          } catch {}
+        }
+      }
+    } catch {}
+  };
+  removeMatchingDirs(path.join(evoDir, 'skills'), RETIRED_GLOBAL_SEED_DIRS.skills);
+  removeMatchingDirs(path.join(evoDir, 'tools'), RETIRED_GLOBAL_SEED_DIRS.tools);
 }
 
 export function ensureGlobalFallbackSeeded(
@@ -552,11 +624,25 @@ export function ensureGlobalFallbackSeeded(
   const storage = new EvoStorage(globalRoot);
   storage.ensureInitialized();
 
+  if (fs.existsSync(storage.configPath)) {
+    try {
+      const rawCfg = fs.readFileSync(storage.configPath, 'utf8').replace(/^\uFEFF/, '');
+      const parsedCfg = JSON.parse(rawCfg) as Record<string, unknown>;
+      if (parsedCfg && typeof parsedCfg === 'object' && !Array.isArray(parsedCfg)) {
+        if (parsedCfg.version !== EVO_KERNEL_VERSION) {
+          parsedCfg.version = EVO_KERNEL_VERSION;
+          fs.writeFileSync(storage.configPath, JSON.stringify(parsedCfg, null, 2) + '\n', 'utf8');
+        }
+      }
+    } catch {}
+  }
+
   const templateSeedDir = path.join(installRoot, 'templates', 'seed-evo');
   const hasTemplateSeed = fs.existsSync(templateSeedDir);
   const seedEvoDir = hasTemplateSeed ? templateSeedDir : path.join(installRoot, '.evo');
 
   if (fs.existsSync(seedEvoDir) && path.resolve(seedEvoDir) !== path.resolve(storage.evoDir)) {
+    pruneRetiredGlobalSeeds(storage.evoDir);
     for (const sub of ['rules', 'skills', 'tools']) {
       copyDirNonOverwriting(
         path.join(seedEvoDir, sub),
@@ -714,11 +800,11 @@ export const VALID_COMMANDS = [
   'memories',
   'audit',
   'refactor',
+  'profile',
   'tree',
   'stats',
   'mcp',
   'hook',
-  'optimize',
   'check',
   'inspect',
   'doctor',
@@ -782,36 +868,13 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--skill-budget',
     '--json',
   ],
+  profile: [...GLOBAL_COMMON_FLAGS, '--json', '--dry-run', '--global', '-g'],
   tree: [...GLOBAL_COMMON_FLAGS, '--json', '--full'],
   stats: [...GLOBAL_COMMON_FLAGS, '--json', '--global', '-g'],
   hook: [...GLOBAL_COMMON_FLAGS, '--payload', '--harness', '--dry-run', '--tool', '--file', '--tool-name', '--target-file'],
   doctor: [...GLOBAL_COMMON_FLAGS, '--json', '--roi', '--probe', '--no-probe'],
   check: [...GLOBAL_COMMON_FLAGS, '--json'],
   inspect: [...GLOBAL_COMMON_FLAGS, '--json'],
-  optimize: [
-    ...GLOBAL_COMMON_FLAGS,
-    '--dim',
-    '-k',
-    '--k',
-    '--rounds',
-    '--proposer-cmd',
-    '--probe-cmd',
-    '--worktree-setup-cmd',
-    '--task',
-    '--task-file',
-    '--trajectory',
-    '--trajectories',
-    '--deliverable',
-    '--deliverables',
-    '--leak-glob',
-    '--auto',
-    '--prepare',
-    '--apply',
-    '--dry-run',
-    '--json',
-    '--require-probe-improvement',
-    '--no-require-probe-improvement',
-  ],
   version: [...GLOBAL_COMMON_FLAGS],
   help: [...GLOBAL_COMMON_FLAGS],
 };
@@ -1453,6 +1516,9 @@ export function runCli(argv: string[]): void {
       case 'refactor':
         printRefactorHelp(args);
         return;
+      case 'profile':
+        printProfileHelp(args);
+        return;
       case 'check':
       case 'inspect':
         printCheckHelp(args);
@@ -1473,6 +1539,12 @@ export function runCli(argv: string[]): void {
         printHelp(args);
         return;
     }
+  }
+
+  if (cmd === 'optimize') {
+    console.error(formatTerminalOutput(RETIRED_OPTIMIZE_NOTICE, cliTermOpts));
+    handleExit(1);
+    return;
   }
 
   if (cmd.startsWith('-')) {
@@ -1554,13 +1626,24 @@ export function runCli(argv: string[]): void {
   }
 
   const globalDir = resolveGlobalFallbackDir();
-  const isReadOnlyDiagnostic = ['score', 'ui', 'doctor', 'check', 'inspect', 'tree', 'stats', 'version', '--version', '-v'].includes(cmd);
+  const profileSubcmd =
+    cmd === 'profile'
+      ? args
+          .slice(1)
+          .find((a, idx) => !a.startsWith('-') && !(idx > 0 && (args[idx] === '--workspace' || args[idx] === '-w')))
+          ?.toLowerCase() || 'show'
+      : '';
+  const isReadOnlyDiagnostic =
+    ['score', 'ui', 'doctor', 'audit', 'check', 'inspect', 'tree', 'stats', 'version', '--version', '-v'].includes(cmd) ||
+    (cmd === 'profile' &&
+      (['list', 'show', 'path'].includes(profileSubcmd) ||
+        (profileSubcmd === 'sync' && args.includes('--dry-run'))));
   if (!isReadOnlyDiagnostic && fs.existsSync(path.join(globalDir, '.evo'))) {
     ensureGlobalFallbackSeeded(globalDir);
   }
 
   const isLocalMutationCmd =
-    ['init', 'bootstrap', 'virtualize', 'audit', 'refactor', 'optimize', 'hook', 'uninstall'].includes(cmd) ||
+    ['init', 'bootstrap', 'virtualize', 'refactor', 'hook', 'uninstall'].includes(cmd) ||
     ((cmd === 'memory' || cmd === 'memories') && (args.includes('refresh') || args.includes('--refresh')));
 
   let workspaceRoot: string;
@@ -1821,6 +1904,143 @@ export function runCli(argv: string[]): void {
       break;
     }
 
+    case 'profile': {
+      const positionalArgs: string[] = [];
+      for (let i = 1; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--workspace' || a === '-w') {
+          i++;
+          continue;
+        }
+        if (a.startsWith('-')) continue;
+        positionalArgs.push(a.toLowerCase());
+      }
+      const action = positionalArgs[0] || 'show';
+      if (!['list', 'show', 'sync', 'path'].includes(action)) {
+        console.error(
+          formatTerminalOutput(
+            `❌ Error: Unknown profile subcommand '${action}'. Usage: evo profile [list|show|sync|path]`,
+            cliTermOpts
+          )
+        );
+        handleExit(1);
+        return;
+      }
+
+      const isJson = args.includes('--json');
+      const dryRun = args.includes('--dry-run');
+      const profileStorage = new EvoStorage(globalDir);
+      const hasGlobalEvo = hasValidEvoStructure(profileStorage.evoDir);
+      const cfg = hasGlobalEvo ? profileStorage.getConfig() : { ...DEFAULT_EVO_CONFIG };
+      const maxTokens = cfg.maxGlobalProfileTokens ?? 500;
+
+      if (action === 'path') {
+        const payload = {
+          globalRoot: globalDir,
+          evoDir: profileStorage.evoDir,
+          preferencesDir: profileStorage.preferencesDir,
+          profileDigestPath: profileStorage.profileDigestPath,
+        };
+        if (isJson) {
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          console.log(formatTerminalOutput(`Global Root      : ${payload.globalRoot}`, cliTermOpts));
+          console.log(formatTerminalOutput(`Preferences Dir  : ${payload.preferencesDir}`, cliTermOpts));
+          console.log(formatTerminalOutput(`Profile Digest   : ${payload.profileDigestPath}`, cliTermOpts));
+        }
+        break;
+      }
+
+      if (action === 'sync') {
+        const syncRes = syncGlobalUserProfile(globalDir, { dryRun });
+        if (isJson) {
+          console.log(JSON.stringify({ globalRoot: globalDir, dryRun, ...syncRes }, null, 2));
+        } else {
+          const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+          logProfile(`🧬 User-Global Profile ${dryRun ? '(Dry Run) ' : ''}Synced:`);
+          logProfile(`  ├─ Global Root   : ${globalDir}`);
+          logProfile(`  ├─ Profile Digest: ${syncRes.digestPath}`);
+          logProfile(`  ├─ Token Budget  : ${syncRes.totalTokens}/${syncRes.maxTokens} tokens`);
+          logProfile(
+            `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+          );
+        }
+        break;
+      }
+
+      const prefs = hasGlobalEvo ? profileStorage.listPreferences() : [];
+      const activeAlwaysOn = prefs.filter((p) => p.always_on !== false && p.enabled !== false);
+      const totalTokens = activeAlwaysOn.reduce((acc, p) => acc + p.tokens, 0);
+
+      if (action === 'list') {
+        if (isJson) {
+          console.log(
+            JSON.stringify(
+              {
+                globalRoot: globalDir,
+                totalTokens,
+                maxTokens,
+                preferences: prefs,
+              },
+              null,
+              2
+            )
+          );
+        } else {
+          const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+          logProfile(`👤 User-Global Personal Preferences (${prefs.length} total | Always-On Budget: ${totalTokens}/${maxTokens} tokens)`);
+          if (prefs.length === 0) {
+            logProfile('  └── (empty — use evo_propose(kind: "preference", scope: "global") to add preferences)');
+          } else {
+            prefs.forEach((p, idx) => {
+              const branch = idx === prefs.length - 1 ? '└──' : '├──';
+              const modeBadge = p.always_on !== false ? '[ALWAYS-ON]' : '[ON-DEMAND]';
+              const stateBadge = p.enabled === false ? ' [PAUSED]' : '';
+              logProfile(
+                `  ${branch} ${modeBadge}${stateBadge} ${p.id} (${p.category} | ${p.tokens} tok) — ${p.l0_summary}`
+              );
+            });
+          }
+        }
+        break;
+      }
+
+      // action === 'show' (read-only)
+      let digest = '';
+      if (fs.existsSync(profileStorage.profileDigestPath)) {
+        digest = fs.readFileSync(profileStorage.profileDigestPath, 'utf8').trim();
+      } else if (activeAlwaysOn.length > 0) {
+        digest = profileStorage.formatUserProfileDigest();
+      }
+
+      if (isJson) {
+        console.log(
+          JSON.stringify(
+            {
+              globalRoot: globalDir,
+              profileDigestPath: profileStorage.profileDigestPath,
+              totalTokens,
+              maxTokens,
+              digest,
+              preferences: activeAlwaysOn,
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+        logProfile(`👤 User-Global Profile Digest (${totalTokens}/${maxTokens} tokens | ${globalDir})`);
+        if (!digest) {
+          logProfile('  (no active always-on preferences yet)');
+        } else {
+          console.log('');
+          console.log(digest);
+        }
+      }
+      break;
+    }
+
     case 'tree': {
       if (args.includes('--json')) {
         console.log(JSON.stringify(buildEvoTreeJson(workspaceRoot), null, 2));
@@ -1927,8 +2147,9 @@ export function runCli(argv: string[]): void {
         printOptimizeHelp(args);
         break;
       }
-      runOptimizeCli(args, workspaceRoot);
-      break;
+      console.error(formatTerminalOutput(RETIRED_OPTIMIZE_NOTICE, cliTermOpts));
+      handleExit(1);
+      return;
     }
 
     case 'doctor': {

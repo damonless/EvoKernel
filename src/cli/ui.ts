@@ -21,6 +21,7 @@ import {
   EvoGatekeeper,
   captureWorkspaceMutationSignature,
   captureWorkspaceRollbackSnapshot,
+  isGlobalFallbackRoot,
   parseSkillSectionsFromMarkdown,
   restoreWorkspaceFromSnapshot,
 } from '../core/gatekeeper.js';
@@ -35,7 +36,7 @@ import {
 } from '../core/memory.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
 import { executeSandboxedScriptAsync } from '../core/sandbox.js';
-import { mountIdeExtensions, syncManagedRuleBlocks } from './init.js';
+import { mountIdeExtensions, syncGlobalUserProfile, syncManagedRuleBlocks } from './init.js';
 import { formatTerminalOutput, isAsciiMode, isColorEnabled } from './term.js';
 import { isSubpathOf } from '../mcp/handlers.js';
 
@@ -46,6 +47,7 @@ export interface UiSnapshot {
   skills: any[];
   tools: any[];
   memories: any[];
+  preferences?: any[];
   archived: any[];
   gatekeeperEvents: any[];
 }
@@ -181,6 +183,7 @@ export function buildUiSnapshot(
     const skills: any[] = [];
     const tools: any[] = [];
     const memories: any[] = [];
+    const preferences: any[] = [];
     const archived: any[] = [];
     let gatekeeperEvents: any[] = [];
     const telemMap = new Map<string, { hit_count: number; attribution: string }>();
@@ -272,6 +275,7 @@ export function buildUiSnapshot(
     let rawSkills: any[] = [];
     let rawTools: any[] = [];
     let rawMemories: any[] = [];
+    let rawPreferences: any[] = [];
     let rawArchived: any[] = [];
     const capMetaMap = new Map<string, { origin?: string; visibility?: string }>();
     const hiddenAnonIds = new Set<string>(configExcludeIds);
@@ -282,12 +286,14 @@ export function buildUiSnapshot(
         rawSkills = storage.listSkills();
         rawTools = storage.listTools();
         rawMemories = storage.listMemories();
+        rawPreferences = storage.listPreferences();
         rawArchived = storage.listArchivedCapabilities() as any[];
         for (const item of [
           ...rawRules,
           ...rawSkills,
           ...rawTools,
           ...rawMemories,
+          ...rawPreferences,
           ...rawArchived,
         ]) {
           const itemId = String(item?.id || '');
@@ -584,6 +590,17 @@ export function buildUiSnapshot(
           }
           memories.push(attached);
         }
+        preferences.push(
+          ...filterAnon(rawPreferences).map((pref) => {
+            const attached = attach(pref);
+            if (options?.anon) {
+              attached.title = scrubAnonText(attached.title);
+              attached.l0_summary = scrubAnonText(attached.l0_summary);
+              attached.content = scrubAnonText(attached.content);
+            }
+            return attached;
+          })
+        );
         archived.push(
           ...filterAnon(rawArchived).map((item) => {
             if (!options?.anon) return item;
@@ -605,6 +622,7 @@ export function buildUiSnapshot(
       skills,
       tools,
       memories,
+      preferences,
       archived,
       gatekeeperEvents,
     };
@@ -1231,8 +1249,8 @@ export async function startUiServer(
           case 'archive-item': {
             const rawKind = typeof params.kind === 'string' ? params.kind.trim().toLowerCase() : '';
             const rawId = typeof params.id === 'string' ? params.id.trim() : '';
-            if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind)) {
-              sendJsonResponse(res, 400, { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory` });
+            if (!['rule', 'skill', 'tool', 'memory', 'preference'].includes(rawKind)) {
+              sendJsonResponse(res, 400, { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory|preference` });
               return;
             }
             if (!rawId) {
@@ -1249,7 +1267,11 @@ export async function startUiServer(
               return;
             }
 
-            if (rawKind !== 'memory') {
+            if (rawKind === 'preference') {
+              if (isGlobalFallbackRoot(ws)) {
+                syncGlobalUserProfile(ws);
+              }
+            } else if (rawKind !== 'memory') {
               syncManagedRuleBlocks(ws);
             }
             const telem = new EvoTelemetry(storage);
@@ -1270,8 +1292,8 @@ export async function startUiServer(
           case 'restore-item': {
             const rawKind = typeof params.kind === 'string' ? params.kind.trim().toLowerCase() : '';
             const rawId = typeof params.id === 'string' ? params.id.trim() : '';
-            if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind)) {
-              sendJsonResponse(res, 400, { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory` });
+            if (!['rule', 'skill', 'tool', 'memory', 'preference'].includes(rawKind)) {
+              sendJsonResponse(res, 400, { ok: false, error: `Bad Request: Invalid kind "${rawKind}". Must be rule|skill|tool|memory|preference` });
               return;
             }
             if (!rawId) {
@@ -1285,7 +1307,11 @@ export async function startUiServer(
               return;
             }
 
-            if (rawKind !== 'memory') {
+            if (rawKind === 'preference') {
+              if (isGlobalFallbackRoot(ws)) {
+                syncGlobalUserProfile(ws);
+              }
+            } else if (rawKind !== 'memory') {
               syncManagedRuleBlocks(ws);
             }
             const telem = new EvoTelemetry(storage);
@@ -1318,13 +1344,14 @@ export async function startUiServer(
             }
 
             let touchedManagedCatalog = false;
+            let touchedProfile = false;
             let updatedCount = 0;
             const now = new Date().toISOString();
 
             for (const entry of batchItems) {
               const rawKind = typeof entry?.kind === 'string' ? entry.kind.trim().toLowerCase() : '';
               const rawId = typeof entry?.id === 'string' ? entry.id.trim() : '';
-              if (!['rule', 'skill', 'tool', 'memory'].includes(rawKind) || !rawId) {
+              if (!['rule', 'skill', 'tool', 'memory', 'preference'].includes(rawKind) || !rawId) {
                 sendJsonResponse(res, 400, { ok: false, error: 'Bad Request: Invalid kind or id in toggle-enabled' });
                 return;
               }
@@ -1390,11 +1417,39 @@ export async function startUiServer(
                 }
                 storage.saveMemory({ ...mem, enabled: targetEnabled, updated_at: now });
                 updatedCount++;
+              } else if (rawKind === 'preference') {
+                const pref = storage.getPreference(cleanId);
+                if (!pref) {
+                  if (batchItems.length === 1) {
+                    sendJsonResponse(res, 404, { ok: false, error: `Not Found: Preference "${cleanId}" not found` });
+                    return;
+                  }
+                  continue;
+                }
+                if (targetEnabled && pref.always_on !== false && pref.enabled === false) {
+                  const { totalTokens } = storage.getProfileTokenUsage();
+                  const maxProfileBudget = storage.getConfig()?.maxGlobalProfileTokens ?? 500;
+                  if (totalTokens + pref.tokens > maxProfileBudget) {
+                    sendJsonResponse(res, 400, {
+                      ok: false,
+                      error: `Bad Request: Global profile budget exceeded (${totalTokens + pref.tokens}/${maxProfileBudget} tokens)`,
+                      code: 'ERR_PROFILE_BUDGET_EXCEEDED',
+                      details: { currentTokens: totalTokens, candidateTokens: pref.tokens, maxTokens: maxProfileBudget },
+                    });
+                    return;
+                  }
+                }
+                storage.savePreference({ ...pref, enabled: targetEnabled, updated_at: now });
+                touchedProfile = true;
+                updatedCount++;
               }
             }
 
             if (touchedManagedCatalog) {
               syncManagedRuleBlocks(ws);
+            }
+            if (touchedProfile && isGlobalFallbackRoot(ws)) {
+              syncGlobalUserProfile(ws);
             }
             const telem = new EvoTelemetry(storage);
             try { telem.syncFromDisk(true); } finally { telem.close(); }
@@ -2009,7 +2064,7 @@ export async function startUiServer(
       const w = fs.watch(evoDir, { recursive: true }, (_e, f) => {
         if (!f) return notifyChange();
         const norm = f.replace(/\\/g, '/');
-        if (norm.startsWith('.cache') || norm.includes('telemetry.db') || norm.startsWith('optimize')) return;
+        if (norm.startsWith('.cache') || norm.includes('telemetry.db')) return;
         notifyChange();
       });
       w.on('error', () => {}); watchers.push(w);

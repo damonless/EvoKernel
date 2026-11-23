@@ -2,14 +2,14 @@
 id: url-userinfo-spoofing-and-powershell-subexpression-guard
 title: "URL Userinfo Spoofing & PowerShell Subexpression Execution Remediation"
 l0_summary: "Loopback URL validation rejects WHATWG userinfo (@) spoofing and PowerShell single-quoted escaping blocks $() subexpression execution."
-created_commit: "18dae2b"
+created_commit: "105df52"
 created_branch: "main"
 target_symbols: ["src/cli/ui.ts#isValidLocalHttpUrl","src/cli/ui.ts#launchDefaultBrowser"]
-ast_fingerprints: {"src/cli/ui.ts#isValidLocalHttpUrl":{"symbol":"src/cli/ui.ts#isValidLocalHttpUrl","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":906,"end_line":917,"signature":"export function isValidLocalHttpUrl(rawUrl: string): boolean","ast_hash":"e3418e60fd7541dd"},"src/cli/ui.ts#launchDefaultBrowser":{"symbol":"src/cli/ui.ts#launchDefaultBrowser","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":919,"end_line":943,"signature":"export function launchDefaultBrowser(url: string): boolean","ast_hash":"da6a32e738aa8511"}}
+ast_fingerprints: {"src/cli/ui.ts#isValidLocalHttpUrl":{"symbol":"src/cli/ui.ts#isValidLocalHttpUrl","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":924,"end_line":935,"signature":"export function isValidLocalHttpUrl(rawUrl: string): boolean","ast_hash":"e3418e60fd7541dd"},"src/cli/ui.ts#launchDefaultBrowser":{"symbol":"src/cli/ui.ts#launchDefaultBrowser","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":937,"end_line":961,"signature":"export function launchDefaultBrowser(url: string): boolean","ast_hash":"da6a32e738aa8511"}}
 tags: ["security","url-validation","powershell","cli-ui"]
 origin: "evolved"
 created_at: "2026-11-05T09:37:27.809Z"
-updated_at: "2026-11-18T17:14:26.642Z"
+updated_at: "2026-11-23T16:49:16.331Z"
 ---
 
 ## Symptom

@@ -3,6 +3,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawnGitAsync } from '../memory/git-utils.js';
 
 export interface WorkspaceRollbackSnapshot {
   sig: Map<string, string>;
@@ -24,6 +25,64 @@ function computeFileMutationSig(fullPath: string, stat: fs.Stats): string {
     }
   }
   return base;
+}
+
+async function computeFileMutationSigAsync(fullPath: string, stat: fs.Stats): Promise<string> {
+  const base = `${stat.size}:${Math.floor(stat.mtimeMs)}`;
+  if (stat.size <= 64 * 1024) {
+    try {
+      const buf = await fs.promises.readFile(fullPath);
+      const digest = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 8);
+      return `${base}:${digest}`;
+    } catch {
+      return base;
+    }
+  }
+  return base;
+}
+
+function parseGitPorcelainEntries(stdout: string): Array<{ status: string; rel: string }> {
+  const entries: Array<{ status: string; rel: string }> = [];
+  const lines = stdout.split(/\r?\n/);
+  for (const l of lines) {
+    if (!l.trim()) continue;
+    const status = l.slice(0, 2).trim();
+    let rel = l.slice(3).trim();
+    if (rel.includes(' -> ')) rel = rel.split(' -> ').pop()!.trim();
+    if (rel.startsWith('"') && rel.endsWith('"')) rel = rel.slice(1, -1);
+    rel = rel.replace(/\\/g, '/');
+    if (!rel || rel === '.evo/.cache' || rel.startsWith('.evo/.cache/')) continue;
+    entries.push({ status, rel });
+  }
+  return entries;
+}
+
+export async function getGitPorcelainStatusAsync(
+  rootDir: string,
+  timeoutMs = 3000
+): Promise<Array<{ status: string; rel: string }>> {
+  try {
+    const gitRes = await spawnGitAsync(
+      rootDir,
+      ['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'],
+      timeoutMs
+    );
+    if (gitRes && gitRes.stdout) {
+      return parseGitPorcelainEntries(gitRes.stdout);
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+async function pathExistsAsync(targetPath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function captureWorkspaceMutationSignature(rootDir: string, maxFiles = 10000): Map<string, string> {
@@ -650,6 +709,606 @@ export function prepareEphemeralSelfTestWorkspace(
 
   const preSnapshot = captureWorkspaceRollbackSnapshot(stageDir);
   const realPreSnapshot = captureWorkspaceRollbackSnapshot(resolvedRoot);
+  return {
+    staged: true,
+    stageDir,
+    preSnapshot,
+    realPreSnapshot,
+  };
+}
+
+export async function captureWorkspaceMutationSignatureAsync(
+  rootDir: string,
+  maxFiles = 10000
+): Promise<Map<string, string>> {
+  const sigMap = new Map<string, string>();
+  if (!rootDir || !(await pathExistsAsync(rootDir))) {
+    return sigMap;
+  }
+
+  const ignoredDirNames = new Set(['.git', 'node_modules', '.codegraph', 'dist', 'build']);
+  let fileCount = 0;
+  let hitLimit = false;
+
+  async function walk(currentDir: string, depth: number): Promise<void> {
+    if (depth > 12 || fileCount >= maxFiles) {
+      hitLimit = true;
+      return;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (fileCount >= maxFiles) {
+        hitLimit = true;
+        break;
+      }
+
+      const fullPath = path.join(currentDir, entry.name);
+      const relPath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+
+      if (entry.isSymbolicLink()) {
+        if (ignoredDirNames.has(entry.name)) {
+          continue;
+        }
+        if (relPath === '.evo/.cache' || relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        try {
+          const target = await fs.promises.readlink(fullPath);
+          sigMap.set(relPath, `SYMLINK:${target}`);
+          fileCount++;
+        } catch {
+          // ignore inaccessible symlinks
+        }
+      } else if (entry.isDirectory()) {
+        if (ignoredDirNames.has(entry.name)) {
+          continue;
+        }
+        if (relPath === '.evo/.cache' || relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        await walk(fullPath, depth + 1);
+      } else if (entry.isFile()) {
+        if (relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          sigMap.set(relPath, await computeFileMutationSigAsync(fullPath, stat));
+          fileCount++;
+        } catch {
+          // ignore inaccessible files
+        }
+      }
+    }
+  }
+
+  await walk(path.resolve(rootDir), 0);
+
+  if (hitLimit) {
+    const gitEntries = await getGitPorcelainStatusAsync(rootDir, 3000);
+    for (const { status, rel } of gitEntries) {
+      const fullPath = path.join(rootDir, rel);
+      try {
+        const lstat = await fs.promises.lstat(fullPath);
+        if (lstat.isSymbolicLink()) {
+          sigMap.set(rel, `SYMLINK:${await fs.promises.readlink(fullPath)}`);
+        } else {
+          sigMap.set(rel, await computeFileMutationSigAsync(fullPath, lstat));
+        }
+      } catch {
+        sigMap.set(rel, `GIT_STATUS:${status}`);
+      }
+    }
+  }
+
+  return sigMap;
+}
+
+export async function captureWorkspaceRollbackSnapshotAsync(
+  rootDir: string,
+  maxFiles = 10000
+): Promise<WorkspaceRollbackSnapshot> {
+  const sig = new Map<string, string>();
+  const contents = new Map<string, Buffer>();
+  const dirs = new Set<string>();
+  const gitDirtyFiles = new Set<string>();
+  const gitDirtyStatuses = new Map<string, string>();
+  const symlinks = new Map<string, string>();
+
+  if (!rootDir || !(await pathExistsAsync(rootDir))) {
+    return { sig, contents, dirs, gitDirtyFiles, symlinks };
+  }
+
+  const gitEntries = await getGitPorcelainStatusAsync(rootDir, 3000);
+  for (const { status, rel } of gitEntries) {
+    const fullDirtyPath = path.join(rootDir, rel);
+    let dirtyExists = false;
+    try {
+      await fs.promises.lstat(fullDirtyPath);
+      dirtyExists = true;
+    } catch {
+      dirtyExists = false;
+    }
+    if (dirtyExists) {
+      gitDirtyFiles.add(rel);
+    } else {
+      sig.set(rel, `GIT_STATUS:${status}`);
+    }
+    gitDirtyStatuses.set(rel, status);
+  }
+
+  const ignoredDirNames = new Set(['.git', 'node_modules', '.codegraph', 'dist', 'build']);
+  let fileCount = 0;
+  let hitLimit = false;
+  const MAX_FILE_SIZE_FOR_CONTENT = 2 * 1024 * 1024; // 2MB
+  const TOTAL_CONTENT_BUDGET = 64 * 1024 * 1024; // 64MB
+  let totalContentBytes = 0;
+
+  async function walk(currentDir: string, depth: number): Promise<void> {
+    if (depth > 12 || fileCount >= maxFiles) {
+      hitLimit = true;
+      return;
+    }
+
+    const currentRel = path.relative(rootDir, currentDir).replace(/\\/g, '/');
+    if (currentRel && currentRel !== '.') {
+      dirs.add(currentRel);
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (fileCount >= maxFiles) {
+        hitLimit = true;
+        break;
+      }
+
+      const fullPath = path.join(currentDir, entry.name);
+      const relPath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+
+      if (entry.isSymbolicLink()) {
+        if (ignoredDirNames.has(entry.name)) {
+          continue;
+        }
+        if (relPath === '.evo/.cache' || relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        try {
+          const target = await fs.promises.readlink(fullPath);
+          sig.set(relPath, `SYMLINK:${target}`);
+          symlinks.set(relPath, target);
+          fileCount++;
+        } catch {
+          // ignore inaccessible symlinks
+        }
+      } else if (entry.isDirectory()) {
+        if (ignoredDirNames.has(entry.name)) {
+          continue;
+        }
+        if (relPath === '.evo/.cache' || relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        dirs.add(relPath);
+        await walk(fullPath, depth + 1);
+      } else if (entry.isFile()) {
+        if (relPath.startsWith('.evo/.cache/')) {
+          continue;
+        }
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          sig.set(relPath, await computeFileMutationSigAsync(fullPath, stat));
+          fileCount++;
+
+          const isDirty = gitDirtyFiles.has(relPath);
+          if (
+            (isDirty && stat.size <= 32 * 1024 * 1024) ||
+            (stat.size <= MAX_FILE_SIZE_FOR_CONTENT &&
+              totalContentBytes + stat.size <= TOTAL_CONTENT_BUDGET)
+          ) {
+            const buf = await fs.promises.readFile(fullPath);
+            contents.set(relPath, buf);
+            totalContentBytes += buf.length;
+          }
+        } catch {
+          // ignore inaccessible files
+        }
+      }
+    }
+  }
+
+  await walk(path.resolve(rootDir), 0);
+
+  if (hitLimit) {
+    for (const [rel, status] of gitDirtyStatuses.entries()) {
+      if (sig.has(rel)) continue;
+      let parentRel = path.dirname(rel).replace(/\\/g, '/');
+      while (parentRel && parentRel !== '.' && parentRel !== '') {
+        dirs.add(parentRel);
+        const nextParent = path.dirname(parentRel).replace(/\\/g, '/');
+        if (nextParent === parentRel) break;
+        parentRel = nextParent;
+      }
+      const fullPath = path.join(rootDir, rel);
+      try {
+        const lstat = await fs.promises.lstat(fullPath);
+        if (lstat.isSymbolicLink()) {
+          const target = await fs.promises.readlink(fullPath);
+          sig.set(rel, `SYMLINK:${target}`);
+          symlinks.set(rel, target);
+        } else if (lstat.isFile()) {
+          sig.set(rel, await computeFileMutationSigAsync(fullPath, lstat));
+          if (lstat.size <= 32 * 1024 * 1024) {
+            const buf = await fs.promises.readFile(fullPath);
+            contents.set(rel, buf);
+            totalContentBytes += buf.length;
+          }
+        }
+      } catch {
+        sig.set(rel, `GIT_STATUS:${status}`);
+      }
+    }
+  }
+
+  return { sig, contents, dirs, gitDirtyFiles, symlinks };
+}
+
+async function createSymlinkSafeAsync(
+  origTarget: string,
+  fullMutatedPath: string,
+  targetCheckBaseDir: string = path.dirname(fullMutatedPath)
+): Promise<void> {
+  if (process.platform === 'win32') {
+    const absTarget = path.resolve(targetCheckBaseDir, origTarget);
+    try {
+      const st = await fs.promises.stat(absTarget);
+      if (st.isDirectory()) {
+        await fs.promises.symlink(origTarget, fullMutatedPath, 'junction');
+        return;
+      }
+    } catch {
+      // fall back to default symlink
+    }
+  }
+  await fs.promises.symlink(origTarget, fullMutatedPath);
+}
+
+export async function restoreWorkspaceFromSnapshotAsync(
+  rootDir: string,
+  preSnapshot: WorkspaceRollbackSnapshot,
+  postWorkspaceSig?: Map<string, string>
+): Promise<{ mutatedFiles: string[]; restoredFiles: string[] }> {
+  const effectivePostSig =
+    postWorkspaceSig ?? (await captureWorkspaceMutationSignatureAsync(rootDir));
+  const mutatedFiles: string[] = [];
+  const restoredFiles: string[] = [];
+
+  for (const [filePath, sig] of effectivePostSig.entries()) {
+    const beforeSig = preSnapshot.sig.get(filePath);
+    if (beforeSig === undefined) {
+      if (preSnapshot.gitDirtyFiles.has(filePath)) {
+        continue;
+      }
+      mutatedFiles.push(filePath);
+      const fullMutatedPath = path.join(rootDir, filePath);
+      try {
+        await fs.promises.lstat(fullMutatedPath);
+        await fs.promises.unlink(fullMutatedPath);
+        restoredFiles.push(filePath);
+      } catch {
+        // best-effort cleanup
+      }
+      let parentRel = path.dirname(filePath).replace(/\\/g, '/');
+      while (parentRel && parentRel !== '.' && parentRel !== '') {
+        if (preSnapshot.dirs.has(parentRel)) {
+          break;
+        }
+        const fullParent = path.join(rootDir, parentRel);
+        try {
+          const children = await fs.promises.readdir(fullParent);
+          if (children.length === 0) {
+            await fs.promises.rmdir(fullParent);
+            const nextParent = path.dirname(parentRel).replace(/\\/g, '/');
+            if (nextParent === parentRel) break;
+            parentRel = nextParent;
+          } else {
+            break;
+          }
+        } catch {
+          break;
+        }
+      }
+    } else if (beforeSig !== sig) {
+      mutatedFiles.push(filePath);
+      const fullMutatedPath = path.join(rootDir, filePath);
+      if (beforeSig.startsWith('SYMLINK:') || preSnapshot.symlinks?.has(filePath)) {
+        const origTarget = preSnapshot.symlinks?.get(filePath) ?? beforeSig.slice('SYMLINK:'.length);
+        try {
+          try {
+            await fs.promises.lstat(fullMutatedPath);
+            await fs.promises.unlink(fullMutatedPath);
+          } catch {}
+          await fs.promises.mkdir(path.dirname(fullMutatedPath), { recursive: true });
+          await createSymlinkSafeAsync(origTarget, fullMutatedPath);
+          restoredFiles.push(filePath);
+        } catch {
+          // best-effort symlink restore
+        }
+      } else if (beforeSig.startsWith('GIT_STATUS:')) {
+        try {
+          await fs.promises.lstat(fullMutatedPath);
+          await fs.promises.unlink(fullMutatedPath);
+          restoredFiles.push(filePath);
+        } catch {}
+      } else if (preSnapshot.contents.has(filePath)) {
+        try {
+          if (sig.startsWith('SYMLINK:')) {
+            try { await fs.promises.unlink(fullMutatedPath); } catch {}
+          }
+          await fs.promises.mkdir(path.dirname(fullMutatedPath), { recursive: true });
+          await fs.promises.writeFile(fullMutatedPath, preSnapshot.contents.get(filePath)!);
+          restoredFiles.push(filePath);
+        } catch {}
+      } else if (!preSnapshot.gitDirtyFiles.has(filePath)) {
+        try {
+          if (sig.startsWith('SYMLINK:')) {
+            try { await fs.promises.unlink(fullMutatedPath); } catch {}
+          }
+          const gitRes = await spawnGitAsync(rootDir, ['checkout', '--', filePath], 3000);
+          if (gitRes.status === 0) {
+            restoredFiles.push(filePath);
+          }
+        } catch {}
+      }
+    }
+  }
+
+  for (const [filePath, beforeSig] of preSnapshot.sig.entries()) {
+    if (!effectivePostSig.has(filePath)) {
+      if (beforeSig.startsWith('GIT_STATUS:')) {
+        continue;
+      }
+      const fullMutatedPath = path.join(rootDir, filePath);
+      try {
+        const lstat = await fs.promises.lstat(fullMutatedPath);
+        if (beforeSig.startsWith('SYMLINK:')) {
+          if (lstat.isSymbolicLink() && `SYMLINK:${await fs.promises.readlink(fullMutatedPath)}` === beforeSig) {
+            continue;
+          }
+        } else if (lstat.isFile() && (await computeFileMutationSigAsync(fullMutatedPath, lstat)) === beforeSig) {
+          continue;
+        }
+      } catch {}
+      mutatedFiles.push(filePath);
+      if (beforeSig.startsWith('SYMLINK:') || preSnapshot.symlinks?.has(filePath)) {
+        const origTarget = preSnapshot.symlinks?.get(filePath) ?? beforeSig.slice('SYMLINK:'.length);
+        try {
+          try {
+            await fs.promises.lstat(fullMutatedPath);
+            await fs.promises.unlink(fullMutatedPath);
+          } catch {}
+          await fs.promises.mkdir(path.dirname(fullMutatedPath), { recursive: true });
+          await createSymlinkSafeAsync(origTarget, fullMutatedPath);
+          restoredFiles.push(filePath);
+        } catch {}
+      } else if (preSnapshot.contents.has(filePath)) {
+        try {
+          await fs.promises.mkdir(path.dirname(fullMutatedPath), { recursive: true });
+          await fs.promises.writeFile(fullMutatedPath, preSnapshot.contents.get(filePath)!);
+          restoredFiles.push(filePath);
+        } catch {}
+      } else if (!preSnapshot.gitDirtyFiles.has(filePath)) {
+        try {
+          const gitRes = await spawnGitAsync(rootDir, ['checkout', '--', filePath], 3000);
+          if (gitRes.status === 0) {
+            restoredFiles.push(filePath);
+          }
+        } catch {}
+      }
+    }
+  }
+
+  return { mutatedFiles, restoredFiles };
+}
+
+export async function prepareEphemeralSelfTestWorkspaceAsync(
+  realRootDir: string,
+  stageRootDir?: string
+): Promise<{
+  staged: boolean;
+  stageDir?: string;
+  preSnapshot: WorkspaceRollbackSnapshot;
+  realPreSnapshot?: WorkspaceRollbackSnapshot;
+}> {
+  if (!realRootDir || !(await pathExistsAsync(realRootDir))) {
+    return {
+      staged: false,
+      preSnapshot: await captureWorkspaceRollbackSnapshotAsync(realRootDir),
+    };
+  }
+
+  const MAX_STAGE_FILES = 1500;
+  const MAX_STAGE_BYTES = 32 * 1024 * 1024;
+  const MAX_STAGE_GIT_BYTES = 8 * 1024 * 1024;
+  const MAX_GIT_FILES = 2000;
+  const resolvedRoot = path.resolve(realRootDir);
+  const ignoredDirNames = new Set(['node_modules', 'dist', 'build', '.codegraph']);
+
+  const files: Array<{ relPath: string; fullPath: string }> = [];
+  const dirs: string[] = [];
+  const symlinks: Array<{ relPath: string; target: string; origDir: string }> = [];
+  const gitFiles: Array<{ relPath: string; fullPath: string }> = [];
+  const gitDirs: string[] = [];
+  let fileCount = 0;
+  let totalBytes = 0;
+  let gitBytes = 0;
+  let exceeded = false;
+
+  async function walkWorkspace(currentDir: string, depth: number): Promise<void> {
+    if (exceeded || depth > 12) {
+      if (depth > 12) exceeded = true;
+      return;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (exceeded) break;
+      const fullPath = path.join(currentDir, entry.name);
+      const relPath = path.relative(resolvedRoot, fullPath).replace(/\\/g, '/');
+
+      if (entry.isSymbolicLink()) {
+        if (entry.name === '.git' || ignoredDirNames.has(entry.name)) continue;
+        if (relPath === '.evo/.cache' || relPath.startsWith('.evo/.cache/')) continue;
+        fileCount++;
+        if (fileCount > MAX_STAGE_FILES) {
+          exceeded = true;
+          return;
+        }
+        try {
+          const target = await fs.promises.readlink(fullPath);
+          symlinks.push({ relPath, target, origDir: path.dirname(fullPath) });
+        } catch {
+          // ignore inaccessible symlinks
+        }
+      } else if (entry.isDirectory()) {
+        if (entry.name === '.git' || ignoredDirNames.has(entry.name)) continue;
+        if (relPath === '.evo/.cache' || relPath.startsWith('.evo/.cache/')) continue;
+        dirs.push(relPath);
+        await walkWorkspace(fullPath, depth + 1);
+      } else if (entry.isFile()) {
+        if (relPath.startsWith('.evo/.cache/')) continue;
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          fileCount++;
+          totalBytes += stat.size;
+          if (fileCount > MAX_STAGE_FILES || totalBytes > MAX_STAGE_BYTES) {
+            exceeded = true;
+            return;
+          }
+          files.push({ relPath, fullPath });
+        } catch {
+          // ignore inaccessible files
+        }
+      }
+    }
+  }
+
+  async function walkGitDir(currentDir: string, depth: number): Promise<void> {
+    if (exceeded || depth > 12) {
+      if (depth > 12) exceeded = true;
+      return;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (exceeded) break;
+      const fullPath = path.join(currentDir, entry.name);
+      const relPath = path.relative(resolvedRoot, fullPath).replace(/\\/g, '/');
+      if (relPath === '.git/objects/pack' || relPath.startsWith('.git/objects/pack/')) {
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        continue;
+      } else if (entry.isDirectory()) {
+        gitDirs.push(relPath);
+        await walkGitDir(fullPath, depth + 1);
+      } else if (entry.isFile()) {
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          gitBytes += stat.size;
+          if (gitBytes > MAX_STAGE_GIT_BYTES || gitFiles.length >= MAX_GIT_FILES) {
+            exceeded = true;
+            return;
+          }
+          gitFiles.push({ relPath, fullPath });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  await walkWorkspace(resolvedRoot, 0);
+
+  if (!exceeded) {
+    const dotGitPath = path.join(resolvedRoot, '.git');
+    try {
+      const gitLstat = await fs.promises.lstat(dotGitPath);
+      if (gitLstat.isFile()) {
+        if (gitLstat.size > MAX_STAGE_GIT_BYTES) {
+          exceeded = true;
+        } else {
+          gitBytes += gitLstat.size;
+          gitFiles.push({ relPath: '.git', fullPath: dotGitPath });
+        }
+      } else if (gitLstat.isDirectory()) {
+        gitDirs.push('.git');
+        await walkGitDir(dotGitPath, 0);
+      }
+    } catch {
+      // ignore missing/inaccessible .git
+    }
+  }
+
+  if (exceeded) {
+    return {
+      staged: false,
+      preSnapshot: await captureWorkspaceRollbackSnapshotAsync(resolvedRoot),
+    };
+  }
+
+  const stageDir = stageRootDir
+    ? path.join(stageRootDir, 'ws')
+    : await fs.promises.mkdtemp(path.join(os.tmpdir(), 'evo-stage-'));
+  await fs.promises.mkdir(stageDir, { recursive: true });
+
+  for (const d of dirs) {
+    await fs.promises.mkdir(path.join(stageDir, d), { recursive: true });
+  }
+  for (const d of gitDirs) {
+    await fs.promises.mkdir(path.join(stageDir, d), { recursive: true });
+  }
+  for (const f of files) {
+    const dest = path.join(stageDir, f.relPath);
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    await fs.promises.copyFile(f.fullPath, dest);
+  }
+  for (const f of gitFiles) {
+    const dest = path.join(stageDir, f.relPath);
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    await fs.promises.copyFile(f.fullPath, dest);
+  }
+  for (const sl of symlinks) {
+    const dest = path.join(stageDir, sl.relPath);
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    try {
+      await createSymlinkSafeAsync(sl.target, dest, sl.origDir);
+    } catch {
+      // On Windows without Developer Mode, file symlinks may fail with EPERM
+    }
+  }
+
+  const preSnapshot = await captureWorkspaceRollbackSnapshotAsync(stageDir);
+  const realPreSnapshot = await captureWorkspaceRollbackSnapshotAsync(resolvedRoot);
   return {
     staged: true,
     stageDir,

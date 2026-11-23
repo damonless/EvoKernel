@@ -17,13 +17,20 @@ import {
   isHollowEvoZombieDir,
   isHostGlobalConfigDir,
   isPluginOrExtensionInstallDir,
+  resolveGlobalFallbackDir,
   sanitizeId,
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { EvoGatekeeper } from '../core/gatekeeper.js';
+import { EvoGatekeeper, isGlobalFallbackRoot } from '../core/gatekeeper.js';
 import { executeSandboxedScriptAsync } from '../core/sandbox.js';
 import { verifyMemoryFreshness, verifyMemoryFreshnessAsync } from '../core/memory.js';
-import { ensureGitInfoExclude, findGitRoot, syncManagedRuleBlocks } from '../cli/init.js';
+import { spawnGitAsync } from '../core/memory/git-utils.js';
+import {
+  ensureGitInfoExclude,
+  findGitRoot,
+  syncGlobalUserProfile,
+  syncManagedRuleBlocks,
+} from '../cli/init.js';
 import { McpProxyManager, parseExternalToolId, type ExternalToolRecord } from './proxy.js';
 
 const WORKSPACE_PARAM_SCHEMA = {
@@ -36,7 +43,7 @@ export const META_MCP_TOOLS = [
   {
     name: 'evo_search',
     description:
-      'Search evolved project Rules, Skills, Micro-Tools, and Episodic Memories (fault cases) using FTS5 BM25 + live AST Anti-Drift verification. Returns ultra-compact L0 summaries (<30 tokens per item), hit/success metrics, and symbol freshness badges.',
+      'Search Rules, Skills, Micro-Tools, Episodic Memories, and Personal Preferences via FTS5 BM25 + live AST Anti-Drift verification. Returns compact L0 summaries (<30 tokens), hit metrics, and freshness badges.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -46,8 +53,13 @@ export const META_MCP_TOOLS = [
         },
         kind: {
           type: 'string',
-          enum: ['all', 'rule', 'skill', 'tool', 'memory'],
+          enum: ['all', 'rule', 'skill', 'tool', 'memory', 'preference'],
           description: 'Filter by capability kind (default: "all").',
+        },
+        scope: {
+          type: 'string',
+          enum: ['all', 'project', 'global'],
+          description: 'Search scope: project, global, or all (default: "all").',
         },
         limit: {
           type: 'number',
@@ -61,7 +73,7 @@ export const META_MCP_TOOLS = [
   {
     name: 'evo_inspect',
     description:
-      'Progressive disclosure loader. Fetch L1 (contract / schema / symbol freshness) or L2 (full SOP / script source / Episodic Memory with AST Anti-Drift report & CodeGraph Topology Penetration anchors) for a specific Rule, Skill, Micro-Tool, or Memory.',
+      'Progressive disclosure loader. Fetch L1 (contract / schema / symbol freshness) or L2 (full SOP / script source / Episodic Memory with AST Anti-Drift report & CodeGraph Topology Penetration anchors) for a specific Rule, Skill, Micro-Tool, Memory, or Preference.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -82,7 +94,7 @@ export const META_MCP_TOOLS = [
   {
     name: 'evo_run',
     description:
-      'Execute a verified local Micro-Tool script (.mjs, .py, .ps1, .sh) inside a bounded sandbox and return structured stdout/stderr. Saves 90%+ context window tokens compared to reading raw files.',
+      'Execute a verified local Micro-Tool script (.mjs, .py, .ps1, .sh) inside a bounded sandbox and return stdout/stderr, saving 90%+ context tokens.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -102,31 +114,44 @@ export const META_MCP_TOOLS = [
   {
     name: 'evo_propose',
     description:
-      'Crystallize a newly discovered bug-prevention Rule, reusable multi-step Skill (SOP), parameterized Micro-Tool script, or AST-anchored Episodic Memory (fault case) into .evo/. Enforces deterministic Gatekeeper checks: Static Security, Sandbox/AST Grounding, BM25 Deduplication, and 1,500-token Core Rule Budget.',
+      'Crystallize a newly discovered Rule, Skill (SOP), Micro-Tool script, AST-anchored Episodic Memory, or global Preference into .evo/. Enforces deterministic Gatekeeper checks: Static Security, Sandbox/AST Grounding, BM25 Dedup, and Token Budgets.',
     inputSchema: {
       type: 'object',
       properties: {
         kind: {
           type: 'string',
-          enum: ['rule', 'skill', 'tool', 'memory'],
+          enum: ['rule', 'skill', 'tool', 'memory', 'preference'],
           description: 'Capability type to evolve.',
+        },
+        scope: {
+          type: 'string',
+          enum: ['project', 'global'],
+          description: 'Target store: "global" or "project".',
+        },
+        category: {
+          type: 'string',
+          enum: ['style', 'formatting', 'communication', 'workflow', 'knowledge'],
+          description: '[preference] Category (default: "style").',
+        },
+        always_on: {
+          type: 'boolean',
+          description: '[preference] Push to host global profile card (default: true).',
         },
         id: {
           type: 'string',
-          description: 'Kebab-case identifier (e.g., "validate-i18n-keys", "can-rx-timeout-glitch").',
+          description: 'Kebab-case identifier (e.g., "validate-i18n-keys").',
         },
         title: {
           type: 'string',
-          description: 'Short, plain-spoken human title (avoid opaque academic jargon; clearly state the scenario or fix).',
+          description: 'Short, plain-spoken human title stating the scenario or fix.',
         },
         l0_summary: {
           type: 'string',
-          description:
-            'Plain-spoken 1-sentence human takeaway ("Scenario -> Root Cause -> Fix / Guardrail", <= 35 words / <= 140 chars) for fast human & agent scanning.',
+          description: 'Plain-spoken 1-sentence takeaway (<= 140 chars) for fast scanning.',
         },
         supersedes_id: {
           type: 'string',
-          description: 'Optional ID of an older capability that this proposal upgrades/replaces.',
+          description: 'Optional ID of an older capability upgraded by this proposal.',
         },
         scope_glob: {
           type: 'string',
@@ -134,16 +159,16 @@ export const META_MCP_TOOLS = [
         },
         core: {
           type: 'boolean',
-          description: '[For rule] Whether this rule belongs in the always-on 1,500-token core invariants digest.',
+          description: '[For rule] Belongs in the always-on 1,500-token core invariants digest.',
         },
         content: {
           type: 'string',
-          description: '[For rule] Actionable markdown guardrails and rationale (code-state SSOT decoupled; use "Case Anchor:" for concrete symbol/threshold examples).',
+          description: '[For rule/preference] Actionable markdown guardrails or personal preference.',
         },
         transfer_scenarios: {
           type: 'array',
           items: { type: 'string' },
-          description: '[For rule] At least 2 distinct cross-module/cross-scenario applications proving 1-level-up transferability.',
+          description: '[For rule] At least 2 distinct cross-module/cross-scenario applications.',
         },
         l1_contract: {
           type: 'string',
@@ -156,7 +181,7 @@ export const META_MCP_TOOLS = [
         tags: {
           type: 'array',
           items: { type: 'string' },
-          description: '[For skill / tool / memory] Searchable domain tags.',
+          description: '[For skill / tool / memory / preference] Searchable domain tags.',
         },
         runtime: {
           type: 'string',
@@ -165,7 +190,7 @@ export const META_MCP_TOOLS = [
         },
         script_code: {
           type: 'string',
-          description: '[For tool] Full script source code. Must exit 0 when invoked with --self-test or EVO_SELF_TEST=1.',
+          description: '[For tool] Script source code. Must exit 0 with --self-test or EVO_SELF_TEST=1.',
         },
         input_schema: {
           type: 'object',
@@ -177,11 +202,11 @@ export const META_MCP_TOOLS = [
         },
         symptom: {
           type: 'string',
-          description: '[For memory] Observed error message, fault symptom, or anomalous packet/log signature.',
+          description: '[For memory] Observed error message, fault symptom, or log signature.',
         },
         root_cause: {
           type: 'string',
-          description: '[For memory] Underlying root cause analysis explaining why the symptom occurred.',
+          description: '[For memory] Underlying root cause explaining why the symptom occurred.',
         },
         solution: {
           type: 'string',
@@ -190,7 +215,7 @@ export const META_MCP_TOOLS = [
         target_symbols: {
           type: 'array',
           items: { type: 'string' },
-          description: '[For memory] Core code symbols or file#symbol targets (e.g., ["src/core/telemetry.ts#search", "BmsCanRxHandler"]) for automatic AST structural fingerprinting.',
+          description: '[For memory] Code symbols or file#symbol targets for AST structural fingerprinting.',
         },
         trigger_cue: {
           type: 'string',
@@ -217,7 +242,7 @@ export const META_MCP_TOOLS = [
   {
     name: 'evo_compact',
     description:
-      'Garbage-collect and merge multiple fragmented, stale, or low-hit capabilities into a single high-density entry, archiving the old versions to .evo/archive/ to free up the 1,500-token core budget.',
+      'Garbage-collect and merge multiple fragmented, stale, or low-hit capabilities into a single high-density entry, archiving the old versions to .evo/archive/ to free up the core token budget.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -228,7 +253,7 @@ export const META_MCP_TOOLS = [
         },
         merged_proposal: {
           type: 'object',
-          description: 'The consolidated ProposalPayload (same schema as evo_propose) that replaces target_ids.',
+          description: 'The consolidated ProposalPayload (same schema as evo_propose) replacing target_ids.',
         },
         reason: {
           type: 'string',
@@ -480,6 +505,65 @@ export class EvoMcpDispatcher {
     return '';
   }
 
+  private async checkDirtyTreeReminderAsync(
+    workspaceRoot: string,
+    activeTelemetry?: EvoTelemetry | null,
+    wsCtx?: WorkspaceContext
+  ): Promise<string> {
+    const tracker: {
+      callsSinceLastPropose: number;
+      lastDirtyCheckAt: number;
+      lastDirtySig: string;
+      watermarkDirtySig: string;
+      lastWorktreeStateSig: string;
+    } = wsCtx || (this as any);
+    const lastHookAt =
+      activeTelemetry && !activeTelemetry.isClosed()
+        ? parseInt(activeTelemetry.getSessionFlag('last_hook_event_at') || '0', 10)
+        : 0;
+    const hasActiveHook = Boolean(
+      process.env.ANTIGRAVITY_AGENT || (lastHookAt > 0 && lastHookAt >= this.sessionStartTime)
+    );
+    if (hasActiveHook) return '';
+
+    tracker.callsSinceLastPropose++;
+    if (tracker.callsSinceLastPropose < 3) return '';
+
+    const now = Date.now();
+    if (now - tracker.lastDirtyCheckAt >= 15000) {
+      tracker.lastDirtyCheckAt = now;
+      const gitRoot = findGitRoot(workspaceRoot);
+      if (!gitRoot) {
+        tracker.lastDirtySig = '';
+        return '';
+      }
+      const stateSig = this.computeFastWorktreeStateSig(workspaceRoot, gitRoot);
+      if (!stateSig || stateSig !== tracker.lastWorktreeStateSig) {
+        tracker.lastWorktreeStateSig = stateSig;
+        try {
+          const res = await spawnGitAsync(workspaceRoot, ['status', '--porcelain'], 1500);
+          if (res.status === 0 && res.stdout) {
+            const dirtyLines = res.stdout
+              .split(/\r?\n/)
+              .map((l) => l.trim())
+              .filter((l) => l && !l.includes('.evo/') && !l.includes('.git/'));
+            tracker.lastDirtySig = dirtyLines.join('\n');
+          } else {
+            tracker.lastDirtySig = '';
+          }
+        } catch {
+          tracker.lastDirtySig = '';
+        }
+      }
+    }
+
+    if (tracker.lastDirtySig && tracker.lastDirtySig !== tracker.watermarkDirtySig) {
+      tracker.watermarkDirtySig = tracker.lastDirtySig;
+      return '\n💡 Uncommitted edits detected — call evo_propose(workspace) once root cause/fix is verified.';
+    }
+    return '';
+  }
+
   private normalizeWorkspaceKey(wsRoot: string): string {
     const resolved = path.resolve(wsRoot).replace(/^[a-z]:/, (m) => m.toUpperCase());
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
@@ -501,6 +585,8 @@ export class EvoMcpDispatcher {
           return s.getTool(capId);
         case 'memory':
           return s.getMemory(capId);
+        case 'preference':
+          return s.getPreference(capId);
       }
     };
     if (localStorage) {
@@ -948,11 +1034,60 @@ export class EvoMcpDispatcher {
     return fallbacks;
   }
 
+  private isGlobalWriteRoute(toolName: string, args: Record<string, unknown>): boolean {
+    if (toolName !== 'evo_propose' && toolName !== 'evo_compact') return false;
+    const topScope = typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : '';
+    if (topScope === 'global') return true;
+    if (toolName === 'evo_propose') {
+      const kind = typeof args.kind === 'string' ? args.kind.trim().toLowerCase() : '';
+      return kind === 'preference' && topScope !== 'project';
+    }
+    const merged = args.merged_proposal as Record<string, unknown> | undefined;
+    if (merged && typeof merged === 'object') {
+      const mergedScope = typeof merged.scope === 'string' ? merged.scope.trim().toLowerCase() : '';
+      if (mergedScope === 'global' && topScope !== 'project') return true;
+      const mergedKind = typeof merged.kind === 'string' ? merged.kind.trim().toLowerCase() : '';
+      if (mergedKind === 'preference' && mergedScope !== 'project' && topScope !== 'project') {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private bindActiveContext(toolName: string, args: Record<string, unknown>): RequestContext {
     const rawWs = args.workspace ?? args.workspace_path;
     let targetRoot = this.defaultRoot;
     let candidate = this.defaultRoot;
     let hasLocalEvo = true;
+
+    if (this.isGlobalWriteRoute(toolName, args)) {
+      if (typeof rawWs === 'string' && rawWs.trim()) {
+        const trimmed = rawWs.trim();
+        candidate = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(this.defaultRoot, trimmed);
+      }
+      targetRoot = resolveGlobalFallbackDir();
+      hasLocalEvo = true;
+      this.activeWorkspaceDir = candidate;
+      if (this.activeCallCount <= 1) {
+        this.releaseInactiveTelemetryHandles(targetRoot);
+      }
+      const wsCtx = this.getOrCreateContext(targetRoot, true);
+      wsCtx.activeRefs++;
+      this.storage = wsCtx.storage;
+      this.telemetry = wsCtx.telemetry;
+      this.gatekeeper = wsCtx.gatekeeper;
+      this.proxyManager = wsCtx.proxyManager;
+      return {
+        wsCtx,
+        wsKey: this.normalizeWorkspaceKey(targetRoot),
+        requestWorkspaceDir: candidate,
+        hasLocalEvo,
+        storage: wsCtx.storage,
+        telemetry: wsCtx.telemetry,
+        gatekeeper: wsCtx.gatekeeper,
+        proxyManager: wsCtx.proxyManager,
+      };
+    }
 
     if (typeof rawWs === 'string' && rawWs.trim()) {
       const trimmed = rawWs.trim();
@@ -1150,10 +1285,14 @@ export class EvoMcpDispatcher {
                 this.releaseContextRef(boundCtx.wsCtx);
               }
               boundCtx = freshCtx;
-              return this.handleSearch(args, freshCtx);
+              return asyncMode
+                ? this.handleSearchAsync(args, freshCtx)
+                : this.handleSearch(args, freshCtx);
             });
           } else {
-            result = this.handleSearch(args, reqCtx);
+            result = asyncMode
+              ? this.handleSearchAsync(args, reqCtx)
+              : this.handleSearch(args, reqCtx);
           }
           break;
         case 'evo_inspect':
@@ -1274,13 +1413,19 @@ export class EvoMcpDispatcher {
     }
   }
 
-  private handleSearch(args: Record<string, unknown>, reqCtx: RequestContext) {
+  private prepareSearchContext(args: Record<string, unknown>, reqCtx: RequestContext) {
     const query = String(args.query || '');
     const kind = (args.kind ? String(args.kind) : 'all') as EvoKind | 'all';
+    const rawScope = typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : 'all';
+    const scope = (['all', 'project', 'global'].includes(rawScope) ? rawScope : 'all') as
+      | 'all'
+      | 'project'
+      | 'global';
     const limit = Number(args.limit || 8);
     const reqWorkspaceDir = reqCtx.requestWorkspaceDir;
     const targetCtx = reqCtx.wsCtx;
     const hasLocalEvo = reqCtx.hasLocalEvo;
+    const isTargetGlobalRoot = hasLocalEvo && isGlobalFallbackRoot(reqCtx.storage.rootDir);
     const searchScopeDir = reqWorkspaceDir || reqCtx.storage.rootDir;
     const localTelemetry =
       hasLocalEvo && reqCtx.telemetry && !reqCtx.telemetry.isClosed()
@@ -1288,35 +1433,29 @@ export class EvoMcpDispatcher {
         : hasLocalEvo && hasValidEvoStructure(reqCtx.storage.evoDir)
           ? this.ensureActiveTelemetry(reqCtx, reqCtx.telemetry)
           : undefined;
+    return {
+      query,
+      kind,
+      scope,
+      limit,
+      targetCtx,
+      hasLocalEvo,
+      isTargetGlobalRoot,
+      searchScopeDir,
+      localTelemetry,
+    };
+  }
 
-    const localHits =
-      hasLocalEvo && localTelemetry
-        ? localTelemetry
-            .search(query, kind, limit, searchScopeDir)
-            .map((h) => ({ ...h, tier: 'LOCAL' as const }))
-        : [];
-
-    const mergedHits: SearchHit[] = [...localHits];
-    const seenIds = new Set<string>(localHits.map((h) => h.id));
-
-    if (kind !== 'memory') {
-      for (const gCtx of this.getGlobalFallbackContexts(reqCtx)) {
-        const globalKind = kind === 'all' ? 'all' : kind;
-        const gHits = gCtx.telemetry
-          ? gCtx.telemetry.search(query, globalKind, limit, searchScopeDir)
-          : [];
-        for (const gh of gHits) {
-          if (gh.kind === 'memory' || seenIds.has(gh.id)) continue;
-          seenIds.add(gh.id);
-          mergedHits.push({
-            ...gh,
-            score: gh.score * 0.85,
-            tier: 'GLOBAL',
-          });
-        }
-      }
-    }
-
+  private finalizeSearchResponse(
+    query: string,
+    kind: EvoKind | 'all',
+    limit: number,
+    reqCtx: RequestContext,
+    targetCtx: WorkspaceContext,
+    hasLocalEvo: boolean,
+    localTelemetry: EvoTelemetry | undefined,
+    mergedHits: SearchHit[]
+  ) {
     const highRelevanceHits = mergedHits.filter((h) => !h.low_overlap);
     const effectiveMergedHits =
       highRelevanceHits.length >= 2
@@ -1414,6 +1553,7 @@ export class EvoMcpDispatcher {
           !h.low_overlap &&
           (h.kind === 'rule' ||
             h.kind === 'skill' ||
+            h.kind === 'preference' ||
             (h.kind === 'memory' &&
               (h.memory_status === 'VERIFIED' || h.memory_status === 'OTHER_BRANCH')))
       )
@@ -1450,6 +1590,134 @@ export class EvoMcpDispatcher {
     };
   }
 
+  private handleSearch(args: Record<string, unknown>, reqCtx: RequestContext) {
+    const {
+      query,
+      kind,
+      scope,
+      limit,
+      targetCtx,
+      hasLocalEvo,
+      isTargetGlobalRoot,
+      searchScopeDir,
+      localTelemetry,
+    } = this.prepareSearchContext(args, reqCtx);
+
+    const includeLocal =
+      hasLocalEvo &&
+      Boolean(localTelemetry) &&
+      ((scope === 'all') ||
+        (scope === 'project' && !isTargetGlobalRoot) ||
+        (scope === 'global' && isTargetGlobalRoot));
+    const localHits =
+      includeLocal && localTelemetry
+        ? localTelemetry
+            .search(query, kind, limit, searchScopeDir)
+            .map((h) => ({ ...h, tier: (isTargetGlobalRoot ? 'GLOBAL' : 'LOCAL') as 'LOCAL' | 'GLOBAL' }))
+        : [];
+
+    const mergedHits: SearchHit[] = [...localHits];
+    const seenIds = new Set<string>(localHits.map((h) => h.id));
+
+    if (scope !== 'project' && kind !== 'memory') {
+      for (const gCtx of this.getGlobalFallbackContexts(reqCtx)) {
+        const globalKind = kind === 'all' ? 'all' : kind;
+        const gHits = gCtx.telemetry
+          ? gCtx.telemetry.search(query, globalKind, limit, searchScopeDir)
+          : [];
+        for (const gh of gHits) {
+          if (gh.kind === 'memory' || seenIds.has(gh.id)) continue;
+          seenIds.add(gh.id);
+          const applyDiscount =
+            hasLocalEvo && !isTargetGlobalRoot && scope !== 'global' && gh.kind !== 'preference';
+          mergedHits.push({
+            ...gh,
+            score: applyDiscount ? gh.score * 0.85 : gh.score,
+            tier: 'GLOBAL',
+          });
+        }
+      }
+    }
+
+    return this.finalizeSearchResponse(
+      query,
+      kind,
+      limit,
+      reqCtx,
+      targetCtx,
+      hasLocalEvo,
+      localTelemetry,
+      mergedHits
+    );
+  }
+
+  private async handleSearchAsync(args: Record<string, unknown>, reqCtx: RequestContext) {
+    const {
+      query,
+      kind,
+      scope,
+      limit,
+      targetCtx,
+      hasLocalEvo,
+      isTargetGlobalRoot,
+      searchScopeDir,
+      localTelemetry,
+    } = this.prepareSearchContext(args, reqCtx);
+
+    const includeLocal =
+      hasLocalEvo &&
+      Boolean(localTelemetry) &&
+      ((scope === 'all') ||
+        (scope === 'project' && !isTargetGlobalRoot) ||
+        (scope === 'global' && isTargetGlobalRoot));
+    const localHits =
+      includeLocal && localTelemetry
+        ? (await localTelemetry.searchAsync(query, kind, limit, searchScopeDir)).map((h) => ({
+            ...h,
+            tier: (isTargetGlobalRoot ? 'GLOBAL' : 'LOCAL') as 'LOCAL' | 'GLOBAL',
+          }))
+        : [];
+
+    const mergedHits: SearchHit[] = [...localHits];
+    const seenIds = new Set<string>(localHits.map((h) => h.id));
+
+    if (scope !== 'project' && kind !== 'memory') {
+      const globalCtxs = this.getGlobalFallbackContexts(reqCtx);
+      const globalKind = kind === 'all' ? 'all' : kind;
+      const globalResults = await Promise.all(
+        globalCtxs.map((gCtx) =>
+          gCtx.telemetry
+            ? gCtx.telemetry.searchAsync(query, globalKind, limit, searchScopeDir)
+            : Promise.resolve([])
+        )
+      );
+      for (const gHits of globalResults) {
+        for (const gh of gHits) {
+          if (gh.kind === 'memory' || seenIds.has(gh.id)) continue;
+          seenIds.add(gh.id);
+          const applyDiscount =
+            hasLocalEvo && !isTargetGlobalRoot && scope !== 'global' && gh.kind !== 'preference';
+          mergedHits.push({
+            ...gh,
+            score: applyDiscount ? gh.score * 0.85 : gh.score,
+            tier: 'GLOBAL',
+          });
+        }
+      }
+    }
+
+    return this.finalizeSearchResponse(
+      query,
+      kind,
+      limit,
+      reqCtx,
+      targetCtx,
+      hasLocalEvo,
+      localTelemetry,
+      mergedHits
+    );
+  }
+
   private handleInspect(args: Record<string, unknown>, reqCtx: RequestContext) {
     return this.executeInspect(args, reqCtx, false);
   }
@@ -1483,11 +1751,10 @@ export class EvoMcpDispatcher {
       return { hit_count: 1, helped_count: 0, tokens_saved: 0 };
     };
 
-    const formatInspectResult = (bodyText: string, isPaused = false) => {
+    const formatInspectResult = (bodyText: string, isPaused = false): any => {
       const pausedBanner = isPaused
         ? '> [!WARNING] **[PAUSED — enabled: false]**: This capability is currently paused in EvoKernel Workbench. Inspect only; do not rely on it as active policy.\n\n'
         : '';
-      const reminder = this.checkDirtyTreeReminder(storage.rootDir, telemetry, reqCtx.wsCtx);
       const antiPoisonReminder = this.getSessionAntiPoisonReminder(
         storage.rootDir,
         storage,
@@ -1495,6 +1762,14 @@ export class EvoMcpDispatcher {
         'all',
         hasLocal
       );
+      if (asyncMode) {
+        return this.checkDirtyTreeReminderAsync(storage.rootDir, telemetry, reqCtx.wsCtx).then(
+          (reminder) => ({
+            content: [{ type: 'text' as const, text: pausedBanner + bodyText + reminder + antiPoisonReminder }],
+          })
+        );
+      }
+      const reminder = this.checkDirtyTreeReminder(storage.rootDir, telemetry, reqCtx.wsCtx);
       return { content: [{ type: 'text' as const, text: pausedBanner + bodyText + reminder + antiPoisonReminder }] };
     };
 
@@ -1671,6 +1946,49 @@ export class EvoMcpDispatcher {
           ? `[TOOL L1] ${tool.id} (${tool.runtime})\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}`
           : `[TOOL L2] ${tool.id} (${tool.runtime})\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nL0: ${tool.l0_summary}\nInput Schema:\n${JSON.stringify(tool.input_schema, null, 2)}\n\nScript (${tool.entry_script}):\n\`\`\`${tool.runtime}\n${tool.script_code}\n\`\`\``;
       return formatInspectResult(body, tool.enabled === false);
+    }
+
+    let pref = hasLocal ? storage.getPreference(id) : null;
+    activeTelemetry = hasLocal ? telemetry : undefined;
+    let isPrefGlobalHit = false;
+    if (!pref) {
+      for (const gCtx of this.getGlobalFallbackContexts(reqCtx)) {
+        const gPref = gCtx.storage.getPreference(id);
+        if (gPref) {
+          pref = gPref;
+          activeTelemetry = gCtx.telemetry;
+          isPrefGlobalHit = true;
+          break;
+        }
+      }
+    }
+    if (pref) {
+      activeTelemetry?.recordUsage(id, true, 150);
+      if (hasLocal && hasValidEvoStructure(storage.evoDir)) {
+        telemetry = this.ensureActiveTelemetry(reqCtx, telemetry);
+        if (!isPrefGlobalHit) {
+          activeTelemetry = telemetry;
+        }
+        telemetry?.recordRecallEvent({
+          eventType: 'inspect',
+          capabilityId: pref.id,
+          kind: 'preference',
+          tier,
+        });
+        if (tier !== 'L1') {
+          telemetry?.recordRecalledCapability({
+            id: pref.id,
+            kind: 'preference',
+            tier: isPrefGlobalHit ? 'GLOBAL' : 'LOCAL',
+          });
+        }
+      }
+      const stat = getTelemetryStat(pref.id, activeTelemetry);
+      const body =
+        tier === 'L1'
+          ? `[PREFERENCE L1] ${pref.id} (${pref.category} | always_on: ${pref.always_on})\nL0: ${pref.l0_summary}\nTokens: ${pref.tokens}\nTags: ${pref.tags.join(', ') || 'none'}`
+          : `[PREFERENCE L2] ${pref.id} — ${pref.title}\nCategory: ${pref.category} | Always-On: ${pref.always_on} | Tokens: ${pref.tokens}\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nTags: ${pref.tags.join(', ') || 'none'}\nL0: ${pref.l0_summary}\n\n${pref.content}`;
+      return formatInspectResult(body, pref.enabled === false);
     }
 
     const memory = hasLocal ? storage.getMemory(id) : null;
@@ -1989,7 +2307,7 @@ export class EvoMcpDispatcher {
           const schemaHint = res.isError
             ? this.formatInputSchemaHint(cachedExtTool?.inputSchema)
             : '';
-          const reminder = this.checkDirtyTreeReminder(
+          const reminder = await this.checkDirtyTreeReminderAsync(
             reqCtx.requestWorkspaceDir || initialCtx.storage.rootDir,
             localTelemetry,
             reqCtx.wsCtx
@@ -2114,7 +2432,7 @@ export class EvoMcpDispatcher {
         // Ignore telemetry error if DB was closed concurrently
       }
 
-      const reminder = this.checkDirtyTreeReminder(execCwd, localTel, reqCtx.wsCtx);
+      const reminder = await this.checkDirtyTreeReminderAsync(execCwd, localTel, reqCtx.wsCtx);
       const antiPoisonReminder = this.getSessionAntiPoisonReminder(
         boundStorage.rootDir,
         boundStorage,
@@ -2200,6 +2518,14 @@ export class EvoMcpDispatcher {
         if (payload.kind === 'rule' && Boolean(payload.core) && this.onCoreRulesChanged) {
           this.onCoreRulesChanged();
         }
+      } else if (payload.kind === 'preference' && isGlobalFallbackRoot(storage.rootDir)) {
+        const syncRes = syncGlobalUserProfile(storage.rootDir);
+        result.diagnostics = {
+          ...(result.diagnostics || {}),
+          synced_profile_targets: syncRes.updatedTargets,
+          profile_tokens: syncRes.totalTokens,
+          max_profile_tokens: syncRes.maxTokens,
+        };
       }
 
       return {
@@ -2281,7 +2607,8 @@ export class EvoMcpDispatcher {
           storage.getRule(id) ||
           storage.getSkill(id) ||
           storage.getTool(id) ||
-          storage.getMemory(id),
+          storage.getMemory(id) ||
+          storage.getPreference(id),
       }))
       .filter((entry) => entry.item !== null);
 
@@ -2311,7 +2638,8 @@ export class EvoMcpDispatcher {
       storage.getRule(mergedCleanId) ||
       storage.getSkill(mergedCleanId) ||
       storage.getTool(mergedCleanId) ||
-      storage.getMemory(mergedCleanId);
+      storage.getMemory(mergedCleanId) ||
+      storage.getPreference(mergedCleanId);
     const preservedCreatedAt = existingMergedTarget?.created_at;
 
     const existingRuleTargets: EvoRule[] = targetIds
@@ -2377,6 +2705,7 @@ export class EvoMcpDispatcher {
           path.join(storage.rulesDir, `${cleanId}.md`),
           path.join(storage.rulesDir, 'scoped', `${cleanId}.md`),
           path.join(storage.memoriesDir, `${cleanId}.md`),
+          path.join(storage.preferencesDir, `${cleanId}.md`),
           path.join(storage.skillsDir, cleanId),
           path.join(storage.toolsDir, cleanId),
         ];
@@ -2409,7 +2738,8 @@ export class EvoMcpDispatcher {
           storage.archiveCapability(id, 'rule', reason) ||
           storage.archiveCapability(id, 'skill', reason) ||
           storage.archiveCapability(id, 'tool', reason) ||
-          storage.archiveCapability(id, 'memory', reason)
+          storage.archiveCapability(id, 'memory', reason) ||
+          storage.archiveCapability(id, 'preference', reason)
         ) {
           archived.push(id);
         }
@@ -2435,7 +2765,19 @@ export class EvoMcpDispatcher {
           );
         }
 
-        syncManagedRuleBlocks(storage.rootDir);
+        if (effectiveMergedProposal.kind === 'preference' && isGlobalFallbackRoot(storage.rootDir)) {
+          const syncRes = syncGlobalUserProfile(storage.rootDir);
+          if (commitRes.passed) {
+            commitRes.diagnostics = {
+              ...(commitRes.diagnostics || {}),
+              synced_profile_targets: syncRes.updatedTargets,
+              profile_tokens: syncRes.totalTokens,
+              max_profile_tokens: syncRes.maxTokens,
+            };
+          }
+        } else {
+          syncManagedRuleBlocks(storage.rootDir);
+        }
         if (this.onCoreRulesChanged) {
           this.onCoreRulesChanged();
         }

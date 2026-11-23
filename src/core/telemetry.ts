@@ -12,7 +12,8 @@ import type {
   TelemetryRecord,
 } from './types.js';
 import { EvoStorage } from './storage.js';
-import { verifyMemoryFreshness } from './memory.js';
+import { verifyMemoryFreshness, verifyMemoryFreshnessAsync } from './memory.js';
+import type { MemoryVerificationReport } from './types.js';
 import {
   type DomainLexiconConfig,
   compileLexiconConfig,
@@ -313,7 +314,7 @@ export function redactSensitiveDiagnostics(text: string, workspaceRoot?: string)
 }
 
 export function computeDiskSyncDigest(evoDir: string): string {
-  const subdirs = ['rules', 'skills', 'tools', 'memories'];
+  const subdirs = ['rules', 'skills', 'tools', 'memories', 'preferences'];
   const parts: string[] = [];
   for (const sub of subdirs) {
     const dir = path.join(evoDir, sub);
@@ -1099,7 +1100,7 @@ export class EvoTelemetry {
             .all()
         ) as Array<{ key: string; value: string }>;
         const stateMap = new Map(stateRows.map((r) => [r.key, r.value]));
-        versionMatches = stateMap.get('fts_index_version') === '4';
+        versionMatches = stateMap.get('fts_index_version') === '5';
         if (versionMatches && stateMap.get('disk_sync_digest') === diskDigest) {
           this.lastSyncDigest = diskDigest;
           return;
@@ -1113,6 +1114,7 @@ export class EvoTelemetry {
     const skills = this.storage.listSkills();
     const tools = this.storage.listTools();
     const memories = this.storage.listMemories();
+    const preferences = this.storage.listPreferences();
     const externalTools = this.storage.listExternalTools();
 
     const activeIds = new Set<string>();
@@ -1120,6 +1122,7 @@ export class EvoTelemetry {
     for (const s of skills) activeIds.add(s.id);
     for (const t of tools) activeIds.add(t.id);
     for (const m of memories) activeIds.add(m.id);
+    for (const p of preferences) activeIds.add(p.id);
     for (const et of externalTools) activeIds.add(et.id);
 
     const activeMemoryIds = new Set<string>(memories.map((m) => m.id));
@@ -1428,6 +1431,18 @@ export class EvoTelemetry {
         );
       }
 
+      for (const p of preferences) {
+        const idTokens = p.id.replace(/[-_]+/g, ' ');
+        const tagsText = Array.isArray(p.tags) ? p.tags.join(' ') : '';
+        const cjkKw = extractCjkBigrams(
+          `${p.title} ${p.l0_summary} ${p.content} ${p.category} ${tagsText}`
+        ).join(' ');
+        const normKw = buildNormalizedKeywords([p.id, p.title, p.l0_summary, p.category, tagsText]);
+        const kw = [idTokens, p.category, tagsText, cjkKw, normKw].filter(Boolean).join(' ').trim();
+        upsertFtsRow(p.id, 'preference', p.title, p.l0_summary, kw, p.content);
+        upsertTelemetry.run(p.id, 'preference', p.title, p.l0_summary, p.category, now, p.created_at || now);
+      }
+
       this.db.exec('COMMIT;');
       try {
         const stmt = this.db.prepare(`
@@ -1435,7 +1450,7 @@ export class EvoTelemetry {
           VALUES (?, ?, ?)
         `);
         stmt.run('disk_sync_digest', diskDigest, now);
-        stmt.run('fts_index_version', '4', now);
+        stmt.run('fts_index_version', '5', now);
         this.lastSyncDigest = diskDigest;
       } catch {}
     } catch (err) {
@@ -1536,12 +1551,12 @@ export class EvoTelemetry {
     }
   }
 
-  public search(
+  private prepareSearchCandidates(
     query: string,
-    kind: EvoKind | 'all' = 'all',
-    limit = 10,
+    kind: EvoKind | 'all',
+    limit: number,
     activeWorkspaceRoot?: string
-  ): SearchHit[] {
+  ) {
     this.syncFromDisk();
     const lexiconRoot = activeWorkspaceRoot || this.storage.rootDir;
     const tokens = extractQueryTokens(query, lexiconRoot);
@@ -1628,6 +1643,9 @@ export class EvoTelemetry {
       for (const m of this.storage.listMemories()) {
         if (m.enabled === false) nextPausedIds.add(`memory:${m.id}`);
       }
+      for (const p of this.storage.listPreferences()) {
+        if (p.enabled === false) nextPausedIds.add(`preference:${p.id}`);
+      }
       this.cachedPausedIds = nextPausedIds;
       this.cachedPausedDigest = currentPausedDigest;
     }
@@ -1646,6 +1664,192 @@ export class EvoTelemetry {
       return true;
     });
 
+    return {
+      conceptGroups,
+      fetchLimit,
+      wsForScope,
+      workspaceCodeExts,
+      pausedIds,
+      filteredRows,
+    };
+  }
+
+  private computeHitBase(
+    r: Record<string, unknown>,
+    conceptGroups: QueryConceptGroup[],
+    fuzzyOverride?: { score: number; matchedConcepts: number; lowOverlap: boolean }
+  ) {
+    const id = String(r.id);
+    const itemKind = String(r.kind) as EvoKind;
+    const succ = Number(r.success_count || 0);
+    const fail = Number(r.fail_count || 0);
+    const total = succ + fail;
+    const rate = total > 0 ? `${((succ / total) * 100).toFixed(0)}%` : '100% (verified)';
+
+    let rawScore: number;
+    let lowOverlap: boolean | undefined;
+    let matchedConcepts: number;
+
+    if (fuzzyOverride) {
+      rawScore = fuzzyOverride.lowOverlap ? fuzzyOverride.score * 0.25 : fuzzyOverride.score;
+      lowOverlap = fuzzyOverride.lowOverlap || undefined;
+      matchedConcepts = fuzzyOverride.matchedConcepts;
+    } else {
+      rawScore = Math.abs(Number(r.rank || 0));
+      if (rawScore === 0) rawScore = 1.0;
+      if (r._score === undefined) {
+        const helped = Number(r.helped_count || 0);
+        const hurt = Number(r.hurt_count || 0);
+        const contested = Number(r.contested_count || 0);
+        const outcomes = helped + hurt + contested;
+        if (outcomes >= 2 && (hurt + contested) > helped) {
+          rawScore *= 0.65;
+        } else if (helped >= 3 && hurt === 0 && contested === 0) {
+          rawScore *= 1.10;
+        }
+      }
+
+      const overlap = evaluateConceptOverlap(conceptGroups, r);
+      if (overlap.lowOverlap) {
+        rawScore *= 0.25;
+      } else if (conceptGroups.length >= 2 && overlap.matchedConcepts >= 2) {
+        rawScore *= 1 + Math.min(overlap.matchedConcepts - 1, 3) * 0.15;
+      }
+      lowOverlap = overlap.lowOverlap || undefined;
+      matchedConcepts = overlap.matchedConcepts;
+    }
+
+    return { id, itemKind, rate, rawScore, lowOverlap, matchedConcepts };
+  }
+
+  private formatMemorySearchHit(
+    id: string,
+    r: Record<string, unknown>,
+    rate: string,
+    rawScore: number,
+    lowOverlap: boolean | undefined,
+    matchedConcepts: number,
+    mem: NonNullable<ReturnType<EvoStorage['getMemory']>>,
+    ver: MemoryVerificationReport,
+    selectActiveStmt: ReturnType<DatabaseSync['prepare']>,
+    updateActiveStmt: ReturnType<DatabaseSync['prepare']>,
+    now: string
+  ): SearchHit {
+    const isActive = ver.overall_status !== 'STALE' ? 1 : 0;
+    if (!this.closed) {
+      withSqliteBusyRetry(() => {
+        const memRow = selectActiveStmt.get(id) as { is_active: number } | undefined;
+        if (memRow && memRow.is_active !== isActive) {
+          updateActiveStmt.run(isActive, now, id);
+        }
+      });
+    }
+
+    if (ver.overall_status === 'VERIFIED') {
+      return {
+        id,
+        kind: 'memory',
+        title: String(r.title),
+        l0_summary: String(r.l0_summary),
+        scope_glob: String(r.scope_glob || '**/*'),
+        hit_count: Number(r.hit_count || 0),
+        success_rate: rate,
+        score: rawScore,
+        low_overlap: lowOverlap,
+        matched_concepts: matchedConcepts,
+        memory_status: 'VERIFIED',
+        memory_badge: `[VERIFIED ${ver.verified_count}/${ver.total_symbols} symbols @ ${ver.current_commit}]`,
+      };
+    } else if (ver.overall_status === 'OTHER_BRANCH') {
+      const branchLabel = ver.recorded_branch || mem.created_branch || 'other-branch';
+      return {
+        id,
+        kind: 'memory',
+        title: String(r.title),
+        l0_summary: String(r.l0_summary),
+        scope_glob: String(r.scope_glob || '**/*'),
+        hit_count: Number(r.hit_count || 0),
+        success_rate: `BRANCH:${branchLabel}`,
+        score: rawScore * 0.9,
+        low_overlap: lowOverlap,
+        matched_concepts: matchedConcepts,
+        memory_status: 'OTHER_BRANCH',
+        memory_badge: `[BRANCH: ${branchLabel}@${ver.recorded_commit} (${ver.verified_count}/${ver.total_symbols} in HEAD)]`,
+      };
+    } else {
+      const drifted = ver.checks
+        .filter((c) => c.status !== 'VERIFIED')
+        .map((c) => `${c.symbol}:${c.status}`)
+        .join(', ');
+      return {
+        id,
+        kind: 'memory',
+        title: String(r.title),
+        l0_summary: String(r.l0_summary),
+        scope_glob: String(r.scope_glob || '**/*'),
+        hit_count: Number(r.hit_count || 0),
+        success_rate: 'STALE (needs re-verification)',
+        score: rawScore * 0.25, // Demote stale memories in ranking
+        low_overlap: lowOverlap,
+        matched_concepts: matchedConcepts,
+        memory_status: 'STALE',
+        memory_badge: `[STALE: ${drifted || 'symbols drifted'}]`,
+      };
+    }
+  }
+
+  private mergeFuzzyHits(hits: SearchHit[], fuzzyHits: SearchHit[]): SearchHit[] {
+    if (fuzzyHits.length === 0) return hits;
+    const byKey = new Map<string, SearchHit>();
+    for (const h of hits) {
+      byKey.set(`${h.kind}:${h.id}`, h);
+    }
+    for (const fh of fuzzyHits) {
+      const key = `${fh.kind}:${fh.id}`;
+      if (!byKey.has(key) || (byKey.get(key)?.low_overlap && !fh.low_overlap)) {
+        byKey.set(key, fh);
+      }
+    }
+    return Array.from(byKey.values());
+  }
+
+  private finalizeSearchHits(hits: SearchHit[], limit: number): SearchHit[] {
+    // Sort VERIFIED / active capabilities first, OTHER_BRANCH second, and STALE memories last
+    const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
+      s === 'STALE' ? 2 : s === 'OTHER_BRANCH' ? 1 : 0;
+
+    const highRelevanceHits = hits.filter((h) => !h.low_overlap);
+    const effectiveHits =
+      highRelevanceHits.length >= 2
+        ? highRelevanceHits
+        : highRelevanceHits.length === 1
+          ? hits.filter((h) => !h.low_overlap || (h.matched_concepts ?? 0) > 0)
+          : hits;
+
+    return effectiveHits
+      .sort((a, b) => {
+        const tierDiff = statusTier(a.memory_status) - statusTier(b.memory_status);
+        if (tierDiff !== 0) return tierDiff;
+        return b.score - a.score || b.hit_count - a.hit_count;
+      })
+      .slice(0, limit);
+  }
+
+  public search(
+    query: string,
+    kind: EvoKind | 'all' = 'all',
+    limit = 10,
+    activeWorkspaceRoot?: string
+  ): SearchHit[] {
+    const {
+      conceptGroups,
+      fetchLimit,
+      wsForScope,
+      workspaceCodeExts,
+      pausedIds,
+      filteredRows,
+    } = this.prepareSearchCandidates(query, kind, limit, activeWorkspaceRoot);
+
     const updateActiveStmt = this.db.prepare(
       'UPDATE episodic_memories SET is_active = ?, last_verified_at = ? WHERE id = ?'
     );
@@ -1656,45 +1860,11 @@ export class EvoTelemetry {
       r: Record<string, unknown>,
       fuzzyOverride?: { score: number; matchedConcepts: number; lowOverlap: boolean }
     ): SearchHit => {
-      const id = String(r.id);
-      const itemKind = String(r.kind) as EvoKind;
-      const succ = Number(r.success_count || 0);
-      const fail = Number(r.fail_count || 0);
-      const total = succ + fail;
-      const rate = total > 0 ? `${((succ / total) * 100).toFixed(0)}%` : '100% (verified)';
-
-      let rawScore: number;
-      let lowOverlap: boolean | undefined;
-      let matchedConcepts: number;
-
-      if (fuzzyOverride) {
-        rawScore = fuzzyOverride.lowOverlap ? fuzzyOverride.score * 0.25 : fuzzyOverride.score;
-        lowOverlap = fuzzyOverride.lowOverlap || undefined;
-        matchedConcepts = fuzzyOverride.matchedConcepts;
-      } else {
-        rawScore = Math.abs(Number(r.rank || 0));
-        if (rawScore === 0) rawScore = 1.0;
-        if (r._score === undefined) {
-          const helped = Number(r.helped_count || 0);
-          const hurt = Number(r.hurt_count || 0);
-          const contested = Number(r.contested_count || 0);
-          const outcomes = helped + hurt + contested;
-          if (outcomes >= 2 && (hurt + contested) > helped) {
-            rawScore *= 0.65;
-          } else if (helped >= 3 && hurt === 0 && contested === 0) {
-            rawScore *= 1.10;
-          }
-        }
-
-        const overlap = evaluateConceptOverlap(conceptGroups, r);
-        if (overlap.lowOverlap) {
-          rawScore *= 0.25;
-        } else if (conceptGroups.length >= 2 && overlap.matchedConcepts >= 2) {
-          rawScore *= 1 + Math.min(overlap.matchedConcepts - 1, 3) * 0.15;
-        }
-        lowOverlap = overlap.lowOverlap || undefined;
-        matchedConcepts = overlap.matchedConcepts;
-      }
+      const { id, itemKind, rate, rawScore, lowOverlap, matchedConcepts } = this.computeHitBase(
+        r,
+        conceptGroups,
+        fuzzyOverride
+      );
 
       if (itemKind === 'memory') {
         const mem = this.storage.getMemory(id);
@@ -1703,65 +1873,19 @@ export class EvoTelemetry {
             includeCallers: false,
             cacheDb: this.db,
           });
-          const isActive = ver.overall_status !== 'STALE' ? 1 : 0;
-          withSqliteBusyRetry(() => {
-            const memRow = selectActiveStmt.get(id) as { is_active: number } | undefined;
-            if (memRow && memRow.is_active !== isActive) {
-              updateActiveStmt.run(isActive, now, id);
-            }
-          });
-
-          if (ver.overall_status === 'VERIFIED') {
-            return {
-              id,
-              kind: itemKind,
-              title: String(r.title),
-              l0_summary: String(r.l0_summary),
-              scope_glob: String(r.scope_glob || '**/*'),
-              hit_count: Number(r.hit_count || 0),
-              success_rate: rate,
-              score: rawScore,
-              low_overlap: lowOverlap,
-              matched_concepts: matchedConcepts,
-              memory_status: 'VERIFIED',
-              memory_badge: `[VERIFIED ${ver.verified_count}/${ver.total_symbols} symbols @ ${ver.current_commit}]`,
-            };
-          } else if (ver.overall_status === 'OTHER_BRANCH') {
-            const branchLabel = ver.recorded_branch || mem.created_branch || 'other-branch';
-            return {
-              id,
-              kind: itemKind,
-              title: String(r.title),
-              l0_summary: String(r.l0_summary),
-              scope_glob: String(r.scope_glob || '**/*'),
-              hit_count: Number(r.hit_count || 0),
-              success_rate: `BRANCH:${branchLabel}`,
-              score: rawScore * 0.9,
-              low_overlap: lowOverlap,
-              matched_concepts: matchedConcepts,
-              memory_status: 'OTHER_BRANCH',
-              memory_badge: `[BRANCH: ${branchLabel}@${ver.recorded_commit} (${ver.verified_count}/${ver.total_symbols} in HEAD)]`,
-            };
-          } else {
-            const drifted = ver.checks
-              .filter((c) => c.status !== 'VERIFIED')
-              .map((c) => `${c.symbol}:${c.status}`)
-              .join(', ');
-            return {
-              id,
-              kind: itemKind,
-              title: String(r.title),
-              l0_summary: String(r.l0_summary),
-              scope_glob: String(r.scope_glob || '**/*'),
-              hit_count: Number(r.hit_count || 0),
-              success_rate: 'STALE (needs re-verification)',
-              score: rawScore * 0.25, // Demote stale memories in ranking
-              low_overlap: lowOverlap,
-              matched_concepts: matchedConcepts,
-              memory_status: 'STALE',
-              memory_badge: `[STALE: ${drifted || 'symbols drifted'}]`,
-            };
-          }
+          return this.formatMemorySearchHit(
+            id,
+            r,
+            rate,
+            rawScore,
+            lowOverlap,
+            matchedConcepts,
+            mem,
+            ver,
+            selectActiveStmt,
+            updateActiveStmt,
+            now
+          );
         }
       }
 
@@ -1803,41 +1927,111 @@ export class EvoTelemetry {
               lowOverlap: Boolean(r._fuzzyLowOverlap),
             })
           );
-        if (fuzzyHits.length > 0) {
-          const byKey = new Map<string, SearchHit>();
-          for (const h of hits) {
-            byKey.set(`${h.kind}:${h.id}`, h);
-          }
-          for (const fh of fuzzyHits) {
-            const key = `${fh.kind}:${fh.id}`;
-            if (!byKey.has(key) || (byKey.get(key)?.low_overlap && !fh.low_overlap)) {
-              byKey.set(key, fh);
-            }
-          }
-          hits = Array.from(byKey.values());
-        }
+        hits = this.mergeFuzzyHits(hits, fuzzyHits);
       }
     }
 
-    // Sort VERIFIED / active capabilities first, OTHER_BRANCH second, and STALE memories last
-    const statusTier = (s?: 'VERIFIED' | 'OTHER_BRANCH' | 'STALE') =>
-      s === 'STALE' ? 2 : s === 'OTHER_BRANCH' ? 1 : 0;
+    return this.finalizeSearchHits(hits, limit);
+  }
 
-    const highRelevanceHits = hits.filter((h) => !h.low_overlap);
-    const effectiveHits =
-      highRelevanceHits.length >= 2
-        ? highRelevanceHits
-        : highRelevanceHits.length === 1
-          ? hits.filter((h) => !h.low_overlap || (h.matched_concepts ?? 0) > 0)
-          : hits;
+  public async searchAsync(
+    query: string,
+    kind: EvoKind | 'all' = 'all',
+    limit = 10,
+    scopeDir?: string
+  ): Promise<SearchHit[]> {
+    const {
+      conceptGroups,
+      fetchLimit,
+      wsForScope,
+      workspaceCodeExts,
+      pausedIds,
+      filteredRows,
+    } = this.prepareSearchCandidates(query, kind, limit, scopeDir);
 
-    return effectiveHits
-      .sort((a, b) => {
-        const tierDiff = statusTier(a.memory_status) - statusTier(b.memory_status);
-        if (tierDiff !== 0) return tierDiff;
-        return b.score - a.score || b.hit_count - a.hit_count;
-      })
-      .slice(0, limit);
+    const updateActiveStmt = this.db.prepare(
+      'UPDATE episodic_memories SET is_active = ?, last_verified_at = ? WHERE id = ?'
+    );
+    const selectActiveStmt = this.db.prepare('SELECT is_active FROM episodic_memories WHERE id = ?');
+    const now = new Date().toISOString();
+
+    const buildSearchHitAsync = async (
+      r: Record<string, unknown>,
+      fuzzyOverride?: { score: number; matchedConcepts: number; lowOverlap: boolean }
+    ): Promise<SearchHit> => {
+      const { id, itemKind, rate, rawScore, lowOverlap, matchedConcepts } = this.computeHitBase(
+        r,
+        conceptGroups,
+        fuzzyOverride
+      );
+
+      if (itemKind === 'memory') {
+        const mem = this.storage.getMemory(id);
+        if (mem) {
+          const ver = await verifyMemoryFreshnessAsync(this.storage.rootDir, mem, {
+            includeCallers: false,
+            cacheDb: this.closed ? undefined : this.db,
+          });
+          return this.formatMemorySearchHit(
+            id,
+            r,
+            rate,
+            rawScore,
+            lowOverlap,
+            matchedConcepts,
+            mem,
+            ver,
+            selectActiveStmt,
+            updateActiveStmt,
+            now
+          );
+        }
+      }
+
+      return {
+        id,
+        kind: itemKind,
+        title: String(r.title),
+        l0_summary: String(r.l0_summary),
+        scope_glob: String(r.scope_glob || '**/*'),
+        hit_count: Number(r.hit_count || 0),
+        success_rate: rate,
+        score: rawScore,
+        low_overlap: lowOverlap,
+        matched_concepts: matchedConcepts,
+      };
+    };
+
+    let hits: SearchHit[] = await Promise.all(filteredRows.map((r) => buildSearchHitAsync(r)));
+
+    if (query.trim() && hits.filter((h) => !h.low_overlap).length === 0) {
+      const fuzzyRows = this.searchFuzzyFallback(
+        query,
+        conceptGroups,
+        kind,
+        fetchLimit,
+        pausedIds,
+        wsForScope,
+        workspaceCodeExts
+      );
+      if (fuzzyRows.length > 0) {
+        const eligibleFuzzyRows = fuzzyRows.filter(
+          (r) => !(hits.length > 0 && Boolean(r._fuzzyLowOverlap))
+        );
+        const fuzzyHits = await Promise.all(
+          eligibleFuzzyRows.map((r) =>
+            buildSearchHitAsync(r, {
+              score: Number(r._fuzzyScore || 0.2),
+              matchedConcepts: Number(r._fuzzyMatchedConcepts || 1),
+              lowOverlap: Boolean(r._fuzzyLowOverlap),
+            })
+          )
+        );
+        hits = this.mergeFuzzyHits(hits, fuzzyHits);
+      }
+    }
+
+    return this.finalizeSearchHits(hits, limit);
   }
 
   private searchFuzzyFallback(
@@ -2451,8 +2645,19 @@ export class EvoTelemetry {
           const skill = this.storage.getSkill(cleanId);
           const tool = this.storage.getTool(cleanId);
           const memory = this.storage.getMemory(cleanId);
-          const cap = rule || skill || tool || memory;
-          const kind = rule ? 'rule' : skill ? 'skill' : tool ? 'tool' : memory ? 'memory' : 'rule';
+          const pref = this.storage.getPreference(cleanId);
+          const cap = rule || skill || tool || memory || pref;
+          const kind = rule
+            ? 'rule'
+            : skill
+              ? 'skill'
+              : tool
+                ? 'tool'
+                : memory
+                  ? 'memory'
+                  : pref
+                    ? 'preference'
+                    : 'rule';
           const title = cap?.title || cleanId;
           const l0_summary = cap?.l0_summary || '';
           const scope_glob = rule?.scope_glob || '';

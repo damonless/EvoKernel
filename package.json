@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel",
   "version": "0.4.0",
-  "description": "Deterministic Self-Evolving Meta-Kernel for AI Coding Agents — Offline Git Worktree Evolution, Deliverable Canonical Inspection, Zero-Dep Lexical-Structural Symbol Fingerprinting, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway.",
+  "description": "Two-Layer Local-First Context & Memory Kernel for MCP-Capable AI Coding Agents — Repo-Scoped AST-Verified Cognitive Memory, Cross-Workspace Personal Preference Push, Deliverable Canonical Inspection, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway.",
   "type": "module",
   "bin": {
     "evo": "./bin/evo.mjs",
@@ -66,8 +66,9 @@
     "skills",
     "rules",
     "context-engineering",
-    "offline-evolution",
-    "worktree-optimization",
+    "personal-preferences",
+    "user-profile",
+    "cross-workspace-memory",
     "deliverable-inspector",
     "causal-telemetry",
     "anti-confounding"

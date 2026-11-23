@@ -2,13 +2,23 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { EVO_KERNEL_VERSION, EvoStorage, estimateTokens } from '../core/storage.js';
+import {
+  DEFAULT_EVO_CONFIG,
+  EVO_KERNEL_VERSION,
+  EvoStorage,
+  estimateTokens,
+  hasValidEvoStructure,
+  resolveGlobalFallbackDir,
+} from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
 import { resolveGitPaths } from '../core/memory.js';
 import {
   META_RULE_MARKER_END,
   META_RULE_MARKER_START,
+  PROFILE_MARKER_END,
+  PROFILE_MARKER_START,
   renderManagedBlock,
+  renderUserProfileBlock,
 } from '../templates/meta-rule.js';
 import {
   ALL_HARNESS_ADAPTERS,
@@ -394,6 +404,156 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   }
 
   return updated;
+}
+
+function upsertProfileBlock(existingContent: string, profileBlock: string): string {
+  const startIdx = existingContent.indexOf(PROFILE_MARKER_START);
+  const endIdx = existingContent.indexOf(PROFILE_MARKER_END);
+  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    const before = existingContent.slice(0, startIdx).trimEnd();
+    const after = existingContent.slice(endIdx + PROFILE_MARKER_END.length).trimStart();
+    return [before, profileBlock.trim(), after].filter(Boolean).join('\n\n') + '\n';
+  }
+  if (!existingContent.trim()) {
+    return profileBlock.trim() + '\n';
+  }
+  return existingContent.trimEnd() + '\n\n' + profileBlock.trim() + '\n';
+}
+
+function removeProfileBlock(existingContent: string): string {
+  const startIdx = existingContent.indexOf(PROFILE_MARKER_START);
+  const endIdx = existingContent.indexOf(PROFILE_MARKER_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
+    return existingContent;
+  }
+  const before = existingContent.slice(0, startIdx).trimEnd();
+  const after = existingContent.slice(endIdx + PROFILE_MARKER_END.length).trimStart();
+  const combined = [before, after].filter(Boolean).join('\n\n');
+  return combined ? combined + '\n' : '';
+}
+
+export function syncGlobalUserProfile(
+  globalRoot?: string,
+  options?: { dryRun?: boolean; targetFiles?: string[]; homeDir?: string }
+): { digestPath: string; totalTokens: number; maxTokens: number; updatedTargets: string[] } {
+  const resolvedGlobalRoot = resolveGlobalFallbackDir(globalRoot);
+  const storage = new EvoStorage(resolvedGlobalRoot);
+  const dryRun = Boolean(options?.dryRun);
+  if (!dryRun) {
+    storage.ensureInitialized();
+  }
+  const cfg = hasValidEvoStructure(storage.evoDir)
+    ? storage.getConfig()
+    : { ...DEFAULT_EVO_CONFIG };
+  const maxTokens = cfg.maxGlobalProfileTokens ?? 500;
+  const digest = dryRun
+    ? storage.formatUserProfileDigest()
+    : storage.rebuildUserProfileDigest();
+  const { totalTokens } = storage.getProfileTokenUsage();
+  const profileBlock = renderUserProfileBlock(digest);
+
+  let targetFiles: string[];
+  if (options?.targetFiles !== undefined) {
+    targetFiles = options.targetFiles.map((f) => path.resolve(f));
+  } else if (
+    process.env.EVO_GLOBAL_PROFILE_TARGETS &&
+    process.env.EVO_GLOBAL_PROFILE_TARGETS.trim()
+  ) {
+    targetFiles = process.env.EVO_GLOBAL_PROFILE_TARGETS.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((f) => path.resolve(f));
+  } else if (
+    !options?.homeDir &&
+    ((process.env.EVO_GLOBAL_DIR && process.env.EVO_GLOBAL_DIR.trim()) ||
+      process.env.NODE_TEST_CONTEXT)
+  ) {
+    targetFiles = [path.join(resolvedGlobalRoot, 'USER_PROFILE.md')];
+  } else {
+    const homeDir = path.resolve(options?.homeDir || os.homedir());
+    targetFiles = [];
+    if (fs.existsSync(path.join(homeDir, '.gemini'))) {
+      targetFiles.push(path.join(homeDir, '.gemini', 'GEMINI.md'));
+    }
+    if (fs.existsSync(path.join(homeDir, '.claude'))) {
+      targetFiles.push(path.join(homeDir, '.claude', 'CLAUDE.md'));
+    }
+    if (fs.existsSync(path.join(homeDir, '.codex'))) {
+      targetFiles.push(path.join(homeDir, '.codex', 'AGENTS.md'));
+    }
+    if (fs.existsSync(path.join(homeDir, '.cursor'))) {
+      targetFiles.push(path.join(homeDir, '.cursor', 'rules', 'evo-user-profile.mdc'));
+    }
+    if (fs.existsSync(path.join(homeDir, '.windsurf'))) {
+      targetFiles.push(path.join(homeDir, '.windsurf', 'rules', 'evo-user-profile.md'));
+    }
+  }
+
+  const updatedTargets: string[] = [];
+  for (const targetPath of targetFiles) {
+    const isStandaloneCursorMdc = /[\\/]\.cursor[\\/]rules[\\/]evo-user-profile\.mdc$/i.test(
+      targetPath
+    );
+    const isStandalone =
+      /[\\/]evo-user-profile\.(?:mdc|md)$/i.test(targetPath) || isStandaloneCursorMdc;
+    const existed = fs.existsSync(targetPath);
+    const existing = existed ? fs.readFileSync(targetPath, 'utf8') : '';
+
+    if (!profileBlock) {
+      if (!existed) continue;
+      const stripped = removeProfileBlock(existing);
+      if (isStandalone) {
+        const bodyWithoutFm = stripped
+          .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
+          .trim();
+        if (!bodyWithoutFm) {
+          if (!options?.dryRun) {
+            try {
+              fs.unlinkSync(targetPath);
+            } catch {}
+          }
+          updatedTargets.push(targetPath);
+          continue;
+        }
+      }
+      if (stripped !== existing) {
+        if (!options?.dryRun) {
+          fs.writeFileSync(targetPath, stripped, 'utf8');
+        }
+        updatedTargets.push(targetPath);
+      }
+      continue;
+    }
+
+    let next: string;
+    if (isStandaloneCursorMdc && !existing.trim()) {
+      const mdcHeader = [
+        '---',
+        'description: EvoKernel Personal Style & Cross-Workspace Preferences (Auto-Managed)',
+        'globs: **/*',
+        'alwaysApply: true',
+        '---',
+      ].join('\n');
+      next = `${mdcHeader}\n\n${profileBlock.trim()}\n`;
+    } else {
+      next = upsertProfileBlock(existing, profileBlock);
+    }
+
+    if (!existed || next !== existing) {
+      if (!options?.dryRun) {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, next, 'utf8');
+      }
+      updatedTargets.push(targetPath);
+    }
+  }
+
+  return {
+    digestPath: storage.profileDigestPath,
+    totalTokens,
+    maxTokens,
+    updatedTargets,
+  };
 }
 
 function safeRealpath(p: string): string {

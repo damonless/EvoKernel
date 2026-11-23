@@ -9,11 +9,13 @@ import type {
   EvoHookTrigger,
   EvoKind,
   EvoMemory,
+  EvoPreference,
   EvoRule,
   EvoSkill,
   EvoTool,
   EvoToolManifest,
   ExternalToolDefinition,
+  PreferenceCategory,
   ScriptRuntime,
   SymbolFingerprint,
 } from './types.js';
@@ -67,6 +69,7 @@ export function openSqliteReadOnly(
 export const DEFAULT_EVO_CONFIG: EvoConfig = {
   version: EVO_KERNEL_VERSION,
   maxCoreRuleTokens: 1500,
+  maxGlobalProfileTokens: 500,
   maxScopedRulesPerBucket: 3,
   maxTotalScopedRules: 12,
   maxL0SummaryChars: 140,
@@ -74,6 +77,32 @@ export const DEFAULT_EVO_CONFIG: EvoConfig = {
   sandboxTimeoutMs: 5000,
   enabledHarnesses: [],
 };
+
+export const PREFERENCE_CATEGORIES: readonly PreferenceCategory[] = [
+  'style',
+  'formatting',
+  'communication',
+  'workflow',
+  'knowledge',
+] as const;
+
+const PREFERENCE_CATEGORY_LABELS: Record<PreferenceCategory, string> = {
+  style: 'Style',
+  formatting: 'Formatting',
+  communication: 'Communication',
+  workflow: 'Workflow',
+  knowledge: 'Knowledge',
+};
+
+export function resolveGlobalFallbackDir(customGlobalDir?: string): string {
+  if (customGlobalDir) {
+    return path.resolve(customGlobalDir);
+  }
+  if (process.env.EVO_GLOBAL_DIR) {
+    return path.resolve(process.env.EVO_GLOBAL_DIR);
+  }
+  return path.join(os.homedir(), '.evo', 'global');
+}
 
 export function getScopeBucketKey(scopeGlob: string): string {
   const norm = (scopeGlob || '**/*')
@@ -170,7 +199,8 @@ export function hasValidEvoStructure(candidateEvo: string): boolean {
       fs.existsSync(path.join(candidateEvo, 'rules')) ||
       fs.existsSync(path.join(candidateEvo, 'skills')) ||
       fs.existsSync(path.join(candidateEvo, 'tools')) ||
-      fs.existsSync(path.join(candidateEvo, 'memories'))
+      fs.existsSync(path.join(candidateEvo, 'memories')) ||
+      fs.existsSync(path.join(candidateEvo, 'preferences'))
     );
   } catch {
     return false;
@@ -342,10 +372,12 @@ export class EvoStorage {
   public readonly skillsDir: string;
   public readonly toolsDir: string;
   public readonly memoriesDir: string;
+  public readonly preferencesDir: string;
   public readonly archiveDir: string;
   public readonly cacheDir: string;
   public readonly configPath: string;
   public readonly coreInvariantsPath: string;
+  public readonly profileDigestPath: string;
 
   public static resolveEffectiveEvoDir(rootDir: string, localEvoDir: string): string {
     const localConfigPath = path.join(localEvoDir, 'config.json');
@@ -385,10 +417,12 @@ export class EvoStorage {
     this.skillsDir = path.join(this.evoDir, 'skills');
     this.toolsDir = path.join(this.evoDir, 'tools');
     this.memoriesDir = path.join(this.evoDir, 'memories');
+    this.preferencesDir = path.join(this.evoDir, 'preferences');
     this.archiveDir = path.join(this.evoDir, 'archive');
     this.cacheDir = path.join(this.evoDir, '.cache');
     this.configPath = path.join(this.evoDir, 'config.json');
     this.coreInvariantsPath = path.join(this.rulesDir, 'core-invariants.md');
+    this.profileDigestPath = path.join(this.evoDir, 'profile-digest.md');
   }
 
   public get telemetryDbPath(): string {
@@ -403,6 +437,7 @@ export class EvoStorage {
       this.skillsDir,
       this.toolsDir,
       this.memoriesDir,
+      this.preferencesDir,
       this.archiveDir,
       this.cacheDir,
     ]) {
@@ -425,7 +460,7 @@ export class EvoStorage {
 
     const evoGitignore = path.join(this.evoDir, '.gitignore');
     if (!fs.existsSync(evoGitignore)) {
-      fs.writeFileSync(evoGitignore, '/.cache/\n/optimize/\n/archive/\n', 'utf8');
+      fs.writeFileSync(evoGitignore, '/.cache/\n/archive/\n', 'utf8');
     }
 
     const legacyTopLevelTsRule = path.join(this.rulesDir, 'esm-typescript-imports.md');
@@ -1001,6 +1036,141 @@ export class EvoStorage {
     return memories.sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  // ==================== PERSONAL PREFERENCES ====================
+
+  public savePreference(pref: EvoPreference): void {
+    this.ensureInitialized();
+    const filePath = path.join(this.preferencesDir, `${pref.id}.md`);
+
+    const frontmatter = [
+      '---',
+      `id: ${pref.id}`,
+      `title: ${JSON.stringify(pref.title)}`,
+      `l0_summary: ${JSON.stringify(pref.l0_summary)}`,
+      `category: ${JSON.stringify(pref.category)}`,
+      `always_on: ${pref.always_on !== false}`,
+      `tokens: ${pref.tokens}`,
+      `tags: ${JSON.stringify(pref.tags || [])}`,
+      `origin: ${JSON.stringify(pref.origin)}`,
+      ...(pref.supersedes_id ? [`supersedes_id: ${JSON.stringify(pref.supersedes_id)}`] : []),
+      ...(pref.enabled === false ? ['enabled: false'] : []),
+      ...(pref.review_status === 'pending' ? ['review_status: "pending"'] : []),
+      ...(pref.visibility === 'local' || pref.visibility === 'public'
+        ? [`visibility: ${JSON.stringify(pref.visibility)}`]
+        : []),
+      `created_at: ${JSON.stringify(pref.created_at)}`,
+      `updated_at: ${JSON.stringify(pref.updated_at)}`,
+      '---',
+      '',
+      pref.content.trim(),
+      '',
+    ].join('\n');
+
+    fs.writeFileSync(filePath, frontmatter, 'utf8');
+    this.rebuildUserProfileDigest();
+  }
+
+  public getPreference(id: string): EvoPreference | null {
+    const cleanId = sanitizeId(id);
+    const filePath = path.join(this.preferencesDir, `${cleanId}.md`);
+    if (!fs.existsSync(filePath)) return null;
+    return this.parsePreferenceFile(filePath);
+  }
+
+  public listPreferences(): EvoPreference[] {
+    if (!fs.existsSync(this.preferencesDir)) return [];
+    const byId = new Map<string, EvoPreference>();
+    for (const entry of fs.readdirSync(this.preferencesDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.md')) {
+        const parsed = this.parsePreferenceFile(path.join(this.preferencesDir, entry.name));
+        if (!parsed) continue;
+        const existing = byId.get(parsed.id);
+        if (!existing || (Date.parse(parsed.updated_at) || 0) >= (Date.parse(existing.updated_at) || 0)) {
+          byId.set(parsed.id, parsed);
+        }
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  private parsePreferenceFile(filePath: string): EvoPreference | null {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const { meta, body } = parseFrontmatter(raw);
+      const id = sanitizeId(String(meta.id || path.basename(filePath, '.md')));
+      const content = body.trim();
+      const l0_summary = String(meta.l0_summary || content.split('\n')[0] || id);
+      const rawCategory = String(meta.category || 'style').trim().toLowerCase() as PreferenceCategory;
+      const category: PreferenceCategory = PREFERENCE_CATEGORIES.includes(rawCategory)
+        ? rawCategory
+        : 'style';
+      const always_on = meta.always_on === false || meta.always_on === 'false' ? false : true;
+      return {
+        id,
+        title: String(meta.title || id),
+        l0_summary,
+        category,
+        always_on,
+        content,
+        tokens: Number(meta.tokens || estimateTokens(`- **[${id}]** (${category}): ${l0_summary}\n  ${content}`)),
+        tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
+        origin: String(meta.origin || 'session'),
+        supersedes_id: meta.supersedes_id ? String(meta.supersedes_id) : undefined,
+        enabled: meta.enabled === false || meta.enabled === 'false' ? false : true,
+        review_status: meta.review_status === 'pending' ? 'pending' : 'approved',
+        ...(parseVisibility(meta.visibility) ? { visibility: parseVisibility(meta.visibility) } : {}),
+        created_at: String(meta.created_at || new Date().toISOString()),
+        updated_at: String(meta.updated_at || new Date().toISOString()),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  public getProfileTokenUsage(): { totalTokens: number; preferences: EvoPreference[] } {
+    const activeAlwaysOn = this.listPreferences().filter(
+      (p) => p.always_on !== false && p.enabled !== false
+    );
+    const totalTokens = activeAlwaysOn.reduce((acc, p) => acc + p.tokens, 0);
+    return { totalTokens, preferences: activeAlwaysOn };
+  }
+
+  public formatUserProfileDigest(): string {
+    const activeAlwaysOn = this.listPreferences().filter(
+      (p) => p.always_on !== false && p.enabled !== false
+    );
+    if (activeAlwaysOn.length === 0) {
+      return '';
+    }
+    const sections: string[] = [];
+    for (const cat of PREFERENCE_CATEGORIES) {
+      const items = activeAlwaysOn.filter((p) => p.category === cat);
+      if (items.length === 0) continue;
+      const lines = items.map(
+        (p) => `- **[${p.id}]** (${p.category}): ${p.l0_summary}\n  ${p.content.replace(/\n/g, '\n  ')}`
+      );
+      sections.push(`### ${PREFERENCE_CATEGORY_LABELS[cat]}\n${lines.join('\n')}`);
+    }
+    return sections.join('\n\n');
+  }
+
+  public rebuildUserProfileDigest(): string {
+    const digest = this.formatUserProfileDigest();
+    if (!digest) {
+      if (fs.existsSync(this.profileDigestPath)) {
+        fs.unlinkSync(this.profileDigestPath);
+      }
+      return '';
+    }
+    fs.mkdirSync(this.evoDir, { recursive: true });
+    fs.writeFileSync(
+      this.profileDigestPath,
+      `# User Profile Digest (Auto-Managed by EvoKernel — Do Not Edit Directly)\n\n${digest}\n`,
+      'utf8'
+    );
+    return digest;
+  }
+
   // ==================== ARCHIVE / COMPACTION ====================
 
   public archiveCapability(
@@ -1119,6 +1289,70 @@ export class EvoStorage {
       return true;
     }
 
+    if (kind === 'preference') {
+      const pref = this.getPreference(cleanId);
+      if (!pref) return false;
+      fs.writeFileSync(
+        archiveFile,
+        JSON.stringify(
+          { reason, archived_at: new Date().toISOString(), ...(extraMeta || {}), item: pref },
+          null,
+          2
+        ),
+        'utf8'
+      );
+      const prefPath = path.join(this.preferencesDir, `${cleanId}.md`);
+      if (fs.existsSync(prefPath)) fs.unlinkSync(prefPath);
+      this.rebuildUserProfileDigest();
+      return true;
+    }
+
+    return false;
+  }
+
+  public deleteCapability(id: string, kind: EvoKind): boolean {
+    const cleanId = sanitizeId(id);
+    if (!cleanId) return false;
+    if (kind === 'rule') {
+      const corePath = path.join(this.rulesDir, `${cleanId}.md`);
+      const scopedPath = path.join(this.rulesDir, 'scoped', `${cleanId}.md`);
+      let removed = false;
+      if (fs.existsSync(corePath)) {
+        fs.unlinkSync(corePath);
+        removed = true;
+      }
+      if (fs.existsSync(scopedPath)) {
+        fs.unlinkSync(scopedPath);
+        removed = true;
+      }
+      if (removed) this.rebuildCoreInvariantsDigest();
+      return removed;
+    }
+    if (kind === 'skill') {
+      const skillDir = path.join(this.skillsDir, cleanId);
+      if (!fs.existsSync(skillDir)) return false;
+      fs.rmSync(skillDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 });
+      return true;
+    }
+    if (kind === 'tool') {
+      const toolDir = path.join(this.toolsDir, cleanId);
+      if (!fs.existsSync(toolDir)) return false;
+      fs.rmSync(toolDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 });
+      return true;
+    }
+    if (kind === 'memory') {
+      const memPath = path.join(this.memoriesDir, `${cleanId}.md`);
+      if (!fs.existsSync(memPath)) return false;
+      fs.unlinkSync(memPath);
+      return true;
+    }
+    if (kind === 'preference') {
+      const prefPath = path.join(this.preferencesDir, `${cleanId}.md`);
+      if (!fs.existsSync(prefPath)) return false;
+      fs.unlinkSync(prefPath);
+      this.rebuildUserProfileDigest();
+      return true;
+    }
     return false;
   }
 
@@ -1133,11 +1367,13 @@ export class EvoStorage {
     const activeSkillIds = new Set(this.listSkills().map((s) => s.id));
     const activeToolIds = new Set(this.listTools().map((t) => t.id));
     const activeMemoryIds = new Set(this.listMemories().map((m) => m.id));
+    const activePreferenceIds = new Set(this.listPreferences().map((p) => p.id));
     const isActive = (k: EvoKind, id: string): boolean => {
       if (k === 'rule') return activeRuleIds.has(id);
       if (k === 'skill') return activeSkillIds.has(id);
       if (k === 'tool') return activeToolIds.has(id);
       if (k === 'memory') return activeMemoryIds.has(id);
+      if (k === 'preference') return activePreferenceIds.has(id);
       return false;
     };
 
@@ -1150,13 +1386,15 @@ export class EvoStorage {
         const raw = JSON.parse(fs.readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
         const item = (raw.item && typeof raw.item === 'object' ? raw.item : raw) as Record<string, unknown>;
         let kind: EvoKind | null = null;
-        const nameMatch = entry.name.match(/_(rule|skill|tool|memory)_([^.]+)\.json$/);
+        const nameMatch = entry.name.match(/_(rule|skill|tool|memory|preference)_([^.]+)\.json$/);
         if (nameMatch) {
           kind = nameMatch[1] as EvoKind;
-        } else if (typeof raw.kind === 'string' && ['rule', 'skill', 'tool', 'memory'].includes(raw.kind)) {
+        } else if (typeof raw.kind === 'string' && ['rule', 'skill', 'tool', 'memory', 'preference'].includes(raw.kind)) {
           kind = raw.kind as EvoKind;
-        } else if (typeof item.kind === 'string' && ['rule', 'skill', 'tool', 'memory'].includes(item.kind)) {
+        } else if (typeof item.kind === 'string' && ['rule', 'skill', 'tool', 'memory', 'preference'].includes(item.kind)) {
           kind = item.kind as EvoKind;
+        } else if ('category' in item && 'always_on' in item) {
+          kind = 'preference';
         } else if ('scope_glob' in item || 'core' in item) {
           kind = 'rule';
         } else if ('l2_sop' in item) {
@@ -1225,7 +1463,7 @@ export class EvoStorage {
       try {
         const raw = JSON.parse(fs.readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
         const item = (raw.item && typeof raw.item === 'object' ? raw.item : raw) as Record<string, unknown>;
-        const nameMatch = fileName.match(/_(rule|skill|tool|memory)_([^.]+)\.json$/);
+        const nameMatch = fileName.match(/_(rule|skill|tool|memory|preference)_([^.]+)\.json$/);
         const fileKind = nameMatch ? (nameMatch[1] as EvoKind) : (raw.kind as EvoKind | undefined);
         const itemId = sanitizeId(String(item.id || (nameMatch ? nameMatch[2] : '')));
         if (itemId === cleanId && (!fileKind || fileKind === kind)) {
@@ -1345,6 +1583,26 @@ export class EvoStorage {
             : {},
         created_commit: String(latest.created_commit || 'uncommitted'),
         created_branch: latest.created_branch ? String(latest.created_branch) : undefined,
+        tags: Array.isArray(latest.tags) ? latest.tags.map(String) : [],
+        origin: String(latest.origin || 'restored'),
+        supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
+        enabled: preservedEnabled,
+        review_status: preservedReviewStatus,
+        ...(preservedVisibility ? { visibility: preservedVisibility } : {}),
+        created_at: String(latest.created_at || now),
+        updated_at: now,
+      });
+    } else if (kind === 'preference') {
+      const rawCat = String(latest.category || 'style').trim().toLowerCase() as PreferenceCategory;
+      const category: PreferenceCategory = PREFERENCE_CATEGORIES.includes(rawCat) ? rawCat : 'style';
+      this.savePreference({
+        id: cleanId,
+        title: String(latest.title || cleanId),
+        l0_summary: String(latest.l0_summary || cleanId),
+        category,
+        always_on: latest.always_on === false || latest.always_on === 'false' ? false : true,
+        content: String(latest.content || latest.l0_summary || ''),
+        tokens: Number(latest.tokens || 30),
         tags: Array.isArray(latest.tags) ? latest.tags.map(String) : [],
         origin: String(latest.origin || 'restored'),
         supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,

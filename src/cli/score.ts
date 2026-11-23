@@ -634,6 +634,7 @@ export interface ScoreReport {
     toolsCount: number;
     memoriesCount: number;
     verifiedMemoriesCount: number;
+    preferencesCount?: number;
     totalRuleTokens: number;
   };
   hasEvo?: boolean;
@@ -686,6 +687,7 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
   let toolsCount = 0;
   let memoriesCount = 0;
   let verifiedMemoriesCount = 0;
+  let preferencesCount = 0;
   let totalRuleTokens = 0;
   let totalSkillTokens = 0;
   let totalToolTokens = 0;
@@ -770,6 +772,7 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
           if (v.overall_status === 'VERIFIED') verifiedMemoriesCount++;
         } catch {}
       }
+      preferencesCount = storage.listPreferences().filter((p) => p.enabled !== false).length;
     } catch {}
   }
 
@@ -992,6 +995,7 @@ export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions):
       toolsCount,
       memoriesCount,
       verifiedMemoriesCount,
+      ...(preferencesCount > 0 ? { preferencesCount } : {}),
       totalRuleTokens,
     },
     hasEvo,

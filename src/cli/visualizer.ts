@@ -65,6 +65,7 @@ function loadActiveStatsSnapshot(workspaceRoot: string, includeGlobal: boolean) 
   let skills = hasEvo ? storage.listSkills().filter((s) => s.enabled !== false) : [];
   let tools = hasEvo ? storage.listTools().filter((t) => t.enabled !== false) : [];
   const localMemories = hasEvo ? storage.listMemories().filter((m) => m.enabled !== false) : [];
+  let preferences = hasEvo ? storage.listPreferences().filter((p) => p.enabled !== false) : [];
   let globalOnlyMemories: typeof localMemories = [];
   let globalRoot: string | undefined;
 
@@ -79,6 +80,10 @@ function loadActiveStatsSnapshot(workspaceRoot: string, includeGlobal: boolean) 
       rules = mergeCapabilitiesById(rules, gStorage.listRules().filter((r) => r.enabled !== false));
       skills = mergeCapabilitiesById(skills, gStorage.listSkills().filter((s) => s.enabled !== false));
       tools = mergeCapabilitiesById(tools, gStorage.listTools().filter((t) => t.enabled !== false));
+      preferences = mergeCapabilitiesById(
+        preferences,
+        gStorage.listPreferences().filter((p) => p.enabled !== false)
+      );
       const seenMem = new Set(localMemories.map((m) => m.id));
       globalOnlyMemories = gStorage
         .listMemories()
@@ -99,6 +104,7 @@ function loadActiveStatsSnapshot(workspaceRoot: string, includeGlobal: boolean) 
     rules,
     skills,
     tools,
+    preferences,
     localMemories,
     globalOnlyMemories,
     memories: [...localMemories, ...globalOnlyMemories],
@@ -194,8 +200,12 @@ export function renderEvoTree(
   const skills = hasEvo ? storage.listSkills().filter((s) => s.enabled !== false) : [];
   const tools = hasEvo ? storage.listTools().filter((t) => t.enabled !== false) : [];
   const memories = hasEvo ? storage.listMemories().filter((m) => m.enabled !== false) : [];
+  const preferences = hasEvo ? storage.listPreferences().filter((p) => p.enabled !== false) : [];
   const config = hasEvo ? storage.getConfig() : { ...DEFAULT_EVO_CONFIG };
   const { totalTokens } = hasEvo ? storage.getCoreRulesTokenUsage() : { totalTokens: 0 };
+  const { totalTokens: profileTokens } = hasEvo
+    ? storage.getProfileTokenUsage()
+    : { totalTokens: 0 };
 
   const lines: string[] = [
     '╭──────────────────────────────────────────────────────────────────────────╮',
@@ -280,10 +290,10 @@ export function renderEvoTree(
   const staleCount = verifications.length - verifiedCount - branchCount;
 
   lines.push(
-    `└── 🧠 Episodic Memories (${memories.length} fault cases | ${verifiedCount} VERIFIED · ${branchCount > 0 ? `${branchCount} OTHER_BRANCH · ` : ''}${staleCount} STALE)`
+    `${preferences.length > 0 ? '├──' : '└──'} 🧠 Episodic Memories (${memories.length} fault cases | ${verifiedCount} VERIFIED · ${branchCount > 0 ? `${branchCount} OTHER_BRANCH · ` : ''}${staleCount} STALE)`
   );
   if (memories.length === 0) {
-    lines.push('    └── (empty — propose with `kind: "memory"` or run `evo bootstrap`)');
+    lines.push(`${preferences.length > 0 ? '│   ' : '    '}└── (empty — propose with \`kind: "memory"\` or run \`evo bootstrap\`)`);
   } else {
     verifications.forEach(({ memory: m, report }, idx) => {
       const isLast = idx === verifications.length - 1;
@@ -296,7 +306,22 @@ export function renderEvoTree(
             ? `🌿 [BRANCH:${report.recorded_branch || m.created_branch || 'other'}@${m.created_commit} (${report.verified_count}/${report.total_symbols} in HEAD)]`
             : `⚠️ [STALE ${report.verified_count}/${report.total_symbols} sym]`;
       lines.push(
-        `    ${branch} ${badge} ${m.id} (hits: ${stat?.hit_count ?? 0}) — ${m.l0_summary}`
+        `${preferences.length > 0 ? '│   ' : '    '}${branch} ${badge} ${m.id} (hits: ${stat?.hit_count ?? 0}) — ${m.l0_summary}`
+      );
+    });
+  }
+
+  if (preferences.length > 0) {
+    lines.push(
+      `└── 👤 Personal Preferences (${preferences.length} active | Profile Budget: ${profileTokens}/${config.maxGlobalProfileTokens ?? 500} tokens)`
+    );
+    preferences.forEach((p, idx) => {
+      const isLast = idx === preferences.length - 1;
+      const branch = isLast ? '└──' : '├──';
+      const stat = tMap.get(p.id);
+      const badge = p.always_on !== false ? `[ALWAYS-ON:${p.category}]` : `[ON-DEMAND:${p.category}]`;
+      lines.push(
+        `    ${branch} ${badge} ${p.id} (${p.tokens} tok | hits: ${stat?.hit_count ?? 0}) — ${p.l0_summary}`
       );
     });
   }
@@ -437,6 +462,7 @@ export function renderEvoStats(
     rules,
     skills,
     tools,
+    preferences,
     localMemories,
     globalOnlyMemories,
     memories,
@@ -509,7 +535,7 @@ export function renderEvoStats(
     '│ 📊 EvoKernel ROI, Cognitive Memory & Telemetry Ledger                    │',
     '├──────────────────────────────────────────────────────────────────────────┤',
     `│ 🛡️  Core Rule Token Budget : [${progressBar}] ${totalTokens}/${config.maxCoreRuleTokens} (${pctBudget}%)`,
-    `│ 📦 Active Capabilities    : ${rules.length} Rules · ${skills.length} Skills · ${tools.length} Micro-Tools · ${memories.length} Memories`,
+    `│ 📦 Active Capabilities    : ${rules.length} Rules · ${skills.length} Skills · ${tools.length} Micro-Tools · ${memories.length} Memories${preferences.length > 0 ? ` · ${preferences.length} Preferences` : ''}`,
     `│ 🧠 Memory AST* Anti-Drift : ${verifiedMemories}/${memories.length} VERIFIED${branchMemories > 0 ? ` · ${branchMemories} OTHER_BRANCH` : ''} (${staleMemories} STALE) | 0 Core Budget Tokens`,
     `│ 🗄️  GC Archived Versions   : ${archivedCount} historical snapshots in .evo/archive/`,
     `│ 🎯 Total Capability Hits  : ${totalHits} recalls (${passRate} verification/sandbox pass rate)`,
@@ -603,8 +629,12 @@ export function buildEvoTreeJson(workspaceRoot: string): object {
   const skills = hasEvo ? storage.listSkills().filter((s) => s.enabled !== false) : [];
   const tools = hasEvo ? storage.listTools().filter((t) => t.enabled !== false) : [];
   const memories = hasEvo ? storage.listMemories().filter((m) => m.enabled !== false) : [];
+  const preferences = hasEvo ? storage.listPreferences().filter((p) => p.enabled !== false) : [];
   const config = hasEvo ? storage.getConfig() : { ...DEFAULT_EVO_CONFIG };
   const { totalTokens } = hasEvo ? storage.getCoreRulesTokenUsage() : { totalTokens: 0 };
+  const { totalTokens: profileTokens } = hasEvo
+    ? storage.getProfileTokenUsage()
+    : { totalTokens: 0 };
 
   const cacheDbPath = path.join(storage.rootDir, '.evo', '.cache', 'telemetry.db');
   let treeCacheDb: DatabaseSync | undefined;
@@ -683,16 +713,30 @@ export function buildEvoTreeJson(workspaceRoot: string): object {
         l0_summary: m.l0_summary,
       };
     }),
+    preferences: preferences.map((p) => {
+      const stat = tMap.get(p.id);
+      return {
+        id: p.id,
+        category: p.category,
+        always_on: p.always_on,
+        tokens: p.tokens,
+        hits: stat?.hit_count ?? 0,
+        l0_summary: p.l0_summary,
+      };
+    }),
     summary: {
       rulesCount: rules.length,
       skillsCount: skills.length,
       toolsCount: tools.length,
       memoriesCount: memories.length,
+      preferencesCount: preferences.length,
       verifiedMemories: verifiedCount,
       otherBranchMemories: branchCount,
       staleMemories: staleCount,
       coreRuleTokens: totalTokens,
       maxCoreRuleTokens: config.maxCoreRuleTokens,
+      profileTokens,
+      maxGlobalProfileTokens: config.maxGlobalProfileTokens ?? 500,
     },
   };
 }
@@ -709,6 +753,7 @@ export function buildEvoStatsJson(
     rules,
     skills,
     tools,
+    preferences,
     localMemories,
     globalOnlyMemories,
     memories,
@@ -772,6 +817,7 @@ export function buildEvoStatsJson(
       skills: skills.length,
       tools: tools.length,
       memories: memories.length,
+      preferences: preferences.length,
       archivedSnapshots: archivedCount,
     },
     memoryFreshness: {

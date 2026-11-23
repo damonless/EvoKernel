@@ -9,9 +9,8 @@ tokens: 377
 origin: "evolved"
 contrastive_evidence: "Before adding bounded relative barrel re-export traversal in src/core/memory/symbol-extractor.ts and ephemeral staging in src/core/gatekeeper/workspace-snapshot.ts, splitting facade modules broke pinned AST symbol lookups and mutating self-tests touched live workspace files before rollback; after resolving re-export chains and staging eligible workspaces in temp directories, all facade-anchored memories remain verified and live workspace files stay untouched."
 transfer_scenarios: ["Splitting monolithic TypeScript modules into focused sub-files behind a barrel facade without invalidating historical AST symbol anchors","Executing sandboxed micro-tool verification dry-runs in isolated temporary staging directories before falling back to rollback snapshots"]
-review_status: "pending"
 created_at: "2026-11-18T17:18:15.109Z"
-updated_at: "2026-11-18T17:18:15.109Z"
+updated_at: "2026-11-19T17:22:25.910Z"
 ---
 
 When decomposing large core modules behind compatibility facades or executing sandboxed verification dry-runs:
