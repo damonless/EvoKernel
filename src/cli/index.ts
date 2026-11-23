@@ -1,9 +1,22 @@
 #!/usr/bin/env node
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as readline from 'node:readline/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { findGitRoot, parseInitTargets, runInit, runUninstall, syncGlobalUserProfile } from './init.js';
+import {
+  cleanGlobalUserProfile,
+  discoverGlobalProfileTargets,
+  ensureGlobalFallbackSeeded,
+  findGitRoot,
+  parseInitTargets,
+  runInit,
+  runInitGlobal,
+  runUninstall,
+  syncGlobalUserProfile,
+  syncManagedRuleBlocks,
+} from './init.js';
 import { extractCodexTomlEvoEntry, hasStaleNpxMcpEntry, parseJsonc } from './harness.js';
 import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
@@ -33,14 +46,31 @@ import {
   DEFAULT_EVO_CONFIG,
   EVO_KERNEL_VERSION,
   EvoStorage,
+  PREFERENCE_CATEGORIES,
+  estimateTokens,
   findNearestEvoWorkspace,
   hasValidEvoStructure,
   isHostGlobalConfigDir,
   isPluginOrExtensionInstallDir,
   openSqliteReadOnly,
   resolveGlobalFallbackDir,
+  sanitizeId,
 } from '../core/storage.js';
-export { resolveGlobalFallbackDir };
+import { EvoGatekeeper } from '../core/gatekeeper.js';
+import {
+  ONBOARDING_PRESETS,
+  getOnboardingPresetCandidates,
+  parseMarkdownToPreferenceCandidates,
+  type OnboardingPresetName,
+  type ParsedPreferenceCandidate,
+} from '../core/profile-import.js';
+import type { PreferenceCategory, ProposalPayload } from '../core/types.js';
+import {
+  PROFILE_MARKER_END,
+  PROFILE_MARKER_START,
+  renderUserProfileBlock,
+} from '../templates/meta-rule.js';
+export { ensureGlobalFallbackSeeded, resolveGlobalFallbackDir };
 import {
   EvoTelemetry,
   emptyRecallWindowStats,
@@ -155,6 +185,9 @@ Usage:
 Detect and wire L0 Meta-Rule Seed + Single Meta-MCP + Slash Commands into project and agent harnesses.
 
 Options:
+  --global, -g         Initialize ~/.evo/global, wire global host MCPs, refresh plugin L0 seed & sync profile
+  --dry-run            Preview global initialization without modifying files (with --global)
+  --json               Output structured JSON
   --stealth            Add .evo/ and config files to .git/info/exclude (clean git status)
   --targets <list>     Harness targets: claude, agents, gemini, cursor, or auto (default: auto)
   --link <path>        Link .evo capability tree from another repository or central storage
@@ -179,6 +212,7 @@ Usage:
 Cleanly remove EvoKernel marker blocks, rules, and MCP registrations from host configs.
 
 Options:
+  --global, -g         Also strip EVO:PROFILE blocks from detected global host files
   --unmount-ide        Also uninstall mounted IDE extension bundles & registry entries
   --ide <targets>      Comma-separated target IDEs when --unmount-ide is set
   --workspace <path>   Target workspace directory (default: current directory)
@@ -375,18 +409,34 @@ export function printProfileHelp(args?: string[]): void {
   logHelp(
     `
 Usage:
-  evo profile [list|show|sync|path] [options]
+  evo profile <subcommand> [options]
 
-Inspect or synchronize the User-Global Personal Preference Profile (~/.evo/global/.evo/preferences/).
+Manage, import, onboard, synchronize, or undo User-Global Personal Preferences (~/.evo/global/.evo/preferences/).
 
 Subcommands:
   show                 Show the rendered auto-managed User Profile Digest (default)
   list                 List all global personal preferences & token budget usage
+  add                  Add a personal preference via Gatekeeper and sync host profiles
+  remove <id>          Archive a preference by ID, record undo history & resync hosts
   sync                 Rebuild profile-digest.md and sync host global rule files
+  undo [id]            Undo the latest (or specific ID) profile/personal-memory change & resync hosts
+  import <filePath>    Parse markdown preferences (preview by default; pass --apply to commit)
+  onboard              List or apply onboarding presets (interactive 3-prompt interview in TTY)
+  clean                Strip EVO:PROFILE blocks from detected global host rule files
   path                 Print paths to global profile digest and preferences directory
 
 Options:
-  --dry-run            Preview sync targets without modifying files (sync only)
+  --category <cat>     style|formatting|communication|workflow|requirement|knowledge (add)
+  --title <text>       Preference title (add)
+  --summary <text>     Concise L0 summary <=140 chars (add)
+  --content <text>     Directive body text (add)
+  --id <slug>          Optional deterministic kebab-case ID (add)
+  --on-demand          Register as Tier 2 on-demand preference instead of always-on (add)
+  --trigger <cue>      Trigger cue for Tier 2 Task Directory Menu (add)
+  --project            Scope add/remove to current workspace instead of ~/.evo/global
+  --preset <name>      concise-ceo | rigorous-engineer | technical-writer (onboard)
+  --apply              Commit parsed/preset preferences through Gatekeeper (import, onboard)
+  --dry-run            Preview changes without modifying files (sync, clean, import, onboard)
   --json               Output structured JSON
   -h, --help           Show this help message
 `,
@@ -502,8 +552,8 @@ Usage:
   evo <command> [options]
 
 Core Commands (6):
-  init [--stealth] [--targets <list|auto>] [--warmup] [--install-ide]
-                      Wire L0 Meta-Rule Seed + Single 5-Tool Meta-MCP + Slash Commands into agent hosts
+  init [--global] [--stealth] [--targets <list|auto>] [--warmup] [--install-ide]
+                      Wire L0 Meta-Rule Seed + Single 5-Tool Meta-MCP (--global wires desktop hosts)
   doctor [--roi] [--no-probe] [--json]
                       Verify runtime, live MCP stdio handshake, seed/version parity, AST* memories & ROI
   ui [-p <N>] [--open] [--app] [--desktop] [--export [path]] [--anon]
@@ -522,154 +572,20 @@ Advanced & Automation Commands:
                       Fold third-party stdio MCPs into .evo/mcp-pool.json (preview first with --dry-run)
   refactor [--apply] [--local-only] [--token-budget <N>] [--skill-budget <N>]
                       Decouple bloated rules/skills via built-in evo-rule-architect workflow
-  profile [list|show|sync|path] [--json] [--dry-run]
-                      Inspect or synchronize User-Global personal preferences (~/.evo/global)
+  profile [list|show|add|remove|sync|undo|import|onboard|clean|path] [options]
+                      Manage, import, onboard, sync, or undo User-Global preferences (~/.evo/global)
   tree [--full] [--json]
                       Render ASCII capability & cognitive memory tree (.evo/)
   check <file> [--json]
                       Canonical defect inspection for deliverables (.xlsx, .docx, .pptx, .csv, .json, .md)
   hook <event>        Lifecycle hook router (pre-tool | post-tool | stop | pre-commit)
   mcp                 Start stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
-  uninstall           Cleanly remove EvoKernel marker blocks and MCP entries from host configs
+  uninstall [--global]
+                      Cleanly remove EvoKernel marker blocks and MCP entries from host configs
   version, --version  Print EvoKernel CLI version
 `,
     args
   );
-}
-
-function copyDirNonOverwriting(
-  srcDir: string,
-  destDir: string,
-  syncUpdatedSeeds: boolean = false,
-  allowScoped: boolean = false
-): void {
-  if (!fs.existsSync(srcDir)) return;
-  fs.mkdirSync(destDir, { recursive: true });
-  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    if (
-      entry.name === '.cache' ||
-      entry.name === 'archive' ||
-      (entry.name === 'scoped' && !allowScoped) ||
-      entry.name === 'core-invariants.md'
-    ) {
-      continue;
-    }
-    const srcPath = path.join(srcDir, entry.name);
-    const destPath = path.join(destDir, entry.name);
-    if (entry.isDirectory()) {
-      copyDirNonOverwriting(srcPath, destPath, syncUpdatedSeeds, allowScoped);
-    } else if (entry.isFile()) {
-      if (!fs.existsSync(destPath)) {
-        fs.copyFileSync(srcPath, destPath);
-      } else if (syncUpdatedSeeds) {
-        const srcContent = fs.readFileSync(srcPath, 'utf8').replace(/\r?\n/g, '\n');
-        const destContent = fs.readFileSync(destPath, 'utf8').replace(/\r?\n/g, '\n');
-        if (srcContent !== destContent) {
-          fs.copyFileSync(srcPath, destPath);
-        }
-      }
-    }
-  }
-}
-
-const RETIRED_GLOBAL_SEED_FILES: RegExp[] = [/^bms-.*\.md$/i];
-const RETIRED_GLOBAL_SEED_DIRS: { skills: RegExp[]; tools: RegExp[] } = {
-  skills: [
-    /^bms-/i,
-    /^fsm-/i,
-    /^ceo-team-orchestrator$/i,
-    /^evo-dev-verification-sop$/i,
-  ],
-  tools: [/^evo-release-preflight$/i],
-};
-
-function pruneRetiredGlobalSeeds(evoDir: string): void {
-  const removeMatchingFiles = (dir: string) => {
-    if (!fs.existsSync(dir)) return;
-    try {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isFile()) continue;
-        if (RETIRED_GLOBAL_SEED_FILES.some((pat) => pat.test(entry.name))) {
-          try {
-            fs.unlinkSync(path.join(dir, entry.name));
-          } catch {}
-        }
-      }
-    } catch {}
-  };
-  removeMatchingFiles(path.join(evoDir, 'rules'));
-  removeMatchingFiles(path.join(evoDir, 'rules', 'scoped'));
-
-  const removeMatchingDirs = (dir: string, patterns: RegExp[]) => {
-    if (!fs.existsSync(dir)) return;
-    try {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        if (patterns.some((pat) => pat.test(entry.name))) {
-          try {
-            fs.rmSync(path.join(dir, entry.name), { recursive: true, force: true });
-          } catch {}
-        }
-      }
-    } catch {}
-  };
-  removeMatchingDirs(path.join(evoDir, 'skills'), RETIRED_GLOBAL_SEED_DIRS.skills);
-  removeMatchingDirs(path.join(evoDir, 'tools'), RETIRED_GLOBAL_SEED_DIRS.tools);
-}
-
-export function ensureGlobalFallbackSeeded(
-  globalRoot: string = resolveGlobalFallbackDir(),
-  installRoot: string = path.resolve(import.meta.dirname, '..', '..')
-): string {
-  const storage = new EvoStorage(globalRoot);
-  storage.ensureInitialized();
-
-  if (fs.existsSync(storage.configPath)) {
-    try {
-      const rawCfg = fs.readFileSync(storage.configPath, 'utf8').replace(/^\uFEFF/, '');
-      const parsedCfg = JSON.parse(rawCfg) as Record<string, unknown>;
-      if (parsedCfg && typeof parsedCfg === 'object' && !Array.isArray(parsedCfg)) {
-        if (parsedCfg.version !== EVO_KERNEL_VERSION) {
-          parsedCfg.version = EVO_KERNEL_VERSION;
-          fs.writeFileSync(storage.configPath, JSON.stringify(parsedCfg, null, 2) + '\n', 'utf8');
-        }
-      }
-    } catch {}
-  }
-
-  const templateSeedDir = path.join(installRoot, 'templates', 'seed-evo');
-  const hasTemplateSeed = fs.existsSync(templateSeedDir);
-  const seedEvoDir = hasTemplateSeed ? templateSeedDir : path.join(installRoot, '.evo');
-
-  if (fs.existsSync(seedEvoDir) && path.resolve(seedEvoDir) !== path.resolve(storage.evoDir)) {
-    pruneRetiredGlobalSeeds(storage.evoDir);
-    for (const sub of ['rules', 'skills', 'tools']) {
-      copyDirNonOverwriting(
-        path.join(seedEvoDir, sub),
-        path.join(storage.evoDir, sub),
-        hasTemplateSeed,
-        hasTemplateSeed
-      );
-    }
-    if (!hasTemplateSeed) {
-      const scopedSeedSrc = path.join(seedEvoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
-      const scopedSeedDest = path.join(storage.evoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
-      if (fs.existsSync(scopedSeedSrc) && !fs.existsSync(scopedSeedDest)) {
-        fs.mkdirSync(path.dirname(scopedSeedDest), { recursive: true });
-        fs.copyFileSync(scopedSeedSrc, scopedSeedDest);
-      }
-    }
-    const legacyTopLevelTsRule = path.join(storage.evoDir, 'rules', 'esm-typescript-imports.md');
-    const canonicalScopedTsRule = path.join(storage.evoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
-    if (fs.existsSync(legacyTopLevelTsRule) && fs.existsSync(canonicalScopedTsRule)) {
-      try {
-        fs.unlinkSync(legacyTopLevelTsRule);
-      } catch {}
-    }
-    storage.rebuildCoreInvariantsDigest();
-  }
-
-  return globalRoot;
 }
 
 export function resolveWorkspaceRoot(
@@ -843,6 +759,10 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
   ],
   init: [
     ...GLOBAL_COMMON_FLAGS,
+    '--global',
+    '-g',
+    '--dry-run',
+    '--json',
     '--stealth',
     '--targets',
     '--link',
@@ -852,7 +772,7 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--no-ide',
     '--ide',
   ],
-  uninstall: [...GLOBAL_COMMON_FLAGS, '--unmount-ide', '--ide'],
+  uninstall: [...GLOBAL_COMMON_FLAGS, '--global', '-g', '--unmount-ide', '--ide'],
   bootstrap: [...GLOBAL_COMMON_FLAGS, '--max-commits'],
   virtualize: [...GLOBAL_COMMON_FLAGS, '--dry-run', '--restore', '--global', '-g'],
   memory: [...GLOBAL_COMMON_FLAGS, '--refresh', '--json'],
@@ -868,7 +788,23 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--skill-budget',
     '--json',
   ],
-  profile: [...GLOBAL_COMMON_FLAGS, '--json', '--dry-run', '--global', '-g'],
+  profile: [
+    ...GLOBAL_COMMON_FLAGS,
+    '--json',
+    '--dry-run',
+    '--global',
+    '-g',
+    '--category',
+    '--title',
+    '--summary',
+    '--content',
+    '--id',
+    '--on-demand',
+    '--trigger',
+    '--project',
+    '--apply',
+    '--preset',
+  ],
   tree: [...GLOBAL_COMMON_FLAGS, '--json', '--full'],
   stats: [...GLOBAL_COMMON_FLAGS, '--json', '--global', '-g'],
   hook: [...GLOBAL_COMMON_FLAGS, '--payload', '--harness', '--dry-run', '--tool', '--file', '--tool-name', '--target-file'],
@@ -1366,23 +1302,6 @@ export const VALUE_TAKING_FLAGS = new Set([
   '--targets',
   '--link',
   '--ide',
-  '--max-commits',
-  '--token-budget',
-  '--skill-budget',
-  '--dim',
-  '-k',
-  '--k',
-  '--rounds',
-  '--proposer-cmd',
-  '--probe-cmd',
-  '--worktree-setup-cmd',
-  '--task',
-  '--task-file',
-  '--trajectory',
-  '--trajectories',
-  '--deliverable',
-  '--deliverables',
-  '--leak-glob',
   '--payload',
   '--harness',
   '--event',
@@ -1391,6 +1310,71 @@ export const VALUE_TAKING_FLAGS = new Set([
   '--tool-name',
   '--target-file',
 ]);
+
+const PROFILE_VALUE_FLAGS = new Set([
+  ...VALUE_TAKING_FLAGS,
+  '--category',
+  '--title',
+  '--summary',
+  '--content',
+  '--id',
+  '--trigger',
+  '--preset',
+]);
+
+const FREE_TEXT_PROFILE_FLAGS = new Set([
+  '--title',
+  '--summary',
+  '--content',
+  '--trigger',
+]);
+
+function isFlagNextValue(flag: string, nextArg: string | undefined): boolean {
+  if (nextArg === undefined) return false;
+  if (!nextArg.startsWith('-')) return true;
+  if (FREE_TEXT_PROFILE_FLAGS.has(flag.toLowerCase())) {
+    const nextFlag = nextArg.split('=')[0];
+    if (!KNOWN_FLAGS.includes(nextFlag) && !/^--[a-z0-9-]+$/i.test(nextArg)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parseCliFlagValue(args: string[], flag: string): string | undefined {
+  const eqPrefix = `${flag}=`;
+  const eqArg = args.find((a) => a.startsWith(eqPrefix));
+  if (eqArg) {
+    return eqArg.slice(eqPrefix.length);
+  }
+  const idx = args.indexOf(flag);
+  if (idx !== -1 && idx + 1 < args.length) {
+    const val = args[idx + 1];
+    if (!val.startsWith('-') || !KNOWN_FLAGS.includes(val.split('=')[0])) {
+      return val;
+    }
+  }
+  return undefined;
+}
+
+function extractCliPositionalArgs(args: string[], startIndex: number = 1): string[] {
+  const positional: string[] = [];
+  for (let i = startIndex; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith('-') && a !== '-') {
+      const flag = a.split('=')[0].toLowerCase();
+      if (!a.includes('=') && PROFILE_VALUE_FLAGS.has(flag) && i + 1 < args.length) {
+        const next = args[i + 1];
+        if (isFlagNextValue(flag, next)) {
+          i++;
+        }
+      }
+      continue;
+    }
+    positional.push(a);
+  }
+  return positional;
+}
 
 function normalizeLeadingFlags(rawArgs: string[]): string[] {
   if (rawArgs.length === 0 || !rawArgs[0].startsWith('-')) {
@@ -1418,7 +1402,7 @@ function normalizeLeadingFlags(rawArgs: string[]): string[] {
   return rawArgs;
 }
 
-export function runCli(argv: string[]): void {
+export function runCli(argv: string[]): void | Promise<void> {
   const args = normalizeLeadingFlags(argv.slice(2));
   const cliTermOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
   let cmd = (args[0] || '').toLowerCase();
@@ -1589,7 +1573,12 @@ export function runCli(argv: string[]): void {
         handleExit(1);
         return;
       }
-      if (VALUE_TAKING_FLAGS.has(flag) && !arg.includes('=') && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
+      if (
+        (VALUE_TAKING_FLAGS.has(flag) || PROFILE_VALUE_FLAGS.has(flag)) &&
+        !arg.includes('=') &&
+        idx + 1 < args.length &&
+        isFlagNextValue(flag, args[idx + 1])
+      ) {
         idx++;
       }
     }
@@ -1628,17 +1617,25 @@ export function runCli(argv: string[]): void {
   const globalDir = resolveGlobalFallbackDir();
   const profileSubcmd =
     cmd === 'profile'
-      ? args
-          .slice(1)
-          .find((a, idx) => !a.startsWith('-') && !(idx > 0 && (args[idx] === '--workspace' || args[idx] === '-w')))
-          ?.toLowerCase() || 'show'
+      ? (extractCliPositionalArgs(args, 1)[0] || 'show').toLowerCase()
       : '';
+  const isInitGlobal = cmd === 'init' && (args.includes('--global') || args.includes('-g'));
   const isReadOnlyDiagnostic =
     ['score', 'ui', 'doctor', 'audit', 'check', 'inspect', 'tree', 'stats', 'version', '--version', '-v'].includes(cmd) ||
+    (isInitGlobal && args.includes('--dry-run')) ||
     (cmd === 'profile' &&
       (['list', 'show', 'path'].includes(profileSubcmd) ||
-        (profileSubcmd === 'sync' && args.includes('--dry-run'))));
-  if (!isReadOnlyDiagnostic && fs.existsSync(path.join(globalDir, '.evo'))) {
+        ((profileSubcmd === 'sync' || profileSubcmd === 'clean') && args.includes('--dry-run')) ||
+        ((profileSubcmd === 'import' || profileSubcmd === 'onboard') && !args.includes('--apply'))));
+  const isIsolatedWithoutGlobalOverride =
+    (Boolean(process.env.NODE_TEST_CONTEXT) || process.env.EVO_PROFILE_ISOLATED === '1') &&
+    !process.env.EVO_GLOBAL_DIR;
+  if (
+    !isReadOnlyDiagnostic &&
+    !isInitGlobal &&
+    !isIsolatedWithoutGlobalOverride &&
+    fs.existsSync(path.join(globalDir, '.evo'))
+  ) {
     ensureGlobalFallbackSeeded(globalDir);
   }
 
@@ -1679,6 +1676,29 @@ export function runCli(argv: string[]): void {
     }
 
     case 'init': {
+      const logInit = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+      if (isInitGlobal) {
+        const dryRun = args.includes('--dry-run');
+        const isJson = args.includes('--json');
+        const res = runInitGlobal({ dryRun });
+        if (isJson) {
+          console.log(JSON.stringify({ ok: true, dryRun, ...res }, null, 2));
+        } else {
+          logInit(`🧬 EvoKernel global setup ${dryRun ? '(Dry Run) ' : ''}complete!`);
+          logInit(`  ├─ Global Root     : ${res.globalRoot}`);
+          logInit(
+            `  ├─ Global MCPs     : ${res.mcpTargetsUpdated.length > 0 ? res.mcpTargetsUpdated.join(', ') : '(already configured or none detected)'}`
+          );
+          logInit(
+            `  ├─ Plugin L0 Seeds : ${res.pluginSeedsUpdated.length > 0 ? res.pluginSeedsUpdated.join(', ') : '(up-to-date or none detected)'}`
+          );
+          logInit(
+            `  └─ Profile Sync    : ${res.profileSync.totalTokens}/${res.profileSync.maxTokens} tok (${res.profileSync.updatedTargets.length > 0 ? res.profileSync.updatedTargets.join(', ') : 'targets up-to-date'})`
+          );
+        }
+        break;
+      }
+
       const stealth = args.includes('--stealth');
       const targets = parseTargetsArg(args, workspaceRoot);
       const linkEvoFrom = parseLinkArg(args);
@@ -1686,7 +1706,6 @@ export function runCli(argv: string[]): void {
       const noIde = args.includes('--no-ide');
       const ide = parseIdeTargetsArg(args);
       const installIde = args.includes('--install-ide') || (Boolean(ide?.length) && !noIde) ? true : undefined;
-      const logInit = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
       const res = runInit(workspaceRoot, {
         stealth,
         targets,
@@ -1696,6 +1715,10 @@ export function runCli(argv: string[]): void {
         noIde,
         ide,
       });
+      if (args.includes('--json')) {
+        console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+        break;
+      }
       logInit('🧬 EvoKernel initialized successfully!');
       logInit(`  ├─ Harnesses wired : ${res.initializedHarnesses.join(', ')}`);
       logInit(`  ├─ Rule seeds      : ${res.updatedFiles.join(', ')}`);
@@ -1905,21 +1928,24 @@ export function runCli(argv: string[]): void {
     }
 
     case 'profile': {
-      const positionalArgs: string[] = [];
-      for (let i = 1; i < args.length; i++) {
-        const a = args[i];
-        if (a === '--workspace' || a === '-w') {
-          i++;
-          continue;
-        }
-        if (a.startsWith('-')) continue;
-        positionalArgs.push(a.toLowerCase());
-      }
-      const action = positionalArgs[0] || 'show';
-      if (!['list', 'show', 'sync', 'path'].includes(action)) {
+      const positionalArgs = extractCliPositionalArgs(args, 1);
+      const action = (positionalArgs[0] || 'show').toLowerCase();
+      const validProfileActions = [
+        'list',
+        'show',
+        'add',
+        'remove',
+        'sync',
+        'undo',
+        'import',
+        'onboard',
+        'clean',
+        'path',
+      ];
+      if (!validProfileActions.includes(action)) {
         console.error(
           formatTerminalOutput(
-            `❌ Error: Unknown profile subcommand '${action}'. Usage: evo profile [list|show|sync|path]`,
+            `❌ Error: Unknown profile subcommand '${action}'. Usage: evo profile [${validProfileActions.join('|')}]`,
             cliTermOpts
           )
         );
@@ -1929,10 +1955,646 @@ export function runCli(argv: string[]): void {
 
       const isJson = args.includes('--json');
       const dryRun = args.includes('--dry-run');
+      const apply = args.includes('--apply');
+      const isProject = args.includes('--project');
       const profileStorage = new EvoStorage(globalDir);
       const hasGlobalEvo = hasValidEvoStructure(profileStorage.evoDir);
       const cfg = hasGlobalEvo ? profileStorage.getConfig() : { ...DEFAULT_EVO_CONFIG };
-      const maxTokens = cfg.maxGlobalProfileTokens ?? 500;
+      const maxTokens = cfg.maxGlobalProfileTokens ?? 800;
+      const maxMenuTokens = cfg.maxDirectoryMenuTokens ?? 250;
+
+      const commitCandidates = (
+        candidates: ParsedPreferenceCandidate[],
+        targetStorage: EvoStorage,
+        scope: 'global' | 'project',
+        origin: string
+      ) => {
+        targetStorage.ensureInitialized();
+        const imported: Array<{ id: string; title: string; category: PreferenceCategory }> = [];
+        const rejected: Array<{ id: string; title: string; error_code?: string; message: string }> = [];
+        const telem = new EvoTelemetry(targetStorage);
+        try {
+          const gatekeeper = new EvoGatekeeper(targetStorage, telem);
+          for (const cand of candidates) {
+            const payload: ProposalPayload = {
+              kind: 'preference',
+              id: cand.id,
+              title: cand.title,
+              l0_summary: cand.l0_summary,
+              category: cand.category,
+              always_on: cand.always_on,
+              ...(cand.trigger_cue ? { trigger_cue: cand.trigger_cue } : {}),
+              scope,
+              content: cand.content,
+              origin,
+              enabled: true,
+              review_status: 'approved',
+            };
+            const gateRes = gatekeeper.evaluateAndCommit(payload, { bypassConfoundedCheck: true });
+            if (gateRes.passed) {
+              imported.push({ id: cand.id, title: cand.title, category: cand.category });
+            } else {
+              rejected.push({
+                id: cand.id,
+                title: cand.title,
+                error_code: gateRes.error_code,
+                message: gateRes.message,
+              });
+            }
+          }
+          if (imported.length > 0) {
+            telem.syncFromDisk(true);
+          }
+        } finally {
+          telem.close();
+        }
+        const syncRes =
+          imported.length > 0 && scope === 'global'
+            ? syncGlobalUserProfile(targetStorage.rootDir)
+            : undefined;
+        if (imported.length > 0 && scope === 'project') {
+          syncManagedRuleBlocks(targetStorage.rootDir);
+        }
+        return { imported, rejected, syncRes };
+      };
+
+      if (action === 'add') {
+        const rawCategory = (parseCliFlagValue(args, '--category') || 'style').trim().toLowerCase();
+        const rawTitle = (parseCliFlagValue(args, '--title') || '').trim();
+        const rawSummary = (parseCliFlagValue(args, '--summary') || '').trim();
+        const rawContent = (parseCliFlagValue(args, '--content') || '').trim();
+        const rawId = (parseCliFlagValue(args, '--id') || '').trim();
+        const triggerCue = (parseCliFlagValue(args, '--trigger') || '').trim();
+        const alwaysOn = !args.includes('--on-demand');
+
+        const content = rawContent || rawSummary || rawTitle;
+        if (!content) {
+          const msg =
+            'Missing preference content. Usage: evo profile add --category <cat> --title "..." --summary "..." --content "..."';
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ Error: ${msg}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+        if (!PREFERENCE_CATEGORIES.includes(rawCategory as PreferenceCategory)) {
+          const msg = `Invalid category '${rawCategory}'. Must be one of: ${PREFERENCE_CATEGORIES.join(', ')}`;
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, error_code: 'ERR_INVALID_SCHEMA', error: msg }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ Error: ${msg}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+
+        const title = rawTitle || rawSummary || content.split(/\r?\n/)[0].slice(0, 72);
+        const l0Summary =
+          rawSummary || rawTitle || content.replace(/\s+/g, ' ').trim().slice(0, 130);
+        const sanitizedRawId = rawId ? sanitizeId(rawId) : '';
+        let autoTitleId = sanitizeId(title);
+        if (!isProject && autoTitleId && !/[a-z]/i.test(autoTitleId)) {
+          autoTitleId = '';
+        }
+        if (
+          !isProject &&
+          /^(?:\d+[a-z0-9]*|proj-[a-z0-9]+|project-[a-z0-9]+)-/i.test(autoTitleId)
+        ) {
+          autoTitleId = `pref-${autoTitleId}`;
+        }
+        const cleanId =
+          sanitizedRawId ||
+          (autoTitleId.length >= 3
+            ? autoTitleId.slice(0, 48).replace(/-+$/, '')
+            : `pref-${crypto.createHash('sha256').update(`${title}\0${content}`).digest('hex').slice(0, 8)}`);
+
+        const targetRoot = isProject ? workspaceRoot : globalDir;
+        const targetStorage = new EvoStorage(targetRoot);
+        targetStorage.ensureInitialized();
+
+        const payload: ProposalPayload = {
+          kind: 'preference',
+          id: cleanId,
+          title,
+          l0_summary: l0Summary,
+          category: rawCategory as PreferenceCategory,
+          always_on: alwaysOn,
+          ...(triggerCue ? { trigger_cue: triggerCue } : {}),
+          scope: isProject ? 'project' : 'global',
+          content,
+          origin: 'cli',
+          enabled: true,
+          review_status: 'approved',
+        };
+
+        const telem = new EvoTelemetry(targetStorage);
+        let gateRes;
+        try {
+          const gatekeeper = new EvoGatekeeper(targetStorage, telem);
+          gateRes = gatekeeper.evaluateAndCommit(payload, { bypassConfoundedCheck: true });
+          if (gateRes.passed) {
+            telem.syncFromDisk(true);
+          }
+        } finally {
+          telem.close();
+        }
+
+        if (!gateRes.passed) {
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, ...gateRes }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ ${gateRes.message}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+
+        const syncRes = isProject ? undefined : syncGlobalUserProfile(globalDir);
+        if (isProject) {
+          syncManagedRuleBlocks(workspaceRoot);
+        }
+        const receipt = `🧬 EvoKernel Evolution Receipt: [preference] ${cleanId} (${l0Summary})`;
+        if (isJson) {
+          console.log(
+            JSON.stringify(
+              {
+                ok: true,
+                id: cleanId,
+                scope: isProject ? 'project' : 'global',
+                category: rawCategory,
+                always_on: alwaysOn,
+                ...(triggerCue ? { trigger_cue: triggerCue } : {}),
+                receipt,
+                syncedTargets: syncRes?.updatedTargets || [],
+                ...(syncRes
+                  ? { totalTokens: syncRes.totalTokens, maxTokens: syncRes.maxTokens }
+                  : {}),
+              },
+              null,
+              2
+            )
+          );
+        } else {
+          const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+          logProfile(receipt);
+          if (syncRes) {
+            logProfile(
+              `  ├─ Token Budget  : ${syncRes.totalTokens}/${syncRes.maxTokens} tok (Menu: ${syncRes.menuTokens}/${syncRes.maxMenuTokens} tok)`
+            );
+            logProfile(
+              `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+            );
+          } else {
+            logProfile(`  └─ Project Scope : ${workspaceRoot}`);
+          }
+        }
+        break;
+      }
+
+      if (action === 'remove') {
+        const rawTargetId = positionalArgs[1] ? positionalArgs[1].trim() : '';
+        if (!rawTargetId) {
+          const msg = 'Missing preference ID. Usage: evo profile remove <id> [--project] [--json]';
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ Error: ${msg}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+
+        const cleanId = sanitizeId(rawTargetId);
+        const targetStorage = isProject ? new EvoStorage(workspaceRoot) : profileStorage;
+        const existingPref = hasValidEvoStructure(targetStorage.evoDir)
+          ? targetStorage.getPreference(cleanId)
+          : null;
+        if (!existingPref) {
+          const msg = `Preference '${cleanId}' not found in ${isProject ? workspaceRoot : globalDir}`;
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ ${msg}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+
+        let prevSnapshot: string | undefined;
+        const prefFilePath = path.join(targetStorage.preferencesDir, `${cleanId}.md`);
+        if (!isProject && fs.existsSync(prefFilePath)) {
+          try {
+            prevSnapshot = fs.readFileSync(prefFilePath, 'utf8');
+          } catch {}
+        }
+
+        const reason = 'Removed via evo profile remove CLI';
+        const archived = targetStorage.archiveCapability(cleanId, 'preference', reason);
+        if (!archived) {
+          const msg = `Failed to archive preference '${cleanId}'`;
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ ${msg}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+
+        if (!isProject) {
+          targetStorage.appendProfileHistory({
+            ts: new Date().toISOString(),
+            action: 'archive',
+            id: cleanId,
+            kind: 'preference',
+            title: existingPref.title || cleanId,
+            ...(prevSnapshot ? { previous_snapshot: prevSnapshot } : {}),
+            reason,
+          });
+        }
+
+        const telem = new EvoTelemetry(targetStorage);
+        try {
+          telem.syncFromDisk(true);
+        } finally {
+          telem.close();
+        }
+
+        const syncRes = isProject ? undefined : syncGlobalUserProfile(globalDir);
+        if (isProject) {
+          syncManagedRuleBlocks(workspaceRoot);
+        }
+
+        if (isJson) {
+          console.log(
+            JSON.stringify(
+              {
+                ok: true,
+                removed: cleanId,
+                scope: isProject ? 'project' : 'global',
+                syncedTargets: syncRes?.updatedTargets || [],
+                ...(syncRes
+                  ? { totalTokens: syncRes.totalTokens, maxTokens: syncRes.maxTokens }
+                  : {}),
+              },
+              null,
+              2
+            )
+          );
+        } else {
+          const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+          logProfile(`🗑️  Archived preference '${cleanId}' (${isProject ? 'project' : 'global'})`);
+          if (syncRes) {
+            logProfile(
+              `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+            );
+          }
+        }
+        break;
+      }
+
+      if (action === 'import') {
+        const fileArg = positionalArgs[1] ? positionalArgs[1].trim() : '';
+        if (!fileArg) {
+          const msg = 'Missing markdown file path. Usage: evo profile import <filePath> [--apply] [--json]';
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ Error: ${msg}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+        const cwdTarget = path.isAbsolute(fileArg) ? fileArg : path.resolve(process.cwd(), fileArg);
+        const wsTarget = path.isAbsolute(fileArg) ? fileArg : path.resolve(workspaceRoot, fileArg);
+        const resolvedFile = fs.existsSync(cwdTarget) ? cwdTarget : wsTarget;
+        if (!fs.existsSync(resolvedFile) || fs.statSync(resolvedFile).isDirectory()) {
+          const msg = `Markdown file not found: ${resolvedFile}`;
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ Error: ${msg}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+
+        const rawMd = fs.readFileSync(resolvedFile, 'utf8').replace(/^\uFEFF/, '');
+        const candidates = parseMarkdownToPreferenceCandidates(rawMd, path.basename(resolvedFile));
+
+        if (!apply) {
+          if (isJson) {
+            console.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  dryRun: true,
+                  applied: false,
+                  filePath: resolvedFile,
+                  count: candidates.length,
+                  candidates,
+                },
+                null,
+                2
+              )
+            );
+          } else {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile(`📄 Profile Import Preview (${candidates.length} candidate(s) from ${path.basename(resolvedFile)}):`);
+            if (candidates.length === 0) {
+              logProfile('  (no importable preference directives found)');
+            } else {
+              for (const c of candidates) {
+                logProfile(`  ├─ [${c.category}] ${c.id} — ${c.l0_summary}`);
+              }
+              logProfile('  └─ Re-run with `--apply` to validate via Gatekeeper and sync host profiles.');
+            }
+          }
+          break;
+        }
+
+        const { imported, rejected, syncRes } = commitCandidates(
+          candidates,
+          profileStorage,
+          'global',
+          'imported'
+        );
+        if (isJson) {
+          console.log(
+            JSON.stringify(
+              {
+                ok: true,
+                dryRun: false,
+                applied: true,
+                filePath: resolvedFile,
+                importedCount: imported.length,
+                rejectedCount: rejected.length,
+                imported,
+                rejected,
+                syncedTargets: syncRes?.updatedTargets || [],
+              },
+              null,
+              2
+            )
+          );
+        } else {
+          const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+          logProfile(`🧬 Profile Import Complete: ${imported.length} imported, ${rejected.length} rejected`);
+          for (const item of imported) {
+            logProfile(`  ├─ [+] ${item.id} (${item.category})`);
+          }
+          for (const err of rejected) {
+            logProfile(`  ├─ [!] ${err.id}: ${err.error_code || 'REJECTED'} — ${err.message}`);
+          }
+          if (syncRes) {
+            logProfile(
+              `  └─ Host Targets : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+            );
+          }
+        }
+        break;
+      }
+
+      if (action === 'onboard') {
+        const presetFlag = parseCliFlagValue(args, '--preset');
+        const presetNames = Object.keys(ONBOARDING_PRESETS) as OnboardingPresetName[];
+
+        if (presetFlag) {
+          const normalizedPreset = presetFlag.trim().toLowerCase() as OnboardingPresetName;
+          if (!Object.prototype.hasOwnProperty.call(ONBOARDING_PRESETS, normalizedPreset)) {
+            const msg = `Unknown preset '${presetFlag}'. Available presets: ${presetNames.join(', ')}`;
+            if (isJson) {
+              console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+            } else {
+              console.error(formatTerminalOutput(`❌ Error: ${msg}`, cliTermOpts));
+            }
+            handleExit(1);
+            return;
+          }
+
+          const candidates = getOnboardingPresetCandidates(normalizedPreset);
+          if (!apply) {
+            if (isJson) {
+              console.log(
+                JSON.stringify(
+                  {
+                    ok: true,
+                    dryRun: true,
+                    applied: false,
+                    preset: normalizedPreset,
+                    candidates,
+                  },
+                  null,
+                  2
+                )
+              );
+            } else {
+              const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+              logProfile(`🧭 Onboarding Preset Preview: ${normalizedPreset} (${candidates.length} preferences)`);
+              for (const c of candidates) {
+                logProfile(`  ├─ [${c.category}] ${c.id} — ${c.l0_summary}`);
+              }
+              logProfile('  └─ Re-run with `--apply` to commit and sync across detected hosts.');
+            }
+            break;
+          }
+
+          const { imported, rejected, syncRes } = commitCandidates(
+            candidates,
+            profileStorage,
+            'global',
+            'onboarding'
+          );
+          if (isJson) {
+            console.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  dryRun: false,
+                  applied: true,
+                  preset: normalizedPreset,
+                  importedCount: imported.length,
+                  rejectedCount: rejected.length,
+                  imported,
+                  rejected,
+                  syncedTargets: syncRes?.updatedTargets || [],
+                },
+                null,
+                2
+              )
+            );
+          } else {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile(`🧬 Onboarding Applied (${normalizedPreset}): ${imported.length} active, ${rejected.length} skipped`);
+            if (syncRes) {
+              logProfile(
+                `  └─ Host Targets : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+              );
+            }
+          }
+          break;
+        }
+
+        const isInteractiveTty =
+          Boolean(process.stdin.isTTY) &&
+          Boolean(process.stdout.isTTY) &&
+          !isJson &&
+          !Boolean(process.argv[1]?.includes('.test.'));
+
+        if (!isInteractiveTty) {
+          const presetSummaries = presetNames.map((name) => ({
+            id: name,
+            name: ONBOARDING_PRESETS[name].name,
+            description: ONBOARDING_PRESETS[name].description,
+            count: ONBOARDING_PRESETS[name].candidates.length,
+          }));
+          if (isJson) {
+            console.log(JSON.stringify({ ok: true, presets: presetSummaries }, null, 2));
+          } else {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile('🧭 Available Onboarding Presets:');
+            for (const p of presetSummaries) {
+              logProfile(`  ├─ ${p.id} (${p.count} prefs) — ${p.description}`);
+            }
+            logProfile('  └─ Preview with: `evo profile onboard --preset <name>` (add `--apply` to save)');
+          }
+          break;
+        }
+
+        return (async () => {
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          try {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile('🧭 EvoKernel Personal Profile Onboarding (3 quick prompts):');
+            logProfile('  1) concise-ceo        — Bottom-line first, 3-5 bullets, flag risks upfront');
+            logProfile('  2) rigorous-engineer  — Root-cause first, minimal diff, real build/tests');
+            logProfile('  3) technical-writer   — Structured headings, consistent terms, runnable examples');
+            const ansPreset = (
+              await rl.question('\n[1/3] Select preset [1-3 or name, default: rigorous-engineer]: ')
+            ).trim().toLowerCase();
+            const chosenPreset: OnboardingPresetName =
+              ansPreset === '1' || ansPreset === 'concise-ceo'
+                ? 'concise-ceo'
+                : ansPreset === '3' || ansPreset === 'technical-writer'
+                  ? 'technical-writer'
+                  : 'rigorous-engineer';
+
+            const extraRule = (
+              await rl.question('[2/3] Optional custom communication/formatting rule (Enter to skip): ')
+            ).trim();
+            const confirm = (
+              await rl.question(`[3/3] Apply '${chosenPreset}' to global profile? [Y/n]: `)
+            ).trim().toLowerCase();
+
+            if (confirm === 'n' || confirm === 'no') {
+              logProfile('Cancelled — no changes written.');
+              return;
+            }
+
+            const candidates = getOnboardingPresetCandidates(chosenPreset);
+            if (extraRule) {
+              const normalizedExtra = extraRule.replace(/^(?:[-*+]|\d+[.)])\s+/, '').trim();
+              if (normalizedExtra) {
+                const extraCands = parseMarkdownToPreferenceCandidates(`- ${normalizedExtra}`, 'onboarding');
+                const existingIds = new Set(candidates.map((c) => c.id));
+                for (const ec of extraCands) {
+                  let cid = ec.id;
+                  let n = 2;
+                  while (existingIds.has(cid)) {
+                    cid = `${ec.id.slice(0, 44)}-${n++}`;
+                  }
+                  existingIds.add(cid);
+                  candidates.push({ ...ec, id: cid });
+                }
+              }
+            }
+            const { imported, rejected, syncRes } = commitCandidates(
+              candidates,
+              profileStorage,
+              'global',
+              'onboarding'
+            );
+            logProfile(`🧬 Applied ${imported.length} preference(s) (${rejected.length} skipped).`);
+            if (syncRes) {
+              logProfile(
+                `  └─ Host Targets : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+              );
+            }
+          } finally {
+            rl.close();
+          }
+        })().catch((err) => {
+          console.error(err);
+          handleExit(1);
+        });
+      }
+
+      if (action === 'clean') {
+        const cleanRes = cleanGlobalUserProfile(globalDir, { dryRun });
+        if (isJson) {
+          console.log(JSON.stringify({ ok: true, globalRoot: globalDir, dryRun, ...cleanRes }, null, 2));
+        } else {
+          const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+          logProfile(`🧹 User-Global Profile ${dryRun ? '(Dry Run) ' : ''}Cleaned:`);
+          logProfile(
+            `  └─ Host Targets  : ${cleanRes.updatedTargets.length > 0 ? cleanRes.updatedTargets.join(', ') : '(no EVO:PROFILE blocks found)'}`
+          );
+        }
+        break;
+      }
+
+      if (action === 'undo') {
+        const targetId = positionalArgs[1] ? positionalArgs[1].trim() : undefined;
+        const undoRes = hasGlobalEvo
+          ? profileStorage.undoLastProfileChange(targetId)
+          : { ok: false, message: `Global profile storage is not initialized at ${globalDir}` };
+        if (!undoRes.ok) {
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, globalRoot: globalDir, ...undoRes }, null, 2));
+          } else {
+            console.error(formatTerminalOutput(`❌ ${undoRes.message}`, cliTermOpts));
+          }
+          handleExit(1);
+          return;
+        }
+        const syncRes = syncGlobalUserProfile(globalDir);
+        const gTele = new EvoTelemetry(profileStorage);
+        try {
+          gTele.syncFromDisk(true);
+        } finally {
+          gTele.close();
+        }
+        if (isJson) {
+          console.log(
+            JSON.stringify(
+              {
+                ok: true,
+                globalRoot: globalDir,
+                undone: undoRes.undone,
+                message: undoRes.message,
+                syncedTargets: syncRes.updatedTargets,
+                totalTokens: syncRes.totalTokens,
+                maxTokens: syncRes.maxTokens,
+                menuTokens: syncRes.menuTokens,
+              },
+              null,
+              2
+            )
+          );
+        } else {
+          const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+          logProfile(`↩️  ${undoRes.message}`);
+          logProfile(
+            `  ├─ Token Budget  : ${syncRes.totalTokens}/${syncRes.maxTokens} tok (Menu: ${syncRes.menuTokens}/${syncRes.maxMenuTokens} tok)`
+          );
+          logProfile(
+            `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+          );
+        }
+        break;
+      }
 
       if (action === 'path') {
         const payload = {
@@ -1940,6 +2602,7 @@ export function runCli(argv: string[]): void {
           evoDir: profileStorage.evoDir,
           preferencesDir: profileStorage.preferencesDir,
           profileDigestPath: profileStorage.profileDigestPath,
+          profileHistoryPath: profileStorage.profileHistoryPath,
         };
         if (isJson) {
           console.log(JSON.stringify(payload, null, 2));
@@ -1947,6 +2610,7 @@ export function runCli(argv: string[]): void {
           console.log(formatTerminalOutput(`Global Root      : ${payload.globalRoot}`, cliTermOpts));
           console.log(formatTerminalOutput(`Preferences Dir  : ${payload.preferencesDir}`, cliTermOpts));
           console.log(formatTerminalOutput(`Profile Digest   : ${payload.profileDigestPath}`, cliTermOpts));
+          console.log(formatTerminalOutput(`Profile History  : ${payload.profileHistoryPath}`, cliTermOpts));
         }
         break;
       }
@@ -1960,7 +2624,9 @@ export function runCli(argv: string[]): void {
           logProfile(`🧬 User-Global Profile ${dryRun ? '(Dry Run) ' : ''}Synced:`);
           logProfile(`  ├─ Global Root   : ${globalDir}`);
           logProfile(`  ├─ Profile Digest: ${syncRes.digestPath}`);
-          logProfile(`  ├─ Token Budget  : ${syncRes.totalTokens}/${syncRes.maxTokens} tokens`);
+          logProfile(
+            `  ├─ Token Budget  : ${syncRes.totalTokens}/${syncRes.maxTokens} tokens (Menu: ${syncRes.menuTokens}/${syncRes.maxMenuTokens} tok)`
+          );
           logProfile(
             `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
           );
@@ -1970,7 +2636,13 @@ export function runCli(argv: string[]): void {
 
       const prefs = hasGlobalEvo ? profileStorage.listPreferences() : [];
       const activeAlwaysOn = prefs.filter((p) => p.always_on !== false && p.enabled !== false);
-      const totalTokens = activeAlwaysOn.reduce((acc, p) => acc + p.tokens, 0);
+      const { totalTokens } = hasGlobalEvo
+        ? profileStorage.getProfileTokenUsage()
+        : { totalTokens: 0 };
+      const directoryMenu = hasGlobalEvo
+        ? profileStorage.formatTaskDirectoryMenu(maxMenuTokens)
+        : '';
+      const menuTokens = estimateTokens(directoryMenu);
 
       if (action === 'list') {
         if (isJson) {
@@ -1980,6 +2652,8 @@ export function runCli(argv: string[]): void {
                 globalRoot: globalDir,
                 totalTokens,
                 maxTokens,
+                menuTokens,
+                maxMenuTokens,
                 preferences: prefs,
               },
               null,
@@ -2021,7 +2695,10 @@ export function runCli(argv: string[]): void {
               profileDigestPath: profileStorage.profileDigestPath,
               totalTokens,
               maxTokens,
+              menuTokens,
+              maxMenuTokens,
               digest,
+              directoryMenu,
               preferences: activeAlwaysOn,
             },
             null,
@@ -2304,6 +2981,75 @@ export function runCli(argv: string[]): void {
           }
         } catch {}
       }
+
+      // D10 & D17: Profile health & installed plugin L0 seed drift checks
+      const globalProfileStorage = new EvoStorage(globalDir);
+      const hasGlobalProfileEvo = hasValidEvoStructure(globalProfileStorage.evoDir);
+      const globalProfileCfg = hasGlobalProfileEvo
+        ? globalProfileStorage.getConfig()
+        : { ...DEFAULT_EVO_CONFIG };
+      const maxProfileTokens = globalProfileCfg.maxGlobalProfileTokens ?? 800;
+      const maxMenuTokens = globalProfileCfg.maxDirectoryMenuTokens ?? 250;
+      const { totalTokens: profileTokens } = hasGlobalProfileEvo
+        ? globalProfileStorage.getProfileTokenUsage()
+        : { totalTokens: 0 };
+      const profileDirectoryMenu = hasGlobalProfileEvo
+        ? globalProfileStorage.formatTaskDirectoryMenu(maxMenuTokens)
+        : '';
+      const menuTokens = estimateTokens(profileDirectoryMenu);
+      const profileDigest = hasGlobalProfileEvo
+        ? globalProfileStorage.formatUserProfileDigest()
+        : '';
+      const expectedProfileBlock = renderUserProfileBlock(profileDigest, profileDirectoryMenu).trim();
+      const profileHostTargets = discoverGlobalProfileTargets(globalDir);
+      const syncedProfileTargets: string[] = [];
+      const driftedProfileTargets: string[] = [];
+      if (expectedProfileBlock) {
+        const normProfile = (s: string) => s.replace(/\r\n/g, '\n').trim();
+        for (const tDesc of profileHostTargets) {
+          const tPath = tDesc.path;
+          let existingBlock = '';
+          if (fs.existsSync(tPath)) {
+            try {
+              const rawT = fs.readFileSync(tPath, 'utf8');
+              const sIdx = rawT.indexOf(PROFILE_MARKER_START);
+              const eIdx = rawT.indexOf(PROFILE_MARKER_END);
+              if (sIdx !== -1 && eIdx !== -1 && eIdx > sIdx) {
+                existingBlock = rawT.slice(sIdx, eIdx + PROFILE_MARKER_END.length);
+              }
+            } catch {}
+          }
+          if (normProfile(existingBlock) === normProfile(expectedProfileBlock)) {
+            syncedProfileTargets.push(tPath);
+          } else {
+            driftedProfileTargets.push(tPath);
+          }
+        }
+      }
+
+      const stalePluginSeeds: string[] = [];
+      const currentHome = os.homedir();
+      const pluginSeedCandidates = [
+        path.join(currentHome, '.gemini', 'config', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md'),
+        path.join(currentHome, '.claude', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md'),
+        path.join(currentHome, '.gemini', 'extensions', 'evo-kernel', 'GEMINI.md'),
+      ];
+      for (const pSeed of pluginSeedCandidates) {
+        if (!fs.existsSync(pSeed)) continue;
+        try {
+          const content = fs.readFileSync(pSeed, 'utf8');
+          const isStale =
+            content.includes('EvoKernel 演进回执') ||
+            !content.includes('EvoKernel Recall:') ||
+            !content.includes('scope: "global"');
+          if (isStale) {
+            stalePluginSeeds.push(pSeed);
+            const relSeed = path.relative(currentHome, pSeed).replace(/\\/g, '/');
+            versionDriftReasons.push(`Installed plugin L0 seed is stale (< v0.5): ~/${relSeed}`);
+          }
+        } catch {}
+      }
+
       const hasVersionDrift = versionDriftReasons.length > 0;
       const duplicateRootSeeds =
         seedInfo.valid.includes('AGENTS.md') && seedInfo.valid.includes('GEMINI.md');
@@ -2325,6 +3071,18 @@ export function runCli(argv: string[]): void {
           seeds: {
             ...seedInfo,
             duplicateRootSeeds,
+            stalePluginSeeds,
+          },
+          profile: {
+            globalRoot: globalDir,
+            initialized: hasGlobalProfileEvo,
+            profileTokens,
+            maxProfileTokens,
+            menuTokens,
+            maxMenuTokens,
+            overBudget: profileTokens > maxProfileTokens || menuTokens > maxMenuTokens,
+            syncedTargets: syncedProfileTargets,
+            driftedTargets: driftedProfileTargets,
           },
           versionDrift: {
             drifted: hasVersionDrift,
@@ -2433,6 +3191,13 @@ export function runCli(argv: string[]): void {
           ? `Registered (${mcpInfo.foundConfigs.join(', ')})`
           : 'Not configured — run `npx -y evo-kernel init` to register';
       logDoctor(`  ├─ ${mcpIcon} Meta-MCP Config       : ${mcpConfigDesc}`);
+      const profileIcon =
+        profileTokens > maxProfileTokens || menuTokens > maxMenuTokens || driftedProfileTargets.length > 0
+          ? '[!]'
+          : '[✓]';
+      logDoctor(
+        `  ├─ ${profileIcon} Personal Profile      : Always-On ${profileTokens}/${maxProfileTokens} tok · Directory Menu ${menuTokens}/${maxMenuTokens} tok · Hosts ${syncedProfileTargets.length}/${profileHostTargets.length} synced`
+      );
 
       const probeNeedsLocalInstall =
         Boolean(probeResult.error) && /npm install --save-dev evo-kernel/i.test(probeResult.error || '');
@@ -2596,7 +3361,12 @@ export function runCli(argv: string[]): void {
     case 'uninstall': {
       const unmountIde = args.includes('--unmount-ide');
       const ide = parseIdeTargetsArg(args);
-      const res = runUninstall(workspaceRoot, { unmountIde, ide });
+      const isGlobal = args.includes('--global') || args.includes('-g');
+      const res = runUninstall(workspaceRoot, {
+        unmountIde,
+        ide,
+        ...(isGlobal ? { global: true } : {}),
+      });
       console.log(
         formatTerminalOutput(
           `🧹 Cleaned EvoKernel markers from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`,

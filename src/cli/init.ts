@@ -15,11 +15,31 @@ import { resolveGitPaths } from '../core/memory.js';
 import {
   META_RULE_MARKER_END,
   META_RULE_MARKER_START,
-  PROFILE_MARKER_END,
-  PROFILE_MARKER_START,
   renderManagedBlock,
-  renderUserProfileBlock,
+  resolveLatestMetaRuleSeed,
 } from '../templates/meta-rule.js';
+import { isGlobalFallbackRoot } from '../core/gatekeeper/abstraction-gates.js';
+import {
+  type ProfileSyncOptions,
+  type ProfileSyncResult,
+  cleanGlobalUserProfile,
+  discoverGlobalProfileTargets,
+  findGitRoot as findGitRootImpl,
+  syncGlobalUserProfile as syncGlobalUserProfileImpl,
+} from '../core/profile-sync.js';
+
+export { cleanGlobalUserProfile, discoverGlobalProfileTargets };
+
+export function syncGlobalUserProfile(
+  globalRoot?: string,
+  options?: ProfileSyncOptions
+): ProfileSyncResult {
+  return syncGlobalUserProfileImpl(globalRoot, options);
+}
+
+export function findGitRoot(startDir: string): string | null {
+  return findGitRootImpl(startDir);
+}
 import {
   ALL_HARNESS_ADAPTERS,
   HARNESS_RULE_TARGETS,
@@ -27,6 +47,7 @@ import {
   detectCascadedTargets,
   extractCodexTomlEvoEntry,
   hasStaleNpxMcpEntry,
+  isEphemeralNpxCachePath as isHarnessEphemeralNpxCachePath,
   isPluginBootstrapEntry,
   parseHarnessTargets,
   parseJsonc,
@@ -275,11 +296,19 @@ export function formatToolsCatalogMarkdown(
   return finalLines.join('\n');
 }
 
+function formatProjectPreferencesMarkdown(storage: EvoStorage): string {
+  if (isGlobalFallbackRoot(storage.rootDir)) {
+    return '';
+  }
+  return storage.formatUserProfileDigest();
+}
+
 export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   const storage = new EvoStorage(workspaceRoot);
   const digest = storage.rebuildCoreInvariantsDigest();
   const toolsCatalog = formatToolsCatalogMarkdown(storage, digest, { includeGlobal: false });
-  const block = renderManagedBlock(digest, toolsCatalog);
+  const projectPrefs = formatProjectPreferencesMarkdown(storage);
+  const block = renderManagedBlock(digest, toolsCatalog, projectPrefs);
   const updated: string[] = [];
 
   const candidateRuleFiles = [
@@ -404,184 +433,6 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
   }
 
   return updated;
-}
-
-function upsertProfileBlock(existingContent: string, profileBlock: string): string {
-  const startIdx = existingContent.indexOf(PROFILE_MARKER_START);
-  const endIdx = existingContent.indexOf(PROFILE_MARKER_END);
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const before = existingContent.slice(0, startIdx).trimEnd();
-    const after = existingContent.slice(endIdx + PROFILE_MARKER_END.length).trimStart();
-    return [before, profileBlock.trim(), after].filter(Boolean).join('\n\n') + '\n';
-  }
-  if (!existingContent.trim()) {
-    return profileBlock.trim() + '\n';
-  }
-  return existingContent.trimEnd() + '\n\n' + profileBlock.trim() + '\n';
-}
-
-function removeProfileBlock(existingContent: string): string {
-  const startIdx = existingContent.indexOf(PROFILE_MARKER_START);
-  const endIdx = existingContent.indexOf(PROFILE_MARKER_END);
-  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
-    return existingContent;
-  }
-  const before = existingContent.slice(0, startIdx).trimEnd();
-  const after = existingContent.slice(endIdx + PROFILE_MARKER_END.length).trimStart();
-  const combined = [before, after].filter(Boolean).join('\n\n');
-  return combined ? combined + '\n' : '';
-}
-
-export function syncGlobalUserProfile(
-  globalRoot?: string,
-  options?: { dryRun?: boolean; targetFiles?: string[]; homeDir?: string }
-): { digestPath: string; totalTokens: number; maxTokens: number; updatedTargets: string[] } {
-  const resolvedGlobalRoot = resolveGlobalFallbackDir(globalRoot);
-  const storage = new EvoStorage(resolvedGlobalRoot);
-  const dryRun = Boolean(options?.dryRun);
-  if (!dryRun) {
-    storage.ensureInitialized();
-  }
-  const cfg = hasValidEvoStructure(storage.evoDir)
-    ? storage.getConfig()
-    : { ...DEFAULT_EVO_CONFIG };
-  const maxTokens = cfg.maxGlobalProfileTokens ?? 500;
-  const digest = dryRun
-    ? storage.formatUserProfileDigest()
-    : storage.rebuildUserProfileDigest();
-  const { totalTokens } = storage.getProfileTokenUsage();
-  const profileBlock = renderUserProfileBlock(digest);
-
-  let targetFiles: string[];
-  if (options?.targetFiles !== undefined) {
-    targetFiles = options.targetFiles.map((f) => path.resolve(f));
-  } else if (
-    process.env.EVO_GLOBAL_PROFILE_TARGETS &&
-    process.env.EVO_GLOBAL_PROFILE_TARGETS.trim()
-  ) {
-    targetFiles = process.env.EVO_GLOBAL_PROFILE_TARGETS.split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((f) => path.resolve(f));
-  } else if (
-    !options?.homeDir &&
-    ((process.env.EVO_GLOBAL_DIR && process.env.EVO_GLOBAL_DIR.trim()) ||
-      process.env.NODE_TEST_CONTEXT)
-  ) {
-    targetFiles = [path.join(resolvedGlobalRoot, 'USER_PROFILE.md')];
-  } else {
-    const homeDir = path.resolve(options?.homeDir || os.homedir());
-    targetFiles = [];
-    if (fs.existsSync(path.join(homeDir, '.gemini'))) {
-      targetFiles.push(path.join(homeDir, '.gemini', 'GEMINI.md'));
-    }
-    if (fs.existsSync(path.join(homeDir, '.claude'))) {
-      targetFiles.push(path.join(homeDir, '.claude', 'CLAUDE.md'));
-    }
-    if (fs.existsSync(path.join(homeDir, '.codex'))) {
-      targetFiles.push(path.join(homeDir, '.codex', 'AGENTS.md'));
-    }
-    if (fs.existsSync(path.join(homeDir, '.cursor'))) {
-      targetFiles.push(path.join(homeDir, '.cursor', 'rules', 'evo-user-profile.mdc'));
-    }
-    if (fs.existsSync(path.join(homeDir, '.windsurf'))) {
-      targetFiles.push(path.join(homeDir, '.windsurf', 'rules', 'evo-user-profile.md'));
-    }
-  }
-
-  const updatedTargets: string[] = [];
-  for (const targetPath of targetFiles) {
-    const isStandaloneCursorMdc = /[\\/]\.cursor[\\/]rules[\\/]evo-user-profile\.mdc$/i.test(
-      targetPath
-    );
-    const isStandalone =
-      /[\\/]evo-user-profile\.(?:mdc|md)$/i.test(targetPath) || isStandaloneCursorMdc;
-    const existed = fs.existsSync(targetPath);
-    const existing = existed ? fs.readFileSync(targetPath, 'utf8') : '';
-
-    if (!profileBlock) {
-      if (!existed) continue;
-      const stripped = removeProfileBlock(existing);
-      if (isStandalone) {
-        const bodyWithoutFm = stripped
-          .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
-          .trim();
-        if (!bodyWithoutFm) {
-          if (!options?.dryRun) {
-            try {
-              fs.unlinkSync(targetPath);
-            } catch {}
-          }
-          updatedTargets.push(targetPath);
-          continue;
-        }
-      }
-      if (stripped !== existing) {
-        if (!options?.dryRun) {
-          fs.writeFileSync(targetPath, stripped, 'utf8');
-        }
-        updatedTargets.push(targetPath);
-      }
-      continue;
-    }
-
-    let next: string;
-    if (isStandaloneCursorMdc && !existing.trim()) {
-      const mdcHeader = [
-        '---',
-        'description: EvoKernel Personal Style & Cross-Workspace Preferences (Auto-Managed)',
-        'globs: **/*',
-        'alwaysApply: true',
-        '---',
-      ].join('\n');
-      next = `${mdcHeader}\n\n${profileBlock.trim()}\n`;
-    } else {
-      next = upsertProfileBlock(existing, profileBlock);
-    }
-
-    if (!existed || next !== existing) {
-      if (!options?.dryRun) {
-        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-        fs.writeFileSync(targetPath, next, 'utf8');
-      }
-      updatedTargets.push(targetPath);
-    }
-  }
-
-  return {
-    digestPath: storage.profileDigestPath,
-    totalTokens,
-    maxTokens,
-    updatedTargets,
-  };
-}
-
-function safeRealpath(p: string): string {
-  try {
-    return fs.realpathSync.native(p);
-  } catch {
-    return path.resolve(p);
-  }
-}
-
-export function findGitRoot(startDir: string): string | null {
-  let current = path.resolve(startDir);
-  const homeReal = safeRealpath(os.homedir()).toLowerCase();
-  const tmpReal = safeRealpath(os.tmpdir()).toLowerCase();
-  while (true) {
-    const currentReal = safeRealpath(current).toLowerCase();
-    if (currentReal === homeReal || currentReal === tmpReal) {
-      return null;
-    }
-    if (fs.existsSync(path.join(current, '.git'))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return null;
-    }
-    current = parent;
-  }
 }
 
 export function resolveGitDir(gitRoot: string): string {
@@ -843,10 +694,7 @@ if (!entry && process.env.EVO_FORCE_NPX !== '1') {
 const rawArgs = process.argv.slice(2);
 const VALUE_FLAGS = new Set([
   '--workspace', '-w', '--port', '-p', '--host', '--token', '--export', '--svg', '--html',
-  '--targets', '--link', '--ide', '--max-commits', '--token-budget',
-  '--skill-budget', '--dim', '-k', '--k', '--rounds', '--proposer-cmd', '--probe-cmd',
-  '--worktree-setup-cmd', '--task', '--task-file', '--trajectory', '--trajectories',
-  '--deliverable', '--deliverables', '--leak-glob',
+  '--targets', '--link', '--ide',
   '--payload', '--harness', '--event', '--tool', '--tool-name', '--file', '--target-file',
 ]);
 let firstPositional = '';
@@ -1093,6 +941,381 @@ function healStaleWorkspaceMcpConfigs(
   return { workspaceHealed, globalHealed };
 }
 
+function copyDirNonOverwriting(
+  srcDir: string,
+  destDir: string,
+  syncUpdatedSeeds: boolean = false,
+  allowScoped: boolean = false
+): void {
+  if (!fs.existsSync(srcDir)) return;
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    if (
+      entry.name === '.cache' ||
+      entry.name === 'archive' ||
+      (entry.name === 'scoped' && !allowScoped) ||
+      entry.name === 'core-invariants.md'
+    ) {
+      continue;
+    }
+    const srcPath = path.join(srcDir, entry.name);
+    const destPath = path.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      copyDirNonOverwriting(srcPath, destPath, syncUpdatedSeeds, allowScoped);
+    } else if (entry.isFile()) {
+      if (!fs.existsSync(destPath)) {
+        fs.copyFileSync(srcPath, destPath);
+      } else if (syncUpdatedSeeds) {
+        const srcContent = fs.readFileSync(srcPath, 'utf8').replace(/\r?\n/g, '\n');
+        const destContent = fs.readFileSync(destPath, 'utf8').replace(/\r?\n/g, '\n');
+        if (srcContent !== destContent) {
+          fs.copyFileSync(srcPath, destPath);
+        }
+      }
+    }
+  }
+}
+
+const RETIRED_GLOBAL_SEED_FILES: RegExp[] = [/^bms-.*\.md$/i];
+const RETIRED_GLOBAL_SEED_DIRS: { skills: RegExp[]; tools: RegExp[] } = {
+  skills: [
+    /^bms-/i,
+    /^fsm-/i,
+    /^ceo-team-orchestrator$/i,
+    /^evo-dev-verification-sop$/i,
+  ],
+  tools: [/^evo-release-preflight$/i],
+};
+
+function pruneRetiredGlobalSeeds(evoDir: string): void {
+  const removeMatchingFiles = (dir: string) => {
+    if (!fs.existsSync(dir)) return;
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (RETIRED_GLOBAL_SEED_FILES.some((pat) => pat.test(entry.name))) {
+          try {
+            fs.unlinkSync(path.join(dir, entry.name));
+          } catch {}
+        }
+      }
+    } catch {}
+  };
+  removeMatchingFiles(path.join(evoDir, 'rules'));
+  removeMatchingFiles(path.join(evoDir, 'rules', 'scoped'));
+
+  const removeMatchingDirs = (dir: string, patterns: RegExp[]) => {
+    if (!fs.existsSync(dir)) return;
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (patterns.some((pat) => pat.test(entry.name))) {
+          try {
+            fs.rmSync(path.join(dir, entry.name), { recursive: true, force: true });
+          } catch {}
+        }
+      }
+    } catch {}
+  };
+  removeMatchingDirs(path.join(evoDir, 'skills'), RETIRED_GLOBAL_SEED_DIRS.skills);
+  removeMatchingDirs(path.join(evoDir, 'tools'), RETIRED_GLOBAL_SEED_DIRS.tools);
+}
+
+export function ensureGlobalFallbackSeeded(
+  globalRoot: string = resolveGlobalFallbackDir(),
+  installRoot: string = path.resolve(import.meta.dirname, '..', '..')
+): string {
+  const storage = new EvoStorage(globalRoot);
+  storage.ensureInitialized();
+
+  if (fs.existsSync(storage.configPath)) {
+    try {
+      const rawCfg = fs.readFileSync(storage.configPath, 'utf8').replace(/^\uFEFF/, '');
+      const parsedCfg = JSON.parse(rawCfg) as Record<string, unknown>;
+      if (parsedCfg && typeof parsedCfg === 'object' && !Array.isArray(parsedCfg)) {
+        if (parsedCfg.version !== EVO_KERNEL_VERSION) {
+          parsedCfg.version = EVO_KERNEL_VERSION;
+          fs.writeFileSync(storage.configPath, JSON.stringify(parsedCfg, null, 2) + '\n', 'utf8');
+        }
+      }
+    } catch {}
+  }
+
+  const templateSeedDir = path.join(installRoot, 'templates', 'seed-evo');
+  const hasTemplateSeed = fs.existsSync(templateSeedDir);
+  const seedEvoDir = hasTemplateSeed ? templateSeedDir : path.join(installRoot, '.evo');
+
+  if (fs.existsSync(seedEvoDir) && path.resolve(seedEvoDir) !== path.resolve(storage.evoDir)) {
+    pruneRetiredGlobalSeeds(storage.evoDir);
+    for (const sub of ['rules', 'skills', 'tools']) {
+      copyDirNonOverwriting(
+        path.join(seedEvoDir, sub),
+        path.join(storage.evoDir, sub),
+        hasTemplateSeed,
+        hasTemplateSeed
+      );
+    }
+    if (!hasTemplateSeed) {
+      const scopedSeedSrc = path.join(seedEvoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
+      const scopedSeedDest = path.join(storage.evoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
+      if (fs.existsSync(scopedSeedSrc) && !fs.existsSync(scopedSeedDest)) {
+        fs.mkdirSync(path.dirname(scopedSeedDest), { recursive: true });
+        fs.copyFileSync(scopedSeedSrc, scopedSeedDest);
+      }
+    }
+    const legacyTopLevelTsRule = path.join(storage.evoDir, 'rules', 'esm-typescript-imports.md');
+    const canonicalScopedTsRule = path.join(storage.evoDir, 'rules', 'scoped', 'esm-typescript-imports.md');
+    if (fs.existsSync(legacyTopLevelTsRule) && fs.existsSync(canonicalScopedTsRule)) {
+      try {
+        fs.unlinkSync(legacyTopLevelTsRule);
+      } catch {}
+    }
+    storage.rebuildCoreInvariantsDigest();
+  }
+
+  return globalRoot;
+}
+
+export interface InitGlobalOptions {
+  homeDir?: string;
+  dryRun?: boolean;
+  installRoot?: string;
+  globalDir?: string;
+}
+
+export interface InitGlobalResult {
+  globalRoot: string;
+  mcpTargetsUpdated: string[];
+  pluginSeedsUpdated: string[];
+  profileSync: ProfileSyncResult;
+}
+
+function resolveLaunchConfigForGlobalInit(installRoot?: string): {
+  command: string;
+  args: string[];
+} {
+  if (installRoot) {
+    const resolvedRoot = path.resolve(installRoot);
+    if (!isHarnessEphemeralNpxCachePath(resolvedRoot)) {
+      const bootEntry = path.join(resolvedRoot, 'scripts', 'boot-mcp.mjs');
+      if (fs.existsSync(bootEntry)) {
+        return { command: 'node', args: [bootEntry.replace(/\\/g, '/'), 'mcp'] };
+      }
+      const distEntry = path.join(resolvedRoot, 'dist', 'cli', 'index.js');
+      if (fs.existsSync(distEntry)) {
+        return { command: 'node', args: [distEntry.replace(/\\/g, '/'), 'mcp'] };
+      }
+    }
+  }
+  return resolveGlobalEvoMcpLaunchConfig();
+}
+
+export function runInitGlobal(options?: InitGlobalOptions): InitGlobalResult {
+  const dryRun = Boolean(options?.dryRun);
+  const isIsolatedEnv =
+    Boolean(process.env.NODE_TEST_CONTEXT) || process.env.EVO_PROFILE_ISOLATED === '1';
+
+  // HERMETIC SAFETY GUARD: never touch real os.homedir() under test/isolated mode unless homeDir is explicitly provided
+  const effectiveHomeDir = options?.homeDir
+    ? path.resolve(options.homeDir)
+    : isIsolatedEnv
+      ? undefined
+      : os.homedir();
+
+  const globalRoot = options?.globalDir
+    ? path.resolve(options.globalDir)
+    : process.env.EVO_GLOBAL_DIR
+      ? path.resolve(process.env.EVO_GLOBAL_DIR)
+      : effectiveHomeDir
+        ? path.join(effectiveHomeDir, '.evo', 'global')
+        : isIsolatedEnv
+          ? path.join(os.tmpdir(), 'evo-kernel-isolated-global')
+          : resolveGlobalFallbackDir();
+
+  const installRoot = options?.installRoot
+    ? path.resolve(options.installRoot)
+    : path.resolve(import.meta.dirname, '..', '..');
+
+  if (!dryRun) {
+    ensureGlobalFallbackSeeded(globalRoot, installRoot);
+  }
+
+  const mcpTargetsUpdated: string[] = [];
+  const pluginSeedsUpdated: string[] = [];
+  const globalLaunch = resolveLaunchConfigForGlobalInit(options?.installRoot);
+
+  if (effectiveHomeDir) {
+    const jsonTargets: Array<{ dirExists: boolean; filePath: string }> = [
+      {
+        dirExists: fs.existsSync(path.join(effectiveHomeDir, '.gemini')),
+        filePath: path.join(effectiveHomeDir, '.gemini', 'settings.json'),
+      },
+      {
+        dirExists:
+          fs.existsSync(path.join(effectiveHomeDir, '.claude')) ||
+          fs.existsSync(path.join(effectiveHomeDir, '.claude.json')),
+        filePath: path.join(effectiveHomeDir, '.claude.json'),
+      },
+      {
+        dirExists: fs.existsSync(path.join(effectiveHomeDir, '.cursor')),
+        filePath: path.join(effectiveHomeDir, '.cursor', 'mcp.json'),
+      },
+      {
+        dirExists: fs.existsSync(path.join(effectiveHomeDir, '.codeium', 'windsurf')),
+        filePath: path.join(effectiveHomeDir, '.codeium', 'windsurf', 'mcp_config.json'),
+      },
+    ];
+
+    for (const target of jsonTargets) {
+      if (!target.dirExists && !fs.existsSync(target.filePath)) continue;
+      try {
+        let parsed: Record<string, any> = {};
+        if (fs.existsSync(target.filePath)) {
+          const raw = fs.readFileSync(target.filePath, 'utf8');
+          if (raw.trim()) {
+            const maybeObj = parseJsonc(raw, target.filePath);
+            if (!maybeObj || typeof maybeObj !== 'object' || Array.isArray(maybeObj)) {
+              continue;
+            }
+            parsed = maybeObj as Record<string, any>;
+          }
+        }
+        const existingBucket =
+          parsed.mcpServers && typeof parsed.mcpServers === 'object' && !Array.isArray(parsed.mcpServers)
+            ? (parsed.mcpServers as Record<string, any>)
+            : {};
+        const existingEntry = existingBucket['evo-kernel'];
+        const cfgDir = path.dirname(target.filePath);
+
+        if (isPluginBootstrapEntry(existingEntry)) {
+          continue;
+        }
+
+        const needsUpsert =
+          !existingEntry ||
+          typeof existingEntry !== 'object' ||
+          hasStaleNpxMcpEntry(existingEntry, cfgDir);
+
+        if (needsUpsert) {
+          const preservedEnv =
+            existingEntry &&
+            typeof existingEntry === 'object' &&
+            existingEntry.env &&
+            typeof existingEntry.env === 'object'
+              ? { env: existingEntry.env }
+              : {};
+          existingBucket['evo-kernel'] = {
+            ...globalLaunch,
+            ...preservedEnv,
+          };
+          parsed.mcpServers = existingBucket;
+          if (!dryRun) {
+            fs.mkdirSync(cfgDir, { recursive: true });
+            fs.writeFileSync(target.filePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+          }
+          mcpTargetsUpdated.push(target.filePath);
+        }
+      } catch {
+        // Ignore unparseable host JSON configs
+      }
+    }
+
+    const codexDir = path.join(effectiveHomeDir, '.codex');
+    const codexTomlPath = path.join(codexDir, 'config.toml');
+    if (fs.existsSync(codexDir) || fs.existsSync(codexTomlPath)) {
+      try {
+        const rawToml = fs.existsSync(codexTomlPath)
+          ? fs.readFileSync(codexTomlPath, 'utf8')
+          : '';
+        const codexEntry = extractCodexTomlEvoEntry(rawToml);
+        const cfgDir = path.dirname(codexTomlPath);
+        const needsUpsert =
+          !codexEntry ||
+          hasStaleNpxMcpEntry({ command: codexEntry.command, args: codexEntry.args }, cfgDir) ||
+          hasStaleNpxMcpEntry(codexEntry.rawSection, cfgDir);
+        if (needsUpsert) {
+          if (!dryRun) {
+            upsertCodexToml(codexTomlPath, globalLaunch.command, globalLaunch.args);
+          }
+          mcpTargetsUpdated.push(codexTomlPath);
+        }
+      } catch {
+        // Ignore malformed TOML
+      }
+    }
+
+    // Refresh installed plugin L0 seed(s) cleanly (D17), preserving evolved Section 4/5 blocks if present
+    const latestSeed = resolveLatestMetaRuleSeed();
+    const latestSeedInner = latestSeed
+      .replace(META_RULE_MARKER_START, '')
+      .replace(META_RULE_MARKER_END, '')
+      .trim();
+    const pluginSeedCandidates: Array<{ seedPath: string; pluginRoot: string }> = [
+      {
+        seedPath: path.join(effectiveHomeDir, '.gemini', 'config', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md'),
+        pluginRoot: path.join(effectiveHomeDir, '.gemini', 'config', 'plugins', 'evo-kernel'),
+      },
+      {
+        seedPath: path.join(effectiveHomeDir, '.claude', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md'),
+        pluginRoot: path.join(effectiveHomeDir, '.claude', 'plugins', 'evo-kernel'),
+      },
+      {
+        seedPath: path.join(effectiveHomeDir, '.gemini', 'extensions', 'evo-kernel', 'GEMINI.md'),
+        pluginRoot: path.join(effectiveHomeDir, '.gemini', 'extensions', 'evo-kernel'),
+      },
+    ];
+    for (const { seedPath, pluginRoot } of pluginSeedCandidates) {
+      if (!fs.existsSync(seedPath)) continue;
+      try {
+        if (!fs.statSync(seedPath).isFile()) continue;
+        const current = fs.readFileSync(seedPath, 'utf8');
+        let targetBlock = latestSeed;
+        if (hasValidEvoStructure(path.join(pluginRoot, '.evo'))) {
+          const pluginStorage = new EvoStorage(pluginRoot);
+          const coreRules = pluginStorage.listRules().filter((r) => r.core && r.enabled !== false);
+          const digest = coreRules
+            .map((r) => `- **[${r.id}]** (\`${r.scope_glob}\`): ${r.l0_summary}\n  ${r.content.replace(/\n/g, '\n  ')}`)
+            .join('\n');
+          const toolsCatalog = formatToolsCatalogMarkdown(pluginStorage, digest, { includeGlobal: false });
+          const projectPrefs = formatProjectPreferencesMarkdown(pluginStorage);
+          targetBlock = renderManagedBlock(digest, toolsCatalog, projectPrefs);
+        } else {
+          const sIdx = current.indexOf(META_RULE_MARKER_START);
+          const eIdx = current.indexOf(META_RULE_MARKER_END);
+          if (sIdx !== -1 && eIdx !== -1 && eIdx > sIdx) {
+            const inner = current.slice(sIdx + META_RULE_MARKER_START.length, eIdx);
+            const tailMatch = inner.match(/\r?\n(#{2,3}\s*(?:4\.|5\.|Project Preferences\b)[\s\S]*)$/);
+            if (tailMatch && tailMatch[1].trim()) {
+              targetBlock = `${META_RULE_MARKER_START}\n${latestSeedInner}\n\n${tailMatch[1].trim()}\n${META_RULE_MARKER_END}\n`;
+            }
+          }
+        }
+        const next = upsertMarkerBlock(current, targetBlock);
+        if (next.replace(/\r\n/g, '\n') !== current.replace(/\r\n/g, '\n')) {
+          if (!dryRun) {
+            fs.writeFileSync(seedPath, next, 'utf8');
+          }
+          pluginSeedsUpdated.push(seedPath);
+        }
+      } catch {
+        // Ignore read-only plugin seed paths
+      }
+    }
+  }
+
+  const profileSync = syncGlobalUserProfile(globalRoot, {
+    dryRun,
+    ...(options?.homeDir ? { homeDir: options.homeDir } : {}),
+  });
+
+  return {
+    globalRoot,
+    mcpTargetsUpdated,
+    pluginSeedsUpdated,
+    profileSync,
+  };
+}
+
 export function runInit(
   workspaceRoot: string,
   targetsOrOptions?: string[] | InitOptions
@@ -1175,7 +1398,8 @@ export function runInit(
 
   const digest = storage.rebuildCoreInvariantsDigest();
   const toolsCatalog = formatToolsCatalogMarkdown(storage, digest, { includeGlobal: false });
-  const managedBlock = renderManagedBlock(digest, toolsCatalog);
+  const projectPrefs = formatProjectPreferencesMarkdown(storage);
+  const managedBlock = renderManagedBlock(digest, toolsCatalog, projectPrefs);
 
   const updatedFilesList: string[] = [];
   const mcpConfigFilesList: string[] = [];
@@ -1262,6 +1486,27 @@ export function runInit(
       });
       ideMounts = mountRes.mounts;
     } catch {}
+  }
+
+  if (!process.env.NODE_TEST_CONTEXT && !process.env.EVO_PROFILE_ISOLATED) {
+    try {
+      const globalRoot = process.env.EVO_GLOBAL_DIR
+        ? path.resolve(process.env.EVO_GLOBAL_DIR)
+        : opts.globalHomeDir
+          ? path.join(path.resolve(opts.globalHomeDir), '.evo', 'global')
+          : resolveGlobalFallbackDir();
+      const globalPrefsDir = path.join(globalRoot, '.evo', 'preferences');
+      if (
+        fs.existsSync(globalPrefsDir) &&
+        fs.readdirSync(globalPrefsDir).some((f) => f.endsWith('.md'))
+      ) {
+        syncGlobalUserProfile(globalRoot, {
+          ...(opts.globalHomeDir ? { homeDir: opts.globalHomeDir } : {}),
+        });
+      }
+    } catch {
+      // Ignore global profile sync errors during workspace init
+    }
   }
 
   return {
@@ -1710,8 +1955,14 @@ export function unmountIdeExtensions(
 
 export function runUninstall(
   workspaceRoot: string,
-  options?: { patterns?: string[]; unmountIde?: boolean; ide?: string[] }
-): { cleanedFiles: string[] } {
+  options?: {
+    patterns?: string[];
+    unmountIde?: boolean;
+    ide?: string[];
+    global?: boolean;
+    homeDir?: string;
+  }
+): { cleanedFiles: string[]; cleanedProfileTargets?: string[] } {
   const cleanedFilesList: string[] = [];
   const dirsToPrune: string[] = [
     '.claude/commands',
@@ -1743,6 +1994,13 @@ export function runUninstall(
     unmountIdeExtensions({ ide: options?.ide });
   }
 
+  let cleanedProfileTargets: string[] | undefined;
+  if (options?.global) {
+    const cleanRes = cleanGlobalUserProfile(undefined, { homeDir: options.homeDir });
+    cleanedProfileTargets = cleanRes.updatedTargets;
+    cleanedFilesList.push(...cleanRes.updatedTargets);
+  }
+
   pruneEmptyDirs(workspaceRoot, dirsToPrune);
 
   const patternsToRemove = options?.patterns && options.patterns.length > 0
@@ -1763,5 +2021,8 @@ export function runUninstall(
       ];
   removeGitInfoExclude(workspaceRoot, patternsToRemove);
 
-  return { cleanedFiles: Array.from(new Set(cleanedFilesList)) };
+  return {
+    cleanedFiles: Array.from(new Set(cleanedFilesList)),
+    ...(cleanedProfileTargets ? { cleanedProfileTargets } : {}),
+  };
 }

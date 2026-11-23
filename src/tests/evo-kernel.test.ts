@@ -1259,11 +1259,16 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
     const dispatcher = new EvoMcpDispatcher(globalWs);
     try {
-      // 1. All 5 tools require 'workspace' in inputSchema.required
+      // 1. All 5 tools expose optional 'workspace' in inputSchema.properties without requiring it in required[]
       for (const tool of META_MCP_TOOLS) {
         assert.ok(
+          'workspace' in (tool.inputSchema.properties as Record<string, unknown>),
+          `${tool.name} must expose 'workspace' property`
+        );
+        assert.equal(
           (tool.inputSchema.required as readonly string[]).includes('workspace'),
-          `${tool.name} must require 'workspace'`
+          false,
+          `${tool.name} must allow omitting 'workspace' for global / blank-chat routing`
         );
       }
 

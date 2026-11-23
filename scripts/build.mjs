@@ -63,8 +63,8 @@ function syncCanonicalSeeds() {
   const seedEvoDir = path.join(rootDir, 'templates', 'seed-evo');
   const rootSkillsDir = path.join(rootDir, 'skills');
 
-  // 1. Sync dist/core/deliverable.js -> .evo/tools/deliverable-canonical-inspector/run.mjs (SSOT)
-  const compiledDeliverable = path.join(distDir, 'core', 'deliverable.js');
+  // 1. Sync dist/tools/deliverable.js -> .evo/tools/deliverable-canonical-inspector/run.mjs (SSOT)
+  const compiledDeliverable = path.join(distDir, 'tools', 'deliverable.js');
   const localDeliverableToolRun = path.join(
     evoDir,
     'tools',

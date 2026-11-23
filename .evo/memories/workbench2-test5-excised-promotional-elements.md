@@ -2,14 +2,14 @@
 id: workbench2-test5-excised-promotional-elements
 title: "Test 5 failure from excised promotional elements in Workbench 2.0"
 l0_summary: "Test 5 fails asserting #btn-watch-film because Cockpit 1.0 promotional gadgets were excised in Workbench 2.0 overhaul."
-created_commit: "105df52"
+created_commit: "2fdf9f6"
 created_branch: "main"
 target_symbols: ["exportUiHtml","renderUiClientHtml"]
-ast_fingerprints: {"exportUiHtml":{"symbol":"exportUiHtml","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":2145,"end_line":2153,"signature":"export function exportUiHtml(","ast_hash":"2cca90d4bcf385fe"},"renderUiClientHtml":{"symbol":"renderUiClientHtml","file_path":"src/templates/ui-client.ts","file":"src/templates/ui-client.ts","kind":"function","start_line":7,"end_line":5985,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"05e78b0e1e4c313f"}}
+ast_fingerprints: {"exportUiHtml":{"symbol":"exportUiHtml","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1505,"end_line":1513,"signature":"export function exportUiHtml(","ast_hash":"2cca90d4bcf385fe"},"renderUiClientHtml":{"symbol":"renderUiClientHtml","file_path":"src/templates/ui/shell.ts","file":"src/templates/ui/shell.ts","kind":"function","start_line":12,"end_line":283,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"5fab41e65bcbf556"}}
 tags: ["testing","workbench2","ui-export","modernization"]
 origin: "evolved"
 created_at: "2026-11-05T08:50:08.610Z"
-updated_at: "2026-11-23T16:49:16.674Z"
+updated_at: "2026-11-23T20:22:14.857Z"
 ---
 
 ## Symptom

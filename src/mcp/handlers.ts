@@ -67,7 +67,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['query', 'workspace'],
+      required: ['query'],
     },
   },
   {
@@ -88,7 +88,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['id', 'workspace'],
+      required: ['id'],
     },
   },
   {
@@ -108,7 +108,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['tool_id', 'workspace'],
+      required: ['tool_id'],
     },
   },
   {
@@ -130,7 +130,7 @@ export const META_MCP_TOOLS = [
         },
         category: {
           type: 'string',
-          enum: ['style', 'formatting', 'communication', 'workflow', 'knowledge'],
+          enum: ['style', 'formatting', 'communication', 'workflow', 'requirement', 'knowledge'],
           description: '[preference] Category (default: "style").',
         },
         always_on: {
@@ -217,9 +217,14 @@ export const META_MCP_TOOLS = [
           items: { type: 'string' },
           description: '[For memory] Code symbols or file#symbol targets for AST structural fingerprinting.',
         },
+        memory_type: {
+          type: 'string',
+          enum: ['code', 'personal'],
+          description: '[For memory] "personal" for cross-workspace personal experience (skips AST grounding).',
+        },
         trigger_cue: {
           type: 'string',
-          description: 'Optional situation trigger cue (<=120 chars) for skills.',
+          description: 'Optional situation trigger cue (<=120 chars) for skills or on-demand preferences.',
         },
         confidence: {
           type: 'string',
@@ -236,7 +241,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['kind', 'id', 'title', 'l0_summary', 'workspace'],
+      required: ['kind', 'id', 'title', 'l0_summary'],
     },
   },
   {
@@ -261,7 +266,7 @@ export const META_MCP_TOOLS = [
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['target_ids', 'merged_proposal', 'reason', 'workspace'],
+      required: ['target_ids', 'merged_proposal', 'reason'],
     },
   },
 ] as const;
@@ -1040,14 +1045,20 @@ export class EvoMcpDispatcher {
     if (topScope === 'global') return true;
     if (toolName === 'evo_propose') {
       const kind = typeof args.kind === 'string' ? args.kind.trim().toLowerCase() : '';
-      return kind === 'preference' && topScope !== 'project';
+      const memType = typeof args.memory_type === 'string' ? args.memory_type.trim().toLowerCase() : '';
+      return (kind === 'preference' || (kind === 'memory' && memType === 'personal')) && topScope !== 'project';
     }
     const merged = args.merged_proposal as Record<string, unknown> | undefined;
     if (merged && typeof merged === 'object') {
       const mergedScope = typeof merged.scope === 'string' ? merged.scope.trim().toLowerCase() : '';
       if (mergedScope === 'global' && topScope !== 'project') return true;
       const mergedKind = typeof merged.kind === 'string' ? merged.kind.trim().toLowerCase() : '';
-      if (mergedKind === 'preference' && mergedScope !== 'project' && topScope !== 'project') {
+      const mergedMemType = typeof merged.memory_type === 'string' ? merged.memory_type.trim().toLowerCase() : '';
+      if (
+        (mergedKind === 'preference' || (mergedKind === 'memory' && mergedMemType === 'personal')) &&
+        mergedScope !== 'project' &&
+        topScope !== 'project'
+      ) {
         return true;
       }
     }
@@ -1087,6 +1098,18 @@ export class EvoMcpDispatcher {
         gatekeeper: wsCtx.gatekeeper,
         proxyManager: wsCtx.proxyManager,
       };
+    }
+
+    if (
+      (typeof rawWs !== 'string' || !rawWs.trim()) &&
+      (toolName === 'evo_search' || toolName === 'evo_inspect') &&
+      String(args.scope || '').trim().toLowerCase() === 'global'
+    ) {
+      targetRoot = resolveGlobalFallbackDir();
+      candidate = targetRoot;
+      hasLocalEvo = hasValidEvoStructure(path.join(targetRoot, '.evo'));
+    } else if (typeof rawWs !== 'string' || !rawWs.trim()) {
+      hasLocalEvo = hasValidEvoStructure(path.join(targetRoot, '.evo'));
     }
 
     if (typeof rawWs === 'string' && rawWs.trim()) {
@@ -1236,7 +1259,8 @@ export class EvoMcpDispatcher {
     const rawWs = args.workspace ?? args.workspace_path;
     if (
       (name === 'evo_propose' || name === 'evo_compact') &&
-      (typeof rawWs !== 'string' || !rawWs.trim())
+      (typeof rawWs !== 'string' || !rawWs.trim()) &&
+      !this.isGlobalWriteRoute(name, args)
     ) {
       return {
         isError: true,
@@ -1249,7 +1273,7 @@ export class EvoMcpDispatcher {
                 gate_failed: 'SCHEMA_SECURITY',
                 error_code: 'ERR_INVALID_SCHEMA',
                 message:
-                  'Non-empty workspace path is required for evo_propose and evo_compact.',
+                  'Non-empty workspace path is required for project-scoped evo_propose and evo_compact (or omit workspace with scope: "global", kind: "preference", or memory_type: "personal").',
               },
               null,
               2
@@ -1514,6 +1538,19 @@ export class EvoMcpDispatcher {
         kind: topNonStale ? topNonStale.kind : (kind === 'all' ? 'rule' : kind),
         tier: topNonStale?.tier || 'LOCAL',
       });
+    } else if (hits.some((h) => h.tier === 'GLOBAL')) {
+      const globalTele = this.getGlobalFallbackContexts(reqCtx).find(
+        (g) => g.telemetry && !g.telemetry.isClosed()
+      )?.telemetry;
+      if (globalTele) {
+        const topGlobal = hits.find((h) => h.tier === 'GLOBAL' && h.memory_status !== 'STALE') || hits[0];
+        globalTele.recordRecallEvent({
+          eventType: 'search',
+          capabilityId: topGlobal.id,
+          kind: topGlobal.kind,
+          tier: 'GLOBAL',
+        });
+      }
     }
 
     const teleMap = localTelemetry ? localTelemetry.getTelemetryMap() : new Map();
@@ -1619,17 +1656,25 @@ export class EvoMcpDispatcher {
     const mergedHits: SearchHit[] = [...localHits];
     const seenIds = new Set<string>(localHits.map((h) => h.id));
 
-    if (scope !== 'project' && kind !== 'memory') {
+    if (scope !== 'project') {
       for (const gCtx of this.getGlobalFallbackContexts(reqCtx)) {
         const globalKind = kind === 'all' ? 'all' : kind;
         const gHits = gCtx.telemetry
           ? gCtx.telemetry.search(query, globalKind, limit, searchScopeDir)
           : [];
         for (const gh of gHits) {
-          if (gh.kind === 'memory' || seenIds.has(gh.id)) continue;
+          const isGlobalPersonalMem =
+            gh.kind === 'memory' &&
+            (gh.memory_badge === '[PERSONAL]' || gh.scope_glob === 'global:personal');
+          if (gh.kind === 'memory' && !isGlobalPersonalMem) continue;
+          if (seenIds.has(gh.id)) continue;
           seenIds.add(gh.id);
           const applyDiscount =
-            hasLocalEvo && !isTargetGlobalRoot && scope !== 'global' && gh.kind !== 'preference';
+            hasLocalEvo &&
+            !isTargetGlobalRoot &&
+            scope !== 'global' &&
+            gh.kind !== 'preference' &&
+            !isGlobalPersonalMem;
           mergedHits.push({
             ...gh,
             score: applyDiscount ? gh.score * 0.85 : gh.score,
@@ -1681,7 +1726,7 @@ export class EvoMcpDispatcher {
     const mergedHits: SearchHit[] = [...localHits];
     const seenIds = new Set<string>(localHits.map((h) => h.id));
 
-    if (scope !== 'project' && kind !== 'memory') {
+    if (scope !== 'project') {
       const globalCtxs = this.getGlobalFallbackContexts(reqCtx);
       const globalKind = kind === 'all' ? 'all' : kind;
       const globalResults = await Promise.all(
@@ -1693,10 +1738,18 @@ export class EvoMcpDispatcher {
       );
       for (const gHits of globalResults) {
         for (const gh of gHits) {
-          if (gh.kind === 'memory' || seenIds.has(gh.id)) continue;
+          const isGlobalPersonalMem =
+            gh.kind === 'memory' &&
+            (gh.memory_badge === '[PERSONAL]' || gh.scope_glob === 'global:personal');
+          if (gh.kind === 'memory' && !isGlobalPersonalMem) continue;
+          if (seenIds.has(gh.id)) continue;
           seenIds.add(gh.id);
           const applyDiscount =
-            hasLocalEvo && !isTargetGlobalRoot && scope !== 'global' && gh.kind !== 'preference';
+            hasLocalEvo &&
+            !isTargetGlobalRoot &&
+            scope !== 'global' &&
+            gh.kind !== 'preference' &&
+            !isGlobalPersonalMem;
           mergedHits.push({
             ...gh,
             score: applyDiscount ? gh.score * 0.85 : gh.score,
@@ -1809,6 +1862,20 @@ export class EvoMcpDispatcher {
               tier: isGlobalHit ? 'GLOBAL' : 'LOCAL',
             });
           }
+        } else if (extTelemetry && !extTelemetry.isClosed()) {
+          extTelemetry.recordRecallEvent({
+            eventType: 'inspect',
+            capabilityId: extTool.id,
+            kind: 'tool',
+            tier: tier,
+          });
+          if (tier !== 'L1') {
+            extTelemetry.recordRecalledCapability({
+              id: extTool.id,
+              kind: 'tool',
+              tier: 'GLOBAL',
+            });
+          }
         }
         const stat = getTelemetryStat(extTool.id, extTelemetry);
         const body =
@@ -1851,6 +1918,20 @@ export class EvoMcpDispatcher {
             id: rule.id,
             kind: 'rule',
             tier: isRuleGlobalHit ? 'GLOBAL' : 'LOCAL',
+          });
+        }
+      } else if (activeTelemetry && !activeTelemetry.isClosed()) {
+        activeTelemetry.recordRecallEvent({
+          eventType: 'inspect',
+          capabilityId: rule.id,
+          kind: 'rule',
+          tier,
+        });
+        if (tier !== 'L1') {
+          activeTelemetry.recordRecalledCapability({
+            id: rule.id,
+            kind: 'rule',
+            tier: 'GLOBAL',
           });
         }
       }
@@ -1896,6 +1977,20 @@ export class EvoMcpDispatcher {
             tier: isSkillGlobalHit ? 'GLOBAL' : 'LOCAL',
           });
         }
+      } else if (activeTelemetry && !activeTelemetry.isClosed()) {
+        activeTelemetry.recordRecallEvent({
+          eventType: 'inspect',
+          capabilityId: skill.id,
+          kind: 'skill',
+          tier,
+        });
+        if (tier !== 'L1') {
+          activeTelemetry.recordRecalledCapability({
+            id: skill.id,
+            kind: 'skill',
+            tier: 'GLOBAL',
+          });
+        }
       }
       const stat = getTelemetryStat(skill.id, activeTelemetry);
       const body =
@@ -1937,6 +2032,20 @@ export class EvoMcpDispatcher {
             id: tool.id,
             kind: 'tool',
             tier: isToolGlobalHit ? 'GLOBAL' : 'LOCAL',
+          });
+        }
+      } else if (activeTelemetry && !activeTelemetry.isClosed()) {
+        activeTelemetry.recordRecallEvent({
+          eventType: 'inspect',
+          capabilityId: tool.id,
+          kind: 'tool',
+          tier,
+        });
+        if (tier !== 'L1') {
+          activeTelemetry.recordRecalledCapability({
+            id: tool.id,
+            kind: 'tool',
+            tier: 'GLOBAL',
           });
         }
       }
@@ -1982,6 +2091,20 @@ export class EvoMcpDispatcher {
             tier: isPrefGlobalHit ? 'GLOBAL' : 'LOCAL',
           });
         }
+      } else if (activeTelemetry && !activeTelemetry.isClosed()) {
+        activeTelemetry.recordRecallEvent({
+          eventType: 'inspect',
+          capabilityId: pref.id,
+          kind: 'preference',
+          tier,
+        });
+        if (tier !== 'L1') {
+          activeTelemetry.recordRecalledCapability({
+            id: pref.id,
+            kind: 'preference',
+            tier: 'GLOBAL',
+          });
+        }
       }
       const stat = getTelemetryStat(pref.id, activeTelemetry);
       const body =
@@ -1991,8 +2114,67 @@ export class EvoMcpDispatcher {
       return formatInspectResult(body, pref.enabled === false);
     }
 
-    const memory = hasLocal ? storage.getMemory(id) : null;
+    let memory = hasLocal ? storage.getMemory(id) : null;
+    activeTelemetry = hasLocal ? telemetry : undefined;
+    let isMemGlobalHit = false;
+    if (!memory) {
+      for (const gCtx of this.getGlobalFallbackContexts(reqCtx)) {
+        const gMem = gCtx.storage.getMemory(id);
+        if (gMem && (gMem.memory_type === 'personal' || gMem.target_symbols.length === 0)) {
+          memory = gMem;
+          activeTelemetry = gCtx.telemetry;
+          isMemGlobalHit = true;
+          break;
+        }
+      }
+    }
     if (memory) {
+      const isPersonalMem =
+        memory.memory_type === 'personal' ||
+        (memory.target_symbols.length === 0 &&
+          (isMemGlobalHit || isGlobalFallbackRoot(storage.rootDir)));
+      if (isPersonalMem) {
+        activeTelemetry?.recordUsage(id, true, 400);
+        if (hasLocal && hasValidEvoStructure(storage.evoDir)) {
+          telemetry = this.ensureActiveTelemetry(reqCtx, telemetry);
+          if (!isMemGlobalHit) {
+            activeTelemetry = telemetry;
+          }
+          telemetry?.recordRecallEvent({
+            eventType: 'inspect',
+            capabilityId: memory.id,
+            kind: 'memory',
+            tier,
+          });
+          if (tier !== 'L1') {
+            telemetry?.recordRecalledCapability({
+              id: memory.id,
+              kind: 'memory',
+              tier: isMemGlobalHit ? 'GLOBAL' : 'LOCAL',
+            });
+          }
+        } else if (activeTelemetry && !activeTelemetry.isClosed()) {
+          activeTelemetry.recordRecallEvent({
+            eventType: 'inspect',
+            capabilityId: memory.id,
+            kind: 'memory',
+            tier,
+          });
+          if (tier !== 'L1') {
+            activeTelemetry.recordRecalledCapability({
+              id: memory.id,
+              kind: 'memory',
+              tier: 'GLOBAL',
+            });
+          }
+        }
+        const stat = getTelemetryStat(memory.id, activeTelemetry);
+        const body =
+          tier === 'L1'
+            ? `[PERSONAL MEMORY L1] ${memory.id} — ${memory.title}\nStatus: PERSONAL [CROSS-WORKSPACE]\nL0: ${memory.l0_summary}\n\n## Symptom / Context\n${memory.symptom}`
+            : `[PERSONAL MEMORY L2] ${memory.id} — ${memory.title}\nStatus: PERSONAL [CROSS-WORKSPACE]\nTelemetry: ${stat.hit_count} hits · ${stat.helped_count || 0} verified helped · ~${stat.tokens_saved || 0} tok saved\nTags: ${memory.tags.join(', ') || 'personal'}\nL0: ${memory.l0_summary}\n\n## 1. Context / Symptom\n${memory.symptom}\n\n## 2. Insight / Root Cause\n${memory.root_cause}\n\n## 3. Takeaway / Solution\n${memory.solution}`;
+        return formatInspectResult(body, memory.enabled === false);
+      }
       const memoryTargetDir = reqCtx.requestWorkspaceDir || reqCtx.wsCtx.rootDir || storage.rootDir;
       const finishMemoryInspect = (report: MemoryVerificationReport) => {
         if (hasLocal && hasValidEvoStructure(storage.evoDir)) {
@@ -2513,19 +2695,42 @@ export class EvoMcpDispatcher {
         activeEpoch
       );
 
+      const isGlobalRoot = isGlobalFallbackRoot(storage.rootDir);
+      const isPersonalMemCommit =
+        payload.kind === 'memory' &&
+        (result.diagnostics as Record<string, unknown> | undefined)?.memory_type === 'personal';
+
       if (payload.kind === 'rule' || payload.kind === 'tool' || payload.kind === 'skill') {
-        syncManagedRuleBlocks(storage.rootDir);
+        if (!isGlobalRoot) {
+          syncManagedRuleBlocks(storage.rootDir);
+        }
         if (payload.kind === 'rule' && Boolean(payload.core) && this.onCoreRulesChanged) {
           this.onCoreRulesChanged();
         }
-      } else if (payload.kind === 'preference' && isGlobalFallbackRoot(storage.rootDir)) {
+        if (isGlobalRoot && payload.kind === 'skill') {
+          const syncRes = syncGlobalUserProfile(storage.rootDir);
+          result.diagnostics = {
+            ...(result.diagnostics || {}),
+            synced_profile_targets: syncRes.updatedTargets,
+            profile_tokens: syncRes.totalTokens,
+            max_profile_tokens: syncRes.maxTokens,
+            menu_tokens: syncRes.menuTokens,
+          };
+        }
+      } else if (
+        isGlobalRoot &&
+        (payload.kind === 'preference' || isPersonalMemCommit)
+      ) {
         const syncRes = syncGlobalUserProfile(storage.rootDir);
         result.diagnostics = {
           ...(result.diagnostics || {}),
           synced_profile_targets: syncRes.updatedTargets,
           profile_tokens: syncRes.totalTokens,
           max_profile_tokens: syncRes.maxTokens,
+          menu_tokens: syncRes.menuTokens,
         };
+      } else if (!isGlobalRoot && payload.kind === 'preference') {
+        syncManagedRuleBlocks(storage.rootDir);
       }
 
       return {
@@ -2731,6 +2936,15 @@ export class EvoMcpDispatcher {
         }
       }
 
+      const isGlobalRoot = isGlobalFallbackRoot(storage.rootDir);
+      const hasAnyPrefOrSkillTarget = existingTargets.some(
+        (t) => storage.getPreference(t.id) !== null || storage.getSkill(t.id) !== null
+      );
+      const hasAnyPrefTarget = existingTargets.some((t) => storage.getPreference(t.id) !== null);
+      const archiveEntriesBefore = new Set(
+        fs.existsSync(storage.archiveDir) ? fs.readdirSync(storage.archiveDir) : []
+      );
+
       const archived: string[] = [];
       for (const id of targetIds) {
         if (
@@ -2753,6 +2967,20 @@ export class EvoMcpDispatcher {
             fs.mkdirSync(path.dirname(snap.path), { recursive: true });
             fs.writeFileSync(snap.path, snap.data);
           }
+          if (fs.existsSync(storage.archiveDir)) {
+            for (const entry of fs.readdirSync(storage.archiveDir)) {
+              if (!archiveEntriesBefore.has(entry)) {
+                try {
+                  fs.rmSync(path.join(storage.archiveDir, entry), { recursive: true, force: true });
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }
+          if (hasAnyPrefTarget || effectiveMergedProposal.kind === 'preference') {
+            storage.rebuildUserProfileDigest();
+          }
           telemetry?.syncFromDisk();
         } else {
           this.recordSessionProposal(
@@ -2765,7 +2993,12 @@ export class EvoMcpDispatcher {
           );
         }
 
-        if (effectiveMergedProposal.kind === 'preference' && isGlobalFallbackRoot(storage.rootDir)) {
+        if (
+          isGlobalRoot &&
+          (effectiveMergedProposal.kind === 'preference' ||
+            effectiveMergedProposal.kind === 'skill' ||
+            hasAnyPrefOrSkillTarget)
+        ) {
           const syncRes = syncGlobalUserProfile(storage.rootDir);
           if (commitRes.passed) {
             commitRes.diagnostics = {
@@ -2773,9 +3006,10 @@ export class EvoMcpDispatcher {
               synced_profile_targets: syncRes.updatedTargets,
               profile_tokens: syncRes.totalTokens,
               max_profile_tokens: syncRes.maxTokens,
+              menu_tokens: syncRes.menuTokens,
             };
           }
-        } else {
+        } else if (!isGlobalRoot) {
           syncManagedRuleBlocks(storage.rootDir);
         }
         if (this.onCoreRulesChanged) {

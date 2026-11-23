@@ -18,6 +18,7 @@ import {
   EvoStorage,
   PREFERENCE_CATEGORIES,
   estimateTokens,
+  formatUserProfileDigestForPreferences,
   getExtensionForRuntime,
   getScopeBucketKey,
   parseSkillSectionsFromMarkdown,
@@ -39,12 +40,14 @@ import {
 } from '../memory.js';
 import { spawnGitAsync } from '../memory/git-utils.js';
 import {
-  DANGEROUS_PATTERNS,
+  SCRIPT_EXECUTION_PATTERNS,
   TOOL_NETWORK_PATTERNS,
+  UNIVERSAL_SECURITY_PATTERNS,
   isValidContrastiveEvidence,
   scanDangerousPatterns as scanDangerousTextPatterns,
   stripScriptComments,
 } from './security-patterns.js';
+import { renderUserProfileBlock } from '../../templates/meta-rule.js';
 import { hasUnsafeHookRegex } from './redos-guard.js';
 import {
   compareRuleClauses,
@@ -106,6 +109,7 @@ interface PreparedProposalContext {
   memoryPreserveHistoricalAnchor?: boolean;
   memoryLiveHeadCommit?: string;
   memoryLiveHeadBranch?: string;
+  isPersonalMemory?: boolean;
   extractedMemoryFingerprints: Record<string, SymbolFingerprint>;
 }
 
@@ -118,6 +122,79 @@ interface ToolDryRunStaging {
   preSnapshot: WorkspaceRollbackSnapshot;
   realPreSnapshot?: WorkspaceRollbackSnapshot;
   runCwd: string;
+}
+
+const PREFERENCE_POLARITY_AXES: Array<{
+  topic: string;
+  sideA: RegExp;
+  sideB: RegExp;
+}> = [
+  {
+    topic: 'tables',
+    sideA:
+      /(?:禁用|不要|不用|别用|禁止|避免|切勿|勿用)[^。\n.,;!?，；！？]{0,16}表格|\bno\s+(?:markdown\s+)?tables?\b|\bavoid\s+(?:markdown\s+)?tables?\b|\bnever\s+use\s+(?:markdown\s+)?tables?\b|\bdo\s+not\s+use\s+(?:markdown\s+)?tables?\b|\bdon't\s+use\s+(?:markdown\s+)?tables?\b|\b(?:instead\s+of|rather\s+than)\s+(?:markdown\s+)?tables?\b/i,
+    sideB:
+      /(?:使?用|输出|采用|改用)\s*(?:markdown\s*)?表格|表格形式|表格展示|\bprefer\s+(?:markdown\s+)?tables?\b|\buse\s+(?:markdown\s+)?tables?\b|\bmarkdown\s+tables?\b|\btabular\s+format\b/i,
+  },
+  {
+    topic: 'verbosity',
+    sideA:
+      /简洁|简短|3\s*[-–~]\s*5\s*条|大白话|言简意赅|精简|点到为止|\bconcise\b|\bbrief(?:ly)?\b|\bshort\s+(?:answers?|replies?|bullet)|\bkeep\s+it\s+short\b|\bterse\b/i,
+    sideB:
+      /详尽|长篇|详细展开|越详细越好|深入展开|展开说明|\bdetailed\b|\bcomprehensive\b|\bverbose\b|\bthorough\s+explanation\b|\bin[- ]depth\b/i,
+  },
+  {
+    topic: 'ordering',
+    sideA:
+      /结论先行|先说结论|先给结论|直奔主题|\bbottom[- ]line\s+first\b|\bconclusion\s+first\b|\btl;?dr\s+first\b|\blead\s+with\s+(?:the\s+)?conclusion\b/i,
+    sideB:
+      /先讲背景|先说背景|先解释背景|先铺垫|\bbackground\s+first\b|\bcontext\s+first\b|\bexplain\s+background\s+before\b/i,
+  },
+  {
+    topic: 'language',
+    sideA:
+      /(?:只用|只使用|全部用|全部使用|仅用|仅使用|一律用|一律使用|请用|默认用|统一用|优先用)中文|中文回复|中文回答|\bchinese\s+only\b|\breply\s+in\s+chinese\b|\brespond\s+in\s+chinese\b|\balways\s+(?:use\s+)?chinese\b/i,
+    sideB:
+      /(?:只用|只使用|全部用|全部使用|仅用|仅使用|一律用|一律使用|请用|默认用|统一用|优先用)英文|英文回复|英文回答|\benglish\s+only\b|\breply\s+in\s+english\b|\brespond\s+in\s+english\b|\balways\s+(?:use\s+)?english\b/i,
+  },
+];
+
+function classifyPolaritySides(text: string): Map<string, 'A' | 'B'> {
+  const result = new Map<string, 'A' | 'B'>();
+  const affirmativeText = text.replace(
+    /(?:instead\s+of\s+|rather\s+than\s+|avoid\s+|never\s+use\s+|do\s+not\s+use\s+|don't\s+use\s+|\bno\s+|不要|禁用|禁止|不用|别用|避免|切勿|勿用)[^.,;!\n。；！]*/gi,
+    ' '
+  );
+  for (const axis of PREFERENCE_POLARITY_AXES) {
+    const hasA = axis.sideA.test(text);
+    const hasB = !hasA && axis.sideB.test(affirmativeText);
+    if (hasA) result.set(axis.topic, 'A');
+    else if (hasB) result.set(axis.topic, 'B');
+  }
+  return result;
+}
+
+export function detectPreferenceConflict(
+  candidate: { id?: string; title?: string; l0_summary?: string; content?: string },
+  existingPrefs: EvoPreference[]
+): Array<{ id: string; topic: string; title: string }> {
+  const candText = [candidate.title || '', candidate.l0_summary || '', candidate.content || ''].join('\n');
+  const candSides = classifyPolaritySides(candText);
+  if (candSides.size === 0) return [];
+  const conflicts: Array<{ id: string; topic: string; title: string }> = [];
+  for (const pref of existingPrefs) {
+    if (pref.enabled === false) continue;
+    const prefText = [pref.title || '', pref.l0_summary || '', pref.content || ''].join('\n');
+    const prefSides = classifyPolaritySides(prefText);
+    for (const [topic, side] of candSides.entries()) {
+      const existingSide = prefSides.get(topic);
+      if (existingSide && existingSide !== side) {
+        conflicts.push({ id: pref.id, topic, title: pref.title || pref.id });
+        break;
+      }
+    }
+  }
+  return conflicts;
 }
 
 export class EvoGatekeeper {
@@ -311,13 +388,20 @@ export class EvoGatekeeper {
           (cleanSupersedesId ? this.storage.getMemory(cleanSupersedesId) : null)
         : null;
 
+    const isGlobalRoot = isGlobalFallbackRoot(this.storage.rootDir);
     const rawTargetSymbolsSource =
       rawProposal.target_symbols !== undefined
         ? rawProposal.target_symbols
         : existingMemoryForDefaults?.target_symbols;
-    const normalizedTargetSymbols = Array.isArray(rawTargetSymbolsSource)
+    const rawNormalizedTargetSymbols = Array.isArray(rawTargetSymbolsSource)
       ? rawTargetSymbolsSource.map((s) => this.normalizeTargetSymbol(s)).filter(Boolean)
       : [];
+    const isPersonalMemory =
+      rawProposal.kind === 'memory' &&
+      (rawProposal.memory_type === 'personal' ||
+        existingMemoryForDefaults?.memory_type === 'personal' ||
+        (isGlobalRoot && rawNormalizedTargetSymbols.length === 0));
+    const normalizedTargetSymbols = isPersonalMemory ? [] : rawNormalizedTargetSymbols;
 
     rawProposal = {
       ...rawProposal,
@@ -446,18 +530,18 @@ export class EvoGatekeeper {
     // =========================================================================
     // GATE 1: SCHEMA & STATIC SECURITY AUDIT
     // =========================================================================
-    if (rawProposal.kind === 'memory' && isGlobalFallbackRoot(this.storage.rootDir)) {
+    if (rawProposal.kind === 'memory' && isGlobalRoot && !isPersonalMemory) {
       return fail({
         passed: false,
         gate_failed: 'SCHEMA_SECURITY',
         error_code: 'ERR_GLOBAL_MEMORY_FORBIDDEN',
         message:
-          'Episodic memories are anchored to repo-specific Git commits and AST symbols and cannot be stored in the global fallback tree.',
+          'Code-anchored episodic memories require repo-specific Git commits and AST symbols and cannot be stored in the global fallback tree. Use memory_type: "personal" (with no target_symbols) for global personal experience.',
       });
     }
 
     if (
-      isGlobalFallbackRoot(this.storage.rootDir) &&
+      isGlobalRoot &&
       /^(?:\d+[a-z0-9]*|proj-[a-z0-9]+|project-[a-z0-9]+)-/i.test(cleanId)
     ) {
       return fail({
@@ -519,7 +603,7 @@ export class EvoGatekeeper {
       ...normalizedTargetSymbols,
     ].join('\n');
 
-    for (const rule of DANGEROUS_PATTERNS) {
+    for (const rule of UNIVERSAL_SECURITY_PATTERNS) {
       if (rule.pattern.test(fullPayloadText)) {
         return fail({
           passed: false,
@@ -527,6 +611,35 @@ export class EvoGatekeeper {
           error_code: 'ERR_SECURITY_VIOLATION',
           message: `Security gate blocked proposal: ${rule.reason}`,
         });
+      }
+    }
+
+    if (rawProposal.kind === 'rule' || rawProposal.kind === 'skill') {
+      const fencedBlocks = [...fullPayloadText.matchAll(/```[^\n]*\n([\s\S]*?)```/g)]
+        .map((m) => m[1] || '')
+        .join('\n');
+      const destructiveShellOnly = SCRIPT_EXECUTION_PATTERNS.slice(0, 5);
+      for (const rule of destructiveShellOnly) {
+        if (rule.pattern.test(fullPayloadText)) {
+          return fail({
+            passed: false,
+            gate_failed: 'SCHEMA_SECURITY',
+            error_code: 'ERR_SECURITY_VIOLATION',
+            message: `Security gate blocked proposal: ${rule.reason}`,
+          });
+        }
+      }
+      if (fencedBlocks) {
+        for (const rule of SCRIPT_EXECUTION_PATTERNS) {
+          if (rule.pattern.test(fencedBlocks)) {
+            return fail({
+              passed: false,
+              gate_failed: 'SCHEMA_SECURITY',
+              error_code: 'ERR_SECURITY_VIOLATION',
+              message: `Security gate blocked proposal: ${rule.reason}`,
+            });
+          }
+        }
       }
     }
 
@@ -557,8 +670,12 @@ export class EvoGatekeeper {
       const scriptExt = getExtensionForRuntime(toolRuntime);
       const strippedScript = stripScriptComments(toolScriptCode, scriptExt);
       const strippedCompact = strippedScript.replace(/[ \t]{2,}/g, ' ');
-      for (const rule of DANGEROUS_PATTERNS) {
-        if (rule.pattern.test(strippedScript) || rule.pattern.test(strippedCompact)) {
+      for (const rule of [...UNIVERSAL_SECURITY_PATTERNS, ...SCRIPT_EXECUTION_PATTERNS]) {
+        if (
+          rule.pattern.test(fullPayloadText) ||
+          rule.pattern.test(strippedScript) ||
+          rule.pattern.test(strippedCompact)
+        ) {
           return fail({
             passed: false,
             gate_failed: 'SCHEMA_SECURITY',
@@ -588,18 +705,21 @@ export class EvoGatekeeper {
       }
     }
 
-    // Prompt-Injection / Directive Tripwire (Gate 1 for rule/skill/preference)
+    // Prompt-Injection / Directive Tripwire (Gate 1 for rule/skill/preference/personal memory)
     if (
       rawProposal.kind === 'rule' ||
       rawProposal.kind === 'skill' ||
-      rawProposal.kind === 'preference'
+      rawProposal.kind === 'preference' ||
+      isPersonalMemory
     ) {
       const textToAudit =
         rawProposal.kind === 'rule'
           ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${resolvedRuleContent}`
           : rawProposal.kind === 'preference'
             ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${resolvedPrefContent}`
-            : `${rawProposal.title}\n${rawProposal.l0_summary}\n${rawProposal.trigger_cue || ''}\n${resolvedSkillL1}\n${resolvedSkillL2}`;
+            : isPersonalMemory
+              ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${resolvedSymptom}\n${resolvedRootCause}\n${resolvedSolution}`
+              : `${rawProposal.title}\n${rawProposal.l0_summary}\n${rawProposal.trigger_cue || ''}\n${resolvedSkillL1}\n${resolvedSkillL2}`;
       const strippedAuditText = stripCaseAnchorLines(textToAudit)
         .replace(/```[\s\S]*?```/g, '')
         .replace(/`[^`]*`/g, '');
@@ -996,13 +1116,13 @@ export class EvoGatekeeper {
         });
       }
 
-      if (normalizedTargetSymbols.length === 0) {
+      if (!isPersonalMemory && normalizedTargetSymbols.length === 0) {
         return fail({
           passed: false,
           gate_failed: 'SCHEMA_SECURITY',
           error_code: 'ERR_INVALID_SCHEMA',
           message:
-            'Episodic memory proposal requires at least one symbol or file in target_symbols (e.g., ["src/core/telemetry.ts#search"]).',
+            'Episodic memory proposal requires at least one symbol or file in target_symbols (e.g., ["src/core/telemetry.ts#search"]). For personal non-code experience, set memory_type: "personal" (in global scope).',
         });
       }
 
@@ -1011,57 +1131,63 @@ export class EvoGatekeeper {
         ? this.storage.getMemory(sanitizeId(rawProposal.supersedes_id))
         : undefined;
       memoryBaseMem = memoryExisting ?? supersededMem;
-      const normalizeTargetForCompare = (spec: string): string => {
-        const norm = this.normalizeWorkspaceTargetPath(spec);
-        const hashIdx = norm.indexOf('#');
-        if (hashIdx !== -1) {
-          const filePart = norm.slice(0, hashIdx).replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
-          return `${filePart}${norm.slice(hashIdx)}`;
-        }
-        return norm.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
-      };
-      const baseRawSymbols = (memoryBaseMem?.target_symbols || [])
-        .map((s) => this.normalizeTargetSymbol(s))
-        .filter(Boolean);
-      const baseSymbols = baseRawSymbols.map(normalizeTargetForCompare);
-      const targetCompareSymbols = normalizedTargetSymbols.map(normalizeTargetForCompare);
-      const sameTargetSymbols =
-        Boolean(memoryBaseMem) &&
-        baseSymbols.length === targetCompareSymbols.length &&
-        baseSymbols.every((s, idx) => s === targetCompareSymbols[idx]);
-      const hasCompleteBaseFingerprints =
-        sameTargetSymbols &&
-        Boolean(memoryBaseMem?.ast_fingerprints) &&
-        normalizedTargetSymbols.length > 0 &&
-        normalizedTargetSymbols.every((s, idx) =>
-          Boolean(
-            memoryBaseMem!.ast_fingerprints[s] ||
-              (memoryBaseMem!.target_symbols[idx] &&
-                memoryBaseMem!.ast_fingerprints[memoryBaseMem!.target_symbols[idx]])
-          )
-        );
-      memoryHasEmptyBaseFingerprints =
-        sameTargetSymbols &&
-        (!memoryBaseMem?.ast_fingerprints ||
-          Object.keys(memoryBaseMem.ast_fingerprints).length === 0);
+      if (isPersonalMemory) {
+        memoryHasEmptyBaseFingerprints = true;
+        memoryPreserveHistoricalAnchor = false;
+        memoryLiveHeadCommit = 'personal';
+      } else {
+        const normalizeTargetForCompare = (spec: string): string => {
+          const norm = this.normalizeWorkspaceTargetPath(spec);
+          const hashIdx = norm.indexOf('#');
+          if (hashIdx !== -1) {
+            const filePart = norm.slice(0, hashIdx).replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+            return `${filePart}${norm.slice(hashIdx)}`;
+          }
+          return norm.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+        };
+        const baseRawSymbols = (memoryBaseMem?.target_symbols || [])
+          .map((s) => this.normalizeTargetSymbol(s))
+          .filter(Boolean);
+        const baseSymbols = baseRawSymbols.map(normalizeTargetForCompare);
+        const targetCompareSymbols = normalizedTargetSymbols.map(normalizeTargetForCompare);
+        const sameTargetSymbols =
+          Boolean(memoryBaseMem) &&
+          baseSymbols.length === targetCompareSymbols.length &&
+          baseSymbols.every((s, idx) => s === targetCompareSymbols[idx]);
+        const hasCompleteBaseFingerprints =
+          sameTargetSymbols &&
+          Boolean(memoryBaseMem?.ast_fingerprints) &&
+          normalizedTargetSymbols.length > 0 &&
+          normalizedTargetSymbols.every((s, idx) =>
+            Boolean(
+              memoryBaseMem!.ast_fingerprints[s] ||
+                (memoryBaseMem!.target_symbols[idx] &&
+                  memoryBaseMem!.ast_fingerprints[memoryBaseMem!.target_symbols[idx]])
+            )
+          );
+        memoryHasEmptyBaseFingerprints =
+          sameTargetSymbols &&
+          (!memoryBaseMem?.ast_fingerprints ||
+            Object.keys(memoryBaseMem.ast_fingerprints).length === 0);
 
-      const explicitCommit =
-        typeof rawProposal.created_commit === 'string' && rawProposal.created_commit.trim()
-          ? rawProposal.created_commit.trim()
-          : '';
-      // Preserve historical anchor when explicitly requested (matching created_commit or
-      // preserveAnchorOnMetadataEdit without a conflicting explicit created_commit).
-      memoryPreserveHistoricalAnchor =
-        sameTargetSymbols &&
-        (hasCompleteBaseFingerprints || memoryHasEmptyBaseFingerprints) &&
-        Boolean(memoryBaseMem?.created_commit) &&
-        memoryBaseMem!.created_commit !== 'uncommitted' &&
-        (explicitCommit === memoryBaseMem!.created_commit ||
-          (options?.preserveAnchorOnMetadataEdit === true && !explicitCommit));
-      memoryLiveHeadCommit =
-        memoryPreserveHistoricalAnchor || isAsync
-          ? ''
-          : resolveCurrentGitCommit(this.storage.rootDir);
+        const explicitCommit =
+          typeof rawProposal.created_commit === 'string' && rawProposal.created_commit.trim()
+            ? rawProposal.created_commit.trim()
+            : '';
+        // Preserve historical anchor when explicitly requested (matching created_commit or
+        // preserveAnchorOnMetadataEdit without a conflicting explicit created_commit).
+        memoryPreserveHistoricalAnchor =
+          sameTargetSymbols &&
+          (hasCompleteBaseFingerprints || memoryHasEmptyBaseFingerprints) &&
+          Boolean(memoryBaseMem?.created_commit) &&
+          memoryBaseMem!.created_commit !== 'uncommitted' &&
+          (explicitCommit === memoryBaseMem!.created_commit ||
+            (options?.preserveAnchorOnMetadataEdit === true && !explicitCommit));
+        memoryLiveHeadCommit =
+          memoryPreserveHistoricalAnchor || isAsync
+            ? ''
+            : resolveCurrentGitCommit(this.storage.rootDir);
+      }
     }
 
     return {
@@ -1092,6 +1218,7 @@ export class EvoGatekeeper {
         memoryHasEmptyBaseFingerprints,
         memoryPreserveHistoricalAnchor,
         memoryLiveHeadCommit,
+        isPersonalMemory,
         extractedMemoryFingerprints: {},
       },
     };
@@ -1101,7 +1228,7 @@ export class EvoGatekeeper {
   // GATE 2: AST GROUNDING (FOR MEMORY) / SYNTAX & SANDBOX DRY-RUN (FOR TOOLS)
   // ===========================================================================
   private runMemoryGroundingGate2(ctx: PreparedProposalContext): GatekeeperResult | null {
-    if (ctx.memoryPreserveHistoricalAnchor) {
+    if (ctx.isPersonalMemory || ctx.memoryPreserveHistoricalAnchor) {
       return null;
     }
     const grounding = buildFingerprintsForTargets(
@@ -1127,6 +1254,10 @@ export class EvoGatekeeper {
   private async runMemoryGroundingGate2Async(
     ctx: PreparedProposalContext
   ): Promise<GatekeeperResult | null> {
+    if (ctx.isPersonalMemory) {
+      ctx.memoryLiveHeadCommit = 'personal';
+      return null;
+    }
     const headSnap = await readGitHeadSnapshotAsync(this.storage.rootDir);
     if (!ctx.memoryPreserveHistoricalAnchor) {
       ctx.memoryLiveHeadCommit =
@@ -1698,6 +1829,32 @@ export class EvoGatekeeper {
       });
     }
 
+    // D8: Deterministic Preference Polarity Conflict Guard
+    if (rawProposal.kind === 'preference') {
+      const candidatePool = this.storage
+        .listPreferences()
+        .filter((p) => !excludeSet.has(p.id));
+      const polarityConflicts = detectPreferenceConflict(
+        {
+          id: cleanId,
+          title: resolvedTitle,
+          l0_summary: resolvedL0Summary,
+          content: resolvedPrefContent,
+        },
+        candidatePool
+      );
+      if (polarityConflicts.length > 0) {
+        const conflictIds = polarityConflicts.map((c) => c.id);
+        return done({
+          passed: false,
+          gate_failed: 'DUPLICATE_CHECK',
+          error_code: 'ERR_DUPLICATE_CAPABILITY',
+          message: `Preference '${cleanId}' conflicts with existing opposite-polarity preference(s): ${polarityConflicts.map((c) => `${c.id} [${c.topic}]`).join(', ')}. Pass supersedes_id: "${conflictIds[0]}" to cleanly replace the conflicting habit.`,
+          conflicting_ids: conflictIds,
+        });
+      }
+    }
+
     // =========================================================================
     // GATE 4: TOKEN BUDGET CAP & SCOPED BUCKET QUOTA ENFORCEMENT
     // =========================================================================
@@ -2152,53 +2309,90 @@ export class EvoGatekeeper {
     }
 
     if (rawProposal.kind === 'memory') {
+      const isPersonal = Boolean(ctx.isPersonalMemory);
       const symptom = resolvedSymptom;
       const rootCause = resolvedRootCause;
       const solution = resolvedSolution;
-      const targetSymbols = normalizedTargetSymbols;
+      const targetSymbols = isPersonal ? [] : normalizedTargetSymbols;
       const existing = ctx.memoryExisting;
       const baseMem = ctx.memoryBaseMem;
       const hasEmptyBaseFingerprints = Boolean(ctx.memoryHasEmptyBaseFingerprints);
       const preserveHistoricalAnchor = Boolean(ctx.memoryPreserveHistoricalAnchor);
-      const liveHeadCommit = ctx.memoryLiveHeadCommit || '';
+      const liveHeadCommit = isPersonal ? 'personal' : (ctx.memoryLiveHeadCommit || '');
 
-      const liveBranch =
-        ctx.memoryLiveHeadBranch !== undefined
+      const liveBranch = isPersonal
+        ? undefined
+        : ctx.memoryLiveHeadBranch !== undefined
           ? (ctx.memoryLiveHeadBranch || undefined)
           : resolveCurrentGitBranch(this.storage.rootDir);
-      const currentCommit = preserveHistoricalAnchor ? baseMem!.created_commit : liveHeadCommit;
+      const currentCommit = isPersonal
+        ? 'personal'
+        : preserveHistoricalAnchor
+          ? baseMem!.created_commit
+          : liveHeadCommit;
       const explicitBranch =
         typeof rawProposal.created_branch === 'string' ? rawProposal.created_branch.trim() : '';
-      const currentBranch = preserveHistoricalAnchor
-        ? explicitBranch || baseMem?.created_branch || liveBranch
-        : explicitBranch || liveBranch;
-      const finalMemoryFingerprints = preserveHistoricalAnchor
-        ? hasEmptyBaseFingerprints
-          ? {}
-          : targetSymbols.every((s) => Boolean(baseMem!.ast_fingerprints[s]))
-            ? baseMem!.ast_fingerprints
-            : Object.fromEntries(
-                targetSymbols.map((s, idx) => [
-                  s,
-                  baseMem!.ast_fingerprints[s] ||
-                    baseMem!.ast_fingerprints[baseMem!.target_symbols[idx]],
-                ])
-              )
-        : extractedMemoryFingerprints;
+      const currentBranch = isPersonal
+        ? undefined
+        : preserveHistoricalAnchor
+          ? explicitBranch || baseMem?.created_branch || liveBranch
+          : explicitBranch || liveBranch;
+      const finalMemoryFingerprints = isPersonal
+        ? {}
+        : preserveHistoricalAnchor
+          ? hasEmptyBaseFingerprints
+            ? {}
+            : targetSymbols.every((s) => Boolean(baseMem!.ast_fingerprints[s]))
+              ? baseMem!.ast_fingerprints
+              : Object.fromEntries(
+                  targetSymbols.map((s, idx) => [
+                    s,
+                    baseMem!.ast_fingerprints[s] ||
+                      baseMem!.ast_fingerprints[baseMem!.target_symbols[idx]],
+                  ])
+                )
+          : extractedMemoryFingerprints;
 
       if (options?.dryRun) {
         return done({
           passed: true,
-          message: `Dry-run: Episodic Memory '${cleanId}' passed AST Symbol Grounding.`,
+          message: isPersonal
+            ? `Dry-run: Personal Experience Memory '${cleanId}' passed Gatekeeper checks.`
+            : `Dry-run: Episodic Memory '${cleanId}' passed AST Symbol Grounding.`,
           diagnostics: {
             id: cleanId,
             kind: 'memory',
+            memory_type: isPersonal ? 'personal' : 'code',
             created_commit: currentCommit,
             created_branch: currentBranch,
             target_symbols: targetSymbols,
             ast_fingerprints: finalMemoryFingerprints,
           },
         });
+      }
+
+      let prevSelfMemSnapshot: string | undefined;
+      let supersededMemSnapshot: string | undefined;
+      const sanitizedSupMemId = rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : '';
+      const crossSupMemId =
+        sanitizedSupMemId && sanitizedSupMemId !== cleanId ? sanitizedSupMemId : '';
+      if (isPersonal) {
+        if (existing) {
+          const prevSelfPath = path.join(this.storage.memoriesDir, `${cleanId}.md`);
+          if (fs.existsSync(prevSelfPath)) {
+            try {
+              prevSelfMemSnapshot = fs.readFileSync(prevSelfPath, 'utf8');
+            } catch {}
+          }
+        }
+        if (crossSupMemId) {
+          const prevSupPath = path.join(this.storage.memoriesDir, `${crossSupMemId}.md`);
+          if (fs.existsSync(prevSupPath)) {
+            try {
+              supersededMemSnapshot = fs.readFileSync(prevSupPath, 'utf8');
+            } catch {}
+          }
+        }
       }
 
       const preservedCreatedAt = baseMem?.created_at || options?.preservedCreatedAt || now;
@@ -2236,6 +2430,7 @@ export class EvoGatekeeper {
         id: cleanId,
         title: resolvedTitle.trim(),
         l0_summary: resolvedL0Summary.trim(),
+        memory_type: isPersonal ? 'personal' : 'code',
         symptom,
         root_cause: rootCause,
         solution,
@@ -2255,7 +2450,7 @@ export class EvoGatekeeper {
         review_status:
           rawProposal.review_status === 'approved' || rawProposal.review_status === 'pending'
             ? rawProposal.review_status
-            : (baseMem?.review_status || 'pending'),
+            : (baseMem?.review_status || (isPersonal ? 'approved' : 'pending')),
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -2265,6 +2460,40 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('pending_evolution', 'false');
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
+
+      if (isPersonal) {
+        const prevMemSnapshot = prevSelfMemSnapshot || supersededMemSnapshot;
+        this.storage.appendProfileHistory({
+          ts: now,
+          action: existing || resolvedSupersedesId ? 'update' : 'add',
+          id: cleanId,
+          kind: 'memory',
+          title: memoryObj.title,
+          ...(prevMemSnapshot ? { previous_snapshot: prevMemSnapshot } : {}),
+          ...(resolvedSupersedesId ? { superseded_id: resolvedSupersedesId } : {}),
+          ...(supersededMemSnapshot ? { superseded_snapshot: supersededMemSnapshot } : {}),
+          ...(prevSelfMemSnapshot && resolvedSupersedesId
+            ? { self_previous_snapshot: prevSelfMemSnapshot }
+            : {}),
+          reason: resolvedSupersedesId
+            ? `Superseded ${resolvedSupersedesId}`
+            : existing
+              ? 'Updated personal memory'
+              : 'Added personal memory',
+        });
+        return done({
+          passed: true,
+          message: `Personal Experience Memory '${cleanId}' passed Gatekeeper checks and is crystallized at .evo/memories/${cleanId}.md (0 core budget tokens used).`,
+          diagnostics: {
+            id: cleanId,
+            kind: 'memory',
+            memory_type: 'personal',
+            created_commit: 'personal',
+            target_symbols: [],
+            ast_fingerprints: {},
+          },
+        });
+      }
 
       return {
         done: false,
@@ -2290,6 +2519,10 @@ export class EvoGatekeeper {
       const newPrefTokens = estimateTokens(
         `- **[${cleanId}]** (${category}): ${rawProposal.l0_summary.trim()}\n  ${content.replace(/\n/g, '\n  ')}`
       );
+      const candidateEnabled =
+        rawProposal.enabled !== undefined
+          ? rawProposal.enabled !== false
+          : basePref?.enabled !== false;
 
       if (alwaysOn) {
         const MAX_ATOMIC_PREF_TOKENS = 150;
@@ -2302,11 +2535,28 @@ export class EvoGatekeeper {
           });
         }
 
-        const maxProfileTokens = config.maxGlobalProfileTokens ?? 500;
+        const maxProfileTokens = config.maxGlobalProfileTokens ?? 800;
         const { preferences: existingPrefs } = this.storage.getProfileTokenUsage();
         const filteredPrefs = existingPrefs.filter((p) => !excludeSet.has(p.id));
-        const currentTokens = filteredPrefs.reduce((acc, p) => acc + p.tokens, 0);
-        const effectiveCandidateTokens = currentTokens + newPrefTokens;
+        const candidatePrefForBudget: EvoPreference = {
+          id: cleanId,
+          title: rawProposal.title.trim(),
+          l0_summary: rawProposal.l0_summary.trim(),
+          category,
+          always_on: true,
+          content,
+          tokens: newPrefTokens,
+          enabled: candidateEnabled,
+          created_at: now,
+          updated_at: now,
+        };
+        const simulatedPrefs = candidateEnabled
+          ? [...filteredPrefs, candidatePrefForBudget]
+          : filteredPrefs;
+        const simulatedDigest = formatUserProfileDigestForPreferences(simulatedPrefs);
+        const effectiveCandidateTokens = simulatedDigest
+          ? estimateTokens(renderUserProfileBlock(simulatedDigest, ''))
+          : 0;
 
         if (effectiveCandidateTokens > maxProfileTokens) {
           const telemetryMap = this.telemetry.getTelemetryMap();
@@ -2344,6 +2594,32 @@ export class EvoGatekeeper {
         });
       }
 
+      let prevSelfPrefSnapshot: string | undefined;
+      let supersededPrefSnapshot: string | undefined;
+      const sanitizedSupersedesPref = rawProposal.supersedes_id
+        ? sanitizeId(rawProposal.supersedes_id)
+        : '';
+      const crossSupPrefId =
+        sanitizedSupersedesPref && sanitizedSupersedesPref !== cleanId
+          ? sanitizedSupersedesPref
+          : '';
+      if (existing) {
+        const prevSelfPath = path.join(this.storage.preferencesDir, `${cleanId}.md`);
+        if (fs.existsSync(prevSelfPath)) {
+          try {
+            prevSelfPrefSnapshot = fs.readFileSync(prevSelfPath, 'utf8');
+          } catch {}
+        }
+      }
+      if (crossSupPrefId) {
+        const prevSupPath = path.join(this.storage.preferencesDir, `${crossSupPrefId}.md`);
+        if (fs.existsSync(prevSupPath)) {
+          try {
+            supersededPrefSnapshot = fs.readFileSync(prevSupPath, 'utf8');
+          } catch {}
+        }
+      }
+
       const preservedCreatedAt = basePref?.created_at || options?.preservedCreatedAt || now;
       const correctionMetadata =
         this.telemetry.getSessionFlag('user_correction_detected') === 'true' ||
@@ -2359,9 +2635,6 @@ export class EvoGatekeeper {
           correctionMetadata
         );
       }
-      const sanitizedSupersedesPref = rawProposal.supersedes_id
-        ? sanitizeId(rawProposal.supersedes_id)
-        : '';
       if (sanitizedSupersedesPref && sanitizedSupersedesPref !== cleanId) {
         this.storage.archiveCapability(
           sanitizedSupersedesPref,
@@ -2378,6 +2651,10 @@ export class EvoGatekeeper {
       const prefTags = Array.isArray(rawProposal.tags)
         ? rawProposal.tags.map((t) => String(t).trim()).filter(Boolean)
         : (basePref?.tags || []);
+      const resolvedTriggerCue =
+        typeof rawProposal.trigger_cue === 'string' && rawProposal.trigger_cue.trim()
+          ? rawProposal.trigger_cue.trim()
+          : basePref?.trigger_cue;
 
       const prefObj: EvoPreference = {
         id: cleanId,
@@ -2385,21 +2662,17 @@ export class EvoGatekeeper {
         l0_summary: rawProposal.l0_summary.trim(),
         category,
         always_on: alwaysOn,
+        ...(resolvedTriggerCue ? { trigger_cue: resolvedTriggerCue } : {}),
         content,
         tokens: newPrefTokens,
         tags: prefTags,
         origin: rawProposal.origin || basePref?.origin || 'evolved',
         supersedes_id: resolvedSupersedesId,
-        enabled:
-          rawProposal.enabled !== undefined
-            ? rawProposal.enabled === false
-              ? false
-              : true
-            : basePref?.enabled !== false,
+        enabled: candidateEnabled,
         review_status:
           rawProposal.review_status === 'approved' || rawProposal.review_status === 'pending'
             ? rawProposal.review_status
-            : (basePref?.review_status || 'pending'),
+            : (basePref?.review_status || 'approved'),
         created_at: preservedCreatedAt,
         updated_at: now,
       };
@@ -2409,6 +2682,25 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('pending_evolution', 'false');
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
+      const prevPrefSnapshot = prevSelfPrefSnapshot || supersededPrefSnapshot;
+      this.storage.appendProfileHistory({
+        ts: now,
+        action: existing || resolvedSupersedesId ? 'update' : 'add',
+        id: cleanId,
+        kind: 'preference',
+        title: prefObj.title,
+        ...(prevPrefSnapshot ? { previous_snapshot: prevPrefSnapshot } : {}),
+        ...(resolvedSupersedesId ? { superseded_id: resolvedSupersedesId } : {}),
+        ...(supersededPrefSnapshot ? { superseded_snapshot: supersededPrefSnapshot } : {}),
+        ...(prevSelfPrefSnapshot && resolvedSupersedesId
+          ? { self_previous_snapshot: prevSelfPrefSnapshot }
+          : {}),
+        reason: resolvedSupersedesId
+          ? `Superseded ${resolvedSupersedesId}`
+          : existing
+            ? 'Updated preference'
+            : 'Added preference',
+      });
 
       return done({
         passed: true,

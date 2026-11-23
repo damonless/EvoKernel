@@ -2,7 +2,28 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { collectWorkspaceSourceFiles, stripCStyleComments } from '../memory.js';
 
-export const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+export const UNIVERSAL_SECURITY_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  {
+    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/,
+    reason: 'Hardcoded private key block detected',
+  },
+  {
+    pattern: /(\bsk-(?:proj-|ant-|svcacct-)?[a-zA-Z0-9_-]{20,}|\bgh[pousr]_[a-zA-Z0-9_]{20,}|\bAKIA[0-9A-Z]{16})/,
+    reason: 'Hardcoded plaintext API secret/token detected',
+  },
+  {
+    pattern: /[A-Za-z]:\\Users\\[A-Za-z0-9_.-]+\\/i,
+    reason:
+      'Hardcoded user-specific Windows absolute path detected; use relative paths or process.env.EVO_WORKSPACE',
+  },
+  {
+    pattern: /\/Users\/[A-Za-z0-9_.-]+\/|\/home\/[A-Za-z0-9_.-]+\//,
+    reason:
+      'Hardcoded user-specific Unix absolute path detected; use relative paths or process.env.EVO_WORKSPACE',
+  },
+];
+
+export const SCRIPT_EXECUTION_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   {
     pattern: /\brm\s+-rf\s+(\/|~|\$HOME|\$EVO_WORKSPACE|\.\.(?:\/|\\|\s|$)|[A-Za-z]:\\)/i,
     reason: 'Destructive root/home/parent directory deletion detected',
@@ -19,9 +40,6 @@ export const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   },
   { pattern: /\b(Format-Volume|Clear-Disk|mkfs\.|dd\s+if=)/i, reason: 'Disk formatting command detected' },
   { pattern: /\b(curl|wget|Invoke-WebRequest|iwr)\b.*\|\s*(sh|bash|pwsh|powershell|iex|Invoke-Expression)/i, reason: 'Remote code pipe execution detected' },
-  { pattern: /(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16})/, reason: 'Hardcoded plaintext API secret/token detected' },
-  { pattern: /[A-Za-z]:\\Users\\[A-Za-z0-9_.-]+\\/i, reason: 'Hardcoded user-specific Windows absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
-  { pattern: /\/Users\/[A-Za-z0-9_.-]+\/|\/home\/[A-Za-z0-9_.-]+\//, reason: 'Hardcoded user-specific Unix absolute path detected; use relative paths or process.env.EVO_WORKSPACE' },
   {
     pattern:
       /\b(?:eval|new\s+Function|vm\.(?:runInNewContext|runInThisContext))\s*\([\s\S]{0,120}\b(?:Buffer\.from|atob|base64|process|fs|child_process)\b/i,
@@ -58,6 +76,11 @@ export const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
     pattern: /(?:^|\s)-EncodedCommand\b|\bFromBase64String\s*\(/i,
     reason: 'PowerShell encoded/base64 payload obfuscation detected',
   },
+];
+
+export const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  ...UNIVERSAL_SECURITY_PATTERNS,
+  ...SCRIPT_EXECUTION_PATTERNS,
 ];
 
 export const TOOL_NETWORK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [

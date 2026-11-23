@@ -2,19 +2,31 @@
 
 ## Architecture
 - **Zero Runtime Dependencies**: Strict zero-npm-dependency invariant. Pure Node.js built-ins (`node:http`, `node:fs`, `node:path`, `node:child_process`, `node:crypto`, `node:url`) + ES2022.
-- **Presentation Layer (`src/templates/ui-client.ts`)**: Monolithic self-contained HTML/CSS/JS generator for EvoKernel Workbench 2.0.
+- **Presentation Layer (`src/templates/ui-client.ts` -> `src/templates/ui/`)**: Originally a monolithic generator for EvoKernel Workbench 2.0, now modularized behind the `src/templates/ui-client.ts` barrel facade into `src/templates/ui/{shell,styles,i18n,components-capabilities,components-profile,client-script}.ts`.
   - Visual system: Zinc dark tokens (`--bg-canvas: #09090b`, `--text-primary: #fafafa`, `--border-subtle: #27272a`), `cult-ui` Bento 1px inset highlights, `motion-primitives` spring transitions (`cubic-bezier(0.22, 1, 0.36, 1)`).
   - 3-column layout: Left navigation rail (220px) with telemetry Bento; Center Stage (flex 1) with 4 views (Capabilities Data Table, Orthogonal Card Topology with focus dimming, Git Hotspots, Gatekeeper Audit Stream); Right Structured Inspector (380px) with action toolbar, AST anchors, markdown preview/editor, sandbox terminal; `Cmd/Ctrl+K` Command Palette.
   - CSP compliance: Strict script SHA-256 hash, zero inline `on*=` handlers.
 - **Backend & Control Layer (`src/cli/ui.ts`)**:
   - `POST /api/action` endpoint handling 6 core actions: `open-editor`, `verify-memory`, `run-tool-test`, `archive-item`, `toggle-rule-tier`, `update-content`.
-  - Security boundaries: 127.0.0.1 binding, Host validation, Sec-Fetch-Site 403 block, X-Evo-UI-Token authentication, `isSubpathOf` directory traversal guard, 1500-token core rule budget limit, 5000ms sandbox timeout.
+  - Security boundaries: 127.0.0.1 binding, Host validation, Sec-Fetch-Site 403 block, X-Evo-UI-Token authentication, `isSubpathOf` directory traversal guard, 1500-token core rule budget limit, 800-token Always-On Profile Card & 250-token Task Directory Menu caps, 5000ms sandbox timeout.
+  - 3-Tier Personal Cognition & Profile Studio (`src/core/profile-sync.ts`, `src/templates/ui/components-profile.ts`): Cross-workspace preferences (`style | formatting | communication | workflow | requirement | knowledge`), Tier 2 On-Demand Task Directory Menu, Tier 3 global `memory_type: "personal"` memories, and 1-click undo (`profile-history.jsonl` / `evo profile undo`).
   - Native micro-window launcher: Edge/Chrome `--app` chromeless window with system browser fallback.
 - **IDE Extension & Integration Layer (`src/ide/vscode-extension.ts`, `src/cli/init.ts`)**:
   - Zero-dependency VS Code / Cursor / Windsurf / Antigravity extension entry point with WebviewPanel and bidirectional messaging bridge.
   - Auto-mount during `evo init` / `evo ui --install-ide` into `~/.vscode/extensions`, `~/.cursor/extensions`, etc.
 - **Quality & Verification Layer (`src/tests/score-and-ui.test.ts`, `benchmarks/context-tax-benchmark.mjs`)**:
   - Modernized Test 5 for Workbench 2.0 layout & tokens; new unit tests for all 6 action types and security perimeters; Windows ESM `pathToFileURL` fix.
+
+## v0.5 Architecture & Personal Profile Studio (Slim Dual-Core + 3-Tier Offline User Cognition)
+- **Dual-Core Separation**:
+  - **Layer 1 (Repo-Scoped Engineering Memory, `.evo/`)**: AST-verified memories across Git branches, strict `1,500`-token core invariants budget, path-scoped guardrails (`scope_glob`), and `--self-test` sandboxed micro-tools.
+  - **Layer 2 (Cross-Workspace 3-Tier Offline User Cognition, `~/.evo/global/.evo/`)**:
+    1. **Tier 1 — Always-On Profile Card (`800`-token full-rendered budget)**: `always_on: true` preferences (`style | formatting | communication | workflow | requirement | knowledge`) pushed via `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` to 8 desktop AI hosts (`~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`, `~/.codex/AGENTS.md`, `~/.codeium/windsurf/memories/global_rules.md` with 6,000-char guard, `~/.cursor/rules/evo-user-profile.mdc`, `~/.cline/rules/evo-user-profile.md`, `~/.roo/rules/evo-user-profile.md`, `~/.config/opencode/AGENTS.md`).
+    2. **Tier 2 — Live Task & Workflow Directory Menu (`250`-token cap)**: `always_on: false` preferences + non-seed global skills with `trigger_cue`, rendered alongside the Profile Card for semantic `evo_inspect(id, "L2")` recall.
+    3. **Tier 3 — Global Personal Experience Memory (`memory_type: "personal"`)**: Cross-workspace lessons stored without AST symbol binding (`[PERSONAL]`), searchable via expanded bilingual office/writing/workflow lexicon in `src/core/lexicon.ts`.
+- **4A Instant Activation + 1-Second Undo**: Explicit `evo_propose` / CLI / Workbench preference mutations activate immediately (`review_status: "approved"`), append snapshots to `~/.evo/global/.evo/profile-history.jsonl`, and support 1-click undo (`evo profile undo` & Workbench `undo-preference`).
+- **Zero-Friction Global Install & Cold Start**: `evo init --global` (`runInitGlobal`), `evo uninstall --global` (`cleanGlobalUserProfile` + `runUninstall`), full `evo profile` CLI (`show | list | add | remove | sync | undo | import | onboard | clean | path`) powered by `src/core/profile-sync.ts` and `src/core/profile-import.ts` (`parseMarkdownToPreferenceCandidates`, `ONBOARDING_PRESETS`, `getOnboardingPresetCandidates`), and optional `workspace` across all 5 `META_MCP_TOOLS` (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`) for blank/non-code chats.
+- **Personal Profile Studio (`src/templates/ui/components-profile.ts`, `src/core/workbench-actions.ts`)**: Dedicated Workbench view (`#view-profile`) with live 800-tok Profile Card & 250-tok Task Directory Menu meters, 8-host sync badges, Recent Changes 1-click undo bar, inline Create/Edit preference drawer, Markdown import preview/apply, and unified `POST /api/action` handlers (`create-preference`, `undo-preference`, `sync-profile`, `import-profile-markdown`, `restore-item`, `approve-item`, `toggle-enabled`, `rebind-memory-ast`).
 
 ## Feature Inventory
 | # | Feature | Description | Milestone | Source |
@@ -88,7 +100,8 @@
 ## Code Layout
 - `src/cli/ui.ts`: HTTP Server, `/api/action` router, `--app` chromeless window spawner. (Owned exclusively by M1)
 - `benchmarks/context-tax-benchmark.mjs`: Benchmark script, Windows ESM URL pathing. (Owned exclusively by M1)
-- `src/templates/ui-client.ts`: Monolithic Workbench 2.0 template generator. (Owned exclusively by M2)
+- `src/templates/ui-client.ts` & `src/templates/ui/`: Workbench UI barrel facade and modular template generators (incl. `components-profile.ts` for Personal Profile Studio).
+- `src/core/profile-sync.ts`, `src/core/profile-import.ts`, `src/core/workbench-actions.ts`: v0.5 8-host profile synchronization, Markdown import & onboarding presets, and unified Workbench action handlers. (Owned exclusively by M2)
 - `src/ide/vscode-extension.ts`: VS Code extension entry point. (Owned exclusively by M3)
 - `src/cli/init.ts`: CLI init command, IDE extension auto-linking. (Owned exclusively by M3)
 - `src/tests/score-and-ui.test.ts`: Automated tests for UI, actions, and IDE. (Owned exclusively by M4)

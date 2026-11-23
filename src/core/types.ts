@@ -7,6 +7,7 @@ export type PreferenceCategory =
   | 'formatting'
   | 'communication'
   | 'workflow'
+  | 'requirement'
   | 'knowledge';
 
 export type ConfidenceLevel = 'high' | 'medium' | 'low' | 'confounded';
@@ -62,6 +63,7 @@ export interface EvoMemory {
   solution: string;
   target_symbols: string[];
   ast_fingerprints: Record<string, SymbolFingerprint>;
+  memory_type?: 'code' | 'personal';
   created_commit: string;
   created_branch?: string;
   tags: string[];
@@ -135,6 +137,7 @@ export interface EvoConfig {
   version: string;
   maxCoreRuleTokens: number;
   maxGlobalProfileTokens?: number;
+  maxDirectoryMenuTokens?: number;
   maxScopedRulesPerBucket: number;
   maxTotalScopedRules: number;
   maxL0SummaryChars: number;
@@ -153,6 +156,7 @@ export interface EvoPreference {
   l0_summary: string;
   category: PreferenceCategory;
   always_on: boolean;
+  trigger_cue?: string;
   content: string;
   tokens: number;
   tags: string[];
@@ -163,6 +167,19 @@ export interface EvoPreference {
   visibility?: 'local' | 'public';
   created_at: string;
   updated_at: string;
+}
+
+export interface ProfileHistoryEntry {
+  ts: string;
+  action: 'add' | 'update' | 'archive' | 'undo';
+  id: string;
+  kind: 'preference' | 'memory';
+  title: string;
+  previous_snapshot?: string;
+  superseded_id?: string;
+  superseded_snapshot?: string;
+  self_previous_snapshot?: string;
+  reason?: string;
 }
 
 export interface EvoRule {
@@ -283,6 +300,7 @@ export interface ProposalPayload {
   root_cause?: string;
   solution?: string;
   target_symbols?: string[];
+  memory_type?: 'code' | 'personal';
   created_branch?: string;
   created_commit?: string;
   // For preferences / global routing:

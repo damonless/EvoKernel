@@ -715,8 +715,9 @@ console.log('active');
       'id',
       'title',
       'l0_summary',
-      'workspace',
     ]);
+    assert.ok(schemaProps.workspace, 'evo_propose must still expose optional workspace property');
+    assert.ok(schemaProps.memory_type, 'evo_propose must expose memory_type');
   });
 
   test('19. EvoMcpDispatcher records recalled capabilities to workspace-local telemetry on inspect and run', async () => {

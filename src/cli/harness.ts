@@ -1950,7 +1950,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
   }
 
   detectGlobal(home: string): boolean {
-    return fs.existsSync(path.join(home, '.opencode'));
+    return (
+      fs.existsSync(path.join(home, '.config', 'opencode')) ||
+      fs.existsSync(path.join(home, '.opencode'))
+    );
   }
 
   install(ws: string, managedBlock: string): HarnessInstallResult {

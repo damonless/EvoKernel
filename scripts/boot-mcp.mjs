@@ -41,10 +41,7 @@ if (!fs.existsSync(distEntry)) {
 const rawArgs = process.argv.slice(2);
 const VALUE_FLAGS = new Set([
   '--workspace', '-w', '--port', '-p', '--host', '--token', '--export', '--svg', '--html',
-  '--targets', '--link', '--ide', '--max-commits', '--token-budget',
-  '--skill-budget', '--dim', '-k', '--k', '--rounds', '--proposer-cmd', '--probe-cmd',
-  '--worktree-setup-cmd', '--task', '--task-file', '--trajectory', '--trajectories',
-  '--deliverable', '--deliverables', '--leak-glob',
+  '--targets', '--link', '--ide',
   '--payload', '--harness', '--event', '--tool', '--tool-name', '--file', '--target-file',
 ]);
 let firstPositional = '';

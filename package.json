@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel",
   "version": "0.4.0",
-  "description": "Two-Layer Local-First Context & Memory Kernel for MCP-Capable AI Coding Agents — Repo-Scoped AST-Verified Cognitive Memory, Cross-Workspace Personal Preference Push, Deliverable Canonical Inspection, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway.",
+  "description": "Slim Dual-Core Local-First Context & Memory Kernel for MCP-Capable AI Agents — Repo-Scoped AST-Verified Engineering Memory + 3-Tier Offline User Cognition (800-tok Profile Card, 250-tok Task Directory Menu, Global Personal Memory), Deliverable Canonical Inspection, and 100% Byte-Stable KV Cache via a 5-Tool Meta-MCP Gateway.",
   "type": "module",
   "bin": {
     "evo": "./bin/evo.mjs",
@@ -28,6 +28,7 @@
     "dist/ide",
     "dist/mcp",
     "dist/templates",
+    "dist/tools",
     "scripts/antigravity_hook.mjs",
     "scripts/boot-mcp.mjs",
     "scripts/build.mjs",
@@ -67,8 +68,13 @@
     "rules",
     "context-engineering",
     "personal-preferences",
+    "personal-cognition",
     "user-profile",
     "cross-workspace-memory",
+    "offline-memory",
+    "cline",
+    "roo-code",
+    "opencode",
     "deliverable-inspector",
     "causal-telemetry",
     "anti-confounding"

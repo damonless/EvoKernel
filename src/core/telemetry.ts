@@ -11,7 +11,7 @@ import type {
   SearchHit,
   TelemetryRecord,
 } from './types.js';
-import { EvoStorage } from './storage.js';
+import { EvoStorage, resolveGlobalFallbackDir } from './storage.js';
 import { verifyMemoryFreshness, verifyMemoryFreshnessAsync } from './memory.js';
 import type { MemoryVerificationReport } from './types.js';
 import {
@@ -1434,12 +1434,14 @@ export class EvoTelemetry {
       for (const p of preferences) {
         const idTokens = p.id.replace(/[-_]+/g, ' ');
         const tagsText = Array.isArray(p.tags) ? p.tags.join(' ') : '';
+        const triggerCue = p.trigger_cue || '';
         const cjkKw = extractCjkBigrams(
-          `${p.title} ${p.l0_summary} ${p.content} ${p.category} ${tagsText}`
+          `${p.title} ${p.l0_summary} ${p.content} ${p.category} ${tagsText} ${triggerCue}`
         ).join(' ');
-        const normKw = buildNormalizedKeywords([p.id, p.title, p.l0_summary, p.category, tagsText]);
-        const kw = [idTokens, p.category, tagsText, cjkKw, normKw].filter(Boolean).join(' ').trim();
-        upsertFtsRow(p.id, 'preference', p.title, p.l0_summary, kw, p.content);
+        const normKw = buildNormalizedKeywords([p.id, p.title, p.l0_summary, p.category, tagsText, triggerCue]);
+        const kw = [idTokens, p.category, tagsText, triggerCue, cjkKw, normKw].filter(Boolean).join(' ').trim();
+        const bodyText = triggerCue ? `${p.content}\n${triggerCue}` : p.content;
+        upsertFtsRow(p.id, 'preference', p.title, p.l0_summary, kw, bodyText);
         upsertTelemetry.run(p.id, 'preference', p.title, p.l0_summary, p.category, now, p.created_at || now);
       }
 
@@ -1869,6 +1871,27 @@ export class EvoTelemetry {
       if (itemKind === 'memory') {
         const mem = this.storage.getMemory(id);
         if (mem) {
+          const isPersonalMem =
+            mem.memory_type === 'personal' ||
+            (mem.target_symbols.length === 0 &&
+              path.resolve(this.storage.rootDir).toLowerCase() ===
+                path.resolve(resolveGlobalFallbackDir()).toLowerCase());
+          if (isPersonalMem) {
+            return {
+              id,
+              kind: 'memory',
+              title: String(r.title),
+              l0_summary: String(r.l0_summary),
+              scope_glob: 'global:personal',
+              hit_count: Number(r.hit_count || 0),
+              success_rate: rate,
+              score: rawScore,
+              low_overlap: lowOverlap,
+              matched_concepts: matchedConcepts,
+              memory_status: 'VERIFIED',
+              memory_badge: '[PERSONAL]',
+            };
+          }
           const ver = verifyMemoryFreshness(this.storage.rootDir, mem, {
             includeCallers: false,
             cacheDb: this.db,
@@ -1968,6 +1991,27 @@ export class EvoTelemetry {
       if (itemKind === 'memory') {
         const mem = this.storage.getMemory(id);
         if (mem) {
+          const isPersonalMem =
+            mem.memory_type === 'personal' ||
+            (mem.target_symbols.length === 0 &&
+              path.resolve(this.storage.rootDir).toLowerCase() ===
+                path.resolve(resolveGlobalFallbackDir()).toLowerCase());
+          if (isPersonalMem) {
+            return {
+              id,
+              kind: 'memory',
+              title: String(r.title),
+              l0_summary: String(r.l0_summary),
+              scope_glob: 'global:personal',
+              hit_count: Number(r.hit_count || 0),
+              success_rate: rate,
+              score: rawScore,
+              low_overlap: lowOverlap,
+              matched_concepts: matchedConcepts,
+              memory_status: 'VERIFIED',
+              memory_badge: '[PERSONAL]',
+            };
+          }
           const ver = await verifyMemoryFreshnessAsync(this.storage.rootDir, mem, {
             includeCallers: false,
             cacheDb: this.closed ? undefined : this.db,

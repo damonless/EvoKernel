@@ -2,14 +2,14 @@
 id: action-update-content-path-traversal-403
 title: "Eager sanitizeId masks update-content path traversal as 404 instead of 403"
 l0_summary: "Eager sanitizeId in update-content masks path traversal attempts as 404 instead of returning 403 Forbidden."
-created_commit: "105df52"
+created_commit: "2fdf9f6"
 created_branch: "main"
 target_symbols: ["src/cli/ui.ts#startUiServer","src/core/storage.ts#sanitizeId"]
-ast_fingerprints: {"src/cli/ui.ts#startUiServer":{"symbol":"src/cli/ui.ts#startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1012,"end_line":2121,"signature":"export async function startUiServer(","ast_hash":"29d0ee68e942aecb"},"src/core/storage.ts#sanitizeId":{"symbol":"src/core/storage.ts#sanitizeId","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":271,"end_line":277,"signature":"export function sanitizeId(rawId: string): string","ast_hash":"1c9ec53cbe02e6e4"}}
+ast_fingerprints: {"src/cli/ui.ts#startUiServer":{"symbol":"src/cli/ui.ts#startUiServer","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1269,"end_line":1481,"signature":"export async function startUiServer(","ast_hash":"31f352a98fa2bcf4"},"src/core/storage.ts#sanitizeId":{"symbol":"src/core/storage.ts#sanitizeId","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":293,"end_line":299,"signature":"export function sanitizeId(rawId: string): string","ast_hash":"1c9ec53cbe02e6e4"}}
 tags: ["ui","api","security","path-traversal"]
 origin: "evolved"
 created_at: "2026-11-05T08:52:30.589Z"
-updated_at: "2026-11-23T16:49:12.793Z"
+updated_at: "2026-11-23T20:22:12.844Z"
 ---
 
 ## Symptom

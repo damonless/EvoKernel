@@ -1,97 +1,30 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import type { DatabaseSync } from 'node:sqlite';
 import { EvoStorage, openSqliteReadOnly } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { parseSymbolTarget } from '../core/memory.js';
+import {
+  CORRECTION_REGEX,
+  buildPreferenceEvolutionHint,
+  defaultIsCapabilityRelevantToModifiedFiles,
+  detectConversationEvolutionSignals,
+  matchesScopeGlob,
+  recordRecalledOutcomeUnified,
+} from '../core/hook-engine.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { renderAuditReport, runAudit } from './audit.js';
 import { formatTerminalOutput } from './term.js';
 import type { CapabilityOutcome, RecalledCapabilityEntry } from '../core/types.js';
+
+export { CORRECTION_REGEX, matchesScopeGlob };
 
 export function isCapabilityRelevantToModifiedFiles(
   storage: EvoStorage,
   entry: RecalledCapabilityEntry,
   modifiedFiles?: string[]
 ): boolean {
-  if (!modifiedFiles || modifiedFiles.length === 0) return true;
-
-  const checkRule = () => {
-    const rule = storage.getRule(entry.id);
-    if (!rule) return undefined;
-    if (!rule.scope_glob || rule.scope_glob === '*' || rule.scope_glob === '**/*') {
-      return true;
-    }
-    return modifiedFiles.some((f) => matchesScopeGlob(f, rule.scope_glob));
-  };
-
-  const checkTool = () => {
-    const tool = storage.getTool(entry.id);
-    if (!tool) return undefined;
-    const fileGlob = tool.hook_trigger?.file_glob;
-    if (!fileGlob || fileGlob === '*' || fileGlob === '**/*') {
-      return true;
-    }
-    return modifiedFiles.some((f) => matchesScopeGlob(f, fileGlob));
-  };
-
-  const checkMemory = () => {
-    const memory = storage.getMemory(entry.id);
-    if (!memory) return undefined;
-    const fileHints = new Set<string>();
-    for (const sym of memory.target_symbols || []) {
-      const parsed = parseSymbolTarget(sym);
-      const rawFile = (parsed.fileHint || '').trim();
-      if (rawFile) {
-        fileHints.add(rawFile.replace(/\\/g, '/').replace(/^\.\/+/, '').toLowerCase());
-      }
-    }
-    for (const fp of Object.values(memory.ast_fingerprints || {})) {
-      const fpFile = (fp?.file_path || (fp as any)?.file || '').trim();
-      if (fpFile && fpFile !== '(unrecorded)') {
-        fileHints.add(fpFile.replace(/\\/g, '/').replace(/^\.\/+/, '').toLowerCase());
-      }
-    }
-    if (fileHints.size === 0) return true;
-    return modifiedFiles.some((mf) => {
-      const normMf = mf.replace(/\\/g, '/').replace(/^\.\/+/, '').toLowerCase();
-      for (const hint of fileHints) {
-        if (normMf === hint || normMf.endsWith(`/${hint}`) || hint.endsWith(`/${normMf}`)) {
-          return true;
-        }
-      }
-      return false;
-    });
-  };
-
-  if (entry.kind === 'rule') return checkRule() ?? true;
-  if (entry.kind === 'tool') return checkTool() ?? true;
-  if (entry.kind === 'memory') return checkMemory() ?? true;
-  if (entry.kind === 'skill') return true;
-
-  return checkRule() ?? checkTool() ?? checkMemory() ?? true;
-}
-
-function resolveRealPathWithFallback(p: string): string {
-  const resolved = path.resolve(p);
-  try {
-    return fs.realpathSync.native
-      ? fs.realpathSync.native(resolved)
-      : fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
-
-function isSameResolvedPath(a: string, b: string): boolean {
-  const ra = resolveRealPathWithFallback(a);
-  const rb = resolveRealPathWithFallback(b);
-  if (process.platform === 'win32' || process.platform === 'darwin') {
-    return ra.toLowerCase() === rb.toLowerCase();
-  }
-  return ra === rb;
+  return defaultIsCapabilityRelevantToModifiedFiles(storage, entry, modifiedFiles);
 }
 
 export function recordRecalledOutcomeWithTierRouting(
@@ -101,59 +34,14 @@ export function recordRecalledOutcomeWithTierRouting(
   outcome: Exclude<CapabilityOutcome, 'neutral'>,
   modifiedFiles?: string[]
 ): void {
-  const existsLocally =
-    Boolean(localStorage.getRule(entry.id)) ||
-    Boolean(localStorage.getSkill(entry.id)) ||
-    Boolean(localStorage.getTool(entry.id)) ||
-    Boolean(localStorage.getMemory(entry.id));
-
-  if (existsLocally && entry.tier !== 'GLOBAL') {
-    if (!isCapabilityRelevantToModifiedFiles(localStorage, entry, modifiedFiles)) {
-      return;
-    }
-    localTelemetry.recordCapabilityOutcome(entry.id, outcome);
-    return;
-  }
-
-  const globalRoot = process.env.EVO_GLOBAL_DIR
-    ? path.resolve(process.env.EVO_GLOBAL_DIR)
-    : path.join(os.homedir(), '.evo', 'global');
-
-  if (fs.existsSync(path.join(globalRoot, '.evo'))) {
-    const globalStorage = new EvoStorage(globalRoot);
-    const existsGlobally =
-      Boolean(globalStorage.getRule(entry.id)) ||
-      Boolean(globalStorage.getSkill(entry.id)) ||
-      Boolean(globalStorage.getTool(entry.id)) ||
-      Boolean(globalStorage.getMemory(entry.id));
-
-    if (existsGlobally) {
-      if (!isCapabilityRelevantToModifiedFiles(globalStorage, entry, modifiedFiles)) {
-        return;
-      }
-      const globalTelemetry = new EvoTelemetry(globalStorage);
-      try {
-        if (!isSameResolvedPath(globalRoot, localStorage.rootDir)) {
-          globalTelemetry.recordCapabilityOutcome(entry.id, outcome, { skipRecallEventsUpdate: true });
-          if (outcome === 'helped') {
-            localTelemetry.markRecallEventHelped(entry.id);
-          }
-        } else {
-          globalTelemetry.recordCapabilityOutcome(entry.id, outcome);
-        }
-      } finally {
-        globalTelemetry.close();
-      }
-      return;
-    }
-  }
-
-  if (existsLocally) {
-    if (!isCapabilityRelevantToModifiedFiles(localStorage, entry, modifiedFiles)) {
-      return;
-    }
-    localTelemetry.recordCapabilityOutcome(entry.id, outcome);
-  }
+  recordRecalledOutcomeUnified(
+    localStorage,
+    localTelemetry,
+    entry,
+    outcome,
+    modifiedFiles,
+    isCapabilityRelevantToModifiedFiles
+  );
 }
 
 export type HookEvent = 'pre-tool' | 'post-tool' | 'stop' | 'pre-commit' | 'mark-recovery';
@@ -255,48 +143,14 @@ export function parseHookHarnessArg(args: string[]): string | undefined {
   return undefined;
 }
 
-export const CORRECTION_REGEX =
-  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,])/i;
-
 export function isUserCorrectionSignal(text: string): boolean {
-  if (!text || typeof text !== 'string') return false;
-  return CORRECTION_REGEX.test(text);
+  return detectConversationEvolutionSignals(text).hasCorrection;
 }
 
 const FORBIDDEN_STAGED_PATTERNS = [
   /\.evo\/\.cache\//,
   /\.evo\/telemetry\.db(?:-wal|-shm)?$/,
 ];
-
-export function matchesScopeGlob(filePath: string, scopeGlob: string): boolean {
-  if (!scopeGlob || scopeGlob === '*' || scopeGlob === '**/*') return true;
-  const normalizedFile = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
-  const normalizedGlob = scopeGlob.replace(/\\/g, '/').replace(/^\/+/, '');
-
-  let pattern = normalizedGlob.replace(/\{([^}]+)\}/g, (_match, group) => {
-    const parts = group.split(',').map((p: string) => p.trim());
-    return `__BRACE_OPEN__${parts.join('__BRACE_OR__')}__BRACE_CLOSE__`;
-  });
-
-  let regexStr = pattern
-    .replace(/[.+^$()|[\]\\]/g, '\\$&')
-    .replace(/\*\*\//g, '__GLOBSTAR_SLASH__')
-    .replace(/\*\*/g, '__GLOBSTAR__')
-    .replace(/\*/g, '__STAR__')
-    .replace(/\?/g, '__QUESTION__');
-
-  regexStr = regexStr
-    .replace(/__GLOBSTAR_SLASH__/g, '(?:.*\\/)?')
-    .replace(/__GLOBSTAR__/g, '.*')
-    .replace(/__STAR__/g, '[^\\/]*')
-    .replace(/__QUESTION__/g, '[^\\/]')
-    .replace(/__BRACE_OPEN__/g, '(?:')
-    .replace(/__BRACE_OR__/g, '|')
-    .replace(/__BRACE_CLOSE__/g, ')');
-
-  const regex = new RegExp(`^${regexStr}$`, 'i');
-  return regex.test(normalizedFile);
-}
 
 export function parseHookEvent(args: string[]): HookEvent {
   const eqArg = args.find((a) => a.startsWith('--event='));
@@ -1235,9 +1089,18 @@ export function handleStop(
 
     const isHarness = Boolean(options.harness || payload.harness || payload.transcript_path || payload.transcriptPath);
 
+    const evolutionSignals = detectConversationEvolutionSignals(
+      [inlineUserText, transcriptTail].filter(Boolean).join('\n')
+    );
+
     // Stop 3-Tier Strategy
     const isTier1 = Boolean(dirtyId) || hasUserCorrection || monotonicRecovery;
-    const isTier2 = !isTier1 && (hasHeavyDiagnosticReads || editCount >= 6 || modifiedFiles.length >= 6);
+    const isTier2 =
+      !isTier1 &&
+      (hasHeavyDiagnosticReads ||
+        editCount >= 6 ||
+        modifiedFiles.length >= 6 ||
+        evolutionSignals.shouldRemindGlobalMemory);
     const isTier3 = !isTier1 && !isTier2;
 
     const strikeCount = parseInt(telemetry.getSessionFlag('stop_strike_count') || '0', 10);
@@ -1279,7 +1142,12 @@ export function handleStop(
       }
     } else {
       crystallizationSuggested =
-        hasUncrystallizedEdits || hasHeavyDiagnosticReads || hasUserCorrection || Boolean(dirtyId) || monotonicRecovery;
+        hasUncrystallizedEdits ||
+        hasHeavyDiagnosticReads ||
+        hasUserCorrection ||
+        Boolean(dirtyId) ||
+        monotonicRecovery ||
+        evolutionSignals.shouldRemindGlobalMemory;
     }
 
     if (dirtyId) {
@@ -1301,16 +1169,22 @@ export function handleStop(
           modifiedFiles.length > 0
             ? `(${modifiedFiles.slice(0, 3).join(', ')}${modifiedFiles.length > 3 ? ` +${modifiedFiles.length - 3} more` : ''})`
             : `(${editCount} mutation steps recorded)`;
+      } else if (evolutionSignals.shouldRemindGlobalMemory) {
+        reasonSummary = `(personal experience / cross-workspace memory signal detected)`;
       } else {
         reasonSummary = `(${readCount} read-only diagnostic steps with ${editCount} edits)`;
       }
 
+      const preferenceHint = buildPreferenceEvolutionHint(evolutionSignals);
       messages.push(
         `💡 [EvoKernel Hook Reminder] Session work detected without capability crystallization ${reasonSummary}:\n` +
         `  ├─ 🧠 Bug Fix / Defect Pattern : evo_propose(kind: "memory", symptom: "...", root_cause: "...", solution: "...", target_symbols: [...])\n` +
+        `  ├─ 🎨 Personal Preference      : evo_propose(kind: "preference", scope: "global", ...) [style, formatting, workflow standard]\n` +
+        `  ├─ 🌐 Global Personal Memory   : evo_propose(kind: "memory", scope: "global", ...) [cross-workspace personal experience]\n` +
         `  ├─ 🛡️  Architectural Invariant  : evo_propose(kind: "rule", l0_summary: "...", scope_glob: "...") [zero magic numbers]\n` +
         `  ├─ ⚠️  Anti-Confounding Gate   : If multi-variable edits lack isolated causation, use kind: "memory" (or pass contrastive_evidence for rule/skill)\n` +
         `  └─ 🔧 Reusable Micro-Tool     : evo_propose(kind: "tool", ...) [--self-test verified]\n` +
+        (preferenceHint ? `  ★ ${preferenceHint}\n` : '') +
         `  Output receipt in response: 🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)`
       );
     }

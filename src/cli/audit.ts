@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   EvoStorage,
   estimateTokens,
+  hasValidEvoStructure,
   openSqliteReadOnly,
   parseFrontmatter,
   sanitizeId,
@@ -18,7 +19,13 @@ import {
   validateCapabilityReferences,
 } from '../core/gatekeeper.js';
 import type { Gate1_5Violation } from '../core/gatekeeper.js';
-import { renderManagedBlock } from '../templates/meta-rule.js';
+import {
+  PROFILE_MARKER_END,
+  PROFILE_MARKER_START,
+  renderManagedBlock,
+  renderUserProfileBlock,
+} from '../templates/meta-rule.js';
+import { discoverGlobalProfileTargets } from '../core/profile-sync.js';
 import { MAX_TOOLS_CATALOG_TOKENS, runInit, syncManagedRuleBlocks } from './init.js';
 import type { EvoRule, EvoSkill, ProposalPayload } from '../core/types.js';
 
@@ -1217,6 +1224,59 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   }
 
   const surfaceViolations = auditHarnessSurfaces(root, { includeGlobal, globalHomeDir });
+
+  // D10/D17: Validate global Profile Card + Task Directory Menu token budget & host sync drift
+  if ((includeGlobal || isWorkspaceSameAsGlobal) && hasValidEvoStructure(globalStorage.evoDir)) {
+    const globalCfg = globalStorage.getConfig();
+    const maxProfileBudget = globalCfg.maxGlobalProfileTokens ?? 800;
+    const maxMenuBudget = globalCfg.maxDirectoryMenuTokens ?? 250;
+    const { totalTokens: profileTokens } = globalStorage.getProfileTokenUsage();
+    if (profileTokens > maxProfileBudget) {
+      surfaceViolations.push({
+        harness: 'profile',
+        displayPath: '~/.evo/global/preferences',
+        severity: 'error',
+        code: 'PROFILE_BUDGET_EXCEEDED',
+        message: `Global Always-On Profile Card uses ${profileTokens}/${maxProfileBudget} tokens. Condense preferences, toggle always_on: false, or run \`evo_compact\`.`,
+      });
+    }
+    const digest = globalStorage.formatUserProfileDigest();
+    const menu = globalStorage.formatTaskDirectoryMenu(maxMenuBudget);
+    const expectedBlock = renderUserProfileBlock(digest, menu).trim();
+    if (expectedBlock) {
+      const hostTargets = discoverGlobalProfileTargets(globalRoot, { homeDir: globalHomeDir });
+      const normBlock = (s: string) => s.replace(/\r\n/g, '\n').trim();
+      for (const targetDesc of hostTargets) {
+        const targetPath = targetDesc.path;
+        let existingBlock = '';
+        if (fs.existsSync(targetPath)) {
+          try {
+            const rawTarget = fs.readFileSync(targetPath, 'utf8');
+            const sIdx = rawTarget.indexOf(PROFILE_MARKER_START);
+            const eIdx = rawTarget.indexOf(PROFILE_MARKER_END);
+            if (sIdx !== -1 && eIdx !== -1 && eIdx > sIdx) {
+              existingBlock = rawTarget.slice(sIdx, eIdx + PROFILE_MARKER_END.length);
+            }
+          } catch {
+            // ignore read error
+          }
+        }
+        if (normBlock(existingBlock) !== normBlock(expectedBlock)) {
+          const relTarget = path.relative(globalHomeDir, targetPath).replace(/\\/g, '/');
+          const displayTarget =
+            relTarget && !relTarget.startsWith('..') ? `~/${relTarget}` : targetPath;
+          surfaceViolations.push({
+            harness: 'profile',
+            displayPath: displayTarget,
+            severity: 'warning',
+            code: 'PROFILE_SYNC_DRIFT',
+            message:
+              'Host global profile block is missing or out of sync with ~/.evo/global/preferences. Run `evo profile sync`.',
+          });
+        }
+      }
+    }
+  }
 
   const contestedCapabilities: ContestedCapability[] = [];
   const dbPath = localStorage.telemetryDbPath;

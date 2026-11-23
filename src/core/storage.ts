@@ -16,17 +16,19 @@ import type {
   EvoToolManifest,
   ExternalToolDefinition,
   PreferenceCategory,
+  ProfileHistoryEntry,
   ScriptRuntime,
   SymbolFingerprint,
 } from './types.js';
+import { renderUserProfileBlock } from '../templates/meta-rule.js';
 
 export const EVO_KERNEL_VERSION = '0.4.0';
 
 /**
  * Measured token footprint of the immutable 5-tool Meta-MCP JSON Schema
- * (`Math.ceil(JSON.stringify(META_MCP_TOOLS).length / 3.8)` = 1,916 tokens).
+ * (`Math.ceil(JSON.stringify(META_MCP_TOOLS).length / 3.8)` = 1,953 tokens).
  */
-export const META_MCP_5_TOOLS_TOKENS = 1916;
+export const META_MCP_5_TOOLS_TOKENS = 1953;
 
 /**
  * Opens an existing SQLite database in read-only mode when supported (Node >=22.12),
@@ -69,7 +71,8 @@ export function openSqliteReadOnly(
 export const DEFAULT_EVO_CONFIG: EvoConfig = {
   version: EVO_KERNEL_VERSION,
   maxCoreRuleTokens: 1500,
-  maxGlobalProfileTokens: 500,
+  maxGlobalProfileTokens: 800,
+  maxDirectoryMenuTokens: 250,
   maxScopedRulesPerBucket: 3,
   maxTotalScopedRules: 12,
   maxL0SummaryChars: 140,
@@ -83,14 +86,16 @@ export const PREFERENCE_CATEGORIES: readonly PreferenceCategory[] = [
   'formatting',
   'communication',
   'workflow',
+  'requirement',
   'knowledge',
 ] as const;
 
-const PREFERENCE_CATEGORY_LABELS: Record<PreferenceCategory, string> = {
+export const PREFERENCE_CATEGORY_LABELS: Record<PreferenceCategory, string> = {
   style: 'Style',
   formatting: 'Formatting',
   communication: 'Communication',
   workflow: 'Workflow',
+  requirement: 'Requirement',
   knowledge: 'Knowledge',
 };
 
@@ -255,6 +260,23 @@ export function findNearestEvoWorkspace(startDir: string): string | null {
   return null;
 }
 
+export function formatUserProfileDigestForPreferences(prefs: EvoPreference[]): string {
+  const activeAlwaysOn = prefs.filter((p) => p.always_on !== false && p.enabled !== false);
+  if (activeAlwaysOn.length === 0) {
+    return '';
+  }
+  const sections: string[] = [];
+  for (const cat of PREFERENCE_CATEGORIES) {
+    const items = activeAlwaysOn.filter((p) => p.category === cat);
+    if (items.length === 0) continue;
+    const lines = items.map(
+      (p) => `- **[${p.id}]** (${p.category}): ${p.l0_summary}\n  ${p.content.replace(/\n/g, '\n  ')}`
+    );
+    sections.push(`### ${PREFERENCE_CATEGORY_LABELS[cat]}\n${lines.join('\n')}`);
+  }
+  return sections.join('\n\n');
+}
+
 export function estimateTokens(text: string): number {
   if (!text) return 0;
   let cjkCount = 0;
@@ -378,6 +400,7 @@ export class EvoStorage {
   public readonly configPath: string;
   public readonly coreInvariantsPath: string;
   public readonly profileDigestPath: string;
+  public readonly profileHistoryPath: string;
 
   public static resolveEffectiveEvoDir(rootDir: string, localEvoDir: string): string {
     const localConfigPath = path.join(localEvoDir, 'config.json');
@@ -423,6 +446,7 @@ export class EvoStorage {
     this.configPath = path.join(this.evoDir, 'config.json');
     this.coreInvariantsPath = path.join(this.rulesDir, 'core-invariants.md');
     this.profileDigestPath = path.join(this.evoDir, 'profile-digest.md');
+    this.profileHistoryPath = path.join(this.evoDir, 'profile-history.jsonl');
   }
 
   public get telemetryDbPath(): string {
@@ -957,6 +981,9 @@ export class EvoStorage {
       ...(memory.created_branch ? [`created_branch: ${JSON.stringify(memory.created_branch)}`] : []),
       `target_symbols: ${JSON.stringify(memory.target_symbols)}`,
       `ast_fingerprints: ${JSON.stringify(memory.ast_fingerprints)}`,
+      ...(memory.memory_type === 'personal' || memory.memory_type === 'code'
+        ? [`memory_type: ${JSON.stringify(memory.memory_type)}`]
+        : []),
       `tags: ${JSON.stringify(memory.tags)}`,
       `origin: ${JSON.stringify(memory.origin)}`,
       ...(memory.supersedes_id ? [`supersedes_id: ${JSON.stringify(memory.supersedes_id)}`] : []),
@@ -1008,6 +1035,9 @@ export class EvoStorage {
         solution: solutionMatch ? solutionMatch[1].trim() : '',
         target_symbols: Array.isArray(meta.target_symbols) ? meta.target_symbols.map(String) : [],
         ast_fingerprints: rawFingerprints,
+        ...(meta.memory_type === 'personal' || meta.memory_type === 'code'
+          ? { memory_type: meta.memory_type }
+          : {}),
         created_commit: String(meta.created_commit || 'uncommitted'),
         created_branch: meta.created_branch ? String(meta.created_branch) : undefined,
         tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
@@ -1049,6 +1079,7 @@ export class EvoStorage {
       `l0_summary: ${JSON.stringify(pref.l0_summary)}`,
       `category: ${JSON.stringify(pref.category)}`,
       `always_on: ${pref.always_on !== false}`,
+      ...(pref.trigger_cue ? [`trigger_cue: ${JSON.stringify(pref.trigger_cue)}`] : []),
       `tokens: ${pref.tokens}`,
       `tags: ${JSON.stringify(pref.tags || [])}`,
       `origin: ${JSON.stringify(pref.origin)}`,
@@ -1105,12 +1136,17 @@ export class EvoStorage {
         ? rawCategory
         : 'style';
       const always_on = meta.always_on === false || meta.always_on === 'false' ? false : true;
+      const trigger_cue =
+        meta.trigger_cue && String(meta.trigger_cue).trim()
+          ? String(meta.trigger_cue).trim()
+          : undefined;
       return {
         id,
         title: String(meta.title || id),
         l0_summary,
         category,
         always_on,
+        ...(trigger_cue ? { trigger_cue } : {}),
         content,
         tokens: Number(meta.tokens || estimateTokens(`- **[${id}]** (${category}): ${l0_summary}\n  ${content}`)),
         tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
@@ -1127,31 +1163,384 @@ export class EvoStorage {
     }
   }
 
+  public formatUserProfileDigestForPreferences(prefs: EvoPreference[]): string {
+    return formatUserProfileDigestForPreferences(prefs);
+  }
+
   public getProfileTokenUsage(): { totalTokens: number; preferences: EvoPreference[] } {
     const activeAlwaysOn = this.listPreferences().filter(
       (p) => p.always_on !== false && p.enabled !== false
     );
-    const totalTokens = activeAlwaysOn.reduce((acc, p) => acc + p.tokens, 0);
+    if (activeAlwaysOn.length === 0) {
+      return { totalTokens: 0, preferences: [] };
+    }
+    const digest = this.formatUserProfileDigestForPreferences(activeAlwaysOn);
+    const totalTokens = estimateTokens(renderUserProfileBlock(digest, ''));
     return { totalTokens, preferences: activeAlwaysOn };
   }
 
   public formatUserProfileDigest(): string {
-    const activeAlwaysOn = this.listPreferences().filter(
-      (p) => p.always_on !== false && p.enabled !== false
-    );
-    if (activeAlwaysOn.length === 0) {
-      return '';
-    }
-    const sections: string[] = [];
-    for (const cat of PREFERENCE_CATEGORIES) {
-      const items = activeAlwaysOn.filter((p) => p.category === cat);
-      if (items.length === 0) continue;
-      const lines = items.map(
-        (p) => `- **[${p.id}]** (${p.category}): ${p.l0_summary}\n  ${p.content.replace(/\n/g, '\n  ')}`
+    return this.formatUserProfileDigestForPreferences(this.listPreferences());
+  }
+
+  public formatTaskDirectoryMenu(maxTokens?: number): string {
+    const cfg = this.getConfig();
+    const cap = maxTokens ?? cfg.maxDirectoryMenuTokens ?? 250;
+    if (cap <= 0) return '';
+
+    const seedSkillIds = new Set(['bug-to-guardrail-sop', 'evo-rule-architect']);
+    const catPriority: Record<PreferenceCategory, number> = {
+      workflow: 0,
+      requirement: 1,
+      knowledge: 2,
+      formatting: 3,
+      communication: 4,
+      style: 5,
+    };
+
+    const onDemandPrefs = this.listPreferences()
+      .filter((p) => p.always_on === false && p.enabled !== false)
+      .sort(
+        (a, b) =>
+          (catPriority[a.category] ?? 9) - (catPriority[b.category] ?? 9) ||
+          a.id.localeCompare(b.id)
       );
-      sections.push(`### ${PREFERENCE_CATEGORY_LABELS[cat]}\n${lines.join('\n')}`);
+
+    const nonSeedSkills = this.listSkills()
+      .filter(
+        (s) =>
+          s.enabled !== false &&
+          s.origin !== 'bootstrap' &&
+          s.origin !== 'seed' &&
+          !seedSkillIds.has(s.id)
+      )
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    const prefLines = onDemandPrefs.map((p) => {
+      const cue = (p.trigger_cue || p.category).trim().replace(/\s+/g, ' ');
+      const summary = (p.l0_summary || p.title || p.id).trim().replace(/\s+/g, ' ');
+      return `- **[${p.id}]** (${cue}): ${summary} → \`evo_inspect("${p.id}", "L2")\``;
+    });
+    const skillLines = nonSeedSkills.map((s) => {
+      const cue = (s.trigger_cue || 'skill').trim().replace(/\s+/g, ' ');
+      const summary = (s.l0_summary || s.description || s.title || s.id)
+        .trim()
+        .replace(/\s+/g, ' ');
+      return `- **[${s.id}]** (${cue}): ${summary} → \`evo_inspect("${s.id}", "L2")\``;
+    });
+
+    if (prefLines.length === 0 && skillLines.length === 0) return '';
+
+    const keptPrefs: string[] = [];
+    const keptSkills: string[] = [];
+
+    // Reserve a fair sub-quota for non-seed global skills when both on-demand preferences
+    // and skills exist so skills are not starved by many preferences.
+    const skillReserveCap =
+      prefLines.length > 0 && skillLines.length > 0
+        ? Math.max(Math.min(cap, estimateTokens(skillLines[0])), Math.floor(cap * 0.35))
+        : 0;
+    const prefCap = skillReserveCap > 0 ? Math.max(0, cap - skillReserveCap) : cap;
+
+    for (const line of prefLines) {
+      const candidate = [...keptPrefs, line].join('\n');
+      if (estimateTokens(candidate) <= prefCap) {
+        keptPrefs.push(line);
+      }
     }
-    return sections.join('\n\n');
+
+    for (const line of skillLines) {
+      const candidate = [...keptPrefs, ...keptSkills, line].join('\n');
+      if (estimateTokens(candidate) <= cap) {
+        keptSkills.push(line);
+      }
+    }
+
+    // Backfill any unused skill reserve with remaining on-demand preferences
+    for (const line of prefLines) {
+      if (keptPrefs.includes(line)) continue;
+      const candidate = [...keptPrefs, line, ...keptSkills].join('\n');
+      if (estimateTokens(candidate) <= cap) {
+        keptPrefs.push(line);
+      }
+    }
+
+    return [...keptPrefs, ...keptSkills].join('\n');
+  }
+
+  public appendProfileHistory(entry: ProfileHistoryEntry): void {
+    this.ensureInitialized();
+    const normalized: ProfileHistoryEntry = {
+      ...entry,
+      ts: entry.ts || new Date().toISOString(),
+      id: sanitizeId(entry.id) || entry.id,
+    };
+    fs.appendFileSync(this.profileHistoryPath, JSON.stringify(normalized) + '\n', 'utf8');
+  }
+
+  private readAllProfileHistoryChronological(): ProfileHistoryEntry[] {
+    if (!fs.existsSync(this.profileHistoryPath)) return [];
+    try {
+      const raw = fs.readFileSync(this.profileHistoryPath, 'utf8');
+      const entries: ProfileHistoryEntry[] = [];
+      for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed) as ProfileHistoryEntry;
+          if (parsed && typeof parsed.id === 'string' && typeof parsed.action === 'string') {
+            entries.push(parsed);
+          }
+        } catch {
+          // ignore malformed JSONL line
+        }
+      }
+      return entries;
+    } catch {
+      return [];
+    }
+  }
+
+  public listProfileHistory(limit = 20): ProfileHistoryEntry[] {
+    const entries = this.readAllProfileHistoryChronological();
+    const safeLimit = Math.max(0, Math.floor(limit));
+    return entries.reverse().slice(0, safeLimit);
+  }
+
+  public undoLastProfileChange(
+    targetId?: string
+  ): { ok: boolean; undone?: ProfileHistoryEntry; message: string } {
+    const entries = this.readAllProfileHistoryChronological();
+    if (entries.length === 0) {
+      return { ok: false, message: 'No profile history entries found to undo.' };
+    }
+
+    const cleanTargetId = targetId ? sanitizeId(targetId) : undefined;
+    const undoBalance = new Map<string, number>();
+    let candidate: ProfileHistoryEntry | undefined;
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      const key = `${entry.kind}:${sanitizeId(entry.id)}`;
+      if (entry.action === 'undo') {
+        undoBalance.set(key, (undoBalance.get(key) || 0) + 1);
+        continue;
+      }
+      if (cleanTargetId && sanitizeId(entry.id) !== cleanTargetId) {
+        continue;
+      }
+      const pendingUndos = undoBalance.get(key) || 0;
+      if (pendingUndos > 0) {
+        undoBalance.set(key, pendingUndos - 1);
+        continue;
+      }
+      if (entry.action === 'add' || entry.action === 'update' || entry.action === 'archive') {
+        candidate = entry;
+        break;
+      }
+    }
+
+    if (!candidate) {
+      return {
+        ok: false,
+        message: cleanTargetId
+          ? `No reversible profile change found for '${cleanTargetId}'.`
+          : 'No reversible profile change found to undo.',
+      };
+    }
+
+    const cleanId = sanitizeId(candidate.id) || candidate.id;
+    const now = new Date().toISOString();
+
+    const checkPreferenceSnapshotBudget = (
+      snapshotRaw: string,
+      targetPrefId: string,
+      excludeIds: string[] = []
+    ): string | null => {
+      const { meta, body } = parseFrontmatter(snapshotRaw);
+      const rawCat = String(meta.category || 'style').trim().toLowerCase() as PreferenceCategory;
+      const category: PreferenceCategory = PREFERENCE_CATEGORIES.includes(rawCat) ? rawCat : 'style';
+      const alwaysOn = meta.always_on === false || meta.always_on === 'false' ? false : true;
+      const enabled = meta.enabled === false || meta.enabled === 'false' ? false : true;
+      if (!alwaysOn || !enabled) return null;
+
+      const content = body.trim();
+      const l0 = String(meta.l0_summary || content.split('\n')[0] || targetPrefId);
+      const candPref: EvoPreference = {
+        id: targetPrefId,
+        title: String(meta.title || targetPrefId),
+        l0_summary: l0,
+        category,
+        always_on: true,
+        content,
+        tokens: Number(meta.tokens || estimateTokens(`- **[${targetPrefId}]** (${category}): ${l0}\n  ${content}`)),
+        tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
+        origin: String(meta.origin || 'restored'),
+        enabled: true,
+        created_at: String(meta.created_at || now),
+        updated_at: now,
+      };
+      const cfg = this.getConfig();
+      const maxProfileBudget = cfg.maxGlobalProfileTokens ?? 800;
+      const { preferences: existingPrefs } = this.getProfileTokenUsage();
+      const excluded = new Set([targetPrefId, ...excludeIds.map((x) => sanitizeId(x) || x)]);
+      const projectedDigest = formatUserProfileDigestForPreferences([
+        ...existingPrefs.filter((p) => !excluded.has(p.id)),
+        candPref,
+      ]);
+      const projectedTokens = estimateTokens(renderUserProfileBlock(projectedDigest, ''));
+      if (projectedTokens > maxProfileBudget) {
+        return `ERR_PROFILE_BUDGET_EXCEEDED: Undoing ${candidate.action} for preference "${targetPrefId}" (${projectedTokens}/${maxProfileBudget} tokens) would exceed maxGlobalProfileTokens.`;
+      }
+      return null;
+    };
+
+    if (candidate.action === 'add') {
+      const removed = this.archiveCapability(
+        cleanId,
+        candidate.kind,
+        `Undid add via profile history (${candidate.ts})`
+      );
+      if (!removed) {
+        if (candidate.kind === 'preference') {
+          this.rebuildUserProfileDigest();
+        }
+        return {
+          ok: false,
+          message: `Could not undo add for '${cleanId}': capability is no longer active.`,
+        };
+      }
+      this.appendProfileHistory({
+        ts: now,
+        action: 'undo',
+        id: cleanId,
+        kind: candidate.kind,
+        title: candidate.title,
+        reason: `Undid add of ${cleanId}`,
+      });
+      return {
+        ok: true,
+        undone: candidate,
+        message: `Undid addition of ${candidate.kind} '${cleanId}'.`,
+      };
+    }
+
+    if (
+      (candidate.action === 'update' || candidate.action === 'archive') &&
+      typeof candidate.previous_snapshot === 'string' &&
+      candidate.previous_snapshot.trim().length > 0
+    ) {
+      this.ensureInitialized();
+      const targetDir = candidate.kind === 'preference' ? this.preferencesDir : this.memoriesDir;
+      const cleanSupersededId = candidate.superseded_id ? sanitizeId(candidate.superseded_id) : '';
+      const hasCrossSupersede = Boolean(cleanSupersededId && cleanSupersededId !== cleanId);
+
+      if (hasCrossSupersede) {
+        const supersededSnapshot =
+          typeof candidate.superseded_snapshot === 'string' && candidate.superseded_snapshot.trim()
+            ? candidate.superseded_snapshot
+            : candidate.previous_snapshot;
+        if (candidate.kind === 'preference') {
+          const budgetErr = checkPreferenceSnapshotBudget(supersededSnapshot, cleanSupersededId, [cleanId]);
+          if (budgetErr) {
+            return { ok: false, message: budgetErr };
+          }
+        }
+        if (candidate.self_previous_snapshot && candidate.self_previous_snapshot.trim()) {
+          if (candidate.kind === 'preference') {
+            const selfBudgetErr = checkPreferenceSnapshotBudget(
+              candidate.self_previous_snapshot,
+              cleanId,
+              [cleanId]
+            );
+            if (selfBudgetErr) {
+              return { ok: false, message: selfBudgetErr };
+            }
+          }
+          fs.writeFileSync(path.join(targetDir, `${cleanId}.md`), candidate.self_previous_snapshot, 'utf8');
+        } else {
+          this.archiveCapability(
+            cleanId,
+            candidate.kind,
+            `Undid supersede of '${cleanSupersededId}' via profile history (${candidate.ts})`
+          );
+        }
+        fs.writeFileSync(path.join(targetDir, `${cleanSupersededId}.md`), supersededSnapshot, 'utf8');
+        if (candidate.kind === 'preference') {
+          this.rebuildUserProfileDigest();
+        }
+        this.appendProfileHistory({
+          ts: now,
+          action: 'undo',
+          id: cleanId,
+          kind: candidate.kind,
+          title: candidate.title,
+          reason: `Undid ${candidate.action} of ${cleanId} and restored ${cleanSupersededId}`,
+        });
+        return {
+          ok: true,
+          undone: candidate,
+          message: `Restored superseded ${candidate.kind} '${cleanSupersededId}' and reverted '${cleanId}'.`,
+        };
+      }
+
+      if (candidate.kind === 'preference') {
+        const budgetErr = checkPreferenceSnapshotBudget(candidate.previous_snapshot, cleanId);
+        if (budgetErr) {
+          return { ok: false, message: budgetErr };
+        }
+      }
+
+      const targetPath = path.join(targetDir, `${cleanId}.md`);
+      fs.writeFileSync(targetPath, candidate.previous_snapshot, 'utf8');
+      if (candidate.kind === 'preference') {
+        this.rebuildUserProfileDigest();
+      }
+      this.appendProfileHistory({
+        ts: now,
+        action: 'undo',
+        id: cleanId,
+        kind: candidate.kind,
+        title: candidate.title,
+        reason: `Undid ${candidate.action} of ${cleanId}`,
+      });
+      return {
+        ok: true,
+        undone: candidate,
+        message: `Restored previous snapshot of ${candidate.kind} '${cleanId}' (undid ${candidate.action}).`,
+      };
+    }
+
+    if (candidate.action === 'archive') {
+      try {
+        const restored = this.restoreCapability(cleanId, candidate.kind);
+        if (restored) {
+          this.appendProfileHistory({
+            ts: now,
+            action: 'undo',
+            id: cleanId,
+            kind: candidate.kind,
+            title: candidate.title,
+            reason: `Undid archive of ${cleanId}`,
+          });
+          return {
+            ok: true,
+            undone: candidate,
+            message: `Restored archived ${candidate.kind} '${cleanId}'.`,
+          };
+        }
+      } catch (err: any) {
+        return {
+          ok: false,
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      message: `Cannot undo ${candidate.action} for '${cleanId}': missing previous snapshot.`,
+    };
   }
 
   public rebuildUserProfileDigest(): string {
@@ -1501,15 +1890,34 @@ export class EvoStorage {
     };
 
     if (kind === 'rule') {
+      const isCore = Boolean(latest.core);
+      const ruleSummary = String(latest.l0_summary || cleanId);
+      const ruleContent = String(latest.content || latest.l0_summary || '');
+      const ruleTokens = Number(
+        latest.tokens || estimateTokens(`- **[${cleanId}]**: ${ruleSummary}\n${ruleContent}`) || 40
+      );
+      if (isCore && preservedEnabled) {
+        const cfg = this.getConfig();
+        const maxCoreBudget = cfg.maxCoreRuleTokens ?? 1500;
+        const { rules: existingCoreRules } = this.getCoreRulesTokenUsage();
+        const currentTokens = existingCoreRules
+          .filter((r) => r.id !== cleanId)
+          .reduce((acc, r) => acc + r.tokens, 0);
+        if (currentTokens + ruleTokens > maxCoreBudget) {
+          throw new Error(
+            `ERR_BUDGET_EXCEEDED: Restoring core rule "${cleanId}" (${currentTokens + ruleTokens}/${maxCoreBudget} tokens) would exceed maxCoreRuleTokens.`
+          );
+        }
+      }
       this.saveRule({
         id: cleanId,
         title: String(latest.title || cleanId),
-        l0_summary: String(latest.l0_summary || cleanId),
+        l0_summary: ruleSummary,
         scope_glob: String(latest.scope_glob || '**/*'),
-        core: Boolean(latest.core),
+        core: isCore,
         priority: Number(latest.priority ?? 50),
-        content: String(latest.content || latest.l0_summary || ''),
-        tokens: Number(latest.tokens || 40),
+        content: ruleContent,
+        tokens: ruleTokens,
         origin: String(latest.origin || 'restored'),
         supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
         transfer_scenarios: Array.isArray(latest.transfer_scenarios)
@@ -1581,6 +1989,9 @@ export class EvoStorage {
           latest.ast_fingerprints && typeof latest.ast_fingerprints === 'object'
             ? (latest.ast_fingerprints as Record<string, SymbolFingerprint>)
             : {},
+        ...(latest.memory_type === 'personal' || latest.memory_type === 'code'
+          ? { memory_type: latest.memory_type }
+          : {}),
         created_commit: String(latest.created_commit || 'uncommitted'),
         created_branch: latest.created_branch ? String(latest.created_branch) : undefined,
         tags: Array.isArray(latest.tags) ? latest.tags.map(String) : [],
@@ -1595,14 +2006,25 @@ export class EvoStorage {
     } else if (kind === 'preference') {
       const rawCat = String(latest.category || 'style').trim().toLowerCase() as PreferenceCategory;
       const category: PreferenceCategory = PREFERENCE_CATEGORIES.includes(rawCat) ? rawCat : 'style';
-      this.savePreference({
+      const alwaysOn = latest.always_on === false || latest.always_on === 'false' ? false : true;
+      const prefL0 = String(latest.l0_summary || cleanId);
+      const prefContent = String(latest.content || latest.l0_summary || '');
+      const prefTokens = Number(
+        latest.tokens ||
+          estimateTokens(`- **[${cleanId}]** (${category}): ${prefL0}\n  ${prefContent}`) ||
+          30
+      );
+      const candidatePref: EvoPreference = {
         id: cleanId,
         title: String(latest.title || cleanId),
-        l0_summary: String(latest.l0_summary || cleanId),
+        l0_summary: prefL0,
         category,
-        always_on: latest.always_on === false || latest.always_on === 'false' ? false : true,
-        content: String(latest.content || latest.l0_summary || ''),
-        tokens: Number(latest.tokens || 30),
+        always_on: alwaysOn,
+        ...(latest.trigger_cue && String(latest.trigger_cue).trim()
+          ? { trigger_cue: String(latest.trigger_cue).trim() }
+          : {}),
+        content: prefContent,
+        tokens: prefTokens,
         tags: Array.isArray(latest.tags) ? latest.tags.map(String) : [],
         origin: String(latest.origin || 'restored'),
         supersedes_id: latest.supersedes_id ? String(latest.supersedes_id) : undefined,
@@ -1611,7 +2033,23 @@ export class EvoStorage {
         ...(preservedVisibility ? { visibility: preservedVisibility } : {}),
         created_at: String(latest.created_at || now),
         updated_at: now,
-      });
+      };
+      if (alwaysOn && preservedEnabled) {
+        const cfg = this.getConfig();
+        const maxProfileBudget = cfg.maxGlobalProfileTokens ?? 800;
+        const { preferences: existingPrefs } = this.getProfileTokenUsage();
+        const projectedDigest = this.formatUserProfileDigestForPreferences([
+          ...existingPrefs.filter((p) => p.id !== cleanId),
+          candidatePref,
+        ]);
+        const projectedTokens = estimateTokens(renderUserProfileBlock(projectedDigest, ''));
+        if (projectedTokens > maxProfileBudget) {
+          throw new Error(
+            `ERR_PROFILE_BUDGET_EXCEEDED: Restoring always_on preference "${cleanId}" (${projectedTokens}/${maxProfileBudget} tokens) would exceed maxGlobalProfileTokens.`
+          );
+        }
+      }
+      this.savePreference(candidatePref);
     } else {
       return false;
     }

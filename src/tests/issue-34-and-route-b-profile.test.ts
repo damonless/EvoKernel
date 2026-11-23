@@ -4,22 +4,26 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   EvoStorage,
   estimateTokens,
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { EvoGatekeeper } from '../core/gatekeeper.js';
+import { EvoGatekeeper, detectPreferenceConflict } from '../core/gatekeeper.js';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from '../mcp/handlers.js';
-import { runInit, syncGlobalUserProfile } from '../cli/init.js';
+import { runInit, syncGlobalUserProfile, syncManagedRuleBlocks } from '../cli/init.js';
 import { auditHarnessSurfaces, runAudit } from '../cli/audit.js';
 import { ensureGlobalFallbackSeeded, runCli } from '../cli/index.js';
 import { buildUiSnapshot } from '../cli/ui.js';
+import { inspectMcpTaxSnapshot } from '../cli/score.js';
+import { executeWorkbenchAction } from '../core/workbench-actions.js';
 import { buildEvoTreeJson, renderEvoStats, renderEvoTree } from '../cli/visualizer.js';
 import {
   L0_META_RULE_SEED,
   PROFILE_MARKER_END,
   PROFILE_MARKER_START,
+  renderUserProfileBlock,
 } from '../templates/meta-rule.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
@@ -534,7 +538,7 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
         updated_at: new Date().toISOString(),
       });
 
-      // Add multiple distinct always_on preferences (each ~95 tokens) until > 500 tokens total
+      // Add multiple distinct always_on preferences until > 800 tokens total
       const topics = [
         ['typography', 'monospace font hints', 'Use monospace blocks for identifiers and flags'],
         ['punctuation', 'em-dash spacing', 'Keep punctuation consistent across bilingual notes'],
@@ -544,6 +548,8 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
         ['terminology', 'domain glossary terms', 'Use canonical product terminology consistently'],
         ['diagrams', 'mermaid flowcharts', 'Prefer compact sequence diagrams for protocols'],
         ['brevity', 'executive summary top', 'Place key decision upfront before supporting logs'],
+        ['checklists', 'verification gates', 'Always list pre-merge checks before handoff'],
+        ['localization', 'bilingual labels', 'Preserve consistent glossary mapping in summaries'],
       ] as const;
       const addedIds: string[] = [];
       for (let i = 0; i < topics.length; i++) {
@@ -572,7 +578,7 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
           break;
         }
       }
-      assert.ok(addedIds.length >= 2 && addedIds.length < topics.length, `Expected budget cap around 500 tokens, added: ${addedIds.join(',')}`);
+      assert.ok(addedIds.length >= 2 && addedIds.length < topics.length, `Expected budget cap around 800 tokens, added: ${addedIds.join(',')}`);
 
       // Verify on-demand preference (always_on: false) succeeds even when always_on budget is tight
       const onDemandRes = await dispatcher.handleToolCallAsync('evo_propose', {
@@ -586,6 +592,10 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
         workspace: projectWs,
       });
       assert.strictEqual(JSON.parse(onDemandRes.content[0].text).passed, true);
+      assert.ok(
+        fs.readFileSync(geminiMd, 'utf8').includes('weekly-report-template'),
+        'Tier 2 Task Directory Menu must render always_on: false preferences inside GEMINI.md'
+      );
 
       // Verify evo_compact merges preferences and syncs profile targets
       const compactRes = await dispatcher.handleToolCallAsync('evo_compact', {
@@ -608,8 +618,8 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
       assert.strictEqual(compactJson.result.passed, true);
       assert.ok(fs.existsSync(path.join(globalRoot, '.evo', 'preferences', 'merged-format-pref.md')));
 
-      // Archiving all active always_on preferences unlinks digest & standalone host files while keeping GEMINI.md user content
-      for (const p of gStorage.listPreferences().filter((x) => x.always_on)) {
+      // Archiving all active preferences (both Tier 1 and Tier 2) unlinks digest & standalone host files while keeping GEMINI.md user content
+      for (const p of gStorage.listPreferences()) {
         gStorage.archiveCapability(p.id, 'preference', 'Cleanup test');
       }
       const cleanSync = syncGlobalUserProfile(globalRoot);
@@ -779,7 +789,7 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
     fs.writeFileSync(dryTarget, '<!-- EVO:START -->\nSeed\n<!-- EVO:END -->\n\n# User Rules\nKeep me.\n', 'utf8');
     // Partial host dirs without rules/ subdir
     fs.mkdirSync(path.join(fakeHome, '.cursor'), { recursive: true });
-    fs.mkdirSync(path.join(fakeHome, '.windsurf'), { recursive: true });
+    fs.mkdirSync(path.join(fakeHome, '.codeium', 'windsurf'), { recursive: true });
     fs.mkdirSync(path.join(fakeHome, '.claude'), { recursive: true });
     fs.mkdirSync(path.join(fakeHome, '.codex'), { recursive: true });
 
@@ -870,9 +880,9 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
     assert.ok(geminiSynced.includes('# User Rules\nKeep me.'));
     assert.ok(geminiSynced.includes(PROFILE_MARKER_START) && geminiSynced.includes('bilingual-number-style'));
     const cursorMdc = path.join(fakeHome, '.cursor', 'rules', 'evo-user-profile.mdc');
-    const windsurfMd = path.join(fakeHome, '.windsurf', 'rules', 'evo-user-profile.md');
+    const windsurfMd = path.join(fakeHome, '.codeium', 'windsurf', 'memories', 'global_rules.md');
     assert.ok(fs.existsSync(cursorMdc), 'Must create missing .cursor/rules/ dir');
-    assert.ok(fs.existsSync(windsurfMd), 'Must create missing .windsurf/rules/ dir');
+    assert.ok(fs.existsSync(windsurfMd), 'Must create missing .codeium/windsurf/memories/global_rules.md');
     assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'CLAUDE.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.codex', 'AGENTS.md')));
 
@@ -883,11 +893,11 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
       0
     );
 
-    // Deleting/archiving preference and re-syncing unlinks standalone cursor/windsurf files & preserves GEMINI.md user + EVO:START blocks
+    // Deleting/archiving preference and re-syncing unlinks standalone cursor file & strips marker blocks from shared host files (Windsurf global_rules.md / GEMINI.md)
     gStorage.archiveCapability('bilingual-number-style', 'preference', 'Cleanup');
     syncGlobalUserProfile(globalRoot, { homeDir: fakeHome });
     assert.strictEqual(fs.existsSync(cursorMdc), false);
-    assert.strictEqual(fs.existsSync(windsurfMd), false);
+    assert.ok(!fs.readFileSync(windsurfMd, 'utf8').includes(PROFILE_MARKER_START));
     const geminiAfterStrip = fs.readFileSync(dryTarget, 'utf8');
     assert.ok(geminiAfterStrip.includes('<!-- EVO:START -->'));
     assert.ok(geminiAfterStrip.includes('Keep me.'));
@@ -923,5 +933,613 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
     } finally {
       dispatcher.close();
     }
+  });
+
+  test('Route C1-C2 (3A Tier 1/2/3 + D12/D13): requirement category, trigger_cue, Task Directory Menu <=250 tok, outer-framing token usage, and Tier 3 personal memory', async () => {
+    const blankDir = makeTempDir('evo-rc1-blank-');
+    const globalRoot = makeTempDir('evo-rc1-global-');
+    const hostMockDir = makeTempDir('evo-rc1-hosts-');
+    cleanupDirs.push(blankDir, globalRoot, hostMockDir);
+
+    const geminiMd = path.join(hostMockDir, '.gemini', 'GEMINI.md');
+    fs.mkdirSync(path.dirname(geminiMd), { recursive: true });
+    fs.writeFileSync(geminiMd, '# Blank Chat Rules\n', 'utf8');
+    process.env.EVO_GLOBAL_DIR = globalRoot;
+    process.env.EVO_GLOBAL_PROFILE_TARGETS = geminiMd;
+
+    const gStorage = new EvoStorage(globalRoot);
+    gStorage.ensureInitialized();
+    const gTelem = new EvoTelemetry(gStorage);
+    const gGate = new EvoGatekeeper(gStorage, gTelem);
+    try {
+      // Seed skill (must be excluded from Tier 2 directory) vs user-evolved global skill (must be included)
+      gGate.evaluateAndCommit({
+        kind: 'skill',
+        id: 'bug-to-guardrail-sop',
+        title: 'Seed Bug SOP',
+        l0_summary: 'Internal seed skill omitted from menu',
+        origin: 'bootstrap',
+        trigger_cue: 'never shown in menu',
+        l1_contract: 'Seed trigger',
+        l2_sop: 'Seed SOP step 1.',
+      });
+      const userSkillRes = gGate.evaluateAndCommit({
+        kind: 'skill',
+        id: 'weekly-status-digest-sop',
+        title: 'Weekly Status Digest SOP',
+        l0_summary: 'Compile weekly milestone progress and blockers in crisp bullet format',
+        trigger_cue: 'writing weekly status report',
+        l1_contract: 'When compiling weekly updates, gather closed items and risks.',
+        l2_sop: '1. Group by Shipped, In-Progress, Risks.\n2. Keep each bullet to 1 sentence.',
+      });
+      assert.strictEqual(userSkillRes.passed, true, userSkillRes.message);
+    } finally {
+      gTelem.close();
+    }
+
+    const dispatcher = new EvoMcpDispatcher(blankDir);
+    try {
+      // 1. D1 + D13: Omit workspace in blank chat -> routes to global, defaults review_status to approved, persists trigger_cue & requirement category
+      const reqPref = await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'preference',
+        id: 'strict-deliverable-checklist',
+        title: 'Always verify deliverable schema',
+        l0_summary: 'Validate generated spreadsheets and reports before final handoff',
+        category: 'requirement',
+        always_on: true,
+        content: 'Run canonical schema inspection on every generated report before returning.',
+      });
+      assert.notStrictEqual(reqPref.isError, true, reqPref.content?.[0]?.text);
+      const savedReq = gStorage.getPreference('strict-deliverable-checklist');
+      assert.ok(savedReq);
+      assert.strictEqual(savedReq!.category, 'requirement');
+      assert.strictEqual(savedReq!.review_status, 'approved');
+
+      // D12: totalTokens accounts for full rendered profile block outer framing
+      const digestOnlyTokens = estimateTokens(gStorage.formatUserProfileDigest());
+      const fullBlockTokens = estimateTokens(renderUserProfileBlock(gStorage.formatUserProfileDigest(), ''));
+      const usage = gStorage.getProfileTokenUsage();
+      assert.strictEqual(usage.totalTokens, fullBlockTokens);
+      assert.ok(usage.totalTokens > digestOnlyTokens, 'D12: totalTokens must include rendered profile header framing');
+
+      // Add multiple distinct always_on: false preferences with trigger_cue to test Tier 2 cap (<= 250 tokens)
+      const odTopics = [
+        ['release-notes-tpl', 'Release notes template', 'Draft changelog grouped by features, fixes, and breaking notes', 'drafting release notes', 'Include summary, migration guide, and sha256 checksums.'],
+        ['arch-rfc-guide', 'Architecture RFC outline', 'Structure technical design proposals with trade-offs and risks', 'authoring architecture RFC', 'Cover context, options matrix, non-goals, and rollback plan.'],
+        ['incident-rca-sheet', 'Incident postmortem format', 'Capture 5-whys timeline, blast radius, and preventive action items', 'writing incident postmortem', 'Record UTC timeline, root cause, detection gap, and owners.'],
+        ['sql-tuning-checklist', 'SQL query review list', 'Inspect EXPLAIN ANALYZE plans, index selectivity, and lock scope', 'reviewing database SQL query', 'Check sequential scans, composite index order, and transaction size.'],
+        ['api-deprecation-sop', 'API deprecation notice', 'Plan phased endpoint sunsetting with telemetry and headers', 'deprecating public REST endpoint', 'Emit Sunset header, log caller versions, and publish migration diff.'],
+        ['security-triage-form', 'Security advisory triage', 'Classify CVE severity, exploitability, and patch verification', 'triaging dependency vulnerability', 'Verify reachable call paths and pinned upgrade compatibility.'],
+      ] as const;
+      for (let i = 0; i < 2; i++) {
+        const [oid, otitle, ol0, ocue, obody] = odTopics[i];
+        const odRes = await dispatcher.handleToolCallAsync('evo_propose', {
+          kind: 'preference',
+          id: oid,
+          title: otitle,
+          l0_summary: ol0,
+          category: 'workflow',
+          always_on: false,
+          trigger_cue: ocue,
+          content: obody,
+        });
+        assert.strictEqual(JSON.parse(odRes.content[0].text).passed, true, odRes.content[0].text);
+      }
+      const savedOd = gStorage.getPreference('release-notes-tpl');
+      assert.strictEqual(savedOd?.trigger_cue, 'drafting release notes');
+
+      const menuMd = gStorage.formatTaskDirectoryMenu(250);
+      assert.ok(estimateTokens(menuMd) <= 250, `Tier 2 menu must stay <= 250 tok (got ${estimateTokens(menuMd)})`);
+      assert.ok(menuMd.includes('release-notes-tpl'));
+      assert.ok(menuMd.includes('weekly-status-digest-sop'));
+      assert.ok(!menuMd.includes('bug-to-guardrail-sop'), 'Seed skills must be excluded from Tier 2 directory');
+
+      const geminiSynced = fs.readFileSync(geminiMd, 'utf8');
+      assert.ok(geminiSynced.includes('strict-deliverable-checklist'));
+      assert.ok(geminiSynced.includes('### On-Demand Task & Workflow Directory'));
+
+      for (let i = 2; i < odTopics.length; i++) {
+        const [oid, otitle, ol0, ocue, obody] = odTopics[i];
+        const odRes = await dispatcher.handleToolCallAsync('evo_propose', {
+          kind: 'preference',
+          id: oid,
+          title: otitle,
+          l0_summary: ol0,
+          category: i % 2 === 0 ? 'workflow' : 'knowledge',
+          always_on: false,
+          trigger_cue: ocue,
+          content: obody,
+        });
+        assert.strictEqual(JSON.parse(odRes.content[0].text).passed, true, odRes.content[0].text);
+      }
+      const cappedMenuMd = gStorage.formatTaskDirectoryMenu(250);
+      assert.ok(estimateTokens(cappedMenuMd) <= 250, `Capped Tier 2 menu must stay <= 250 tok (got ${estimateTokens(cappedMenuMd)})`);
+      assert.ok(cappedMenuMd.split('\n').length < odTopics.length + 1, 'Menu must truncate cleanly at 250-token cap');
+      assert.ok(
+        cappedMenuMd.includes('weekly-status-digest-sop'),
+        'Non-seed global skills must not be starved from Tier 2 directory menu when many on-demand prefs exist'
+      );
+
+      // Search by unique trigger_cue phrase finds on-demand preference
+      const cueSearchRes = await dispatcher.handleToolCallAsync('evo_search', {
+        query: 'drafting release notes',
+        kind: 'preference',
+        scope: 'global',
+      });
+      assert.ok(
+        cueSearchRes.content[0].text.includes('release-notes-tpl'),
+        `Expected preference trigger_cue to be indexed in FTS search, got: ${cueSearchRes.content[0].text}`
+      );
+
+      // 2. 3A Tier 3: Global Personal Memory without workspace or target_symbols
+      const personalMemRes = await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'memory',
+        scope: 'global',
+        memory_type: 'personal',
+        id: 'win-power-export-lesson',
+        title: 'Excel formula locale pitfall in client exports',
+        l0_summary: 'Always use English uppercase formula names when exporting cross-locale XLSX',
+        symptom: 'Client Excel shows #NAME? on localized Chinese formula strings',
+        root_cause: 'OOXML workbook XML requires canonical uppercase English function names',
+        solution: 'Emit canonical SUM/AVERAGE formulas and verify with deliverable inspector.',
+      });
+      assert.notStrictEqual(personalMemRes.isError, true, personalMemRes.content?.[0]?.text);
+      const pmJson = JSON.parse(personalMemRes.content[0].text);
+      assert.strictEqual(pmJson.passed, true);
+      assert.strictEqual(pmJson.diagnostics.memory_type, 'personal');
+      assert.strictEqual(pmJson.diagnostics.created_commit, 'personal');
+
+      const savedPm = gStorage.getMemory('win-power-export-lesson');
+      assert.strictEqual(savedPm?.memory_type, 'personal');
+      assert.strictEqual(savedPm?.review_status, 'approved');
+      assert.deepStrictEqual(savedPm?.target_symbols, []);
+
+      // Code-anchored memory in global root (non-personal with target_symbols) STILL fails ERR_GLOBAL_MEMORY_FORBIDDEN
+      const globalCodeMem = await dispatcher.handleToolCallAsync('evo_propose', {
+        workspace: globalRoot,
+        kind: 'memory',
+        id: 'forbidden-global-code-mem',
+        title: 'Code bug in global root',
+        l0_summary: 'Should reject code memory in global root',
+        symptom: 'crash',
+        root_cause: 'null',
+        solution: 'check',
+        target_symbols: ['src/foo.ts#bar'],
+      });
+      assert.strictEqual(globalCodeMem.isError, true);
+      assert.strictEqual(JSON.parse(globalCodeMem.content[0].text).error_code, 'ERR_GLOBAL_MEMORY_FORBIDDEN');
+
+      // D4 + Tier 3 Search/Inspect on blank dir without workspace
+      const searchBlank = await dispatcher.handleToolCallAsync('evo_search', {
+        query: 'Excel formula locale',
+        scope: 'global',
+      });
+      const searchTxt = searchBlank.content[0].text;
+      assert.ok(searchTxt.includes('[PERSONAL]'), `Expected [PERSONAL] badge in: ${searchTxt}`);
+      assert.ok(searchTxt.includes('win-power-export-lesson'));
+      assert.ok(!searchTxt.includes('STALE'));
+
+      const inspectBlank = await dispatcher.handleToolCallAsync('evo_inspect', {
+        id: 'win-power-export-lesson',
+        tier: 'L2',
+      });
+      assert.ok(inspectBlank.content[0].text.includes('[PERSONAL MEMORY L2]'));
+
+      // D4: Verify global telemetry.db recorded search + inspect events even though blankDir has no .evo/
+      assert.strictEqual(fs.existsSync(path.join(blankDir, '.evo')), false);
+      const gDb = new DatabaseSync(gStorage.telemetryDbPath, { readOnly: true });
+      try {
+        const rows = gDb
+          .prepare('SELECT event_type, capability_id, tier FROM recall_events')
+          .all() as Array<{ event_type: string; capability_id: string; tier: string }>;
+        assert.ok(rows.some((r) => r.event_type === 'search' && r.tier === 'GLOBAL'));
+        assert.ok(rows.some((r) => r.event_type === 'inspect' && r.capability_id === 'win-power-export-lesson'));
+      } finally {
+        gDb.close();
+      }
+    } finally {
+      dispatcher.close();
+    }
+  });
+
+  test('Route C3 (4A History + 1-Click Undo + CLI undo + D7/D8 Security & Polarity Conflict Guard)', async () => {
+    const projectWs = makeTempDir('evo-rc3-proj-');
+    const globalRoot = makeTempDir('evo-rc3-global-');
+    const hostMockDir = makeTempDir('evo-rc3-hosts-');
+    cleanupDirs.push(projectWs, globalRoot, hostMockDir);
+
+    const geminiMd = path.join(hostMockDir, '.gemini', 'GEMINI.md');
+    fs.mkdirSync(path.dirname(geminiMd), { recursive: true });
+    fs.writeFileSync(geminiMd, '# Host Global\n', 'utf8');
+    process.env.EVO_GLOBAL_DIR = globalRoot;
+    process.env.EVO_GLOBAL_PROFILE_TARGETS = geminiMd;
+
+    const dispatcher = new EvoMcpDispatcher(projectWs);
+    try {
+      // D7: Natural-language preference mentioning rm -rf / ~/.ssh / eval() passes Gate 1
+      const prosePref = await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'preference',
+        id: 'danger-explanation-style',
+        title: 'Explain destructive command risks clearly',
+        l0_summary: 'Warn before recommending rm -rf or reading ~/.ssh or using eval() in examples',
+        category: 'communication',
+        always_on: true,
+        content: 'When discussing rm -rf /, ~/.ssh keys, or eval(Buffer.from(...)), explicitly label risk.',
+      });
+      assert.notStrictEqual(prosePref.isError, true, prosePref.content?.[0]?.text);
+
+      // D7: Secret leak still rejected in preference prose
+      const secretPref = await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'preference',
+        id: 'secret-in-pref',
+        title: 'Secret token',
+        l0_summary: 'Leak check',
+        category: 'style',
+        content: 'Use sk-1234567890abcdefghijklmnopqr everywhere',
+      });
+      assert.strictEqual(secretPref.isError, true);
+      assert.strictEqual(JSON.parse(secretPref.content[0].text).error_code, 'ERR_SECURITY_VIOLATION');
+
+      // D8: Polarity conflict guard (tables, verbosity, ordering, language)
+      const noTables = await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'preference',
+        id: 'no-markdown-tables',
+        title: 'Avoid markdown tables',
+        l0_summary: 'Use bullet lists instead of markdown tables in replies',
+        category: 'formatting',
+        always_on: true,
+        content: 'Never use markdown tables; always present comparisons as short bullets.',
+      });
+      assert.strictEqual(JSON.parse(noTables.content[0].text).passed, true);
+
+      const yesTablesConflict = await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'preference',
+        id: 'prefer-markdown-tables',
+        title: 'Prefer markdown tables',
+        l0_summary: 'Always use markdown tables for comparisons',
+        category: 'formatting',
+        always_on: true,
+        content: 'Use tables whenever comparing metrics.',
+      });
+      assert.strictEqual(yesTablesConflict.isError, true);
+      const conflictJson = JSON.parse(yesTablesConflict.content[0].text);
+      assert.strictEqual(conflictJson.error_code, 'ERR_DUPLICATE_CAPABILITY');
+      assert.ok(conflictJson.conflicting_ids.includes('no-markdown-tables'));
+
+      // Direct unit check on detectPreferenceConflict across other axes + Chinese negation forms
+      const concConflicts = detectPreferenceConflict(
+        { id: 'c2', title: 'Verbose replies', l0_summary: 'Provide detailed comprehensive explanations', content: 'Always write in-depth long essays.' },
+        [{ id: 'c1', title: 'Concise replies', l0_summary: 'Keep replies concise (3-5 bullets)', category: 'style', always_on: true, content: 'Be brief.', tokens: 10, created_at: '', updated_at: '' }]
+      );
+      assert.strictEqual(concConflicts[0]?.topic, 'verbosity');
+      const zhNegConflicts = detectPreferenceConflict(
+        { id: 'zh-yes', title: '用表格', l0_summary: '输出表格形式对比', content: '请使用表格输出参数。' },
+        [{ id: 'zh-no', title: '不要使用表格', l0_summary: '不要使用表格，改用要点列表', category: 'formatting', always_on: true, content: '回答时不要用表格。', tokens: 10, created_at: '', updated_at: '' }]
+      );
+      assert.strictEqual(zhNegConflicts[0]?.topic, 'tables');
+
+      // Resolving conflict cleanly via supersedes_id records 'update' snapshot in profile-history.jsonl
+      const replaceTables = await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'preference',
+        id: 'prefer-markdown-tables',
+        supersedes_id: 'no-markdown-tables',
+        title: 'Prefer markdown tables',
+        l0_summary: 'Use markdown tables for structured comparisons',
+        category: 'formatting',
+        always_on: true,
+        content: 'Use markdown tables when comparing 3+ items.',
+      });
+      assert.strictEqual(JSON.parse(replaceTables.content[0].text).passed, true);
+
+      const gStorage = new EvoStorage(globalRoot);
+      const historyBeforeUndo = gStorage.listProfileHistory();
+      assert.ok(historyBeforeUndo.some((h) => h.action === 'update' && h.id === 'prefer-markdown-tables' && Boolean(h.previous_snapshot)));
+      assert.ok(fs.readFileSync(geminiMd, 'utf8').includes('prefer-markdown-tables'));
+
+      // Undoing a cross-ID supersede must remove prefer-markdown-tables AND restore no-markdown-tables
+      const undoSupersede = gStorage.undoLastProfileChange('prefer-markdown-tables');
+      assert.strictEqual(undoSupersede.ok, true, undoSupersede.message);
+      assert.strictEqual(gStorage.getPreference('prefer-markdown-tables'), null);
+      assert.ok(gStorage.getPreference('no-markdown-tables'), 'Superseded preference must be restored by its original ID');
+
+      // Re-apply supersede to continue archive/undo testing on prefer-markdown-tables
+      const reReplace = await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'preference',
+        id: 'prefer-markdown-tables',
+        supersedes_id: 'no-markdown-tables',
+        title: 'Prefer markdown tables',
+        l0_summary: 'Use markdown tables for structured comparisons',
+        category: 'formatting',
+        always_on: true,
+        content: 'Use markdown tables when comparing 3+ items.',
+      });
+      assert.strictEqual(JSON.parse(reReplace.content[0].text).passed, true);
+
+      // 4A 1-Click Undo via workbench action restores previous preference or removes addition
+      const undoAdd = gStorage.undoLastProfileChange('danger-explanation-style');
+      assert.strictEqual(undoAdd.ok, true, undoAdd.message);
+      assert.strictEqual(gStorage.getPreference('danger-explanation-style'), null);
+
+      // Add another pref and undo it via CLI `evo profile undo --json`
+      await dispatcher.handleToolCallAsync('evo_propose', {
+        kind: 'preference',
+        id: 'cli-undo-target',
+        title: 'Temp CLI undo target',
+        l0_summary: 'Bottom-line first conclusion',
+        category: 'communication',
+        always_on: true,
+        content: 'Lead with bottom-line first summary.',
+      });
+      assert.ok(gStorage.getPreference('cli-undo-target'));
+
+      const origLog = console.log;
+      let cliOut = '';
+      console.log = (...items: unknown[]) => {
+        cliOut += items.map(String).join(' ') + '\n';
+      };
+      try {
+        runCli(['node', 'evo', 'profile', 'undo', '--json']);
+      } finally {
+        console.log = origLog;
+      }
+      const cliUndoJson = JSON.parse(cliOut);
+      assert.strictEqual(cliUndoJson.ok, true);
+      assert.strictEqual(gStorage.getPreference('cli-undo-target'), null);
+      assert.ok(!fs.readFileSync(geminiMd, 'utf8').includes('cli-undo-target'));
+
+      const syncCheckOut = (() => {
+        let out = '';
+        const orig = console.log;
+        console.log = (...items: unknown[]) => {
+          out += items.map(String).join(' ') + '\n';
+        };
+        try {
+          runCli(['node', 'evo', 'profile', 'sync']);
+        } finally {
+          console.log = orig;
+        }
+        return out;
+      })();
+      assert.ok(!syncCheckOut.includes('undefined'), `evo profile sync must not print undefined: ${syncCheckOut}`);
+
+      // Archive via workbench action records archive snapshot and undo-preference restores it
+      const archRes = await executeWorkbenchAction(projectWs, 'archive-item', {
+        kind: 'preference',
+        id: 'prefer-markdown-tables',
+      });
+      assert.strictEqual(archRes.status, 200);
+      assert.strictEqual(gStorage.getPreference('prefer-markdown-tables'), null);
+
+      const wbUndo = await executeWorkbenchAction(projectWs, 'undo-preference', {
+        id: 'prefer-markdown-tables',
+      });
+      assert.strictEqual(wbUndo.status, 200, JSON.stringify(wbUndo.body));
+      assert.ok(gStorage.getPreference('prefer-markdown-tables'));
+
+      // Undoing an archive when remaining preferences already fill the 800-token profile budget must fail with ERR_PROFILE_BUDGET_EXCEEDED
+      const archBudget = await executeWorkbenchAction(projectWs, 'archive-item', {
+        kind: 'preference',
+        id: 'prefer-markdown-tables',
+      });
+      assert.strictEqual(archBudget.status, 200);
+      for (let idx = 0; idx < 18; idx++) {
+        gStorage.savePreference({
+          id: `filler-pref-${idx}`,
+          title: `Filler preference ${idx}`,
+          l0_summary: `Filler always-on preference item ${idx} for budget saturation test`,
+          category: 'style',
+          always_on: true,
+          content: `Keep engineering constraint number ${idx} active across all repository tasks, diagnostics, and code reviews.`,
+          tokens: 55,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+      assert.ok(gStorage.getProfileTokenUsage().totalTokens >= 750);
+      const blockedUndo = gStorage.undoLastProfileChange('prefer-markdown-tables');
+      assert.strictEqual(blockedUndo.ok, false);
+      assert.ok(blockedUndo.message.includes('ERR_PROFILE_BUDGET_EXCEEDED'), blockedUndo.message);
+    } finally {
+      dispatcher.close();
+    }
+  });
+
+  test('Route C4-C5 (D5, D10, D14, D15, D16, D17, D19): project pref rendering, restoreCapability budget guard, compact rollback cleanup, MCP tax cache path, audit/doctor profile checks, and scanner maxDepth', async () => {
+    const projectWs = makeTempDir('evo-rc4-proj-');
+    const fakeHome = makeTempDir('evo-rc4-home-');
+    const globalRoot = path.join(fakeHome, '.evo', 'global');
+    cleanupDirs.push(projectWs, fakeHome);
+
+    process.env.EVO_GLOBAL_DIR = globalRoot;
+    delete process.env.EVO_GLOBAL_PROFILE_TARGETS;
+    runInit(projectWs, { targets: ['claude', 'agents'] });
+
+    const pStorage = new EvoStorage(projectWs);
+    pStorage.ensureInitialized();
+    const gStorage = new EvoStorage(globalRoot);
+    gStorage.ensureInitialized();
+
+    // D5: Project-scoped preference renders into ### Project Preferences of CLAUDE.md / AGENTS.md
+    pStorage.savePreference({
+      id: 'proj-commit-msg-pref',
+      title: 'Project commit prefix',
+      l0_summary: 'Prefix commits with module scope tag',
+      category: 'workflow',
+      always_on: true,
+      content: 'Use [core] or [cli] prefix on commits in this repo.',
+      tokens: 20,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    syncManagedRuleBlocks(projectWs);
+    assert.ok(fs.readFileSync(path.join(projectWs, 'CLAUDE.md'), 'utf8').includes('### Project Preferences'));
+    assert.ok(fs.readFileSync(path.join(projectWs, 'CLAUDE.md'), 'utf8').includes('proj-commit-msg-pref'));
+
+    // D14: restoreCapability enforces maxCoreRuleTokens & maxGlobalProfileTokens
+    pStorage.saveRule({
+      id: 'active-heavy-core',
+      title: 'Heavy core rule',
+      l0_summary: 'Consumes 1450 core tokens',
+      scope_glob: '**/*',
+      core: true,
+      priority: 1,
+      content: 'Keep core invariants concise.',
+      tokens: 1450,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    pStorage.saveRule({
+      id: 'excess-core-rule',
+      title: 'Excess core rule',
+      l0_summary: 'Needs 120 core tokens',
+      scope_glob: '**/*',
+      core: true,
+      priority: 2,
+      content: 'Extra core constraint.',
+      tokens: 120,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    pStorage.archiveCapability('excess-core-rule', 'rule', 'Test archive');
+    assert.throws(
+      () => pStorage.restoreCapability('excess-core-rule', 'rule'),
+      /ERR_BUDGET_EXCEEDED/
+    );
+
+    // D15: evo_compact rollback cleans up newly created archive entries and resyncs global profile
+    const geminiMd = path.join(fakeHome, '.gemini', 'GEMINI.md');
+    fs.mkdirSync(path.dirname(geminiMd), { recursive: true });
+    fs.writeFileSync(geminiMd, '# Host\n', 'utf8');
+    process.env.EVO_GLOBAL_PROFILE_TARGETS = geminiMd;
+    gStorage.savePreference({
+      id: 'compact-pref-a',
+      title: 'Compact pref A',
+      l0_summary: 'First compactable preference',
+      category: 'style',
+      always_on: true,
+      content: 'First preference directive.',
+      tokens: 20,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    gStorage.savePreference({
+      id: 'compact-pref-b',
+      title: 'Compact pref B',
+      l0_summary: 'Second compactable preference',
+      category: 'style',
+      always_on: true,
+      content: 'Second preference directive.',
+      tokens: 20,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    syncGlobalUserProfile(globalRoot);
+    const dispatcher = new EvoMcpDispatcher(projectWs);
+    try {
+      const archiveCountBefore = fs.existsSync(gStorage.archiveDir) ? fs.readdirSync(gStorage.archiveDir).length : 0;
+      const failCompact = await dispatcher.handleToolCallAsync('evo_compact', {
+        target_ids: ['compact-pref-a', 'compact-pref-b'],
+        reason: 'Trigger rollback cleanup check',
+        merged_proposal: {
+          kind: 'preference',
+          scope: 'global',
+          id: 'compact-merged-fail',
+          title: 'Merged oversize pref',
+          l0_summary: 'Triggers atomic >150 tok rejection on commit or precheck',
+          category: 'style',
+          always_on: true,
+          content: Array.from({ length: 70 }, (_, idx) => `item${idx}token`).join(' '),
+        },
+      });
+      assert.strictEqual(failCompact.isError, true);
+      const archiveCountAfter = fs.existsSync(gStorage.archiveDir) ? fs.readdirSync(gStorage.archiveDir).length : 0;
+      assert.strictEqual(archiveCountAfter, archiveCountBefore);
+      assert.ok(gStorage.getPreference('compact-pref-a'));
+      assert.ok(gStorage.getPreference('compact-pref-b'));
+    } finally {
+      dispatcher.close();
+    }
+
+    // D16: inspectMcpTaxSnapshot reads .evo/.cache/external_tools.json with serverName/originalName
+    const mcpJsonPath = path.join(projectWs, '.mcp.json');
+    const existingMcp = fs.existsSync(mcpJsonPath) ? JSON.parse(fs.readFileSync(mcpJsonPath, 'utf8')) : {};
+    fs.writeFileSync(
+      mcpJsonPath,
+      JSON.stringify({
+        ...existingMcp,
+        mcpServers: {
+          ...(existingMcp.mcpServers || {}),
+          customapi: { command: 'node', args: ['srv.js'] },
+        },
+      }),
+      'utf8'
+    );
+    fs.mkdirSync(path.join(projectWs, '.evo', '.cache'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectWs, '.evo', '.cache', 'external_tools.json'),
+      JSON.stringify([
+        {
+          id: 'customapi__ping',
+          serverName: 'customapi',
+          originalName: 'ping',
+          description: 'Ping endpoint',
+          inputSchema: { type: 'object', properties: { host: { type: 'string' } } },
+        },
+      ]),
+      'utf8'
+    );
+    const taxReport = inspectMcpTaxSnapshot(projectWs, { includeGlobal: false });
+    const customSrv = taxReport.servers.find((s) => s.name === 'customapi');
+    assert.ok(customSrv);
+    assert.strictEqual(customSrv!.toolCount, 1);
+    assert.ok(customSrv!.tools?.includes('ping'));
+
+    // D10 & D17: audit detects PROFILE_SYNC_DRIFT when host file loses EVO:PROFILE block
+    fs.writeFileSync(geminiMd, '# Host overwritten without profile\n', 'utf8');
+    process.env.EVO_GLOBAL_PROFILE_TARGETS = geminiMd;
+    const driftAudit = runAudit(projectWs, { includeGlobal: true, globalHomeDir: fakeHome });
+    assert.ok(
+      driftAudit.surfaceViolations.some((v) => v.code === 'PROFILE_SYNC_DRIFT'),
+      `Expected PROFILE_SYNC_DRIFT warning in ${JSON.stringify(driftAudit.surfaceViolations)}`
+    );
+
+    // D10: doctor --json includes profile section & detects stale pre-v0.5 plugin L0 seed
+    const stalePluginSeed = path.join(fakeHome, '.gemini', 'config', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md');
+    fs.mkdirSync(path.dirname(stalePluginSeed), { recursive: true });
+    fs.writeFileSync(stalePluginSeed, '<!-- EVO:START -->\nSkip `evo_search` during general chat.\n<!-- EVO:END -->\n', 'utf8');
+    const cliEntry = path.join(REPO_ROOT, 'dist', 'cli', 'index.js');
+    const doctorRes = spawnSync(process.execPath, [cliEntry, 'doctor', '--json', '--no-probe', '--workspace', projectWs], {
+      cwd: projectWs,
+      env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, EVO_GLOBAL_DIR: globalRoot, EVO_GLOBAL_PROFILE_TARGETS: geminiMd },
+      encoding: 'utf8',
+    });
+    assert.strictEqual(doctorRes.status, 0, doctorRes.stderr);
+    const doctorJson = JSON.parse(doctorRes.stdout);
+    assert.ok(doctorJson.profile && typeof doctorJson.profile.profileTokens === 'number');
+    assert.ok(doctorJson.profile.maxProfileTokens === 800 && doctorJson.profile.maxMenuTokens === 250);
+    assert.ok(Array.isArray(doctorJson.seeds?.stalePluginSeeds) && doctorJson.seeds.stalePluginSeeds.length >= 1);
+    assert.strictEqual(doctorJson.versionDrift?.drifted, true);
+
+    // D19: workspace-metrics-scanner honors maxDepth
+    const deepDir = path.join(projectWs, 'd1', 'd2', 'd3');
+    fs.mkdirSync(deepDir, { recursive: true });
+    fs.writeFileSync(path.join(projectWs, 'root.txt'), 'a\n', 'utf8');
+    fs.writeFileSync(path.join(deepDir, 'nested.txt'), 'b\nc\n', 'utf8');
+    const scannerScript = path.join(REPO_ROOT, 'templates', 'seed-evo', 'tools', 'workspace-metrics-scanner', 'run.mjs');
+    const shallowRes = spawnSync(process.execPath, [scannerScript], {
+      cwd: projectWs,
+      env: { ...process.env, EVO_WORKSPACE: projectWs, EVO_ARGS: JSON.stringify({ maxDepth: 0 }) },
+      encoding: 'utf8',
+    });
+    assert.strictEqual(shallowRes.status, 0, shallowRes.stderr);
+    const shallowJson = JSON.parse(shallowRes.stdout);
+    const deepRes = spawnSync(process.execPath, [scannerScript], {
+      cwd: projectWs,
+      env: { ...process.env, EVO_WORKSPACE: projectWs, EVO_ARGS: JSON.stringify({ maxDepth: 4 }) },
+      encoding: 'utf8',
+    });
+    assert.strictEqual(deepRes.status, 0, deepRes.stderr);
+    const deepJson = JSON.parse(deepRes.stdout);
+    assert.ok(deepJson.files > shallowJson.files, `Expected maxDepth=4 (${deepJson.files}) > maxDepth=0 (${shallowJson.files})`);
   });
 });

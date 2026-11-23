@@ -604,9 +604,22 @@ import * as path from 'node:path';
 
 const workspace = process.env.EVO_WORKSPACE || process.cwd();
 const isSelfTest = process.env.EVO_SELF_TEST === '1' || process.argv.includes('--self-test');
+let evoArgs = {};
+try {
+  if (process.env.EVO_ARGS) {
+    evoArgs = JSON.parse(process.env.EVO_ARGS);
+  } else {
+    const rawArg = process.argv.slice(2).find((a) => a.startsWith('{'));
+    if (rawArg) evoArgs = JSON.parse(rawArg);
+  }
+} catch {}
+const maxDepth =
+  typeof evoArgs.maxDepth === 'number' && Number.isFinite(evoArgs.maxDepth) && evoArgs.maxDepth >= 0
+    ? Math.floor(evoArgs.maxDepth)
+    : 4;
 
 function scanDirectory(dir, depth = 0, stats = { files: 0, lines: 0, byExt: {} }) {
-  if (depth > 4 || !fs.existsSync(dir)) return stats;
+  if (depth > maxDepth || !fs.existsSync(dir)) return stats;
   const ignore = new Set(['node_modules', '.git', 'dist', '.evo', '.codegraph']);
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (ignore.has(entry.name)) continue;

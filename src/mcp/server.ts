@@ -5,11 +5,10 @@ import { EVO_KERNEL_VERSION } from '../core/storage.js';
 import { EvoMcpDispatcher, META_MCP_TOOLS } from './handlers.js';
 
 export const MCP_INSTRUCTIONS =
-  'EvoKernel Meta-Rules:\n' +
-  '1. Search before act: Call evo_search(query, workspace) before reading/editing unfamiliar files or debugging errors.\n' +
-  '2. Progressive inspect: On rule/skill/memory hit, call evo_inspect(id, "L2", workspace) to load full SOP/anchors before proceeding.\n' +
-  '3. Mandatory crystallization: After verifying a bug fix or receiving user correction, call evo_propose(kind, ...) to crystallize lessons into .evo/.\n' +
-  '4. Think in code: Use evo_run(tool_id, args, workspace) for multi-file checks instead of dumping raw file content.';
+  'EvoKernel Meta-Rules (Project & Cross-Workspace Personal Cognition):\n' +
+  '1. Search before act: Call evo_search(query, workspace) before reading/editing unfamiliar files or debugging errors; in non-code/blank/writing chats, call evo_search(query, scope: "global") without workspace to recall personal habits, workflows, and experiences.\n' +
+  '2. Progressive inspect: On rule/skill/memory/preference hit (including Task Directory cues), call evo_inspect(id, "L2") to load full SOP/anchors before proceeding.\n' +
+  '3. Mandatory crystallization: After verifying a fix, diagnosing a root cause, or receiving user style/workflow/requirement corrections, call evo_propose(kind, ...) (omit workspace with scope: "global", kind: "preference", or memory_type: "personal" in blank chats) and emit receipt: `🧬 EvoKernel Evolution Receipt: [<kind>] <id> (undo via evo profile undo)`.';
 
 function parseUriToPath(uriStr: string): string | null {
   try {

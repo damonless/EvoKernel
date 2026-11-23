@@ -2,14 +2,14 @@
 id: issue-20-global-isolation-and-concept-overlap-fix
 title: "Issue #20 Global Fallback Isolation, Multi-Token Relevance Gating & Cross-OS Path Redaction"
 l0_summary: "Isolate uninitialized workspace GLOBAL fallback, gate Action Required on concept overlap, and normalize cross-OS path redaction."
-created_commit: "105df52"
+created_commit: "2fdf9f6"
 created_branch: "main"
 target_symbols: ["src/core/telemetry.ts#redactSensitiveDiagnostics","src/core/telemetry.ts#evaluateConceptOverlap","src/mcp/handlers.ts#bindActiveContext","src/mcp/handlers.ts#handleSearch"]
-ast_fingerprints: {"src/core/telemetry.ts#redactSensitiveDiagnostics":{"symbol":"src/core/telemetry.ts#redactSensitiveDiagnostics","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":202,"end_line":314,"signature":"export function redactSensitiveDiagnostics(text: string, workspaceRoot?: string): string","ast_hash":"0acfa7bac98f461d"},"src/core/telemetry.ts#evaluateConceptOverlap":{"symbol":"src/core/telemetry.ts#evaluateConceptOverlap","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":717,"end_line":768,"signature":"function evaluateConceptOverlap(","ast_hash":"40f6646d8a211fed"},"src/mcp/handlers.ts#bindActiveContext":{"symbol":"src/mcp/handlers.ts#bindActiveContext","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":1057,"end_line":1215,"signature":"private bindActiveContext(toolName: string, args: Record<string, unknown>): RequestContext","ast_hash":"ce7cee51eb969b4d"},"src/mcp/handlers.ts#handleSearch":{"symbol":"src/mcp/handlers.ts#handleSearch","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":1593,"end_line":1652,"signature":"private handleSearch(args: Record<string, unknown>, reqCtx: RequestContext)","ast_hash":"334c326e92c54389"}}
+ast_fingerprints: {"src/core/telemetry.ts#redactSensitiveDiagnostics":{"symbol":"src/core/telemetry.ts#redactSensitiveDiagnostics","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":202,"end_line":314,"signature":"export function redactSensitiveDiagnostics(text: string, workspaceRoot?: string): string","ast_hash":"0acfa7bac98f461d"},"src/core/telemetry.ts#evaluateConceptOverlap":{"symbol":"src/core/telemetry.ts#evaluateConceptOverlap","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"function","start_line":717,"end_line":768,"signature":"function evaluateConceptOverlap(","ast_hash":"40f6646d8a211fed"},"src/mcp/handlers.ts#bindActiveContext":{"symbol":"src/mcp/handlers.ts#bindActiveContext","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":1068,"end_line":1238,"signature":"private bindActiveContext(toolName: string, args: Record<string, unknown>): RequestContext","ast_hash":"64dc5a621e96aaa1"},"src/mcp/handlers.ts#handleSearch":{"symbol":"src/mcp/handlers.ts#handleSearch","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":1630,"end_line":1697,"signature":"private handleSearch(args: Record<string, unknown>, reqCtx: RequestContext)","ast_hash":"4c679c3369ef6cfa"}}
 tags: ["mcp","telemetry","global-fallback","search","ci"]
 origin: "evolved"
 created_at: "2026-11-03T05:26:07.726Z"
-updated_at: "2026-11-23T16:49:13.997Z"
+updated_at: "2026-11-23T20:22:13.569Z"
 ---
 
 ## Symptom

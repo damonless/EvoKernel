@@ -157,7 +157,7 @@ function estimateMcpServerTokens(
     return {
       tokens: estimateTokens(jsonStr),
       toolCount: tools.length,
-      tools: tools.map((t: any) => t.name || t.id).filter(Boolean),
+      tools: tools.map((t: any) => t.originalName || t.name || t.id).filter(Boolean),
     };
   }
 
@@ -185,14 +185,14 @@ export function inspectMcpTaxSnapshot(
 
   // Cached external tools
   let cachedToolsMap: Record<string, unknown[]> | undefined;
-  const extToolsPath = path.join(ws, '.evo', 'external-tools.json');
+  const extToolsPath = path.join(ws, '.evo', '.cache', 'external_tools.json');
   if (!globalOnly && fs.existsSync(extToolsPath)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(extToolsPath, 'utf8'));
       if (Array.isArray(parsed)) {
         cachedToolsMap = {};
         for (const t of parsed) {
-          const sName = t.server || 'default';
+          const sName = t.serverName || t.server || 'default';
           if (!cachedToolsMap[sName]) cachedToolsMap[sName] = [];
           cachedToolsMap[sName].push(t);
         }

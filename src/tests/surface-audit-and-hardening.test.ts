@@ -4108,8 +4108,8 @@ Body text here`;
     assert.strictEqual(benchRes.status, 0);
     const benchJson = JSON.parse(benchRes.stdout);
     assert.strictEqual(benchJson.benchmark.rawEagerTokensPerTurn, 27150);
-    assert.strictEqual(benchJson.benchmark.evoBasePrefixTokens, 3066);
-    assert.strictEqual(benchJson.benchmark.staticPrefixReductionPct, 88.7);
+    assert.strictEqual(benchJson.benchmark.evoBasePrefixTokens, 3103);
+    assert.strictEqual(benchJson.benchmark.staticPrefixReductionPct, 88.6);
 
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s01-stats-'));
     try {
@@ -4125,8 +4125,8 @@ Body text here`;
       assert.strictEqual(statsJson.window7d.searchEvents, 0);
       const statsText = renderEvoStats(ws);
       assert.ok(
-        statsText.includes('Fixed 5-Tool Meta-MCP (~1,916 tok)'),
-        'renderEvoStats must report unified Fixed 5-Tool Meta-MCP (~1,916 tok)'
+        statsText.includes('Fixed 5-Tool Meta-MCP (~1,953 tok)'),
+        'renderEvoStats must report unified Fixed 5-Tool Meta-MCP (~1,953 tok)'
       );
       assert.ok(statsText.includes('* AST ='), 'renderEvoStats must include * AST terminology footnote');
       const scoreText = renderScoreAnsi(buildScoreReport(ws));
@@ -4693,10 +4693,10 @@ Body text here`;
   test('71. [Round 2 Hardening] measures real .evo/ tokens + unified 1916 Meta-MCP constant, enforces --no-color & 7-bit --ascii across CLI, wires optimize/doctor --roi --json/stats/packaging, and locks Workbench static/SSE/keyboard/SVG invariants', () => {
     const cliEntry = path.resolve(process.cwd(), 'dist', 'cli', 'index.js');
 
-    // (a) Unified 5-Tool Meta-MCP schema constant (1916 tok) & real on-disk .evo/ file token measurement (zero hardcoded multipliers)
-    assert.strictEqual(META_MCP_5_TOOLS_TOKENS, 1916);
+    // (a) Unified 5-Tool Meta-MCP schema constant (1953 tok) & real on-disk .evo/ file token measurement (zero hardcoded multipliers)
+    assert.strictEqual(META_MCP_5_TOOLS_TOKENS, 1953);
     const benchSrc = fs.readFileSync(path.resolve(process.cwd(), 'benchmarks', 'context-tax-benchmark.mjs'), 'utf8');
-    assert.ok(benchSrc.includes('1916'), 'benchmarks/context-tax-benchmark.mjs must use 1916 token constant');
+    assert.ok(benchSrc.includes('1953'), 'benchmarks/context-tax-benchmark.mjs must use 1953 token constant');
 
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-r2-71-'));
     try {
@@ -4729,8 +4729,8 @@ Body text here`;
 
       const statsText = renderEvoStats(ws);
       assert.ok(
-        statsText.includes('1,916 tok'),
-        `renderEvoStats must display unified Fixed 5-Tool Meta-MCP (~1,916 tok), got: ${statsText}`
+        statsText.includes('1,953 tok'),
+        `renderEvoStats must display unified Fixed 5-Tool Meta-MCP (~1,953 tok), got: ${statsText}`
       );
 
       // Verify openSqliteReadOnly opens telemetry DB cleanly
@@ -4797,7 +4797,7 @@ Body text here`;
       assert.strictEqual(docRoiJsonRes.status, 0);
       const docRoiJson = JSON.parse(docRoiJsonRes.stdout);
       assert.ok(docRoiJson.roi && typeof docRoiJson.roi === 'object', 'doctor --roi --json must include roi breakdown object');
-      assert.strictEqual(docRoiJson.roi.metaMcpTokens, 1916);
+      assert.strictEqual(docRoiJson.roi.metaMcpTokens, 1953);
 
       const helpRes = child_process.spawnSync(process.execPath, [cliEntry, '--help'], { encoding: 'utf8' });
       assert.strictEqual(helpRes.status, 0);

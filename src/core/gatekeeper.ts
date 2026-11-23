@@ -1,6 +1,8 @@
 export { parseSkillSectionsFromMarkdown } from './storage.js';
 export {
   DANGEROUS_PATTERNS,
+  UNIVERSAL_SECURITY_PATTERNS,
+  SCRIPT_EXECUTION_PATTERNS,
   TOOL_NETWORK_PATTERNS,
   stripScriptComments,
   CONTRASTIVE_STOPWORDS,
@@ -32,5 +34,5 @@ export {
   prepareEphemeralSelfTestWorkspace,
 } from './gatekeeper/workspace-snapshot.js';
 export type { WorkspaceRollbackSnapshot } from './gatekeeper/workspace-snapshot.js';
-export { EvoGatekeeper } from './gatekeeper/evaluator.js';
+export { EvoGatekeeper, detectPreferenceConflict } from './gatekeeper/evaluator.js';
 export type { EvaluateOptions, GatekeeperEvaluateOptions } from './gatekeeper/evaluator.js';

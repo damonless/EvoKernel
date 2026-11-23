@@ -6,8 +6,10 @@ import {
   DEFAULT_EVO_CONFIG,
   EvoStorage,
   META_MCP_5_TOOLS_TOKENS,
+  estimateTokens,
   hasValidEvoStructure,
   openSqliteReadOnly,
+  resolveGlobalFallbackDir,
 } from '../core/storage.js';
 import { emptyRecallWindowStats, readMergedRecallWindowStatsFromDbs } from '../core/telemetry.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
@@ -273,10 +275,17 @@ export function renderEvoTree(
   try {
     verifications = memories.map((m) => ({
       memory: m,
-      report: verifyMemoryFreshness(storage.rootDir, m, {
-        includeCallers: false,
-        cacheDb: treeCacheDb,
-      }),
+      report:
+        m.memory_type === 'personal'
+          ? {
+              overall_status: 'VERIFIED',
+              verified_count: 0,
+              total_symbols: 0,
+            }
+          : verifyMemoryFreshness(storage.rootDir, m, {
+              includeCallers: false,
+              cacheDb: treeCacheDb,
+            }),
     }));
   } finally {
     if (treeCacheDb) {
@@ -289,31 +298,45 @@ export function renderEvoTree(
   const branchCount = verifications.filter((v) => v.report.overall_status === 'OTHER_BRANCH').length;
   const staleCount = verifications.length - verifiedCount - branchCount;
 
+  const globalRoot = resolveGlobalFallbackDir();
+  const isSameAsGlobal =
+    path.resolve(globalRoot).toLowerCase() === path.resolve(storage.rootDir).toLowerCase();
+  const globalStorage = !isSameAsGlobal ? new EvoStorage(globalRoot) : null;
+  const hasGlobalProfile = Boolean(
+    globalStorage &&
+      hasValidEvoStructure(globalStorage.evoDir) &&
+      (globalStorage.listPreferences().filter((p) => p.enabled !== false).length > 0 ||
+        globalStorage.listMemories().filter((m) => m.enabled !== false && m.memory_type === 'personal').length > 0)
+  );
+  const hasNextTreeSection = preferences.length > 0 || hasGlobalProfile;
+
   lines.push(
-    `${preferences.length > 0 ? '├──' : '└──'} 🧠 Episodic Memories (${memories.length} fault cases | ${verifiedCount} VERIFIED · ${branchCount > 0 ? `${branchCount} OTHER_BRANCH · ` : ''}${staleCount} STALE)`
+    `${hasNextTreeSection ? '├──' : '└──'} 🧠 Episodic Memories (${memories.length} fault cases | ${verifiedCount} VERIFIED · ${branchCount > 0 ? `${branchCount} OTHER_BRANCH · ` : ''}${staleCount} STALE)`
   );
   if (memories.length === 0) {
-    lines.push(`${preferences.length > 0 ? '│   ' : '    '}└── (empty — propose with \`kind: "memory"\` or run \`evo bootstrap\`)`);
+    lines.push(`${hasNextTreeSection ? '│   ' : '    '}└── (empty — propose with \`kind: "memory"\` or run \`evo bootstrap\`)`);
   } else {
     verifications.forEach(({ memory: m, report }, idx) => {
       const isLast = idx === verifications.length - 1;
       const branch = isLast ? '└──' : '├──';
       const stat = tMap.get(m.id);
       const badge =
-        report.overall_status === 'VERIFIED'
-          ? `✅ [VERIFIED ${report.verified_count}/${report.total_symbols} sym @ ${m.created_commit}]`
-          : report.overall_status === 'OTHER_BRANCH'
-            ? `🌿 [BRANCH:${report.recorded_branch || m.created_branch || 'other'}@${m.created_commit} (${report.verified_count}/${report.total_symbols} in HEAD)]`
-            : `⚠️ [STALE ${report.verified_count}/${report.total_symbols} sym]`;
+        m.memory_type === 'personal'
+          ? '👤 [PERSONAL]'
+          : report.overall_status === 'VERIFIED'
+            ? `✅ [VERIFIED ${report.verified_count}/${report.total_symbols} sym @ ${m.created_commit}]`
+            : report.overall_status === 'OTHER_BRANCH'
+              ? `🌿 [BRANCH:${report.recorded_branch || m.created_branch || 'other'}@${m.created_commit} (${report.verified_count}/${report.total_symbols} in HEAD)]`
+              : `⚠️ [STALE ${report.verified_count}/${report.total_symbols} sym]`;
       lines.push(
-        `${preferences.length > 0 ? '│   ' : '    '}${branch} ${badge} ${m.id} (hits: ${stat?.hit_count ?? 0}) — ${m.l0_summary}`
+        `${hasNextTreeSection ? '│   ' : '    '}${branch} ${badge} ${m.id} (hits: ${stat?.hit_count ?? 0}) — ${m.l0_summary}`
       );
     });
   }
 
   if (preferences.length > 0) {
     lines.push(
-      `└── 👤 Personal Preferences (${preferences.length} active | Profile Budget: ${profileTokens}/${config.maxGlobalProfileTokens ?? 500} tokens)`
+      `${hasGlobalProfile ? '├──' : '└──'} 👤 Personal Preferences (${preferences.length} active | Profile Budget: ${profileTokens}/${config.maxGlobalProfileTokens ?? 800} tokens)`
     );
     preferences.forEach((p, idx) => {
       const isLast = idx === preferences.length - 1;
@@ -321,9 +344,24 @@ export function renderEvoTree(
       const stat = tMap.get(p.id);
       const badge = p.always_on !== false ? `[ALWAYS-ON:${p.category}]` : `[ON-DEMAND:${p.category}]`;
       lines.push(
-        `    ${branch} ${badge} ${p.id} (${p.tokens} tok | hits: ${stat?.hit_count ?? 0}) — ${p.l0_summary}`
+        `${hasGlobalProfile ? '│   ' : '    '}${branch} ${badge} ${p.id} (${p.tokens} tok | hits: ${stat?.hit_count ?? 0}) — ${p.l0_summary}`
       );
     });
+  }
+
+  if (hasGlobalProfile && globalStorage) {
+    const gCfg = globalStorage.getConfig();
+    const gMaxProfile = gCfg.maxGlobalProfileTokens ?? 800;
+    const gMaxMenu = gCfg.maxDirectoryMenuTokens ?? 250;
+    const { totalTokens: gProfTok, preferences: gAlwaysPrefs } = globalStorage.getProfileTokenUsage();
+    const gPrefs = globalStorage.listPreferences().filter((p) => p.enabled !== false);
+    const gMenuTok = estimateTokens(globalStorage.formatTaskDirectoryMenu(gMaxMenu));
+    const gPersonalMems = globalStorage
+      .listMemories()
+      .filter((m) => m.enabled !== false && (m.memory_type === 'personal' || m.target_symbols.length === 0));
+    lines.push(
+      `└── 🌐 Global Personal Profile & Workflows (${gPrefs.length} prefs [${gAlwaysPrefs.length} always-on: ${gProfTok}/${gMaxProfile} tok | menu: ${gMenuTok}/${gMaxMenu} tok] | ${gPersonalMems.length} personal memories)`
+    );
   }
 
   const formattedLines = lines.map((line) =>
@@ -736,7 +774,7 @@ export function buildEvoTreeJson(workspaceRoot: string): object {
       coreRuleTokens: totalTokens,
       maxCoreRuleTokens: config.maxCoreRuleTokens,
       profileTokens,
-      maxGlobalProfileTokens: config.maxGlobalProfileTokens ?? 500,
+      maxGlobalProfileTokens: config.maxGlobalProfileTokens ?? 800,
     },
   };
 }

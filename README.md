@@ -2,9 +2,9 @@
 
 # 🧬 EvoKernel (evo-kernel)
 
-### Stop Repeating the Same Bug Across Coding Sessions — AST-Verified Cognitive Memory & 6-Stage Deterministic Gatekeeper, with 88.7% Lower Session-Start Token Tax and 0 External Dependencies.
+### Stop Repeating the Same Bug or Explaining Your Habits Across Sessions — Slim Dual-Core Cognitive Memory & 3-Tier Offline User Cognition, with 88.6% Lower Session-Start Token Tax and 0 External Dependencies.
 
-**The Two-Layer Local-First Context & Memory Kernel for MCP-Capable AI Coding Agents**  
+**The Slim Dual-Core Local-First Context & Memory Kernel for MCP-Capable AI Agents**  
 *Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
 
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
@@ -15,7 +15,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#-zero-dependency-architecture)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#-core-architecture-5-fixed-meta-tools)
-[![Tests](https://img.shields.io/badge/tests-342%20passed%20%7C%2013%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
+[![Tests](https://img.shields.io/badge/tests-363%20passed%20%7C%2014%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 
 **[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Product Site](https://damonless.github.io/EvoKernel/) · [🖥️ Interactive Workbench Demo](https://damonless.github.io/EvoKernel/demo/) · [📊 Benchmarks](benchmarks/README.md)**
 
@@ -25,28 +25,31 @@
 
 </div>
 
-> **What is EvoKernel?** EvoKernel is a **Two-Layer Local-First Context & Memory Kernel for MCP-Capable AI Coding Agents**. It combines **cross-session AST-verified repo memory, visible 1-line recall receipts (`🛡️ EvoKernel Recall`), and a 6-stage deterministic Gatekeeper** with a **cross-workspace personal preference push layer** — while folding sprawling MCP tool schemas and monolithic rule files behind 5 fixed meta-primitives (**-88.7% session-start token tax: `27,150 → 3,066` tok/turn, 100% KV cache hit, 0 external dependencies**).
+> **What is EvoKernel?** EvoKernel is a **Slim Dual-Core Local-First Context & Memory Kernel for MCP-Capable AI Agents**. It pairs **Layer 1 repo-scoped AST-verified engineering memory, visible 1-line recall receipts (`🛡️ EvoKernel Recall`), and a 6-stage deterministic Gatekeeper** with **Layer 2 3-Tier Offline User Cognition** (800-token Always-On Profile Card across 8 desktop AI hosts, 250-token Live Task & Workflow Directory Menu, and global personal experience memory with 1-second undo) — while folding sprawling MCP tool schemas and monolithic rule files behind 5 fixed meta-primitives with optional `workspace` (**-88.6% session-start token tax: `27,150 → 3,103` tok/turn, 100% KV cache hit, 0 external dependencies**).
 
 > [!NOTE]
 > **Disambiguation Note:** EvoKernel (`evo-kernel`) is an agent architecture and context engineering framework for AI coding assistants (Claude Code, Cursor, Windsurf, Codex, Gemini, etc.). It is not affiliated with academic ICML papers/benchmarks of similar naming or Linux kernel projects.
 
 ---
 
-## 🧭 Positioning & Two-Layer Architecture
+## 🧭 Positioning & Slim Dual-Core Architecture
 
-EvoKernel operates as a **Two-Layer Local-First Context & Memory Kernel for MCP-Capable AI Coding Agents**:
+EvoKernel operates as a **Slim Dual-Core Local-First Context & Memory Kernel for MCP-Capable AI Agents**:
 
 1. **Layer 1 — Repo-Scoped Deterministic Engineering Memory (`.evo/`)**:
    - AST-verified episodic memories across Git branches (`[VERIFIED]` / `[OTHER_BRANCH]` / `[STALE]`), a strict **1,500-token** core invariants budget, path-scoped guardrails (`scope_glob`), and sandboxed `--self-test` micro-tools.
-2. **Layer 2 — Cross-Workspace Personal Preference & Habit Push Layer (`User-Global`)**:
-   - `kind: "preference"`, `scope: "global"` stored in `~/.evo/global/.evo/preferences/` (`style | formatting | communication | workflow | knowledge`).
-   - A dedicated **500-token Profile Card** pushed via `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` to installed local MCP hosts' global rules (`~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.cursor/rules/evo-user-profile.mdc`, `~/.windsurf/rules/evo-user-profile.md`), paired with on-demand `evo_search(..., scope: "global")` recall in non-code/writing/cross-workspace chats.
+2. **Layer 2 — Cross-Workspace User Cognition (3-Tier Offline Recall, `User-Global`)**:
+   1. **Tier 1 — Always-On Profile Card (`800`-token full-rendered budget)**: Explicit personal habits (`style | formatting | communication | workflow | requirement | knowledge`) pushed via `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` to **8 desktop AI hosts**: Claude Code (`~/.claude/CLAUDE.md`), Gemini / Antigravity (`~/.gemini/GEMINI.md`), Codex (`~/.codex/AGENTS.md`), Windsurf (`~/.codeium/windsurf/memories/global_rules.md`), Cursor (`~/.cursor/rules/evo-user-profile.mdc`), Cline (`~/.cline/rules/evo-user-profile.md`), Roo (`~/.roo/rules/evo-user-profile.md`), and OpenCode (`~/.config/opencode/AGENTS.md`).
+   2. **Tier 2 — Live Task & Workflow Directory Menu (`250`-token cap)**: `always_on: false` preferences and non-seed global skills with `trigger_cue` pushed alongside the Profile Card so AI agents semantically pick recurring workflows & work requirements (`evo_inspect(id, "L2")`) without keyword guessing.
+   3. **Tier 3 — Global Non-Code Personal Experience Memory (`memory_type: "personal"`)**: Cross-workspace lessons stored without AST symbol binding (`[PERSONAL]`), searchable at 0 startup tokens via an expanded bilingual office/writing/workflow lexicon.
+   - **Instant Activation + 1-Second Undo**: Explicit preferences & personal memories activate immediately (`approved`) with visible receipts and an append-only `profile-history.jsonl` ledger, supporting 1-click undo via `evo profile undo` or the Workbench **Personal Profile Studio**.
+   - **Zero-Friction Global Install & Cold Start**: `evo init --global` ("install once, known everywhere"), `evo uninstall --global`, full `evo profile` CLI (`list | show | add | remove | undo | import | onboard | sync | clean | path`), and optional `workspace` on all 5 MCP tools (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`) so non-code and blank chats work seamlessly.
 
 ### 🧱 Capability Boundary: What EvoKernel Does & Explicitly Does Not Do
 
 | Boundary | What EvoKernel Covers |
 | :--- | :--- |
-| **✅ In Scope** | • **Repo AST-Verified Memory**: Symbol-anchored troubleshooting memories across Git branches, 1,500-token core invariants, and scoped rules.<br/>• **5-Tool Fixed Meta-MCP Gateway**: `evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact` (0 external dependencies, 100% local-first, byte-stable KV cache).<br/>• **Cross-Workspace Preference Push**: Push explicit style/formatting/communication/workflow/knowledge habits across local MCP-capable IDEs & CLIs (`Claude Code`, `Cursor`, `Antigravity`, `Codex`, `Windsurf`, `Gemini CLI`, etc.) via `evo profile`.<br/>• **Deterministic Micro-Tools & Auditing**: Sandboxed `--self-test` tools, deliverable canonical inspection (`evo check`), and rule/skill bloat auditing (`evo audit`, `evo refactor`). |
+| **✅ In Scope** | • **Layer 1 Repo AST-Verified Memory**: Symbol-anchored troubleshooting memories across Git branches, 1,500-token core invariants, and scoped rules.<br/>• **5-Tool Fixed Meta-MCP Gateway**: `evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact` — optional `workspace` across all 5 tools for blank/non-code chats (0 external dependencies, 100% local-first, byte-stable KV cache).<br/>• **Layer 2 3-Tier Offline User Cognition**: 800-tok Always-On Profile Card pushed to 8 desktop AI hosts, 250-tok Live Task Directory Menu, Tier 3 `memory_type: "personal"` lessons, Markdown import & onboarding presets, plus instant activation with 1-second undo (`evo profile undo` & Workbench Personal Profile Studio).<br/>• **Deterministic Micro-Tools & Auditing**: Sandboxed `--self-test` tools, deliverable canonical inspection (`evo check`), and rule/skill bloat auditing (`evo audit`, `evo refactor`). |
 | **🚫 Out of Scope** | • **Not a consumer cross-app "second brain"**: Does not sync with web browsers (ChatGPT / Claude Web), mobile apps, or chat messengers lacking local MCP or filesystem rule hooks.<br/>• **Not a background cloud-LLM mind-reader**: Does not infer or silently upload implicit, unstated personal habits via cloud LLMs.<br/>• **Not an autonomous offline worktree code-rewriting optimizer**: `evo optimize` has been retired to keep the kernel lean, predictable, and deterministic. |
 
 ---
@@ -59,8 +62,9 @@ Get started in 3 commands — zero installation required:
 # 1. Instant Zero-Write X-Ray (<25ms) — scan host rules, git hotspots & memory coverage
 npx -y evo-kernel score
 
-# 2. One-Click Safe Wiring & Doctor Check — wire 10 IDEs safely with stealth mode
+# 2. One-Click Safe Wiring & Doctor Check — wire 10 IDEs safely with stealth mode (or --global once everywhere)
 npx -y evo-kernel init --stealth && npx -y evo-kernel doctor
+# (Global zero-repo cold start: npx -y evo-kernel init --global)
 # (Preview MCP virtualization token savings safely with: npx -y evo-kernel virtualize --dry-run)
 
 # 3. Launch EvoKernel Workbench to inspect capabilities, AST memories & 7-day recall
@@ -113,10 +117,15 @@ node ./dist/cli/index.js init --targets auto --stealth
 # Cold-start mine your repository structure, project stacks & Git fix history
 node ./dist/cli/index.js bootstrap --max-commits=50
 
-# Inspect and sync cross-workspace User-Global personal preferences (500-tok Profile Card)
+# Install once globally (~/.evo/global, global MCPs, plugin L0 seed & host Profile Card)
+node ./dist/cli/index.js init --global
+
+# Inspect, onboard, import, undo & sync 3-Tier User Cognition (800-tok Profile Card + 250-tok Menu)
 node ./dist/cli/index.js profile list
 node ./dist/cli/index.js profile show
+node ./dist/cli/index.js profile onboard --preset concise-ceo --apply
 node ./dist/cli/index.js profile sync --dry-run
+node ./dist/cli/index.js profile undo
 node ./dist/cli/index.js profile path
 
 # CI / Deliverable canonical inspection (.xlsx, .docx, .pptx, .csv, .json, .md)
@@ -139,13 +148,15 @@ EvoKernel is designed from the ground up to be safe to trial, transparent to ins
 
 ### 1. What `evo init` Touches & 1-Command Lossless Uninstall
 When you run `npx evo-kernel init`, it touches only three isolated surfaces:
-- **Host Agent Rule Files**: Inserts a compact (<1,100 tok), bounded English managed block between `<!-- EVO:START -->` and `<!-- EVO:END -->` markers in detected configuration files (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/evo-kernel.mdc`, or `GEMINI.md` when `.gemini/` is present — avoiding duplicate root Markdown injection). Existing user rules outside these markers are untouched.
+- **Host Agent Rule Files**: Inserts a compact (<1,100-tok L0 seed), bounded English managed block between `<!-- EVO:START -->` and `<!-- EVO:END -->` markers in detected configuration files (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/evo-kernel.mdc`, or `GEMINI.md` when `.gemini/` is present — avoiding duplicate root Markdown injection). Existing user rules outside these markers are untouched.
 - **Host MCP Configs**: Registers a single stdio gateway entry for `evo-kernel` (leaving third-party servers untouched unless virtualized).
 - **Workspace `.evo/` Tree**: Generates local capability and episodic memory directories (`.evo/rules/`, `.evo/skills/`, `.evo/memories/`, `.evo/tools/`, `.evo/.cache/`).
 
 To cleanly and completely revert your repository and agent configurations back to baseline, run:
 ```bash
 npx -y evo-kernel virtualize --restore && npx -y evo-kernel uninstall
+# Include --global to also strip <!-- EVO:PROFILE:START --> blocks from global host files:
+npx -y evo-kernel uninstall --global
 ```
 This restores any virtualized MCP servers to host configuration files, strips all `<!-- EVO:START -->` blocks cleanly, unwires registered lifecycle hooks, and removes `.evo/` with **zero left-behind configuration artifacts**.
 
@@ -165,13 +176,13 @@ Analytical cost/cache model across **8 standard MCP servers** (`github`, `playwr
 
 | Metric | Raw Multi-MCP + Monolithic `CLAUDE.md` | **🧬 EvoKernel 5-Tool Meta-Gateway** | Model / Live Result |
 | :--- | :---: | :---: | :---: |
-| **Exposed Tool Schemas** | 77 tools (`14,700` tok) | **5 fixed meta-tools (`1,916` tok)** | **-93.5% schema count (`-87.0%` schema tok)** |
-| **Session-Start Static Prefix / Turn** | 27,150 tokens | **3,066 tokens** | **-88.7% session-start token tax** |
+| **Exposed Tool Schemas** | 77 tools (`14,700` tok) | **5 fixed meta-tools (`1,953` tok)** | **-93.5% schema count (`-86.7%` schema tok)** |
+| **Session-Start Static Prefix / Turn** | 27,150 tokens | **3,103 tokens** | **-88.6% session-start token tax** |
 | **Mid-Session Cache Invalidations** | 3 full prefix busts | **0 (100% cache hit)** | **100% KV Cache Shield** |
-| **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **738,570 tokens** | **-61.8% total token load** |
-| **50-Turn Cost (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **-70.4% API cost** |
-| **50-Turn Cost (Claude Opus 4.5)** | \$5.76 | **\$1.70** | **-70.4% API cost** |
-| **Live Engine AST Verification Speed** | Unverified text (drifts silently) | **~1.2 ms / memory** | **~49ms batch across 41 memories¹** |
+| **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **740,420 tokens** | **-61.7% total token load** |
+| **50-Turn Cost (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **-70.3% API cost** |
+| **50-Turn Cost (Claude Opus 4.5)** | \$5.76 | **\$1.71** | **-70.3% API cost** |
+| **Live Engine AST Verification Speed** | Unverified text (drifts silently) | **~1.3–2.0 ms / memory** | **~55–85ms batch across 43 memories¹** |
 
 > ¹ *Terminology Note:* AST Anti-Drift / AST Fingerprinting utilizes **Zero-Dep Lexical-Structural Skeleton Fingerprinting**, which is immune to comments, code reformatting, and line-number drift without requiring external compiler dependencies.
 
@@ -210,7 +221,7 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 | **Prompt Cache Stability** | Cache-unfriendly (frequent context shifts) | Varies per edit | **Destructive** (exposing all child tools busts KV prefix on every change) | High context footprint | Neutral | **100% Byte-Stable: Exactly 5 immutable meta-tools exposed to host** |
 | **Downstream MCP Virtualization** | None | None | Dumb pass-through (50+ tools in prompt) | None | None | **Zero-cache-invalidation FTS5 index + on-demand stdio JSON-RPC proxy** |
 | **Verification & Gatekeeper** | Model self-reflection | Git commit diffs & tests | None | Manual `/learn-eval` | Async LLM reviewer | **6-Stage Deterministic Gatekeeper (Static Security, Lexical De-Symbol, Sandbox Exit 0, BM25, 1500-tok Cap, Anti-Confounding)** |
-| **Cross-Workspace Personal Profile** | Conversational persona memory (cloud/DB) | None | None | None | Cloud profile store | **500-tok `profile-digest.md` pushed via `<!-- EVO:PROFILE:START -->` to `~/.gemini`, `~/.claude`, `~/.codex`, `~/.cursor`, `~/.windsurf` + `evo_search(scope: "global")`** |
+| **Cross-Workspace Personal Profile** | Conversational persona memory (cloud/DB) | None | None | None | Cloud profile store | **3-Tier Offline User Cognition: 800-tok Profile Card + 250-tok Task Directory Menu pushed to 8 hosts + Tier 3 `memory_type: "personal"` + `evo profile undo`** |
 | **Deliverable Inspection** | None | None | None | None | None | **Zero-dependency canonical parser for `.xlsx`, `.docx`, `.pptx`, CSV, JSON/JSONL, and Markdown** |
 | **Episodic Memory & Anti-Drift** | Semantic vector embeddings (hallucination prone) | Repo map only | None | None (static docs) | No AST verification | **Zero-Dep Lexical-Structural Symbol Fingerprinting (Fast regex/lexical AST hash, [STALE] demotion, Topology Penetration Anchors)** |
 | **Workbench & Diagnostic Scoring** | Web UI with Postgres | None | None | None | Web UI | **`evo score` (<25ms zero-write scan) & `evo ui` (0-dep EvoKernel Workbench, dual-mode native client, SSE live-reload, strict CSP, exportable single-file HTML)** |
@@ -226,7 +237,7 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 <a id="-core-architecture-5-fixed-meta-tools"></a>
 ## 🧠 Core Architecture & Deep Technical Reference
 
-EvoKernel exposes **5 immutable meta-tools** (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`) over `stdio` for 100% KV prompt-cache retention, backed by cross-workspace personal preference push (`evo profile`), zero-dependency deliverable inspection, causal outcome attribution, and 10-host configuration adapters.
+EvoKernel exposes **5 immutable meta-tools** (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact` — all with optional `workspace` for blank/non-code chats) over `stdio` for 100% KV prompt-cache retention, backed by 3-Tier Offline User Cognition (`evo profile` + `evo init --global`), zero-dependency deliverable inspection, causal outcome attribution, and 10-host configuration adapters.
 
 <details>
 <summary><b>🧠 5 Fixed Meta-Tools, Downstream MCP Virtualization &amp; Hook Router (Click to expand)</b></summary>
@@ -237,10 +248,10 @@ EvoKernel exposes **5 immutable meta-tools** (`evo_search`, `evo_inspect`, `evo_
 
 | Meta-Tool | Tier | Purpose |
 | :--- | :--- | :--- |
-| `evo_search` | **L0** | FTS5 BM25 search across Rules, Skills, Micro-Tools, Virtualized External Tools, and Memories. Performs live Stage-2 AST fingerprint verification and demotes `[STALE]` memories automatically. |
+| `evo_search` | **L0** | FTS5 BM25 search across Rules, Skills, Micro-Tools, Virtualized External Tools, Memories, and Personal Preferences (with optional `workspace` & `scope: "global"`). Performs live Stage-2 AST verification, demotes `[STALE]`, and tags `[PERSONAL]` lessons. |
 | `evo_inspect` | **L1 / L2** | Progressive disclosure loader. Delivers Symptom/Root-Cause/Solution triads, JSON Schemas for virtualized external tools, and **Topology Penetration Anchors** (live line spans, callers, and negative dead-ends). |
 | `evo_run` | **Execution** | Executes local sandboxed Micro-Tools (`.mjs`, `.py`, `.ps1`, `.sh`) or proxies calls to downstream MCP servers via `McpProxyManager`. |
-| `evo_propose` | **Evolution** | Submits a candidate Rule, Skill, Micro-Tool, or Memory through the 6-Stage Deterministic Gatekeeper (Static Security, Lexical De-Symbol, Sandbox Dry-Run, BM25 Deduplication, Token Budget Cap, Anti-Confounding). |
+| `evo_propose` | **Evolution** | Submits a candidate Rule, Skill, Micro-Tool, Memory (`code` or `personal`), or Preference through the 6-Stage Deterministic Gatekeeper (Static Security, Lexical De-Symbol, Sandbox Dry-Run, BM25 & Polarity Dedup, Token Budget Caps, Anti-Confounding). Explicit preferences/personal memories activate immediately with `profile-history.jsonl` undo. |
 | `evo_compact` | **GC** | Atomically merges fragmented rules or archives `[STALE]` memories into `.evo/archive/` to keep core token consumption under the 1,500-token limit. |
 
 ### Downstream MCP Proxy Virtualization (`evo virtualize`)
@@ -285,20 +296,29 @@ evo hook mark-recovery                                      # Record recovery te
 </details>
 
 <details>
-<summary><b>👤 Cross-Workspace Personal Profile Push (<code>evo profile</code>) &amp; Causal Attribution (Click to expand)</b></summary>
+<summary><b>👤 3-Tier Offline User Cognition (<code>evo profile</code>), 1-Second Undo &amp; Causal Attribution (Click to expand)</b></summary>
 
 <br/>
 
 ```bash
-# Manage User-Global personal preferences (~/.evo/global/.evo/preferences/)
-evo profile list             # List all preferences and 500-token Always-On budget usage
-evo profile show             # Print the rendered auto-managed Profile Card digest
-evo profile sync --dry-run   # Preview host global rule targets without modifying files
-evo profile sync             # Push <!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END --> to installed hosts
+# Install globally once ("install once, known everywhere") & manage ~/.evo/global/.evo/
+evo init --global            # Seed ~/.evo/global, wire global MCPs, refresh plugin L0 seed & sync profile
+evo uninstall --global       # Strip EVO:PROFILE blocks from detected global host rule files
+
+# Full User-Global personal profile & workflow CLI
+evo profile list             # List all preferences and 800-tok Card / 250-tok Menu budget usage
+evo profile show             # Print the rendered Profile Card & Live Task Directory Menu
+evo profile add --category workflow --title "..." --summary "..." --content "..."
+evo profile remove <id>      # Archive preference, append undo snapshot & resync hosts
+evo profile undo [id]        # 1-second undo from append-only profile-history.jsonl & resync hosts
+evo profile import notes.md [--apply]          # Parse Markdown habits into Gatekeeper-validated preferences
+evo profile onboard [--preset concise-ceo --apply]  # Apply preset or run 3-prompt TTY interview
+evo profile sync [--dry-run] # Push <!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END --> to 8 desktop hosts
+evo profile clean            # Strip EVO:PROFILE blocks from host global rules
 evo profile path             # Print global root, preferences dir, and profile-digest.md path
 ```
 
-Propose a persistent cross-workspace habit directly from any MCP-capable coding agent:
+Propose a persistent cross-workspace habit or personal lesson directly from any MCP-capable agent (even in blank/non-code chats by omitting `workspace`):
 
 ```json
 {
@@ -311,14 +331,15 @@ Propose a persistent cross-workspace habit directly from any MCP-capable coding 
     "id": "concise-diff-first-replies",
     "title": "Concise Diff-First Engineering Replies",
     "l0_summary": "Lead with root cause and minimal unified diffs; skip boilerplate recaps.",
-    "content": "- Start with the concrete diagnosis or patch.\n- Avoid filler acknowledgments and redundant summaries.",
-    "workspace": "/path/to/repo"
+    "content": "- Start with the concrete diagnosis or patch.\n- Avoid filler acknowledgments and redundant summaries."
   }
 }
 ```
 
-- **Dedicated 500-Token Profile Card**: `always_on: true` preferences compile into `profile-digest.md` (500-token budget, isolated from repo 1,500-token core invariants) and sync cleanly between `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` markers across `~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.cursor/rules/evo-user-profile.mdc`, and `~/.windsurf/rules/evo-user-profile.md`.
-- **On-Demand Non-Code Recall**: Set `always_on: false` for longer personal notes recalled only via `evo_search(query, workspace, scope: "global")` during non-code, writing, or cross-workspace chats.
+- **Tier 1 — Always-On Profile Card (`800`-token full-rendered budget)**: `always_on: true` preferences (`style | formatting | communication | workflow | requirement | knowledge`) compile into `profile-digest.md` (isolated from repo 1,500-token core invariants) and push cleanly between `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` markers across **8 desktop AI hosts**: `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`, `~/.codex/AGENTS.md`, `~/.codeium/windsurf/memories/global_rules.md` (with 6,000-char guard), `~/.cursor/rules/evo-user-profile.mdc`, `~/.cline/rules/evo-user-profile.md`, `~/.roo/rules/evo-user-profile.md`, and `~/.config/opencode/AGENTS.md`.
+- **Tier 2 — Live Task & Workflow Directory Menu (`250`-token cap)**: Set `always_on: false` with `trigger_cue` (alongside non-seed global skills) to render an on-demand directory menu beside the Profile Card so agents semantically call `evo_inspect(id, "L2")` when a matching task begins.
+- **Tier 3 — Global Personal Experience Memory (`memory_type: "personal"`)**: Store non-code cross-workspace lessons (`scope: "global"`, no AST symbol binding required, tagged `[PERSONAL]`) and recall via `evo_search(query, scope: "global")` with an expanded bilingual office/writing/workflow lexicon.
+- **Instant Activation & 1-Second Undo**: Explicit preferences & personal memories activate immediately (`approved`) with visible receipts and append-only `profile-history.jsonl`, supporting 1-click rollback via `evo profile undo` or the Workbench **Personal Profile Studio**.
 - **Deterministic Causal Outcome Attribution (`ERR_CONFOUNDED_CAUSATION`)**: Tracks `helped`, `hurt`, and `contested` recall outcomes in SQLite and blocks single-variable credit assignment when multiple capabilities fire in the same bug-fix loop unless Stage-3 **Topology Penetration Anchors** prove causation.
 
 </details>
@@ -412,10 +433,10 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-**342 tests across 13 test suites pass via `node ./scripts/test.mjs` with 0 failures:**
+**363 tests across 14 test suites pass via `node ./scripts/test.mjs` with 0 failures:**
 
 <details>
-<summary><b>🔍 View All 13 Verified Test Suites (Click to expand)</b></summary>
+<summary><b>🔍 View All 14 Verified Test Suites (Click to expand)</b></summary>
 
 | # | Suite File | Coverage Domain | Tests |
 | :---: | :--- | :--- | :---: |
@@ -424,7 +445,7 @@ node ./scripts/test.mjs
 | 3 | `dist/tests/deliverable-inspector.test.js` | Zero-Dep Deliverable Canonical Consumer-Reader Suite | 34 tests |
 | 4 | `dist/tests/evo-kernel.test.js` | Core Gatekeeper, Sandbox, AST Cognitive Memory & Invariants | 54 tests |
 | 5 | `dist/tests/hook.test.js` | Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience | 32 tests |
-| 6 | `dist/tests/issue-34-and-route-b-profile.test.js` | Issue #34 Hardening & Route B Cross-Workspace Personal Profile | 10 tests |
+| 6 | `dist/tests/issue-34-and-route-b-profile.test.js` | Issue #34 Hardening & Route B Cross-Workspace Personal Profile | 13 tests |
 | 7 | `dist/tests/issues-31-32-33-audit-fixes.test.js` | Issues #31–#33 Audit Fixes Regression Suite | 7 tests |
 | 8 | `dist/tests/issues-31-32-33-b1-b9-hardening.test.js` | Issues #31–#33 Umbrella Waterfall, Async Lock & Lexicon Hardening | 10 tests |
 | 9 | `dist/tests/lifecycle-guard-hooks.test.js` | Lifecycle Guard Hooks, Trigger Cues & Reference Integrity | 27 tests |
@@ -432,6 +453,7 @@ node ./scripts/test.mjs
 | 11 | `dist/tests/multi-harness.test.js` | Multi-Agent Harness Matrix & Cascaded Detection Suite | 15 tests |
 | 12 | `dist/tests/score-and-ui.test.js` | Score, EvoKernel Workbench UI & Control API, Warmup & Slash Commands Suite | 31 tests |
 | 13 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & S0-S3 Hardening Suite | 69 tests |
+| 14 | `dist/tests/v05-user-cognition-and-defects.test.js` | v0.5 3-Tier User Cognition, 8-Host Profile Sync, 1-Click Undo & Defect Regressions | 18 tests |
 
 </details>
 
@@ -442,8 +464,8 @@ node ./scripts/test.mjs
 EvoKernel is an independent, from-scratch open-source engineering runtime built in zero-dependency TypeScript on Node.js 22 native modules (`node:sqlite`, `node:test`, `stripTypeScriptTypes`). Its design synthesizes foundational ideas from the agentic systems and software engineering community:
 
 - **Progressive Disclosure & Context Engineering**: The 5 fixed meta-tools (`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`) and the L0/L1/L2 tiered loading architecture draw inspiration from Anthropic's engineering guidelines on context window economics, prompt-cache preservation, and progressive skill disclosure.
-- **Two-Layer Context Separation & Deliverable Verification**: Separating repo-scoped engineering guardrails from cross-workspace personal preference push (`evo profile`), paired with canonical deliverable verification (`evo check`), keeps session prefixes lean without sacrificing cross-IDE continuity.
-- **Original EvoKernel Contributions**: The 6-Stage Deterministic Gatekeeper (Static Security, Lexical De-Symbolization, Sandbox `--self-test` Dry-Run, BM25 Deduplication, 1,500-Token Hard Cap, and Causal Anti-Confounding), the 3-Stage AST-Anchored Cognitive Memory with git-topology drift detection (`VERIFIED` / `OTHER_BRANCH` / `STALE`), the 500-token host-pushed Personal Profile Card, and the 10-host lossless adapter matrix are original to EvoKernel.
+- **Slim Dual-Core Context Separation & Deliverable Verification**: Separating repo-scoped engineering guardrails from 3-tier offline cross-workspace user cognition (`evo profile`), paired with canonical deliverable verification (`evo check`), keeps session prefixes lean without sacrificing cross-IDE continuity.
+- **Original EvoKernel Contributions**: The 6-Stage Deterministic Gatekeeper (Static Security, Lexical De-Symbolization, Sandbox `--self-test` Dry-Run, BM25 Deduplication, 1,500-Token Hard Cap, and Causal Anti-Confounding), the 3-Stage AST-Anchored Cognitive Memory with git-topology drift detection (`VERIFIED` / `OTHER_BRANCH` / `STALE`), the 3-Tier Offline User Cognition architecture (800-token Profile Card across 8 desktop hosts, 250-token Task Directory Menu, and Global Personal Experience Memory with 1-second undo), and the 10-host lossless adapter matrix are original to EvoKernel.
 
 ---
 

@@ -15,16 +15,114 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const TAIL_BYTES = 128 * 1024;
 const COOLDOWN_STEPS = 4;
 
-const STYLE_PREFERENCE_REGEX =
-  /(?:太啰嗦|稍微精简|不美观|格式不对|排版|语言风格|文风|以后都这样|不要用表格)/i;
+const FALLBACK_BILINGUAL_STYLE_REGEX =
+  /(?:太啰嗦|稍微精简|精简|大白话|不要(?:用)?表格|不美观|排版|格式不对|格式有误|语言风格|文风|太详细|吃力|费劲|concise|too verbose|plain language|no tables|formatting|tone|bullet points)/i;
 
-const CORRECTION_REGEX =
-  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|排版|语言风格|文风|以后都这样|不要用表格|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,])/i;
+const FALLBACK_BILINGUAL_WORKFLOW_REQUIREMENT_REGEX =
+  /(?:以后都按这个流程|记住我的要求|工作流程|每次写周报|汇报标准|以后都这样|from now on|remember my requirement|always follow this workflow|weekly report|report format|my standard)/i;
+
+const FALLBACK_BILINGUAL_PERSONAL_EXPERIENCE_REGEX =
+  /(?:记住这个经验|个人经验|我的经验|个人笔记|踩过的坑|教训|以后记住|记下来|个人备忘|personal experience|remember this lesson|lesson learned|my note|personal note|note to self|keep this in mind|personal memory|remember for future)/i;
+
+const FALLBACK_CORRECTION_REGEX =
+  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|精简|大白话|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|排版|语言风格|文风|以后都这样|不要(?:用)?表格|以后都按这个流程|记住我的要求|工作流程|每次写周报|汇报标准|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,]|concise|too verbose|plain language|no tables|formatting|tone|bullet points|from now on|remember my requirement|always follow this workflow|weekly report|report format|my standard)/i;
+
+let activeHookEngine = null;
+
+async function loadHookEngine() {
+  if (activeHookEngine) return activeHookEngine;
+  const hereDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    process.env.EVO_PACKAGE_ROOT
+      ? path.join(path.resolve(process.env.EVO_PACKAGE_ROOT), 'dist', 'core', 'hook-engine.js')
+      : '',
+    process.env.EVO_KERNEL_ROOT
+      ? path.join(path.resolve(process.env.EVO_KERNEL_ROOT), 'dist', 'core', 'hook-engine.js')
+      : '',
+    path.resolve(hereDir, '..', 'dist', 'core', 'hook-engine.js'),
+    path.resolve(hereDir, '..', '..', 'dist', 'core', 'hook-engine.js'),
+    path.resolve(process.cwd(), 'dist', 'core', 'hook-engine.js'),
+    path.resolve(process.cwd(), 'node_modules', 'evo-kernel', 'dist', 'core', 'hook-engine.js'),
+    process.env.APPDATA
+      ? path.join(process.env.APPDATA, 'npm', 'node_modules', 'evo-kernel', 'dist', 'core', 'hook-engine.js')
+      : '',
+    path.resolve(process.execPath, '../../lib/node_modules/evo-kernel/dist/core/hook-engine.js'),
+    path.resolve(process.execPath, '../node_modules/evo-kernel/dist/core/hook-engine.js'),
+    path.join(os.homedir(), '.gemini', 'config', 'plugins', 'evo-kernel', 'dist', 'core', 'hook-engine.js'),
+    path.join(os.homedir(), '.gemini', 'extensions', 'evo-kernel', 'dist', 'core', 'hook-engine.js'),
+  ].filter(Boolean);
+  for (const cand of candidates) {
+    try {
+      if (fs.existsSync(cand)) {
+        activeHookEngine = await import(pathToFileURL(cand).href);
+        return activeHookEngine;
+      }
+    } catch {
+      // Fall back to next candidate or inline definitions
+    }
+  }
+  return null;
+}
+
+function detectSignals(text) {
+  if (activeHookEngine?.detectConversationEvolutionSignals) {
+    return activeHookEngine.detectConversationEvolutionSignals(text);
+  }
+  const str = typeof text === 'string' ? text : '';
+  if (!str) {
+    return {
+      hasCorrection: false,
+      hasStyleCorrection: false,
+      hasWorkflowRequirement: false,
+      hasPersonalExperience: false,
+      shouldRemindPreference: false,
+      shouldRemindGlobalMemory: false,
+      matchedTriggers: [],
+    };
+  }
+  const hasStyleCorrection = FALLBACK_BILINGUAL_STYLE_REGEX.test(str);
+  const hasWorkflowRequirement = FALLBACK_BILINGUAL_WORKFLOW_REQUIREMENT_REGEX.test(str);
+  const hasPersonalExperience = FALLBACK_BILINGUAL_PERSONAL_EXPERIENCE_REGEX.test(str);
+  const hasCorrection =
+    FALLBACK_CORRECTION_REGEX.test(str) || hasStyleCorrection || hasWorkflowRequirement;
+  return {
+    hasCorrection,
+    hasStyleCorrection,
+    hasWorkflowRequirement,
+    hasPersonalExperience,
+    shouldRemindPreference: hasStyleCorrection || hasWorkflowRequirement,
+    shouldRemindGlobalMemory: hasPersonalExperience,
+    matchedTriggers: [],
+  };
+}
+
+function isCorrectionSignal(text) {
+  return detectSignals(text).hasCorrection;
+}
+
+function buildPreferenceHint(signals) {
+  if (activeHookEngine?.buildPreferenceEvolutionHint) {
+    return activeHookEngine.buildPreferenceEvolutionHint(signals);
+  }
+  if (!signals) return '';
+  const parts = [];
+  if (signals.hasStyleCorrection || signals.hasWorkflowRequirement || signals.shouldRemindPreference) {
+    parts.push(
+      '若涉及跨项目通用的个人表达/排版/格式偏好或工作流标准，请调用 evo_propose(kind: "preference", scope: "global") 沉淀至全局 Profile Card'
+    );
+  }
+  if (signals.hasPersonalExperience || signals.shouldRemindGlobalMemory) {
+    parts.push(
+      '若涉及跨项目个人经验/备忘，请调用 evo_propose(kind: "memory", scope: "global") 沉淀至全局个人记忆'
+    );
+  }
+  return parts.join('；');
+}
 
 const CMD_ERROR_OUTPUT_REGEX =
   /(?:Traceback \(most recent call last\)|SyntaxError:|TypeError:|ValueError:|AttributeError:|KeyError:|ModuleNotFoundError:|ImportError:|PermissionError:|FileNotFoundError:|Command exited with code [1-9]|Exception calling|At line:\d+ char:\d+)/i;
@@ -929,6 +1027,20 @@ function closeRecalledTelemetryOnStop(
       }
     };
 
+    const cacheDir = path.dirname(localDbPath);
+    const evoDir = path.dirname(cacheDir);
+    const localRoot =
+      path.basename(cacheDir) === '.cache' && path.basename(evoDir) === '.evo'
+        ? path.dirname(evoDir)
+        : '';
+    const canUseUnifiedEngine = Boolean(
+      activeHookEngine?.recordRecalledOutcomeUnified &&
+        activeHookEngine?.EvoStorage &&
+        activeHookEngine?.EvoTelemetry &&
+        localRoot &&
+        fs.existsSync(path.join(localRoot, '.evo'))
+    );
+
     if (hasCorrection) {
       if (!contestedAttributed && validEntries.length > 0) {
         const proposeCutoff =
@@ -946,6 +1058,43 @@ function closeRecalledTelemetryOnStop(
             const tsMs = typeof c.at === 'number' ? c.at : Date.parse(String(c.ts || ''));
             return Number.isFinite(tsMs) && tsMs > proposeCutoff;
           });
+        }
+        if (entriesToRecord.length > 0 && canUseUnifiedEngine) {
+          localDb.close();
+          localDb = null;
+          const localStorage = new activeHookEngine.EvoStorage(localRoot);
+          const localTelemetry = new activeHookEngine.EvoTelemetry(localStorage);
+          try {
+            for (const entry of entriesToRecord) {
+              activeHookEngine.recordRecalledOutcomeUnified(
+                localStorage,
+                localTelemetry,
+                entry,
+                'contested'
+              );
+            }
+            if (keptAfterPropose !== null) {
+              if (keptAfterPropose.length > 0) {
+                localTelemetry.setSessionFlag(
+                  'recalled_capabilities',
+                  JSON.stringify(keptAfterPropose)
+                );
+                localTelemetry.setSessionFlag('contested_attributed', 'true');
+                localTelemetry.setSessionFlag('contested_at', String(proposeCutoff));
+              } else {
+                localTelemetry.clearRecalledCapabilities();
+                localTelemetry.setSessionFlag('contested_attributed', 'true');
+                localTelemetry.setSessionFlag('contested_at', String(Date.now()));
+              }
+            } else {
+              localTelemetry.setSessionFlag('contested_attributed', 'true');
+              localTelemetry.setSessionFlag('contested_at', String(Date.now()));
+            }
+            localTelemetry.setSessionFlag('user_correction_detected', 'false');
+          } finally {
+            localTelemetry.close();
+          }
+          return;
         }
         if (entriesToRecord.length > 0) {
           recordEntries(entriesToRecord, 'contested');
@@ -973,6 +1122,29 @@ function closeRecalledTelemetryOnStop(
         const tsMs = typeof c.at === 'number' ? c.at : Date.parse(String(c.ts || ''));
         return !contestedAttributed || (contestedAt > 0 && Number.isFinite(tsMs) && tsMs > contestedAt);
       });
+      if (entriesToRecord.length > 0 && canUseUnifiedEngine) {
+        localDb.close();
+        localDb = null;
+        const localStorage = new activeHookEngine.EvoStorage(localRoot);
+        const localTelemetry = new activeHookEngine.EvoTelemetry(localStorage);
+        try {
+          for (const entry of entriesToRecord) {
+            activeHookEngine.recordRecalledOutcomeUnified(
+              localStorage,
+              localTelemetry,
+              entry,
+              'helped'
+            );
+          }
+          localTelemetry.clearRecalledCapabilities();
+          localTelemetry.setSessionFlag('contested_attributed', 'false');
+          localTelemetry.setSessionFlag('contested_at', '0');
+          localTelemetry.setSessionFlag('user_correction_detected', 'false');
+        } finally {
+          localTelemetry.close();
+        }
+        return;
+      }
       if (entriesToRecord.length > 0) {
         recordEntries(entriesToRecord, 'helped');
       }
@@ -1010,6 +1182,7 @@ function createDefaultConvState() {
     clearedAuditStep: -1,
     lastProposeStepForAt: -1,
     lastProposeAtMs: 0,
+    lastPersonalExpStep: -1,
     maxMonotonicStep: -1,
     tailAnchors: [],
     syncedEpoch: '',
@@ -1135,7 +1308,7 @@ function analyzeTranscriptSteps(steps, convState) {
       latestUserStepIndex = idx;
       userInputHadPriorModelStep = seenModelStep;
       toolWorkStepsAfterUserCorrection = 0;
-      if (seenModelStep && CORRECTION_REGEX.test(latestUserContent)) {
+      if (seenModelStep && isCorrectionSignal(latestUserContent)) {
         lastCorrectionInTranscriptStep = idx;
       }
     }
@@ -1403,7 +1576,7 @@ function applyObservedUserTurnReplacement(convState, analysis) {
     const prevObservedStep = convState.lastObservedUserStep ?? -1;
     convState.lastObservedUserStep = analysis.latestUserStepIndex;
     dirty = true;
-    if (!CORRECTION_REGEX.test(analysis.latestUserContent)) {
+    if (!isCorrectionSignal(analysis.latestUserContent)) {
       const maxCorr = Math.max(
         convState.lastCorrectionStep ?? -1,
         analysis.lastCorrectionInTranscriptStep
@@ -1471,6 +1644,7 @@ Options:
     return;
   }
   const event = process.argv[2] || 'PreInvocation';
+  await loadHookEngine();
   const input = await readStdinJson();
   const explicitConversationId = String(input.conversationId || input.conversation_id || '').trim();
   const conversationId = explicitConversationId || 'default';
@@ -1663,7 +1837,7 @@ Options:
   const isCurrentUserCorrection =
     latestUserStepIndex >= 0 &&
     userInputHadPriorModelStep &&
-    CORRECTION_REGEX.test(latestUserContent) &&
+    isCorrectionSignal(latestUserContent) &&
     latestUserStepIndex > (convState.clearedTelemetryCorrectionStep ?? -1);
   const needsEpochSync =
     Boolean(explicitConversationId) && convState.syncedEpoch !== explicitConversationId;
@@ -1738,9 +1912,16 @@ Options:
       ? userInputHadPriorModelStep &&
         latestUserStepIndex > lastProposeStepIndex &&
         latestUserStepIndex > (convState.clearedCorrectionStep ?? -1) &&
-        CORRECTION_REGEX.test(latestUserContent)
+        isCorrectionSignal(latestUserContent)
       : persistedPendingCorrectionStep >= 0 &&
         persistedPendingCorrectionStep > lastProposeStepIndex;
+
+  const latestUserSignals = detectSignals(latestUserContent);
+  const hasNewPersonalExperience =
+    latestUserStepIndex >= 0 &&
+    latestUserStepIndex > lastProposeStepIndex &&
+    latestUserStepIndex > (convState.lastPersonalExpStep ?? -1) &&
+    latestUserSignals.hasPersonalExperience;
 
   const hasHeavyUnproposeEdits =
     editCountSinceLastPropose >= 4 ||
@@ -1756,6 +1937,7 @@ Options:
 
   if (
     !hasUserCorrection &&
+    !hasNewPersonalExperience &&
     !hasHeavyUnproposeEdits &&
     !hasHeavyDiagnosticReads &&
     !hasDirtyPostProposeEdits &&
@@ -1795,7 +1977,11 @@ Options:
     latestStepIndex - (convState.lastRemindedStep ?? -999) >= COOLDOWN_STEPS;
 
   const hasImmediateNewTrigger =
-    isNewCorrection || isNewDirtyEdit || isNewErrorRecovery || isNewAudit;
+    isNewCorrection ||
+    hasNewPersonalExperience ||
+    isNewDirtyEdit ||
+    isNewErrorRecovery ||
+    isNewAudit;
   const hasCooldownPendingTrigger =
     cooldownExpired &&
     (isPendingCorrectionAfterWork ||
@@ -1842,6 +2028,9 @@ Options:
       lastProposeStepIndex >= 0
         ? Math.max(convState.clearedAuditStep ?? -1, lastProposeStepIndex)
         : (convState.clearedAuditStep ?? -1),
+    lastPersonalExpStep: hasNewPersonalExperience
+      ? latestUserStepIndex
+      : (convState.lastPersonalExpStep ?? -1),
   };
   saveHookState(statePath, allState, conversationId, allState[conversationId]);
 
@@ -1853,6 +2042,9 @@ Options:
   }
   if (isNewCorrection || isPendingCorrectionAfterWork) {
     reasons.push('检测到用户纠偏/交付物反馈信号');
+  }
+  if (hasNewPersonalExperience) {
+    reasons.push('检测到跨项目个人经验/备忘信号');
   }
   if (isNewAudit || isPendingAudit) {
     reasons.push('检测到子智能体（Subagent）专项核查/取证完成唤醒信号');
@@ -1878,12 +2070,12 @@ Options:
     );
   }
 
-  const isStylePreferenceCue =
-    (isNewCorrection || isPendingCorrectionAfterWork) &&
-    STYLE_PREFERENCE_REGEX.test(latestUserContent);
-  const preferenceCue = isStylePreferenceCue
-    ? '；若涉及跨项目通用的个人表达/排版/格式偏好，请调用 evo_propose(kind: "preference", scope: "global") 沉淀至全局 Profile Card'
-    : '';
+  const activeSignals =
+    isNewCorrection || isPendingCorrectionAfterWork || hasNewPersonalExperience
+      ? latestUserSignals
+      : null;
+  const hintText = buildPreferenceHint(activeSignals);
+  const preferenceCue = hintText ? `；${hintText}` : '';
 
   const ephemeralMessage = `[EvoKernel 自演进提醒] ${reasons.join('；')}。在完成本轮根因诊断确认（含零代码修改的只读白盒排查）、假说证伪纠偏、代码修复或交付物验证后，请调用 evo_propose（显式传入当前 workspace 绝对路径）沉淀或更新经验（方法论/交付物规范纠偏请用 supersedes_id 升级 rule/skill，多变量修改缺乏因果隔离时使用 memory 或提供 contrastive_evidence，通用脚本沉淀为 tool，单点故障使用 memory${preferenceCue}），并在回复末尾输出 🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)。`;
 

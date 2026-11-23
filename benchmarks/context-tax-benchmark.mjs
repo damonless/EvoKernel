@@ -43,8 +43,8 @@ const TOTAL_MONOLITHIC_KNOWLEDGE_TOKENS = Object.values(MONOLITHIC_KNOWLEDGE_TOK
 );
 
 // EvoKernel Virtualized Footprint (shared META_MCP_5_TOOLS_TOKENS SSOT + live 5-tool MCP schema check)
-let liveMetaMcpSchemaTokens = 1916;
-let liveMetaMcpSchemaSource = 'static-baseline (5 tools, 1916 tokens @ ~3.8 chars/tok)';
+let liveMetaMcpSchemaTokens = 1953;
+let liveMetaMcpSchemaSource = 'static-baseline (5 tools, 1953 tokens @ ~3.8 chars/tok)';
 try {
   const storagePath = path.join(rootDir, 'dist', 'core', 'storage.js');
   if (fs.existsSync(storagePath)) {
@@ -69,7 +69,7 @@ try {
     liveMetaMcpSchemaSource = `live dist/mcp schema (${toolsDef.length} tools, ${liveMetaMcpSchemaTokens} tokens @ ~3.8 chars/tok)`;
   }
 } catch {
-  // Fallback to META_MCP_5_TOOLS_TOKENS (1916 tokens) if dist/ is not yet built
+  // Fallback to META_MCP_5_TOOLS_TOKENS (1953 tokens) if dist/ is not yet built
 }
 
 const EVOKERNEL_FOOTPRINT = {
