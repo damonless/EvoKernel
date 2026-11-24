@@ -255,14 +255,14 @@ function resolvePayload(options: HookOptions): Record<string, unknown> {
   }
   if (typeof options.payload === 'string') {
     try {
-      return JSON.parse(options.payload) as Record<string, unknown>;
+      return JSON.parse(options.payload.replace(/^\uFEFF/, '')) as Record<string, unknown>;
     } catch {
       return {};
     }
   }
   if (typeof options.stdinData === 'string') {
     try {
-      return JSON.parse(options.stdinData) as Record<string, unknown>;
+      return JSON.parse(options.stdinData.replace(/^\uFEFF/, '')) as Record<string, unknown>;
     } catch {
       return {};
     }
@@ -276,7 +276,7 @@ function resolvePayload(options: HookOptions): Record<string, unknown> {
     try {
       const stat = fs.fstatSync(0);
       if (stat.isFile() && stat.size > 0) {
-        const rawStdin = fs.readFileSync(0, 'utf8').trim();
+        const rawStdin = fs.readFileSync(0, 'utf8').replace(/^\uFEFF/, '').trim();
         if (rawStdin) {
           return JSON.parse(rawStdin) as Record<string, unknown>;
         }

@@ -2664,16 +2664,31 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         updated_at: new Date().toISOString(),
       });
 
-      const badRun = spawnSync(process.execPath, [auditorScript, '--self-test'], {
+      const badRun = spawnSync(process.execPath, [auditorScript], {
         cwd: ws,
         env: { ...process.env, EVO_WORKSPACE: ws, EVO_GLOBAL_DIR: fakeGlobalDir },
         encoding: 'utf8',
       });
-      assert.equal(badRun.status, 1, 'agy-config-auditor --self-test must fail on unhealthy workspace');
+      assert.equal(badRun.status, 1, 'agy-config-auditor must fail on unhealthy workspace');
       const badJson = JSON.parse(badRun.stdout.trim());
       assert.equal(badJson.ok, false);
       assert.equal(badJson.summary.broken_memory_symbols, 1);
       assert.equal(badJson.summary.gate1_5_violations, 1);
+
+      // H6: --self-test audits an isolated clean fixture and must exit 0 even when EVO_WORKSPACE is unhealthy
+      const selfTestRun = spawnSync(process.execPath, [auditorScript, '--self-test'], {
+        cwd: ws,
+        env: { ...process.env, EVO_WORKSPACE: ws, EVO_GLOBAL_DIR: fakeGlobalDir },
+        encoding: 'utf8',
+      });
+      assert.equal(
+        selfTestRun.status,
+        0,
+        `agy-config-auditor --self-test must pass via isolated fixture: ${selfTestRun.stderr}\n${selfTestRun.stdout}`
+      );
+      const selfTestJson = JSON.parse(selfTestRun.stdout.trim());
+      assert.equal(selfTestJson.ok, true);
+      assert.equal(selfTestJson.self_test_assertions, true);
     } finally {
       fs.rmSync(fakeGlobalDir, { recursive: true, force: true });
       fs.rmSync(ws, { recursive: true, force: true });

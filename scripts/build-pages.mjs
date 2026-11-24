@@ -228,7 +228,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; script-src 'sha256-${scriptHash}'; connect-src 'none'; base-uri 'self';" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2L4 6v6c0 5.25 3.4 10.1 8 11.4 4.6-1.3 8-6.15 8-11.4V6l-8-4z'/%3E%3Cpath d='M9 12l2 2 4-4'/%3E%3C/svg%3E" />
   <title>EvoKernel — Deterministic Cognitive Memory &amp; Meta-Kernel for AI Coding Agents</title>
-  <meta name="description" content="AST-verified cognitive memory, visible recall receipts, and 6-stage deterministic Gatekeeper for AI coding agents — with 88.7% lower session-start token tax and 0 dependencies." />
+  <meta name="description" content="AST-verified cognitive memory, visible recall receipts, and 6-stage deterministic Gatekeeper for AI coding agents — with 88.6% lower session-start token tax and 0 dependencies." />
   <style>
     :root {
       --bg-app: #09090b;
@@ -414,7 +414,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
     <div class="container topbar-inner">
       <div class="brand">
         <span>🧬 EvoKernel</span>
-        <span class="brand-badge">v0.4.0</span>
+        <span class="brand-badge">v0.5.0</span>
       </div>
       <nav class="nav-links">
         <a href="#pillars" data-i18n="navFeatures">Capabilities</a>
@@ -493,14 +493,14 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
           <p data-i18n="p1Desc">Root-cause fixes bind to live code symbols via lexical-structural skeleton hashes. Stale memories auto-demote when code changes, and active recalls emit a visible 1-line receipt (🛡️ EvoKernel Recall).</p>
         </article>
         <article class="card">
-          <span class="tag tag-gk" data-i18n="p2Tag">GATEKEEPER · WORKTREE</span>
-          <h3 data-i18n="p2Title">6-Stage Deterministic Gatekeeper &amp; Worktree Evolution</h3>
-          <p data-i18n="p2Desc">Every candidate rule, skill, micro-tool, or memory must pass static security, lexical de-symbolization, isolated --self-test rollback, hybrid BM25 deduplication, a 1,500-token core budget, and causal attribution.</p>
+          <span class="tag tag-gk" data-i18n="p2Tag">GATEKEEPER · AST GROUNDING</span>
+          <h3 data-i18n="p2Title">6-Stage Deterministic Gatekeeper &amp; Conflict Guard</h3>
+          <p data-i18n="p2Desc">Every candidate rule, skill, micro-tool, personal preference, or memory must pass static security, lexical de-symbolization, isolated --self-test rollback, hybrid BM25 + polarity conflict checks, 1,500-tok core / 800-tok profile / 250-tok directory budgets, and causal attribution.</p>
         </article>
         <article class="card">
           <span class="tag tag-mcp" data-i18n="p3Tag">VIRTUALIZATION · 10 HOSTS</span>
-          <h3 data-i18n="p3Title">Fixed 5-Tool Meta-MCP Across 10 Coding Harnesses</h3>
-          <p data-i18n="p3Desc">Folds sprawling third-party MCP schemas and monolithic CLAUDE.md files behind evo_search, evo_inspect, evo_run, evo_propose, and evo_compact across Claude Code, Cursor, Codex, Windsurf, Cline, Roo, Copilot, OpenCode, Gemini, and Antigravity.</p>
+          <h3 data-i18n="p3Title">Fixed 5-Tool Meta-MCP &amp; 3-Tier Personal Cognition Across 10 Hosts</h3>
+          <p data-i18n="p3Desc">Folds sprawling third-party MCP schemas, monolithic CLAUDE.md files, and cross-workspace 3-tier personal habits/workflows/experiences behind evo_search, evo_inspect, evo_run, evo_propose, and evo_compact across Claude Code, Cursor, Codex, Windsurf, Cline, Roo, Copilot, OpenCode, Gemini, and Antigravity.</p>
         </article>
       </div>
     </section>

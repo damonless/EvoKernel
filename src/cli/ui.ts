@@ -11,11 +11,15 @@ import type { ScoreReport } from './score.js';
 import {
   DEFAULT_EVO_CONFIG,
   EvoStorage,
+  PREFERENCE_CATEGORIES,
   estimateTokens,
+  formatUserProfileDigestForPreferences,
   hasValidEvoStructure,
   openSqliteReadOnly,
   resolveGlobalFallbackDir,
+  sanitizeId,
 } from '../core/storage.js';
+import type { PreferenceCategory } from '../core/types.js';
 import {
   type RecallWindowStats,
   emptyRecallWindowStats,
@@ -24,7 +28,7 @@ import {
 } from '../core/telemetry.js';
 import { verifyMemoryFreshness } from '../core/memory.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { PROFILE_MARKER_START } from '../templates/meta-rule.js';
+import { PROFILE_MARKER_START, renderUserProfileBlock } from '../templates/meta-rule.js';
 import { mountIdeExtensions, syncManagedRuleBlocks } from './init.js';
 import { formatTerminalOutput, isAsciiMode, isColorEnabled } from './term.js';
 import { discoverGlobalProfileTargets } from '../core/profile-sync.js';
@@ -149,6 +153,91 @@ function discoverBundledSeedIds(ws: string): Set<string> {
   }
 
   return ids;
+}
+
+function formatTaskDirectoryMenuFromItems(
+  prefs: any[],
+  skillsList: any[],
+  maxTokens: number
+): string {
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return '';
+  const seedSkillIds = new Set(['bug-to-guardrail-sop', 'evo-rule-architect']);
+  const catPriority: Record<PreferenceCategory, number> = {
+    workflow: 0,
+    requirement: 1,
+    knowledge: 2,
+    formatting: 3,
+    communication: 4,
+    style: 5,
+  };
+
+  const onDemandPrefs = (prefs || [])
+    .filter((p) => p && p.always_on === false && p.enabled !== false && p.review_status !== 'pending')
+    .sort(
+      (a, b) =>
+        (catPriority[a.category as PreferenceCategory] ?? 9) -
+          (catPriority[b.category as PreferenceCategory] ?? 9) ||
+        String(a.id || '').localeCompare(String(b.id || ''))
+    );
+
+  const nonSeedSkills = (skillsList || [])
+    .filter(
+      (s) =>
+        s &&
+        s.enabled !== false &&
+        s.origin !== 'bootstrap' &&
+        s.origin !== 'seed' &&
+        !seedSkillIds.has(s.id)
+    )
+    .sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')));
+
+  const prefLines = onDemandPrefs.map((p) => {
+    const cue = String(p.trigger_cue || p.category || 'style').trim().replace(/\s+/g, ' ');
+    const summary = String(p.l0_summary || p.title || p.id || '').trim().replace(/\s+/g, ' ');
+    return `- **[${p.id}]** (${cue}): ${summary} → \`evo_inspect("${p.id}", "L2")\``;
+  });
+  const skillLines = nonSeedSkills.map((s) => {
+    const cue = String(s.trigger_cue || 'skill').trim().replace(/\s+/g, ' ');
+    const summary = String(s.l0_summary || s.description || s.title || s.id || '')
+      .trim()
+      .replace(/\s+/g, ' ');
+    return `- **[${s.id}]** (${cue}): ${summary} → \`evo_inspect("${s.id}", "L2")\``;
+  });
+
+  if (prefLines.length === 0 && skillLines.length === 0) return '';
+
+  const keptPrefs: string[] = [];
+  const keptSkills: string[] = [];
+
+  const skillReserveCap =
+    prefLines.length > 0 && skillLines.length > 0
+      ? Math.max(Math.min(maxTokens, estimateTokens(skillLines[0])), Math.floor(maxTokens * 0.35))
+      : 0;
+  const prefCap = skillReserveCap > 0 ? Math.max(0, maxTokens - skillReserveCap) : maxTokens;
+
+  for (const line of prefLines) {
+    const candidate = [...keptPrefs, line].join('\n');
+    if (estimateTokens(candidate) <= prefCap) {
+      keptPrefs.push(line);
+    }
+  }
+
+  for (const line of skillLines) {
+    const candidate = [...keptPrefs, ...keptSkills, line].join('\n');
+    if (estimateTokens(candidate) <= maxTokens) {
+      keptSkills.push(line);
+    }
+  }
+
+  for (const line of prefLines) {
+    if (keptPrefs.includes(line)) continue;
+    const candidate = [...keptPrefs, line, ...keptSkills].join('\n');
+    if (estimateTokens(candidate) <= maxTokens) {
+      keptPrefs.push(line);
+    }
+  }
+
+  return [...keptPrefs, ...keptSkills].join('\n');
 }
 
 export function buildUiSnapshot(
@@ -721,6 +810,7 @@ export function buildUiSnapshot(
         let globalSkills: any[] = [];
         let globalMemories: any[] = [];
         let globalArchivedPrefs: any[] = [];
+        const globalMetaMap = new Map<string, { origin?: string; visibility?: string }>();
 
         if (isSameAsGlobal) {
           globalPrefs = preferences.map((p) => ({ ...p, tier: 'GLOBAL', scope: 'global' }));
@@ -729,8 +819,34 @@ export function buildUiSnapshot(
           globalArchivedPrefs = archived
             .filter((a) => a.kind === 'preference')
             .map((a) => ({ ...a, tier: 'GLOBAL' }));
+          for (const [k, v] of capMetaMap.entries()) {
+            globalMetaMap.set(k, v);
+          }
         } else if (hasGlobalEvo) {
-          globalPrefs = filterAnonItem(globalStorage.listPreferences()).map((pref) => {
+          const rawGlobalPrefs = globalStorage.listPreferences();
+          const rawGlobalSkills = globalStorage.listSkills();
+          const rawGlobalMemories = globalStorage.listMemories();
+          const rawGlobalArchived = globalStorage.listArchivedCapabilities();
+          for (const item of [
+            ...rawGlobalPrefs,
+            ...rawGlobalSkills,
+            ...rawGlobalMemories,
+            ...(rawGlobalArchived as any[]),
+          ]) {
+            const itemId = String((item as any)?.id || '');
+            if (!itemId) continue;
+            const origin = typeof (item as any).origin === 'string' ? (item as any).origin : undefined;
+            const visibility =
+              typeof (item as any).visibility === 'string' ? (item as any).visibility : undefined;
+            if (!globalMetaMap.has(itemId)) {
+              globalMetaMap.set(itemId, { origin, visibility });
+            }
+            if (visibility === 'local' || configExcludeIds.has(itemId)) {
+              hiddenAnonIds.add(itemId);
+            }
+          }
+
+          globalPrefs = filterAnonItem(rawGlobalPrefs).map((pref) => {
             const gt = globalTelemMap.get(pref.id) || { hit_count: 0, attribution: 'unverified' };
             const item: any = {
               ...pref,
@@ -746,8 +862,8 @@ export function buildUiSnapshot(
             }
             return item;
           });
-          globalSkills = filterAnonItem(globalStorage.listSkills()).filter((s) => s.enabled !== false);
-          globalMemories = filterAnonItem(globalStorage.listMemories()).map((m) => {
+          globalSkills = filterAnonItem(rawGlobalSkills).filter((s) => s.enabled !== false);
+          globalMemories = filterAnonItem(rawGlobalMemories).map((m) => {
             const gt = globalTelemMap.get(m.id) || { hit_count: 0, attribution: 'unverified' };
             return {
               ...m,
@@ -757,7 +873,7 @@ export function buildUiSnapshot(
             };
           });
           globalArchivedPrefs = filterAnonItem(
-            globalStorage.listArchivedCapabilities().filter((a) => a.kind === 'preference') as any[]
+            rawGlobalArchived.filter((a) => a.kind === 'preference') as any[]
           ).map((a) => ({
             ...a,
             tier: 'GLOBAL',
@@ -805,10 +921,12 @@ export function buildUiSnapshot(
           (globalCfg as any).maxProfileMenuTokens ??
           250;
         const renderedDirectoryMenu = hasGlobalEvo
-          ? globalStorage.formatTaskDirectoryMenu(maxMenuTokens)
+          ? formatTaskDirectoryMenuFromItems(globalPrefs, globalSkills, maxMenuTokens)
           : '';
-        const renderedCard = hasGlobalEvo ? globalStorage.formatUserProfileDigest() : '';
-        const totalTokens = hasGlobalEvo ? globalStorage.getProfileTokenUsage().totalTokens : 0;
+        const renderedCard = hasGlobalEvo ? formatUserProfileDigestForPreferences(globalPrefs) : '';
+        const totalTokens = renderedCard
+          ? estimateTokens(renderUserProfileBlock(renderedCard, ''))
+          : 0;
         const menuTokens = estimateTokens(renderedDirectoryMenu);
         const syncedHosts = probeSyncedHosts(globalRoot);
 
@@ -816,11 +934,60 @@ export function buildUiSnapshot(
         const rawHistoryFn = (globalStorage as any).listProfileHistory;
         if (hasGlobalEvo && typeof rawHistoryFn === 'function') {
           try {
-            history = (rawHistoryFn.call(globalStorage, 20) || []).map((entry: any) => ({
-              ...entry,
-              timestamp: entry.ts || entry.timestamp || '',
-              undoable: entry.action !== 'undo',
-            }));
+            const rawHistEntries = (rawHistoryFn.call(globalStorage, 50) || []) as any[];
+            const undoBalance = new Map<string, number>();
+            const processed = rawHistEntries.map((entry: any) => {
+              const entryId = String(entry?.id || '');
+              const cleanEntryId = sanitizeId(entryId) || entryId;
+              const entryKind = String(entry?.kind || 'preference');
+              const balKey = `${entryKind}:${cleanEntryId}`;
+              let undoable = false;
+              if (entry?.action === 'undo') {
+                undoBalance.set(balKey, (undoBalance.get(balKey) || 0) + 1);
+                undoable = false;
+              } else if (
+                entry?.action === 'add' ||
+                entry?.action === 'update' ||
+                entry?.action === 'archive'
+              ) {
+                const pendingUndos = undoBalance.get(balKey) || 0;
+                if (pendingUndos > 0) {
+                  undoBalance.set(balKey, pendingUndos - 1);
+                  undoable = false;
+                } else {
+                  undoable = true;
+                }
+              }
+
+              const {
+                previous_snapshot: _prevSnap,
+                superseded_snapshot: _supSnap,
+                self_previous_snapshot: _selfPrevSnap,
+                ...restEntry
+              } = entry || {};
+              const meta = globalMetaMap.get(entryId) || globalMetaMap.get(cleanEntryId) || capMetaMap.get(entryId);
+              return {
+                ...restEntry,
+                id: entryId,
+                origin: meta?.origin,
+                visibility: meta?.visibility,
+                timestamp: entry?.ts || entry?.timestamp || '',
+                undoable,
+              };
+            });
+
+            history = filterAnonItem(processed)
+              .slice(0, 20)
+              .map(({ origin: _o, visibility: _v, ...cleanEntry }: any) => {
+                if (!options?.anon) return cleanEntry;
+                return {
+                  ...cleanEntry,
+                  title: scrubAnonTextValue(String(cleanEntry.title || ''), ws, relativePathReplacements),
+                  ...(typeof cleanEntry.reason === 'string'
+                    ? { reason: scrubAnonTextValue(cleanEntry.reason, ws, relativePathReplacements) }
+                    : {}),
+                };
+              });
           } catch {
             history = [];
           }
@@ -1050,6 +1217,27 @@ export function isTestEnvironment(): boolean {
   return Boolean(process.env.NODE_TEST_CONTEXT || process.env.EVO_TEST_MODE);
 }
 
+const WIN_CMD_METACHAR_RE = /[&|<>^%!"\0\r\n]/;
+
+function resolveUnderlyingEditorExe(shimPath: string, editorName: string): string | null {
+  const dir = path.dirname(shimPath);
+  const capName = editorName.charAt(0).toUpperCase() + editorName.slice(1);
+  const candidates = [
+    path.join(dir, `${editorName}.exe`),
+    path.join(dir, `${capName}.exe`),
+    path.resolve(dir, '..', `${editorName}.exe`),
+    path.resolve(dir, '..', `${capName}.exe`),
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c) && fs.statSync(c).isFile()) {
+        return c;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 export function launchEditorAtLocation(filePath: string, line: number): { launched: boolean; editor?: string } {
   const targetArg = `${filePath}:${line}`;
   const candidates = ['cursor', 'code', 'windsurf'];
@@ -1057,17 +1245,22 @@ export function launchEditorAtLocation(filePath: string, line: number): { launch
   for (const name of candidates) {
     const execPath = findEditorExecutable(name);
     if (execPath) {
+      const isCmdShim = process.platform === 'win32' && /\.(cmd|bat)$/i.test(execPath);
+      const directExe = isCmdShim ? resolveUnderlyingEditorExe(execPath, name) : execPath;
+      if (isCmdShim && !directExe && (WIN_CMD_METACHAR_RE.test(targetArg) || WIN_CMD_METACHAR_RE.test(execPath))) {
+        return { launched: false };
+      }
       if (isTestEnvironment()) {
         return { launched: false, editor: name };
       }
       try {
-        if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(execPath)) {
+        if (isCmdShim && !directExe) {
           spawn('cmd.exe', ['/c', execPath, '--goto', targetArg], {
             detached: true,
             stdio: 'ignore',
           }).unref();
         } else {
-          spawn(execPath, ['--goto', targetArg], {
+          spawn(directExe || execPath, ['--goto', targetArg], {
             detached: true,
             stdio: 'ignore',
           }).unref();
@@ -1084,10 +1277,15 @@ export function launchEditorAtLocation(filePath: string, line: number): { launch
   // Fallback to platform system opener if no IDE CLI detected
   try {
     if (process.platform === 'win32') {
-      spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Start-Process -FilePath ${JSON.stringify(filePath)}`], {
-        detached: true,
-        stdio: 'ignore',
-      }).unref();
+      spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process -FilePath $env:EVO_OPEN_TARGET'],
+        {
+          detached: true,
+          stdio: 'ignore',
+          env: { ...process.env, EVO_OPEN_TARGET: filePath },
+        }
+      ).unref();
     } else if (process.platform === 'darwin') {
       spawn('open', [filePath], { detached: true, stdio: 'ignore' }).unref();
     } else {
@@ -1289,6 +1487,10 @@ export async function startUiServer(
 
   const server = http.createServer(async (req, res) => {
     try {
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+
       const hostHeader = (req.headers.host || '').toLowerCase();
       const hostname = hostHeader.split(':')[0];
       if (hostname !== '127.0.0.1' && hostname !== 'localhost') {
@@ -1302,13 +1504,32 @@ export async function startUiServer(
         return;
       }
 
-      const reqUrl = new URL(req.url || '/', `http://${hostHeader || '127.0.0.1'}`);
-      const pathname = reqUrl.pathname;
-      if (pathname === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(renderUiClientHtml(snapshot, { token, anon: options.anon }));
+      const activePort =
+        typeof server.address() === 'object' && server.address()
+          ? (server.address() as { port: number }).port
+          : boundPort;
+      const rawOrigin = req.headers.origin;
+      if (rawOrigin !== undefined) {
+        const normOrigin = String(rawOrigin).trim().toLowerCase();
+        const allowedOrigins = new Set([
+          `http://127.0.0.1:${activePort}`,
+          `http://localhost:${activePort}`,
+        ]);
+        if (!allowedOrigins.has(normOrigin)) {
+          res.writeHead(403, { 'Content-Type': 'text/plain' });
+          res.end('Forbidden: Origin not allowed');
+          return;
+        }
+      }
+
+      let reqUrl: URL;
+      try {
+        reqUrl = new URL(req.url || '/', `http://${hostHeader || '127.0.0.1'}`);
+      } catch {
+        sendJsonResponse(res, 400, { ok: false, error: 'Bad Request: Invalid URL or Host header' });
         return;
       }
+      const pathname = reqUrl.pathname;
       if (pathname === '/favicon.ico') {
         res.writeHead(204);
         res.end();
@@ -1317,8 +1538,30 @@ export async function startUiServer(
 
       const headerToken = req.headers['x-evo-ui-token'];
       const queryToken = reqUrl.searchParams.get('token');
-      if (headerToken !== token && queryToken !== token) {
+      const tokenBuf = Buffer.from(token, 'utf8');
+      const matchesToken = (cand: unknown): boolean => {
+        if (typeof cand !== 'string') return false;
+        const candBuf = Buffer.from(cand, 'utf8');
+        if (candBuf.length !== tokenBuf.length) return false;
+        return crypto.timingSafeEqual(candBuf, tokenBuf);
+      };
+      if (!matchesToken(headerToken) && !matchesToken(queryToken)) {
         sendJsonResponse(res, 401, { ok: false, error: 'Unauthorized: Valid X-Evo-UI-Token required' });
+        return;
+      }
+
+      if (pathname === '/') {
+        const rawHtml = renderUiClientHtml(snapshot, { token, anon: options.anon }).replace(/\r\n/g, '\n');
+        const scriptMatch = rawHtml.match(/<script>([\s\S]*?)<\/script>/);
+        const cspHeader = scriptMatch
+          ? `default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; script-src 'sha256-${crypto
+              .createHash('sha256')
+              .update(scriptMatch[1], 'utf8')
+              .digest('base64')}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`
+          : "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+        res.setHeader('Content-Security-Policy', cspHeader);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(rawHtml);
         return;
       }
 
@@ -1336,6 +1579,17 @@ export async function startUiServer(
       }
       if (pathname === '/api/export') {
         const exportHtml = buildExportHtmlContent(ws, { anon: options.anon });
+        const exportScriptMatch = exportHtml.match(/<script>([\s\S]*?)<\/script>/);
+        if (exportScriptMatch) {
+          const exportHash = crypto
+            .createHash('sha256')
+            .update(exportScriptMatch[1], 'utf8')
+            .digest('base64');
+          res.setHeader(
+            'Content-Security-Policy',
+            `default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; script-src 'sha256-${exportHash}'; connect-src 'none'; frame-ancestors 'none'`
+          );
+        }
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Disposition': 'attachment; filename="evo-workbench-export.html"',
@@ -1384,6 +1638,7 @@ export async function startUiServer(
         const actionResult = await executeWorkbenchAction(ws, action, params, {
           buildSnapshot: (targetWs, opts) => buildUiSnapshot(targetWs, opts),
           anon: options.anon,
+          allowEvoDirOpen: true,
           notifyChange,
           openEditor: (targetPath, lineNum) => {
             const { launched, editor } = launchEditorAtLocation(targetPath, lineNum);

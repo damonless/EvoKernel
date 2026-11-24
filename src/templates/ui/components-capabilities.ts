@@ -710,6 +710,8 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         statusCol = '<span class="badge-status"><span class="dot ' + dotCls + '"></span> ' + esc(formatMemoryStatusLabel(st)) + '</span>';
       } else if (k === 'tools') {
         statusCol = '<span class="badge-status">' + esc(dict.tierSandbox) + ' (' + esc(it.runtime || 'node') + ')</span>';
+      } else if (k === 'preferences') {
+        statusCol = '<span class="badge-status">PREFERENCE</span>';
       } else {
         statusCol = '<span class="badge-status">' + esc(dict.tierSkillSop) + '</span>';
       }
@@ -1473,7 +1475,8 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     var isArchived = Boolean(item.archived_at);
     var isPaused = item.enabled === false;
     var isPending = item.review_status === 'pending' && !isArchived;
-    var itemTier = item.tier || (kind === 'preferences' ? 'GLOBAL' : undefined);
+    var isGlobalPersonalMem = kind === 'memories' && (item.tier === 'GLOBAL' || (!item.tier && item.memory_type === 'personal'));
+    var itemTier = item.tier || (kind === 'preferences' || isGlobalPersonalMem ? 'GLOBAL' : undefined);
 
     var header = document.createElement('div');
     header.className = 'inspector-header';
@@ -1631,7 +1634,14 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
             }
           }
           if (!filePath) {
-            filePath = '.evo/memories/' + item.id + '.md';
+            var gRoot = (itemTier === 'GLOBAL' && snapshot && snapshot.userProfile && snapshot.userProfile.globalRoot && !isAnon)
+              ? String(snapshot.userProfile.globalRoot).replace(/[\\\\/]+$/, '')
+              : '';
+            if (gRoot && (gRoot.charAt(0) === '/' || /^[A-Za-z]:/.test(gRoot))) {
+              filePath = gRoot + '/.evo/memories/' + item.id + '.md';
+            } else {
+              filePath = '.evo/memories/' + item.id + '.md';
+            }
           }
         } else if (kind === 'rules') {
           filePath = item.core ? ('.evo/rules/' + item.id + '.md') : ('.evo/rules/scoped/' + item.id + '.md');

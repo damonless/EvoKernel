@@ -549,11 +549,36 @@ describe('Causal Telemetry, Outcome Attribution & Dynamic Section 5 Catalog Suit
       // When hooks became empty, .codex/hooks.json was cleanly deleted
       assert.equal(fs.existsSync(codexHooksFile), false, 'Codex hooks.json should be removed when hooks become empty');
 
-      // 4. Codex clean uninstall removes .codex/hooks.json if present
+      // 4. Codex clean uninstall preserves untouched non-Evo .codex/hooks.json (H12)
       fs.writeFileSync(codexHooksFile, JSON.stringify({ hooks: { PreToolUse: [] } }));
       const codexAdapter = new CodexAdapter();
       codexAdapter.uninstall(ws);
-      assert.equal(fs.existsSync(codexHooksFile), false, '.codex/hooks.json must be removed on Codex uninstall');
+      assert.equal(
+        fs.existsSync(codexHooksFile),
+        true,
+        'untouched non-Evo .codex/hooks.json must be preserved on Codex uninstall'
+      );
+
+      // 4b. When .codex/hooks.json contains only an EvoKernel hook entry, uninstall removes it cleanly
+      fs.writeFileSync(
+        codexHooksFile,
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: '*',
+                hooks: [{ type: 'command', command: 'node /tmp/evo/dist/cli/index.js hook pre-tool' }],
+              },
+            ],
+          },
+        })
+      );
+      codexAdapter.uninstall(ws);
+      assert.equal(
+        fs.existsSync(codexHooksFile),
+        false,
+        'Codex uninstall removes .codex/hooks.json when only EvoKernel entries were present'
+      );
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

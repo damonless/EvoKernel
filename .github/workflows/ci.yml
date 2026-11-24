@@ -28,6 +28,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: TypeScript Strict Typecheck (tsc --noEmit)
+        run: npx -y -p typescript@5.6.3 -p @types/node@22 tsc --noEmit
+
       - name: Build ESM Bundle (dist/)
         run: npm run build
 

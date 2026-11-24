@@ -155,6 +155,7 @@ export const PROFILE_CLIENT_SCRIPT = `
   var editingProfilePrefId = null;
   var editingProfilePrefTier = 'GLOBAL';
   var editingProfilePrefEnabled = true;
+  var editingProfilePrefReviewStatus = 'approved';
 
   function getUserProfileData() {
     if (snapshot && snapshot.userProfile) return snapshot.userProfile;
@@ -573,6 +574,7 @@ export const PROFILE_CLIENT_SCRIPT = `
     editingProfilePrefId = item && item.id ? item.id : null;
     editingProfilePrefTier = (item && item.tier) ? item.tier : 'GLOBAL';
     editingProfilePrefEnabled = (item && item.enabled === false) ? false : true;
+    editingProfilePrefReviewStatus = (item && item.review_status === 'pending') ? 'pending' : 'approved';
     var heading = el('profile-editor-heading');
     if (heading) heading.textContent = editingProfilePrefId ? dict.profileFormTitleEdit : dict.profileFormTitleNew;
 
@@ -612,6 +614,7 @@ export const PROFILE_CLIENT_SCRIPT = `
         editingProfilePrefId = null;
         editingProfilePrefTier = 'GLOBAL';
         editingProfilePrefEnabled = true;
+        editingProfilePrefReviewStatus = 'approved';
         if (el('profile-editor-panel')) el('profile-editor-panel').classList.remove('open');
       });
     }
@@ -641,6 +644,7 @@ export const PROFILE_CLIENT_SCRIPT = `
           payload.id = editingProfilePrefId;
           payload.supersedes_id = editingProfilePrefId;
           payload.enabled = editingProfilePrefEnabled;
+          payload.review_status = editingProfilePrefReviewStatus;
         }
         callKernelAction('create-preference', payload).then(function(res) {
           if (res && res.ok) {
@@ -648,6 +652,7 @@ export const PROFILE_CLIENT_SCRIPT = `
             editingProfilePrefId = null;
             editingProfilePrefTier = 'GLOBAL';
             editingProfilePrefEnabled = true;
+            editingProfilePrefReviewStatus = 'approved';
             if (el('profile-editor-panel')) el('profile-editor-panel').classList.remove('open');
             rerenderAllViews();
             var createdId = (res.data && res.data.id) ? res.data.id : (title || 'preference');

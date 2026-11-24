@@ -415,6 +415,7 @@ export const dispatchExtensionAction = handleWebviewAction;
 let activePanel: VsCodeWebviewPanel | undefined = undefined;
 let activePanelWatchers: fs.FSWatcher[] = [];
 let activePanelDebounce: ReturnType<typeof setTimeout> | undefined = undefined;
+const disposedPanels = new WeakSet<VsCodeWebviewPanel>();
 
 function disposeActivePanelResources(): void {
   if (activePanelDebounce) {
@@ -443,9 +444,10 @@ export async function activate(
   let currentWs = '';
 
   const pushSnapshot = () => {
-    if (!activePanel || !currentWs) return;
+    if (!activePanel || disposedPanels.has(activePanel) || !currentWs) return;
     try {
       const snap = buildUiSnapshot(currentWs);
+      if (!activePanel || disposedPanels.has(activePanel)) return;
       void activePanel.webview.postMessage({
         type: 'evoSnapshotPush',
         snapshot: snap,
@@ -531,7 +533,7 @@ export async function activate(
 
     currentWs = ws;
 
-    if (activePanel) {
+    if (activePanel && !disposedPanels.has(activePanel)) {
       activePanel.reveal(vscode?.ViewColumn?.One ?? 1, false);
       attachWatchers(currentWs);
       pushSnapshot();
@@ -549,13 +551,19 @@ export async function activate(
       }
     );
     activePanel = panel;
+    let panelDisposed = false;
 
     panel.onDidDispose(() => {
+      panelDisposed = true;
+      disposedPanels.add(panel);
       disposeActivePanelResources();
-      activePanel = undefined;
+      if (activePanel === panel) {
+        activePanel = undefined;
+      }
     }, null, context?.subscriptions);
 
     panel.onDidChangeViewState?.((e: any) => {
+      if (panelDisposed || disposedPanels.has(panel)) return;
       const isVisible = e?.webviewPanel?.visible ?? panel.visible;
       if (!isVisible) return;
       syncResolvedWorkspace(true);
@@ -565,17 +573,25 @@ export async function activate(
     attachWatchers(currentWs);
 
     panel.webview.onDidReceiveMessage(async (message: any) => {
+      if (panelDisposed || disposedPanels.has(panel)) {
+        return;
+      }
       if (!message || message.type !== 'evoAction' || !message.reqId || !message.action) {
         return;
       }
 
       const res = await handleWebviewAction(message.action, message.params || {}, currentWs, vscode);
-      panel.webview.postMessage({
-        type: 'evoActionResult',
-        reqId: message.reqId,
-        action: message.action,
-        ...res,
-      });
+      if (panelDisposed || disposedPanels.has(panel)) {
+        return;
+      }
+      try {
+        await panel.webview.postMessage({
+          type: 'evoActionResult',
+          reqId: message.reqId,
+          action: message.action,
+          ...res,
+        });
+      } catch {}
     }, null, context?.subscriptions);
   };
 
@@ -598,6 +614,7 @@ export async function activate(
 export function deactivate(): void {
   disposeActivePanelResources();
   if (activePanel) {
+    disposedPanels.add(activePanel);
     try {
       activePanel.dispose();
     } catch {}

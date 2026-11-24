@@ -10,12 +10,12 @@
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
 [![EvoKernel Workbench Demo](https://img.shields.io/badge/EvoKernel_Workbench-Interactive_Demo-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/demo/)
 [![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-100%2F100_(A%2B)-34d399?style=flat-square)](#-30-second-quick-start)
-[![Version](https://img.shields.io/badge/npm-v0.4.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
+[![Version](https://img.shields.io/badge/npm-v0.5.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(Zero%20Supply--Chain%20Risk)-brightgreen?style=flat-square)](#-zero-dependency-architecture)
 [![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20Byte--Stable-ff6b6b?style=flat-square)](#-core-architecture-5-fixed-meta-tools)
-[![Tests](https://img.shields.io/badge/tests-363%20passed%20%7C%2014%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
+[![Tests](https://img.shields.io/badge/tests-381%20passed%20%7C%2015%20suites-brightgreen?style=flat-square)](#-comprehensive-verification-suite)
 
 **[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 Product Site](https://damonless.github.io/EvoKernel/) · [🖥️ Interactive Workbench Demo](https://damonless.github.io/EvoKernel/demo/) · [📊 Benchmarks](benchmarks/README.md)**
 
@@ -182,7 +182,7 @@ Analytical cost/cache model across **8 standard MCP servers** (`github`, `playwr
 | **50-Turn Cumulative Prompt Tokens** | 1,931,250 tokens | **740,420 tokens** | **-61.7% total token load** |
 | **50-Turn Cost (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **-70.3% API cost** |
 | **50-Turn Cost (Claude Opus 4.5)** | \$5.76 | **\$1.71** | **-70.3% API cost** |
-| **Live Engine AST Verification Speed** | Unverified text (drifts silently) | **~1.3–2.0 ms / memory** | **~55–85ms batch across 43 memories¹** |
+| **Live Engine AST Verification Speed** | Unverified text (drifts silently) | **~11.4 ms / memory** | **~500 ms batch across 44 memories¹** |
 
 > ¹ *Terminology Note:* AST Anti-Drift / AST Fingerprinting utilizes **Zero-Dep Lexical-Structural Skeleton Fingerprinting**, which is immune to comments, code reformatting, and line-number drift without requiring external compiler dependencies.
 
@@ -213,7 +213,7 @@ Every developer using Claude Code, Cursor, Windsurf, Cline, Roo, Copilot, Codex,
 
 <br/>
 
-| Dimension | `MemGPT / Letta` | `Aider` | Direct MCP Proxies | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.4.0 (Ours)** |
+| Dimension | `MemGPT / Letta` | `Aider` | Direct MCP Proxies | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.5.0 (Ours)** |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Primary Focus** | Stateful conversational agent DB | Git-centric terminal pair programmer | Pass-through MCP aggregation | Static engineering prompt library | Background LLM evolutionary agent | **Deterministic self-evolving meta-kernel for coding agents** |
 | **Integration Architecture** | Heavy external service / Postgres / Python daemon | Standalone Python CLI replacing developer IDE | Raw JSON-RPC bridge passing all child tools | Preloaded Markdown templates | Hijacks `/v1/chat` reverse proxy | **Parasitic Meta-MCP + <80-line Seed injected into existing IDEs** |
@@ -433,10 +433,10 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-**363 tests across 14 test suites pass via `node ./scripts/test.mjs` with 0 failures:**
+**381 tests across 15 test suites pass via `node ./scripts/test.mjs` with 0 failures:**
 
 <details>
-<summary><b>🔍 View All 14 Verified Test Suites (Click to expand)</b></summary>
+<summary><b>🔍 View All 15 Verified Test Suites (Click to expand)</b></summary>
 
 | # | Suite File | Coverage Domain | Tests |
 | :---: | :--- | :--- | :---: |
@@ -446,14 +446,15 @@ node ./scripts/test.mjs
 | 4 | `dist/tests/evo-kernel.test.js` | Core Gatekeeper, Sandbox, AST Cognitive Memory & Invariants | 54 tests |
 | 5 | `dist/tests/hook.test.js` | Universal Hook Router & Open-Pipe Stdin Non-Blocking Resilience | 32 tests |
 | 6 | `dist/tests/issue-34-and-route-b-profile.test.js` | Issue #34 Hardening & Route B Cross-Workspace Personal Profile | 13 tests |
-| 7 | `dist/tests/issues-31-32-33-audit-fixes.test.js` | Issues #31–#33 Audit Fixes Regression Suite | 7 tests |
-| 8 | `dist/tests/issues-31-32-33-b1-b9-hardening.test.js` | Issues #31–#33 Umbrella Waterfall, Async Lock & Lexicon Hardening | 10 tests |
-| 9 | `dist/tests/lifecycle-guard-hooks.test.js` | Lifecycle Guard Hooks, Trigger Cues & Reference Integrity | 27 tests |
-| 10 | `dist/tests/mcp-proxy.test.js` | Downstream MCP Proxy Virtualization Suite | 11 tests |
-| 11 | `dist/tests/multi-harness.test.js` | Multi-Agent Harness Matrix & Cascaded Detection Suite | 15 tests |
-| 12 | `dist/tests/score-and-ui.test.js` | Score, EvoKernel Workbench UI & Control API, Warmup & Slash Commands Suite | 31 tests |
-| 13 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & S0-S3 Hardening Suite | 69 tests |
-| 14 | `dist/tests/v05-user-cognition-and-defects.test.js` | v0.5 3-Tier User Cognition, 8-Host Profile Sync, 1-Click Undo & Defect Regressions | 18 tests |
+| 7 | `dist/tests/issue-35-security-and-regression.test.js` | Issue #35 Security, Marker/Budget Guards, Auditor & Regression Suite | 18 tests |
+| 8 | `dist/tests/issues-31-32-33-audit-fixes.test.js` | Issues #31–#33 Audit Fixes Regression Suite | 7 tests |
+| 9 | `dist/tests/issues-31-32-33-b1-b9-hardening.test.js` | Issues #31–#33 Umbrella Waterfall, Async Lock & Lexicon Hardening | 10 tests |
+| 10 | `dist/tests/lifecycle-guard-hooks.test.js` | Lifecycle Guard Hooks, Trigger Cues & Reference Integrity | 27 tests |
+| 11 | `dist/tests/mcp-proxy.test.js` | Downstream MCP Proxy Virtualization Suite | 11 tests |
+| 12 | `dist/tests/multi-harness.test.js` | Multi-Agent Harness Matrix & Cascaded Detection Suite | 15 tests |
+| 13 | `dist/tests/score-and-ui.test.js` | Score, EvoKernel Workbench UI & Control API, Warmup & Slash Commands Suite | 31 tests |
+| 14 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & S0-S3 Hardening Suite | 69 tests |
+| 15 | `dist/tests/v05-user-cognition-and-defects.test.js` | v0.5 3-Tier User Cognition, 8-Host Profile Sync, 1-Click Undo & Defect Regressions | 18 tests |
 
 </details>
 

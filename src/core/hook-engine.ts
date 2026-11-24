@@ -207,7 +207,8 @@ function capabilityExistsInStorage(storage: EvoStorage, id: string): boolean {
     Boolean(storage.getSkill(id)) ||
     Boolean(storage.getTool(id)) ||
     Boolean(storage.getMemory(id)) ||
-    Boolean(storage.getPreference(id))
+    Boolean(storage.getPreference(id)) ||
+    storage.listExternalTools().some((t) => t.id === id)
   );
 }
 
@@ -227,6 +228,13 @@ export function recordRecalledOutcomeUnified(
 ): void {
   const checkRelevant = isRelevantFn ?? defaultIsCapabilityRelevantToModifiedFiles;
   const existsLocally = capabilityExistsInStorage(localStorage, entry.id);
+
+  if (entry.tier === 'LOCAL') {
+    if (existsLocally && checkRelevant(localStorage, entry, modifiedFiles)) {
+      localTelemetry.recordCapabilityOutcome(entry.id, outcome);
+    }
+    return;
+  }
 
   if (existsLocally && entry.tier !== 'GLOBAL') {
     if (!checkRelevant(localStorage, entry, modifiedFiles)) {

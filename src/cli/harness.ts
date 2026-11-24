@@ -6,6 +6,7 @@ import {
   META_RULE_MARKER_START,
 } from '../templates/meta-rule.js';
 import { EvoStorage } from '../core/storage.js';
+import { isRealSubpathOf } from '../core/memory.js';
 
 export interface HarnessInstallResult {
   updatedFiles: string[];
@@ -1309,7 +1310,10 @@ export function upsertOpenCode(
     current.instructions = targetFiles;
 
     for (const relFile of targetFiles) {
-      const fullPath = path.join(workspaceRoot, relFile);
+      const fullPath = path.resolve(workspaceRoot, relFile);
+      if (!isRealSubpathOf(workspaceRoot, fullPath)) {
+        continue;
+      }
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
       let existingContent = '';
       if (fs.existsSync(fullPath)) {
@@ -1370,9 +1374,14 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
 
     if (Array.isArray(parsed.instructions)) {
       const remaining: string[] = [];
+      let removedEvoInstruction = false;
       for (const relFile of parsed.instructions) {
         if (typeof relFile !== 'string' || !relFile.trim()) continue;
-        const targetPath = path.join(workspaceRoot, relFile);
+        const targetPath = path.resolve(workspaceRoot, relFile);
+        if (!isRealSubpathOf(workspaceRoot, targetPath)) {
+          remaining.push(relFile);
+          continue;
+        }
         if (fs.existsSync(targetPath)) {
           const c = fs.readFileSync(targetPath, 'utf8');
           if (c.includes(META_RULE_MARKER_START)) {
@@ -1382,6 +1391,7 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
                 fs.unlinkSync(targetPath);
               } catch {}
               modified = true;
+              removedEvoInstruction = true;
             } else {
               fs.writeFileSync(targetPath, next, 'utf8');
               remaining.push(relFile);
@@ -1390,22 +1400,27 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
           } else {
             remaining.push(relFile);
           }
+        } else if (modified && relFile === 'AGENTS.md') {
+          removedEvoInstruction = true;
         } else {
+          remaining.push(relFile);
+        }
+      }
+      if (removedEvoInstruction) {
+        if (remaining.length === 0) {
+          delete parsed.instructions;
+          modified = true;
+        } else if (remaining.length !== parsed.instructions.length) {
+          parsed.instructions = remaining;
           modified = true;
         }
       }
-      if (remaining.length === 0) {
-        delete parsed.instructions;
-        modified = true;
-      } else if (remaining.length !== parsed.instructions.length) {
-        parsed.instructions = remaining;
-        modified = true;
-      }
     }
 
-    if (parsed.instructionsFile) {
-      const targetPath = path.join(workspaceRoot, String(parsed.instructionsFile));
-      if (fs.existsSync(targetPath)) {
+    if (typeof parsed.instructionsFile === 'string' && parsed.instructionsFile.trim()) {
+      const instFile = parsed.instructionsFile;
+      const targetPath = path.resolve(workspaceRoot, instFile);
+      if (isRealSubpathOf(workspaceRoot, targetPath) && fs.existsSync(targetPath)) {
         const c = fs.readFileSync(targetPath, 'utf8');
         if (c.includes(META_RULE_MARKER_START)) {
           const next = removeMarkerBlock(c);
@@ -1416,13 +1431,12 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
           } else {
             fs.writeFileSync(targetPath, next, 'utf8');
           }
-          cleaned.push(String(parsed.instructionsFile));
+          cleaned.push(instFile);
         }
-      } else {
-        delete parsed.instructionsFile;
-        modified = true;
       }
     }
+
+    if (!modified) return cleaned;
 
     if (Object.keys(parsed).length === 0) {
       fs.unlinkSync(filePath);
@@ -1430,10 +1444,8 @@ export function removeOpenCode(filePath: string, workspaceRoot: string): string[
       return cleaned;
     }
 
-    if (modified) {
-      fs.writeFileSync(filePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
-      cleaned.push('opencode.json');
-    }
+    fs.writeFileSync(filePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+    cleaned.push('opencode.json');
   } catch {
     // Ignore JSON errors
   }
@@ -1878,6 +1890,7 @@ export class CodexAdapter implements HarnessAdapter {
             if (Array.isArray(hooks[ev])) {
               const origList = hooks[ev] as Array<Record<string, unknown>>;
               const nextList: Array<Record<string, unknown>> = [];
+              let evModified = false;
               for (const entry of origList) {
                 if (Array.isArray(entry?.hooks)) {
                   const origInner = entry.hooks as Array<Record<string, unknown>>;
@@ -1888,6 +1901,7 @@ export class CodexAdapter implements HarnessAdapter {
                     nextList.push(entry);
                   } else {
                     modified = true;
+                    evModified = true;
                     if (inner.length > 0) {
                       nextList.push({ ...entry, hooks: inner });
                     }
@@ -1896,21 +1910,20 @@ export class CodexAdapter implements HarnessAdapter {
                   nextList.push(entry);
                 } else {
                   modified = true;
+                  evModified = true;
                 }
               }
-              hooks[ev] = nextList;
-              if (nextList.length === 0) {
-                delete hooks[ev];
+              if (evModified) {
+                hooks[ev] = nextList;
+                if (nextList.length === 0) {
+                  delete hooks[ev];
+                }
               }
             }
           }
-          if (Object.keys(hooks).length === 0) {
+          if (modified && Object.keys(hooks).length === 0) {
             delete parsed.hooks;
-            modified = true;
           }
-        }
-        if (Object.keys(parsed).length === 0) {
-          modified = true;
         }
         if (modified) {
           if (Object.keys(parsed).length === 0) {
@@ -2060,7 +2073,7 @@ export function upsertAntigravityHooks(ws: string): string[] {
   }
 
   const makeHookCmd = (event: 'PreInvocation' | 'Stop') =>
-    `node .agents/scripts/antigravity_hook.mjs ${event} || node scripts/antigravity_hook.mjs ${event}`;
+    `node scripts/antigravity_hook.mjs ${event} || node .agents/scripts/antigravity_hook.mjs ${event}`;
 
   hooksObj['evo-evolution-reminder'] = {
     PreInvocation: [

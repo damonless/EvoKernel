@@ -153,11 +153,22 @@ describe('EvoKernel P1 & P2: Score, UI Cockpit, Slash Commands & Manifest Parity
         req.end();
       });
 
-      // 2b. Root GET on live instance URL returns 200 HTML with parseable inline script
+      // 2b. Root GET without token returns 401 (C3); with ?token= returns 200 HTML, strict CSP, and X-Frame-Options: DENY
+      await new Promise<void>((resolve, reject) => {
+        http.get(`http://127.0.0.1:${instance.port}/`, (res) => {
+          assert.equal(res.statusCode, 401, 'Root GET without token must return 401');
+          resolve();
+        }).on('error', reject);
+      });
+
       await new Promise<void>((resolve, reject) => {
         http.get(instance.url, (res) => {
           assert.equal(res.statusCode, 200);
           assert.ok(res.headers['content-type']?.includes('text/html'));
+          assert.equal(res.headers['x-frame-options'], 'DENY');
+          const csp = String(res.headers['content-security-policy'] || '');
+          assert.ok(csp.includes("frame-ancestors 'none'"), `CSP missing frame-ancestors 'none': ${csp}`);
+          assert.ok(csp.includes("'sha256-"), `CSP missing sha256 script hash: ${csp}`);
           let body = '';
           res.on('data', (c) => (body += c));
           res.on('end', () => {

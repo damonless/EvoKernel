@@ -2,6 +2,27 @@
 
 All notable changes to **EvoKernel (`evo-kernel`)** will be documented in this file.
 
+## [0.5.0] - 2026-11-24
+
+### Added
+- **3-Tier Personal User Cognition Engine (`~/.evo/global/`)**:
+  - **Tier 1 (`always_on: true` preferences)**: 800-token Profile Card synced cleanly into host global instruction files (`CLAUDE.md`, `GEMINI.md`, `AGENTS.md`, Windsurf, Cursor, OpenCode, etc.) via unified `profile-sync` markers, with `evo profile add/list/remove/undo/export/import` and Workbench 1-Click Undo.
+  - **Tier 2 (`always_on: false` preferences & global non-seed skills)**: 250-token On-Demand Task Directory Menu with `trigger_cue` discovery (`evo_search(query, scope: "global")` + `evo_inspect(id, "L2")`).
+  - **Tier 3 (`memory_type: "personal"`, `scope: "global"`)**: Cross-workspace personal lessons at 0 startup tokens, treated as `VERIFIED` across `doctor`, `tree --json`, `memory --json`, and `agy-config-auditor`.
+- **Semantic Polarity Conflict Guard**: Bilingual polarity conflict detection across verbosity, ordering, confirmation, and comment preferences before pushing into the global Profile Card.
+- **`npm run typecheck`**: Added `"typecheck": "tsc --noEmit"` to `package.json`.
+
+### Changed
+- **Structural Consolidation**: Extracted `src/core/profile-sync.ts`, `src/core/workbench-actions.ts`, `src/core/hook-engine.ts`, `src/templates/ui/`, and `src/tools/deliverable.ts` (with `isDirectExecution()` guard) to eliminate duplicated host sync, hook attribution, UI template, and deliverable inspector paths.
+- **Retired `evo optimize`**: Replaced legacy git-worktree evolution commands with an explicit deprecation notice (`evo optimize help` exits 0; execution commands exit 1).
+- **Benchmark & Version Parity**: Bumped all manifests, IDE extension template, docs, and static pages to `0.5.0`, synced live 5-tool MCP schema token footprint (`1,953` tokens; `3,103` base prefix = `88.6%` reduction vs `27,150`), and updated suite metrics to all 15 verified test suites.
+
+### Security & Regression Hardening (Issue #35)
+- **Workspace Execution Isolation (C1)**: `antigravity_hook.mjs` and `agy-config-auditor` verify package identity before loading workspace `dist/` code, preventing untrusted repository `dist/` hijacking.
+- **Preference Marker & Exfil Guard (C2 + fail-closed `profile-sync`)**: Blocks affirmative destructive commands, exfiltration targets (e.g., `~/.ssh`), prompt injection/secrets in `trigger_cue`, and `<!-- EVO:... -->` marker injection in proposals while allowing prohibitive safety guidance; orphaned `START` markers fail closed without deleting host user prose.
+- **Workbench UI Auth & RCE Hardening (C3 & C4)**: Enforces session token auth (`401` without `?token=`), strict CSP (`sha256` + `frame-ancestors 'none'`), `X-Frame-Options: DENY`, escaping `</script>` in embedded tokens, and command-metacharacter / PowerShell interpolation hardening in `launchEditorAtLocation`.
+- **Fail-Closed Lifecycle & Path Containment (H2–H13, M2–M6, L4–L7)**: Enforces `pending` preference isolation, cross-supersede budget checks and dead-entry reconciliation on Undo, CLI free-text value flags (`-h`/`-v`), `agy-config-auditor --self-test` isolated fixture, `ext__*` & blank-chat Stop telemetry parity, `LOCAL`->`GLOBAL` archive isolation, `--anon` snapshot scrubbing, `.evo/tools/<id>/` `entry_script` traversal guard, `origin: seed`/`bootstrap` pruning preserving user-authored capabilities, `templates/GEMINI.extension.md` & Antigravity `mcp_config.json` checks, `opencode.json` traversal & corrupt-config fail-closed checks, unbound `target_symbols` freshness warnings, Windsurf zero-drift, `dryRun` zero-write, BOM-tolerant hook stdin, and `profile import --apply` exit code 1 when all items are rejected.
+
 ## [0.4.0] - 2026-11-15
 
 ### Added

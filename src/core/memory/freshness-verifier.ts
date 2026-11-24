@@ -10,7 +10,7 @@ import type {
   SymbolFingerprint,
   TopologyAnchor,
 } from '../types.js';
-import { EvoStorage } from '../storage.js';
+import { EvoStorage, sanitizeId } from '../storage.js';
 import { EvoTelemetry } from '../telemetry.js';
 import type { GitHeadSnapshot } from './git-utils.js';
 import {
@@ -1183,6 +1183,24 @@ export function verifyMemoryFreshness(
   memory: EvoMemory,
   options?: { includeCallers?: boolean; cacheDb?: DatabaseSync }
 ): MemoryVerificationReport {
+  if (memory.memory_type === 'personal') {
+    return createVerificationReportObject(
+      memory,
+      'VERIFIED',
+      '[置信度: HIGH (≥80%)]',
+      true,
+      memory.created_commit || 'personal',
+      memory.created_branch,
+      memory.created_commit || 'personal',
+      undefined,
+      0,
+      0,
+      0,
+      [],
+      []
+    );
+  }
+
   const root = path.resolve(workspaceRoot);
   const includeCallers = options?.includeCallers ?? true;
   const headSnap = readGitHeadSnapshot(root);
@@ -1190,10 +1208,12 @@ export function verifyMemoryFreshness(
   const currentBranch = headSnap.branch !== 'HEAD' ? headSnap.branch : undefined;
   const hasCodeGraph = fs.existsSync(path.join(root, '.codegraph'));
 
-  const targetKeys =
-    Object.keys(memory.ast_fingerprints).length > 0
-      ? Object.keys(memory.ast_fingerprints)
-      : memory.target_symbols;
+  const targetKeys = Array.from(
+    new Set([
+      ...(memory.target_symbols || []).map((s) => s.trim()).filter(Boolean),
+      ...Object.keys(memory.ast_fingerprints || {}),
+    ])
+  );
 
   // Level 1 Cache Check
   const cacheDbPath = path.join(root, '.evo', '.cache', 'telemetry.db');
@@ -1784,6 +1804,24 @@ export async function verifyMemoryFreshnessAsync(
   memory: EvoMemory,
   options?: { includeCallers?: boolean; cacheDb?: DatabaseSync }
 ): Promise<MemoryVerificationReport> {
+  if (memory.memory_type === 'personal') {
+    return createVerificationReportObject(
+      memory,
+      'VERIFIED',
+      '[置信度: HIGH (≥80%)]',
+      true,
+      memory.created_commit || 'personal',
+      memory.created_branch,
+      memory.created_commit || 'personal',
+      undefined,
+      0,
+      0,
+      0,
+      [],
+      []
+    );
+  }
+
   const root = path.resolve(workspaceRoot);
   const includeCallers = options?.includeCallers ?? true;
   const headSnap = await readGitHeadSnapshotAsync(root);
@@ -1791,10 +1829,12 @@ export async function verifyMemoryFreshnessAsync(
   const currentBranch = headSnap.branch !== 'HEAD' ? headSnap.branch : undefined;
   const hasCodeGraph = fs.existsSync(path.join(root, '.codegraph'));
 
-  const targetKeys =
-    Object.keys(memory.ast_fingerprints).length > 0
-      ? Object.keys(memory.ast_fingerprints)
-      : memory.target_symbols;
+  const targetKeys = Array.from(
+    new Set([
+      ...(memory.target_symbols || []).map((s) => s.trim()).filter(Boolean),
+      ...Object.keys(memory.ast_fingerprints || {}),
+    ])
+  );
 
   // Level 1 Cache Check
   const cacheDbPath = path.join(root, '.evo', '.cache', 'telemetry.db');
@@ -2515,10 +2555,26 @@ export function refreshMemories(
   let telemetry: EvoTelemetry | null = null;
   try {
     for (const memory of memories) {
-      const targetKeys =
-        Object.keys(memory.ast_fingerprints).length > 0
-          ? Object.keys(memory.ast_fingerprints)
-          : memory.target_symbols;
+      const hasSelfRefSupersedes = Boolean(
+        memory.supersedes_id && sanitizeId(memory.supersedes_id) === sanitizeId(memory.id)
+      );
+
+      if (memory.memory_type === 'personal') {
+        if (hasSelfRefSupersedes || Object.keys(memory.ast_fingerprints || {}).length > 0) {
+          if (hasSelfRefSupersedes) memory.supersedes_id = undefined;
+          memory.ast_fingerprints = {};
+          memory.updated_at = new Date().toISOString();
+          storage.saveMemory(memory);
+          refreshed.push(memory.id);
+        } else {
+          unchanged.push(memory.id);
+        }
+        continue;
+      }
+
+      const targetKeys = Array.from(
+        new Set((memory.target_symbols || []).map((s) => s.trim()).filter(Boolean))
+      );
 
       const missingSymbols: string[] = [];
       const newFingerprints: Record<string, SymbolFingerprint> = {};
@@ -2565,6 +2621,9 @@ export function refreshMemories(
       // Only rewrite unchanged-branch memories when created_commit is missing or AST fingerprints drifted/incomplete;
       // advancing HEAD alone must not churn untouched memory files.
       let differs = false;
+      if (hasSelfRefSupersedes) {
+        differs = true;
+      }
       if (
         (!memory.created_commit || memory.created_commit === 'uncommitted') &&
         currentCommit &&
@@ -2575,7 +2634,10 @@ export function refreshMemories(
       if (currentBranch && (memory.created_branch || '') !== currentBranch) differs = true;
 
       const existingKeys = Object.keys(memory.ast_fingerprints);
-      if (existingKeys.length !== targetKeys.length) {
+      if (
+        existingKeys.length !== targetKeys.length ||
+        existingKeys.some((k) => !targetKeys.includes(k))
+      ) {
         differs = true;
       } else {
         for (const symKey of targetKeys) {
@@ -2597,6 +2659,9 @@ export function refreshMemories(
       }
 
       if (differs) {
+        if (hasSelfRefSupersedes) {
+          memory.supersedes_id = undefined;
+        }
         memory.ast_fingerprints = newFingerprints;
         memory.created_commit = currentCommit;
         if (currentBranch) {

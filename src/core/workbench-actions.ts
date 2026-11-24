@@ -6,6 +6,7 @@ import {
   EvoStorage,
   PREFERENCE_CATEGORIES,
   estimateTokens,
+  formatUserProfileDigestForPreferences,
   hasValidEvoStructure,
   openSqliteReadOnly,
   parseFrontmatter,
@@ -16,6 +17,11 @@ import {
 import type {
   ConfidenceLevel,
   EvoKind,
+  EvoMemory,
+  EvoPreference,
+  EvoRule,
+  EvoSkill,
+  EvoTool,
   PreferenceCategory,
   ProposalPayload,
   SymbolFingerprint,
@@ -40,6 +46,8 @@ import {
 } from './memory.js';
 import { executeSandboxedScriptAsync } from './sandbox.js';
 import { syncGlobalUserProfile } from './profile-sync.js';
+import { parseMarkdownToPreferenceCandidates } from './profile-import.js';
+import { renderUserProfileBlock } from '../templates/meta-rule.js';
 
 export interface WorkbenchActionResult {
   status: number;
@@ -217,213 +225,135 @@ function inspectLatestArchivedItem(
   return matches[0].item;
 }
 
-function inferPreferenceCategoryFromHeading(
-  heading: string,
-  fallback: PreferenceCategory
-): PreferenceCategory {
-  const h = heading.toLowerCase();
-  if (/format|layout|markdown|table|排版|格式/.test(h)) return 'formatting';
-  if (/comm|reply|answer|tone|沟通|回复|语气/.test(h)) return 'communication';
-  if (/workflow|process|sop|git|test|deploy|工作流|流程|测试/.test(h)) return 'workflow';
-  if (/knowledge|domain|glossary|term|知识|术语|领域/.test(h)) return 'knowledge';
-  if (/style|pref|rule|习惯|风格|偏好/.test(h)) return 'style';
-  return fallback;
-}
+let runToolTestMutexTail: Promise<void> = Promise.resolve();
 
-interface ParsedMarkdownPreferenceCandidate {
-  id: string;
-  title: string;
-  l0_summary: string;
-  category: PreferenceCategory;
-  always_on: boolean;
-  content: string;
-}
-
-function parseMarkdownToPreferenceCandidates(
-  markdown: string,
-  defaultCategory: PreferenceCategory,
-  defaultAlwaysOn: boolean
-): ParsedMarkdownPreferenceCandidate[] {
-  // Strip EvoKernel managed blocks & HTML comments so we never re-import generated blocks
-  const cleaned = String(markdown || '')
-    .replace(/<!--\s*EVO:START\s*-->[\s\S]*?<!--\s*EVO:END\s*-->/gi, '\n')
-    .replace(/<!--\s*EVO:PROFILE:START\s*-->[\s\S]*?<!--\s*EVO:PROFILE:END\s*-->/gi, '\n')
-    .replace(/<!--[\s\S]*?-->/g, '\n')
-    .replace(/\r\n/g, '\n');
-
-  const lines = cleaned.split('\n');
-  let currentHeading = '';
-  let currentCategory: PreferenceCategory = defaultCategory;
-  let sectionProseLines: string[] = [];
-  let sectionHasBullets = false;
-
-  const rawItems: Array<{
-    heading: string;
-    category: PreferenceCategory;
-    rawText: string;
-  }> = [];
-
-  const flushProseSection = () => {
-    if (!sectionHasBullets && sectionProseLines.length > 0) {
-      const prose = sectionProseLines.join(' ').trim();
-      if (prose.length >= 4) {
-        rawItems.push({
-          heading: currentHeading,
-          category: currentCategory,
-          rawText: prose,
-        });
-      }
-    }
-    sectionProseLines = [];
-    sectionHasBullets = false;
-  };
-
-  let activeBullet: { heading: string; category: PreferenceCategory; lines: string[] } | null = null;
-  const flushBullet = () => {
-    if (activeBullet) {
-      const joined = activeBullet.lines.join(' ').trim();
-      if (joined.length >= 4) {
-        rawItems.push({
-          heading: activeBullet.heading,
-          category: activeBullet.category,
-          rawText: joined,
-        });
-      }
-      activeBullet = null;
-    }
-  };
-
-  let inFence = false;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (/^(`{3,}|~{3,})/.test(trimmed)) {
-      inFence = !inFence;
-      if (activeBullet) {
-        activeBullet.lines.push(trimmed);
-      } else {
-        sectionProseLines.push(trimmed);
-      }
-      continue;
-    }
-    if (inFence) {
-      if (activeBullet) {
-        activeBullet.lines.push(trimmed);
-      } else {
-        sectionProseLines.push(trimmed);
-      }
-      continue;
-    }
-
-    const headingMatch = line.match(/^#{1,4}\s+(.+)$/);
-    if (headingMatch) {
-      flushBullet();
-      flushProseSection();
-      currentHeading = headingMatch[1].replace(/[*`#]/g, '').trim();
-      currentCategory = inferPreferenceCategoryFromHeading(currentHeading, defaultCategory);
-      continue;
-    }
-
-    const bulletMatch = line.match(/^\s*(?:[-*+]|\d+\.)\s+(.+)$/);
-    if (bulletMatch) {
-      flushBullet();
-      sectionHasBullets = true;
-      sectionProseLines = [];
-      activeBullet = {
-        heading: currentHeading,
-        category: currentCategory,
-        lines: [bulletMatch[1].trim()],
-      };
-      continue;
-    }
-
-    if (!trimmed) {
-      flushBullet();
-      continue;
-    }
-
-    if (activeBullet && /^\s{2,}\S/.test(line)) {
-      activeBullet.lines.push(trimmed);
-      continue;
-    }
-
-    flushBullet();
-    sectionProseLines.push(trimmed);
+async function withRunToolTestMutex<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = runToolTestMutexTail;
+  let release!: () => void;
+  runToolTestMutexTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
   }
-  flushBullet();
-  flushProseSection();
+}
 
-  const seenIds = new Set<string>();
-  const candidates: ParsedMarkdownPreferenceCandidate[] = [];
-  for (let i = 0; i < rawItems.length; i++) {
-    const entry = rawItems[i];
-    let text = entry.rawText.trim();
-    let explicitTitle = '';
-
-    // Parse patterns like "**Title**: body" or "**[id]** (cat): summary"
-    const bracketMatch = text.match(/^\*\*\[([^\]]+)\]\*\*\s*(?:\(([^)]+)\))?\s*[:：]\s*(.+)$/);
-    if (bracketMatch) {
-      explicitTitle = bracketMatch[1].trim();
-      text = bracketMatch[3].trim();
+function tokenizeSimpleForDryRun(text: string): Set<string> {
+  const tokens = new Set<string>();
+  const lower = String(text || '').toLowerCase();
+  for (const m of lower.match(/[a-z0-9_]{2,}/g) || []) {
+    tokens.add(m);
+  }
+  const cjk = lower.match(/[\u4e00-\u9fff]+/g) || [];
+  for (const run of cjk) {
+    if (run.length === 1) {
+      tokens.add(run);
     } else {
-      const boldLeadMatch = text.match(/^\*\*([^*]+)\*\*\s*[:：-]\s*(.+)$/);
-      if (boldLeadMatch) {
-        explicitTitle = boldLeadMatch[1].trim();
-        text = boldLeadMatch[2].trim();
+      for (let i = 0; i < run.length - 1; i++) {
+        tokens.add(run.slice(i, i + 2));
       }
     }
-
-    const titleBase =
-      explicitTitle ||
-      (entry.heading && !sectionDuplicateHeading(entry.heading, rawItems)
-        ? `${entry.heading}: ${text}`
-        : text);
-    const cleanTitle = titleBase.replace(/[`*_#]/g, '').trim().slice(0, 72) || `Preference ${i + 1}`;
-    const l0Summary = text.replace(/\s+/g, ' ').trim().slice(0, 130);
-    const idSeed = (explicitTitle || l0Summary)
-      .replace(/[^a-zA-Z0-9\s_-]/g, ' ')
-      .trim()
-      .split(/\s+/)
-      .slice(0, 5)
-      .join('-');
-    let baseId = sanitizeId(idSeed);
-    if (!baseId || baseId.length < 3) {
-      const shortHash = crypto.createHash('sha256').update(text).digest('hex').slice(0, 6);
-      baseId = `imported-pref-${shortHash}`;
-    }
-    if (baseId.length > 48) {
-      baseId = baseId.slice(0, 48).replace(/-+$/, '');
-    }
-    let finalId = baseId;
-    let suffix = 2;
-    while (seenIds.has(finalId)) {
-      finalId = `${baseId}-${suffix++}`;
-    }
-    seenIds.add(finalId);
-
-    candidates.push({
-      id: finalId,
-      title: cleanTitle,
-      l0_summary: l0Summary || cleanTitle,
-      category: entry.category,
-      always_on: defaultAlwaysOn,
-      content: text,
-    });
   }
-  return candidates;
+  return tokens;
 }
 
-function sectionDuplicateHeading(
-  heading: string,
-  items: Array<{ heading: string }>
-): boolean {
-  let count = 0;
-  for (const it of items) {
-    if (it.heading === heading) {
-      count++;
-      if (count > 1) return true;
+function jaccardSetSim(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) {
+    if (b.has(t)) inter++;
+  }
+  const union = a.size + b.size - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+function createDryRunReadOnlyTelemetry(storage: EvoStorage): EvoTelemetry {
+  let roDb: DatabaseSync | undefined;
+  if (fs.existsSync(storage.telemetryDbPath)) {
+    try {
+      roDb = openSqliteReadOnly(storage.telemetryDbPath);
+    } catch {
+      roDb = undefined;
     }
   }
-  return false;
+  const stub = {
+    getSessionFlag(key: string): string | null {
+      if (!roDb) return null;
+      try {
+        const row = roDb.prepare('SELECT value FROM session_state WHERE key = ?').get(key) as
+          | { value?: string }
+          | undefined;
+        return row && typeof row.value === 'string' ? row.value : null;
+      } catch {
+        return null;
+      }
+    },
+    setSessionFlag(): void {},
+    syncFromDisk(): void {},
+    recordGatekeeperEvent(): void {},
+    getTelemetryMap(): Map<string, any> {
+      const map = new Map<string, any>();
+      if (!roDb) return map;
+      try {
+        const rows = roDb.prepare('SELECT * FROM telemetry').all() as Array<Record<string, unknown>>;
+        for (const r of rows) {
+          map.set(String(r.id), {
+            id: String(r.id),
+            kind: String(r.kind),
+            title: String(r.title || r.id),
+            l0_summary: String(r.l0_summary || ''),
+            hit_count: Number(r.hit_count || 0),
+          });
+        }
+      } catch {}
+      return map;
+    },
+    findSimilarCapabilities(
+      title: string,
+      l0Summary: string,
+      kind: EvoKind,
+      excludeId?: string,
+      extraText = '',
+      candidateBody = ''
+    ): Array<{ id: string; similarity: number; l0_summary: string }> {
+      if (!hasValidEvoStructure(storage.evoDir)) return [];
+      const headerTokens = tokenizeSimpleForDryRun(`${title} ${l0Summary} ${extraText}`);
+      const bodyTokens = candidateBody && candidateBody.trim().length >= 20
+        ? tokenizeSimpleForDryRun(candidateBody)
+        : new Set<string>();
+      if (headerTokens.size === 0 && bodyTokens.size === 0) return [];
+      const items = kind === 'preference' ? storage.listPreferences() : [];
+      const matches: Array<{ id: string; similarity: number; l0_summary: string }> = [];
+      for (const item of items) {
+        if (excludeId && item.id === excludeId) continue;
+        const hSim = jaccardSetSim(
+          headerTokens,
+          tokenizeSimpleForDryRun(`${item.title} ${item.l0_summary}`)
+        );
+        const bSim =
+          bodyTokens.size > 0 && item.content && item.content.trim().length >= 20
+            ? jaccardSetSim(bodyTokens, tokenizeSimpleForDryRun(item.content))
+            : 0;
+        const sim = bSim > 0 ? Math.max(hSim, bSim * 0.95, hSim * 0.5 + bSim * 0.5) : hSim;
+        if (sim > 0) {
+          matches.push({ id: item.id, similarity: sim, l0_summary: item.l0_summary });
+        }
+      }
+      return matches.sort((a, b) => b.similarity - a.similarity);
+    },
+    close(): void {
+      if (roDb) {
+        try {
+          roDb.close();
+        } catch {}
+        roDb = undefined;
+      }
+    },
+  };
+  return stub as unknown as EvoTelemetry;
 }
 
 export async function executeWorkbenchAction(
@@ -499,6 +429,12 @@ export async function executeWorkbenchAction(
       let targetMemories = targetStorage.listMemories();
       if (rawId) {
         const cleanId = sanitizeId(rawId);
+        if (!cleanId) {
+          return {
+            status: 400,
+            body: { ok: false, error: 'Bad Request: Invalid memory id' },
+          };
+        }
         const mem = targetStorage.getMemory(cleanId);
         if (!mem) {
           return {
@@ -553,6 +489,12 @@ export async function executeWorkbenchAction(
         };
       }
       const cleanId = sanitizeId(rawId);
+      if (!cleanId) {
+        return {
+          status: 400,
+          body: { ok: false, error: 'Bad Request: Invalid tool id' },
+        };
+      }
       const resolved = resolveTargetStorage(ws, 'tool', params, cleanId);
       let targetStorage = resolved.storage;
       let tool = targetStorage.getTool(cleanId);
@@ -570,6 +512,13 @@ export async function executeWorkbenchAction(
           body: { ok: false, error: `Not Found: Tool "${cleanId}" not found` },
         };
       }
+      const toolDir = path.join(targetStorage.toolsDir, cleanId);
+      if (!isRealSubpathOf(toolDir, tool.script_path)) {
+        return {
+          status: 403,
+          body: { ok: false, error: 'Forbidden: Tool script path escapes tool directory' },
+        };
+      }
       if (!fs.existsSync(tool.script_path)) {
         return {
           status: 404,
@@ -577,19 +526,31 @@ export async function executeWorkbenchAction(
         };
       }
 
-      const preSnapshot = captureWorkspaceRollbackSnapshot(ws);
-      let execResult: any;
-      try {
-        execResult = await executeSandboxedScriptAsync(
-          tool.runtime,
-          tool.script_path,
-          {},
-          { selfTest: true, timeoutMs: 5000, workspaceRoot: ws }
-        );
-      } finally {
-        const postSig = captureWorkspaceMutationSignature(ws);
-        restoreWorkspaceFromSnapshot(ws, preSnapshot, postSig);
+      const rootsToGuard: string[] = [targetStorage.rootDir];
+      if (path.resolve(ws).toLowerCase() !== path.resolve(targetStorage.rootDir).toLowerCase()) {
+        rootsToGuard.push(ws);
       }
+
+      const execResult = await withRunToolTestMutex(async () => {
+        const preSnapshots = rootsToGuard.map((root) => ({
+          root,
+          pre: captureWorkspaceRollbackSnapshot(root),
+        }));
+        try {
+          return await executeSandboxedScriptAsync(
+            tool.runtime,
+            tool.script_path,
+            {},
+            { selfTest: true, timeoutMs: 5000, workspaceRoot: ws }
+          );
+        } finally {
+          for (let i = preSnapshots.length - 1; i >= 0; i--) {
+            const { root, pre } = preSnapshots[i];
+            const postSig = captureWorkspaceMutationSignature(root);
+            restoreWorkspaceFromSnapshot(root, pre, postSig);
+          }
+        }
+      });
 
       const resultObj = {
         exitCode: execResult.exitCode,
@@ -625,6 +586,9 @@ export async function executeWorkbenchAction(
         return { status: 400, body: { ok: false, error: 'Bad Request: Missing item id' } };
       }
       const cleanId = sanitizeId(rawId);
+      if (!cleanId) {
+        return { status: 400, body: { ok: false, error: 'Bad Request: Invalid item id' } };
+      }
       const reason =
         typeof params.reason === 'string' && params.reason.trim()
           ? params.reason.trim()
@@ -632,6 +596,12 @@ export async function executeWorkbenchAction(
 
       const resolved = resolveTargetStorage(ws, rawKind as EvoKind, params, cleanId, 'active');
       const targetStorage = resolved.storage;
+      if (!hasValidEvoStructure(targetStorage.evoDir)) {
+        return {
+          status: 404,
+          body: { ok: false, error: `Not Found: ${rawKind} "${cleanId}" not found` },
+        };
+      }
       let prevProfileSnapshot: string | undefined;
       let prevProfileTitle = cleanId;
       let shouldRecordProfileHistory = false;
@@ -731,6 +701,9 @@ export async function executeWorkbenchAction(
         return { status: 400, body: { ok: false, error: 'Bad Request: Missing item id' } };
       }
       const cleanId = sanitizeId(rawId);
+      if (!cleanId) {
+        return { status: 400, body: { ok: false, error: 'Bad Request: Invalid item id' } };
+      }
       const resolved = resolveTargetStorage(ws, rawKind as EvoKind, params, cleanId, 'archive');
       const targetStorage = resolved.storage;
 
@@ -747,17 +720,20 @@ export async function executeWorkbenchAction(
               ) ||
               40
           );
-          const { totalTokens } = targetStorage.getCoreRulesTokenUsage();
+          const { rules: existingCoreRules } = targetStorage.getCoreRulesTokenUsage();
+          const currentCoreTokens = existingCoreRules
+            .filter((r) => r.id !== cleanId)
+            .reduce((acc, r) => acc + r.tokens, 0);
           const maxBudget = targetStorage.getConfig()?.maxCoreRuleTokens ?? 1500;
-          if (totalTokens + candidateTokens > maxBudget) {
+          if (currentCoreTokens + candidateTokens > maxBudget) {
             return {
               status: 400,
               body: {
                 ok: false,
                 code: 'ERR_BUDGET_EXCEEDED',
-                error: `ERR_BUDGET_EXCEEDED: Restoring core rule "${cleanId}" (${totalTokens + candidateTokens}/${maxBudget} tokens) would exceed maxCoreRuleTokens`,
+                error: `ERR_BUDGET_EXCEEDED: Restoring core rule "${cleanId}" (${currentCoreTokens + candidateTokens}/${maxBudget} tokens) would exceed maxCoreRuleTokens`,
                 details: {
-                  currentTokens: totalTokens,
+                  currentTokens: currentCoreTokens,
                   candidateTokens,
                   maxTokens: maxBudget,
                 },
@@ -767,27 +743,54 @@ export async function executeWorkbenchAction(
         } else if (rawKind === 'preference') {
           const willBeAlwaysOn =
             archivedItem.always_on === false || archivedItem.always_on === 'false' ? false : true;
-          if (willBeAlwaysOn && willBeEnabled) {
-            const cat = String(archivedItem.category || 'style');
+          const preservedReviewStatus =
+            archivedItem.review_status === 'pending' ? 'pending' : 'approved';
+          if (willBeAlwaysOn && willBeEnabled && preservedReviewStatus !== 'pending') {
+            const rawCat = String(archivedItem.category || 'style').trim().toLowerCase() as PreferenceCategory;
+            const cat: PreferenceCategory = PREFERENCE_CATEGORIES.includes(rawCat) ? rawCat : 'style';
+            const prefL0 = String(archivedItem.l0_summary || cleanId);
+            const prefContent = String(archivedItem.content || archivedItem.l0_summary || '');
             const candidateTokens = Number(
               archivedItem.tokens ||
-                estimateTokens(
-                  `- **[${cleanId}]** (${cat}): ${String(archivedItem.l0_summary || '')}\n  ${String(archivedItem.content || '')}`
-                ) ||
+                estimateTokens(`- **[${cleanId}]** (${cat}): ${prefL0}\n  ${prefContent}`) ||
                 30
             );
-            const { totalTokens } = targetStorage.getProfileTokenUsage();
+            const nowIso = new Date().toISOString();
+            const candidatePref: EvoPreference = {
+              id: cleanId,
+              title: String(archivedItem.title || cleanId),
+              l0_summary: prefL0,
+              category: cat,
+              always_on: true,
+              content: prefContent,
+              tokens: candidateTokens,
+              tags: Array.isArray(archivedItem.tags) ? archivedItem.tags.map(String) : [],
+              origin: String(archivedItem.origin || 'restored'),
+              enabled: true,
+              review_status: preservedReviewStatus,
+              created_at: String(archivedItem.created_at || nowIso),
+              updated_at: nowIso,
+            };
+            const { totalTokens, preferences: existingPrefs } = targetStorage.getProfileTokenUsage();
+            const projectedDigest = formatUserProfileDigestForPreferences([
+              ...existingPrefs.filter((p) => p.id !== cleanId),
+              candidatePref,
+            ]);
+            const projectedTokens = projectedDigest
+              ? estimateTokens(renderUserProfileBlock(projectedDigest, ''))
+              : 0;
             const maxProfileBudget = targetStorage.getConfig()?.maxGlobalProfileTokens ?? 800;
-            if (totalTokens + candidateTokens > maxProfileBudget) {
+            if (projectedTokens > maxProfileBudget) {
               return {
                 status: 400,
                 body: {
                   ok: false,
                   code: 'ERR_PROFILE_BUDGET_EXCEEDED',
-                  error: `ERR_PROFILE_BUDGET_EXCEEDED: Restoring always_on preference "${cleanId}" (${totalTokens + candidateTokens}/${maxProfileBudget} tokens) would exceed maxGlobalProfileTokens`,
+                  error: `ERR_PROFILE_BUDGET_EXCEEDED: Restoring always_on preference "${cleanId}" (${projectedTokens}/${maxProfileBudget} tokens) would exceed maxGlobalProfileTokens`,
                   details: {
                     currentTokens: totalTokens,
                     candidateTokens,
+                    projectedTokens,
                     maxTokens: maxProfileBudget,
                   },
                 },
@@ -797,7 +800,21 @@ export async function executeWorkbenchAction(
         }
       }
 
-      const restored = targetStorage.restoreCapability(cleanId, rawKind as EvoKind);
+      let restored = false;
+      try {
+        restored = targetStorage.restoreCapability(cleanId, rawKind as EvoKind);
+      } catch (err: any) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const code = msg.includes('ERR_PROFILE_BUDGET_EXCEEDED')
+          ? 'ERR_PROFILE_BUDGET_EXCEEDED'
+          : msg.includes('ERR_BUDGET_EXCEEDED')
+            ? 'ERR_BUDGET_EXCEEDED'
+            : 'ERR_RESTORE_FAILED';
+        return {
+          status: 400,
+          body: { ok: false, code, error: msg },
+        };
+      }
       if (!restored) {
         return {
           status: 404,
@@ -805,11 +822,14 @@ export async function executeWorkbenchAction(
         };
       }
 
-      if (rawKind === 'preference') {
-        if (resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir)) {
+      const isGlobalTarget = resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir);
+      if (rawKind === 'preference' || (rawKind === 'skill' && isGlobalTarget)) {
+        if (isGlobalTarget) {
           await invokeSyncGlobalUserProfile(targetStorage.rootDir, hooks);
+        } else {
+          await invokeSyncRuleBlocks(ws, hooks);
         }
-      } else if (rawKind !== 'memory' && !resolved.isGlobal) {
+      } else if (rawKind !== 'memory' && !isGlobalTarget) {
         await invokeSyncRuleBlocks(ws, hooks);
       }
       const telem = new EvoTelemetry(targetStorage);
@@ -853,12 +873,25 @@ export async function executeWorkbenchAction(
         };
       }
 
-      let touchedManagedCatalog = false;
-      const touchedProfileRoots = new Set<string>();
-      const touchedStorages = new Map<string, EvoStorage>();
-      let updatedCount = 0;
+      const MAX_ATOMIC_PREF_TOKENS = 150;
       const now = new Date().toISOString();
+      type PlannedToggleOp =
+        | { kind: 'rule'; storage: EvoStorage; isGlobal: boolean; item: EvoRule }
+        | { kind: 'skill'; storage: EvoStorage; isGlobal: boolean; item: EvoSkill }
+        | { kind: 'tool'; storage: EvoStorage; isGlobal: boolean; item: EvoTool }
+        | { kind: 'memory'; storage: EvoStorage; isGlobal: boolean; item: EvoMemory }
+        | { kind: 'preference'; storage: EvoStorage; isGlobal: boolean; item: EvoPreference };
+      const plannedOps: PlannedToggleOp[] = [];
+      const projectedCoreTokensByRoot = new Map<
+        string,
+        { totalTokens: number; maxBudget: number; seenIds: Set<string> }
+      >();
+      const projectedPrefsByRoot = new Map<
+        string,
+        { baselineTokens: number; maxBudget: number; prefs: EvoPreference[] }
+      >();
 
+      // Phase 1: Pre-validate ALL items & projected budgets before mutating any file on disk
       for (const entry of batchItems) {
         const rawKind = typeof entry?.kind === 'string' ? entry.kind.trim().toLowerCase() : '';
         const rawId = typeof entry?.id === 'string' ? entry.id.trim() : '';
@@ -869,13 +902,20 @@ export async function executeWorkbenchAction(
           };
         }
         const cleanId = sanitizeId(rawId);
+        if (!cleanId) {
+          return {
+            status: 400,
+            body: { ok: false, error: 'Bad Request: Invalid id in toggle-enabled' },
+          };
+        }
         const entryParams: Record<string, unknown> = {
           ...params,
           ...(entry && typeof entry === 'object' ? entry : {}),
         };
         const resolved = resolveTargetStorage(ws, rawKind as EvoKind, entryParams, cleanId, 'active');
         const targetStorage = resolved.storage;
-        touchedStorages.set(path.resolve(targetStorage.rootDir), targetStorage);
+        const rootKey = path.resolve(targetStorage.rootDir);
+        const isGlobalTarget = resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir);
 
         if (rawKind === 'rule') {
           const rule = targetStorage.getRule(cleanId);
@@ -886,27 +926,37 @@ export async function executeWorkbenchAction(
             continue;
           }
           if (targetEnabled && rule.core && rule.enabled === false) {
-            const { totalTokens } = targetStorage.getCoreRulesTokenUsage();
-            const maxBudget = targetStorage.getConfig()?.maxCoreRuleTokens ?? 1500;
-            if (totalTokens + rule.tokens > maxBudget) {
+            let coreState = projectedCoreTokensByRoot.get(rootKey);
+            if (!coreState) {
+              const { totalTokens, rules } = targetStorage.getCoreRulesTokenUsage();
+              coreState = {
+                totalTokens,
+                maxBudget: targetStorage.getConfig()?.maxCoreRuleTokens ?? 1500,
+                seenIds: new Set(rules.map((r) => r.id)),
+              };
+              projectedCoreTokensByRoot.set(rootKey, coreState);
+            }
+            if (!coreState.seenIds.has(rule.id)) {
+              coreState.totalTokens += rule.tokens;
+              coreState.seenIds.add(rule.id);
+            }
+            if (coreState.totalTokens > coreState.maxBudget) {
               return {
                 status: 400,
                 body: {
                   ok: false,
-                  error: `Bad Request: Core rule budget exceeded (${totalTokens + rule.tokens}/${maxBudget} tokens)`,
+                  error: `Bad Request: Core rule budget exceeded (${coreState.totalTokens}/${coreState.maxBudget} tokens)`,
                   code: 'ERR_BUDGET_EXCEEDED',
                   details: {
-                    currentTokens: totalTokens,
+                    currentTokens: coreState.totalTokens - rule.tokens,
                     candidateTokens: rule.tokens,
-                    maxTokens: maxBudget,
+                    maxTokens: coreState.maxBudget,
                   },
                 },
               };
             }
           }
-          targetStorage.saveRule({ ...rule, enabled: targetEnabled, updated_at: now });
-          if (!resolved.isGlobal) touchedManagedCatalog = true;
-          updatedCount++;
+          plannedOps.push({ kind: 'rule', storage: targetStorage, isGlobal: isGlobalTarget, item: rule });
         } else if (rawKind === 'skill') {
           const skill = targetStorage.getSkill(cleanId);
           if (!skill) {
@@ -915,9 +965,7 @@ export async function executeWorkbenchAction(
             }
             continue;
           }
-          targetStorage.saveSkill({ ...skill, enabled: targetEnabled, updated_at: now });
-          if (!resolved.isGlobal) touchedManagedCatalog = true;
-          updatedCount++;
+          plannedOps.push({ kind: 'skill', storage: targetStorage, isGlobal: isGlobalTarget, item: skill });
         } else if (rawKind === 'tool') {
           const tool = targetStorage.getTool(cleanId);
           if (!tool) {
@@ -926,10 +974,7 @@ export async function executeWorkbenchAction(
             }
             continue;
           }
-          const { script_code, script_path: _sp, ...manifest } = tool;
-          targetStorage.saveTool({ ...manifest, enabled: targetEnabled, updated_at: now }, script_code);
-          if (!resolved.isGlobal) touchedManagedCatalog = true;
-          updatedCount++;
+          plannedOps.push({ kind: 'tool', storage: targetStorage, isGlobal: isGlobalTarget, item: tool });
         } else if (rawKind === 'memory') {
           const mem = targetStorage.getMemory(cleanId);
           if (!mem) {
@@ -938,8 +983,7 @@ export async function executeWorkbenchAction(
             }
             continue;
           }
-          targetStorage.saveMemory({ ...mem, enabled: targetEnabled, updated_at: now });
-          updatedCount++;
+          plannedOps.push({ kind: 'memory', storage: targetStorage, isGlobal: isGlobalTarget, item: mem });
         } else if (rawKind === 'preference') {
           const pref = targetStorage.getPreference(cleanId);
           if (!pref) {
@@ -952,27 +996,110 @@ export async function executeWorkbenchAction(
             continue;
           }
           if (targetEnabled && pref.always_on !== false && pref.enabled === false) {
-            const { totalTokens } = targetStorage.getProfileTokenUsage();
-            const maxProfileBudget = targetStorage.getConfig()?.maxGlobalProfileTokens ?? 800;
-            if (totalTokens + pref.tokens > maxProfileBudget) {
+            const prefLineTokens = estimateTokens(
+              `- **[${pref.id}]** (${pref.category}): ${pref.l0_summary}\n  ${pref.content.replace(/\n/g, '\n  ')}`
+            );
+            const atomicTokens = Math.max(Number(pref.tokens || 0), prefLineTokens);
+            if (atomicTokens > MAX_ATOMIC_PREF_TOKENS) {
               return {
                 status: 400,
                 body: {
                   ok: false,
-                  error: `Bad Request: Global profile budget exceeded (${totalTokens + pref.tokens}/${maxProfileBudget} tokens)`,
+                  error: `Bad Request: Preference '${pref.id}' exceeds per-item atomic cap (${atomicTokens}/${MAX_ATOMIC_PREF_TOKENS} tokens)`,
                   code: 'ERR_PROFILE_BUDGET_EXCEEDED',
                   details: {
-                    currentTokens: totalTokens,
-                    candidateTokens: pref.tokens,
-                    maxTokens: maxProfileBudget,
+                    candidateTokens: atomicTokens,
+                    maxAtomicTokens: MAX_ATOMIC_PREF_TOKENS,
+                  },
+                },
+              };
+            }
+            let prefState = projectedPrefsByRoot.get(rootKey);
+            if (!prefState) {
+              const { totalTokens, preferences: activePrefs } = targetStorage.getProfileTokenUsage();
+              prefState = {
+                baselineTokens: totalTokens,
+                maxBudget: targetStorage.getConfig()?.maxGlobalProfileTokens ?? 800,
+                prefs: [...activePrefs],
+              };
+              projectedPrefsByRoot.set(rootKey, prefState);
+            }
+            prefState.prefs = [
+              ...prefState.prefs.filter((p) => p.id !== pref.id),
+              { ...pref, enabled: true },
+            ];
+            const projectedDigest = formatUserProfileDigestForPreferences(prefState.prefs);
+            const projectedTokens = projectedDigest
+              ? estimateTokens(renderUserProfileBlock(projectedDigest, ''))
+              : 0;
+            if (projectedTokens > prefState.maxBudget) {
+              return {
+                status: 400,
+                body: {
+                  ok: false,
+                  error: `Bad Request: Global profile budget exceeded (${projectedTokens}/${prefState.maxBudget} tokens)`,
+                  code: 'ERR_PROFILE_BUDGET_EXCEEDED',
+                  details: {
+                    currentTokens: prefState.baselineTokens,
+                    candidateTokens: atomicTokens,
+                    projectedTokens,
+                    maxTokens: prefState.maxBudget,
                   },
                 },
               };
             }
           }
-          targetStorage.savePreference({ ...pref, enabled: targetEnabled, updated_at: now });
-          if (resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir)) {
-            touchedProfileRoots.add(targetStorage.rootDir);
+          plannedOps.push({ kind: 'preference', storage: targetStorage, isGlobal: isGlobalTarget, item: pref });
+        }
+      }
+
+      // Phase 2: Commit validated mutations
+      let touchedManagedCatalog = false;
+      const touchedProfileRoots = new Set<string>();
+      const touchedStorages = new Map<string, EvoStorage>();
+      let updatedCount = 0;
+
+      for (const op of plannedOps) {
+        touchedStorages.set(path.resolve(op.storage.rootDir), op.storage);
+        if (op.kind === 'rule') {
+          op.storage.saveRule({ ...op.item, enabled: targetEnabled, updated_at: now });
+          if (!op.isGlobal) touchedManagedCatalog = true;
+          updatedCount++;
+        } else if (op.kind === 'skill') {
+          op.storage.saveSkill({ ...op.item, enabled: targetEnabled, updated_at: now });
+          if (op.isGlobal) touchedProfileRoots.add(op.storage.rootDir);
+          else touchedManagedCatalog = true;
+          updatedCount++;
+        } else if (op.kind === 'tool') {
+          const { script_code, script_path: _sp, ...manifest } = op.item;
+          op.storage.saveTool({ ...manifest, enabled: targetEnabled, updated_at: now }, script_code);
+          if (!op.isGlobal) touchedManagedCatalog = true;
+          updatedCount++;
+        } else if (op.kind === 'memory') {
+          op.storage.saveMemory({ ...op.item, enabled: targetEnabled, updated_at: now });
+          updatedCount++;
+        } else if (op.kind === 'preference') {
+          let prevProfileSnapshot: string | undefined;
+          const pPath = path.join(op.storage.preferencesDir, `${op.item.id}.md`);
+          if (op.isGlobal && fs.existsSync(pPath)) {
+            try {
+              prevProfileSnapshot = fs.readFileSync(pPath, 'utf8');
+            } catch {}
+          }
+          op.storage.savePreference({ ...op.item, enabled: targetEnabled, updated_at: now });
+          if (op.isGlobal) {
+            op.storage.appendProfileHistory({
+              ts: now,
+              action: 'update',
+              id: op.item.id,
+              kind: 'preference',
+              title: op.item.title || op.item.id,
+              ...(prevProfileSnapshot ? { previous_snapshot: prevProfileSnapshot } : {}),
+              reason: targetEnabled ? 'Resumed preference' : 'Paused preference',
+            });
+            touchedProfileRoots.add(op.storage.rootDir);
+          } else {
+            touchedManagedCatalog = true;
           }
           updatedCount++;
         }
@@ -984,7 +1111,7 @@ export async function executeWorkbenchAction(
       for (const gRoot of touchedProfileRoots) {
         await invokeSyncGlobalUserProfile(gRoot, hooks);
       }
-      if (touchedStorages.size === 0) {
+      if (touchedStorages.size === 0 && hasValidEvoStructure(localStorage.evoDir)) {
         touchedStorages.set(path.resolve(ws), localStorage);
       }
       for (const st of touchedStorages.values()) {
@@ -1015,19 +1142,24 @@ export async function executeWorkbenchAction(
       const approveAll = Boolean(params.approveAll);
       const now = new Date().toISOString();
       let approvedCount = 0;
+      let touchedManagedCatalog = false;
       const touchedProfileRoots = new Set<string>();
 
       const approvePendingInStorage = (st: EvoStorage, isGlobalStore: boolean) => {
+        const isGlobalTarget = isGlobalStore || isGlobalFallbackRoot(st.rootDir);
         for (const r of st.listRules()) {
           if (r.review_status === 'pending') {
             st.saveRule({ ...r, review_status: 'approved', updated_at: now });
             approvedCount++;
+            if (!isGlobalTarget) touchedManagedCatalog = true;
           }
         }
         for (const s of st.listSkills()) {
           if (s.review_status === 'pending') {
             st.saveSkill({ ...s, review_status: 'approved', updated_at: now });
             approvedCount++;
+            if (isGlobalTarget) touchedProfileRoots.add(st.rootDir);
+            else touchedManagedCatalog = true;
           }
         }
         for (const t of st.listTools()) {
@@ -1035,6 +1167,7 @@ export async function executeWorkbenchAction(
             const { script_code, script_path: _sp, ...manifest } = t;
             st.saveTool({ ...manifest, review_status: 'approved', updated_at: now }, script_code);
             approvedCount++;
+            if (!isGlobalTarget) touchedManagedCatalog = true;
           }
         }
         for (const m of st.listMemories()) {
@@ -1047,8 +1180,10 @@ export async function executeWorkbenchAction(
           if (p.review_status === 'pending') {
             st.savePreference({ ...p, review_status: 'approved', updated_at: now });
             approvedCount++;
-            if (isGlobalStore || isGlobalFallbackRoot(st.rootDir)) {
+            if (isGlobalTarget) {
               touchedProfileRoots.add(st.rootDir);
+            } else {
+              touchedManagedCatalog = true;
             }
           }
         }
@@ -1090,25 +1225,36 @@ export async function executeWorkbenchAction(
           };
         }
         const cleanId = sanitizeId(rawId);
+        if (!cleanId) {
+          return {
+            status: 400,
+            body: { ok: false, error: 'Bad Request: Invalid id for approve-item' },
+          };
+        }
         const resolved = resolveTargetStorage(ws, rawKind as EvoKind, params, cleanId, 'active');
         const targetStorage = resolved.storage;
+        const isGlobalTarget = resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir);
 
         if (rawKind === 'rule') {
           const r = targetStorage.getRule(cleanId);
           if (!r) return { status: 404, body: { ok: false, error: `Not Found: Rule "${cleanId}" not found` } };
           targetStorage.saveRule({ ...r, review_status: 'approved', updated_at: now });
           approvedCount = 1;
+          if (!isGlobalTarget) touchedManagedCatalog = true;
         } else if (rawKind === 'skill') {
           const s = targetStorage.getSkill(cleanId);
           if (!s) return { status: 404, body: { ok: false, error: `Not Found: Skill "${cleanId}" not found` } };
           targetStorage.saveSkill({ ...s, review_status: 'approved', updated_at: now });
           approvedCount = 1;
+          if (isGlobalTarget) touchedProfileRoots.add(targetStorage.rootDir);
+          else touchedManagedCatalog = true;
         } else if (rawKind === 'tool') {
           const t = targetStorage.getTool(cleanId);
           if (!t) return { status: 404, body: { ok: false, error: `Not Found: Tool "${cleanId}" not found` } };
           const { script_code, script_path: _sp, ...manifest } = t;
           targetStorage.saveTool({ ...manifest, review_status: 'approved', updated_at: now }, script_code);
           approvedCount = 1;
+          if (!isGlobalTarget) touchedManagedCatalog = true;
         } else if (rawKind === 'memory') {
           const m = targetStorage.getMemory(cleanId);
           if (!m) return { status: 404, body: { ok: false, error: `Not Found: Memory "${cleanId}" not found` } };
@@ -1124,12 +1270,17 @@ export async function executeWorkbenchAction(
           }
           targetStorage.savePreference({ ...p, review_status: 'approved', updated_at: now });
           approvedCount = 1;
-          if (resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir)) {
+          if (isGlobalTarget) {
             touchedProfileRoots.add(targetStorage.rootDir);
+          } else {
+            touchedManagedCatalog = true;
           }
         }
       }
 
+      if (touchedManagedCatalog) {
+        await invokeSyncRuleBlocks(ws, hooks);
+      }
       for (const gRoot of touchedProfileRoots) {
         await invokeSyncGlobalUserProfile(gRoot, hooks);
       }
@@ -1153,6 +1304,9 @@ export async function executeWorkbenchAction(
         return { status: 400, body: { ok: false, error: 'Bad Request: Missing memory id' } };
       }
       const cleanId = sanitizeId(rawId);
+      if (!cleanId) {
+        return { status: 400, body: { ok: false, error: 'Bad Request: Invalid memory id' } };
+      }
       const resolved = resolveTargetStorage(ws, 'memory', params, cleanId);
       const targetStorage = resolved.storage;
       const mem = targetStorage.getMemory(cleanId);
@@ -1252,6 +1406,9 @@ export async function executeWorkbenchAction(
         };
       }
       const cleanId = sanitizeId(rawId);
+      if (!cleanId) {
+        return { status: 400, body: { ok: false, error: 'Bad Request: Invalid rule id' } };
+      }
       const resolved = resolveTargetStorage(ws, 'rule', params, cleanId);
       const targetStorage = resolved.storage;
       const rule = targetStorage.getRule(cleanId);
@@ -1260,36 +1417,60 @@ export async function executeWorkbenchAction(
       }
 
       const targetCore = params.core;
-      if (targetCore && !rule.core && rule.enabled !== false) {
-        const { totalTokens } = targetStorage.getCoreRulesTokenUsage();
-        const maxBudget = targetStorage.getConfig()?.maxCoreRuleTokens ?? 1500;
-        if (totalTokens + rule.tokens > maxBudget) {
-          return {
-            status: 400,
-            body: {
-              ok: false,
-              error: `Bad Request: Core rule budget exceeded (${totalTokens + rule.tokens}/${maxBudget} tokens)`,
-              code: 'ERR_BUDGET_EXCEEDED',
-              details: {
-                currentTokens: totalTokens,
-                candidateTokens: rule.tokens,
-                maxTokens: maxBudget,
-              },
-            },
-          };
-        }
-      }
-
-      targetStorage.saveRule({ ...rule, core: targetCore, updated_at: new Date().toISOString() });
-      if (!resolved.isGlobal) {
-        await invokeSyncRuleBlocks(ws, hooks);
-      }
-
       const telem = new EvoTelemetry(targetStorage);
       try {
-        telem.syncFromDisk(true);
+        if (targetCore && !rule.core) {
+          const gatekeeper = new EvoGatekeeper(targetStorage, telem);
+          const payload: ProposalPayload = {
+            kind: 'rule',
+            id: cleanId,
+            title: rule.title,
+            l0_summary: rule.l0_summary,
+            scope_glob: rule.scope_glob,
+            core: true,
+            priority: rule.priority,
+            confidence: rule.confidence,
+            contrastive_evidence: rule.contrastive_evidence,
+            transfer_scenarios:
+              rule.transfer_scenarios && rule.transfer_scenarios.length > 0
+                ? rule.transfer_scenarios
+                : undefined,
+            content: rule.content,
+            origin: rule.origin || 'session',
+            supersedes_id: cleanId,
+            enabled: rule.enabled,
+            review_status: rule.review_status,
+            visibility: rule.visibility,
+          };
+          const gateRes = await gatekeeper.evaluateAndCommitAsync(payload, {
+            bypassConfoundedCheck: true,
+          });
+          if (!gateRes.passed) {
+            const snapshot = buildSnapshotSafe(ws, hooks);
+            hooks.notifyChange?.();
+            return {
+              status: 400,
+              body: {
+                ok: false,
+                code: gateRes.error_code,
+                gate_failed: gateRes.gate_failed,
+                error: gateRes.message || 'Gatekeeper rejected rule promotion to core',
+                details: gateRes.low_value_candidates,
+                snapshot,
+              },
+            };
+          }
+          telem.syncFromDisk(true);
+        } else {
+          targetStorage.saveRule({ ...rule, core: targetCore, updated_at: new Date().toISOString() });
+          telem.syncFromDisk(true);
+        }
       } finally {
         telem.close();
+      }
+
+      if (!resolved.isGlobal) {
+        await invokeSyncRuleBlocks(ws, hooks);
       }
 
       const snapshot = buildSnapshotSafe(ws, hooks);
@@ -1323,6 +1504,9 @@ export async function executeWorkbenchAction(
       }
 
       const cleanId = sanitizeId(rawId);
+      if (!cleanId) {
+        return { status: 400, body: { ok: false, error: 'Bad Request: Invalid item id' } };
+      }
       const resolved = resolveTargetStorage(ws, rawKind as EvoKind, params, cleanId, 'active');
       const targetStorage = resolved.storage;
 
@@ -1704,12 +1888,15 @@ export async function executeWorkbenchAction(
         };
       }
 
-      if (rawKind === 'preference') {
-        if (resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir)) {
+      const isGlobalTarget = resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir);
+      if (rawKind === 'preference' || (rawKind === 'skill' && isGlobalTarget)) {
+        if (isGlobalTarget) {
           await invokeSyncGlobalUserProfile(targetStorage.rootDir, hooks);
+        } else {
+          await invokeSyncRuleBlocks(ws, hooks);
         }
       } else if (rawKind !== 'memory') {
-        if (!resolved.isGlobal) {
+        if (!isGlobalTarget) {
           await invokeSyncRuleBlocks(ws, hooks);
         }
       } else {
@@ -1771,6 +1958,12 @@ export async function executeWorkbenchAction(
         content.replace(/\s+/g, ' ').slice(0, 130);
       const rawId = typeof params.id === 'string' ? params.id.trim() : '';
       const sanitizedFromRaw = rawId ? sanitizeId(rawId) : '';
+      if (rawId && !sanitizedFromRaw) {
+        return {
+          status: 400,
+          body: { ok: false, error: 'Bad Request: Invalid preference id' },
+        };
+      }
       const sanitizedFromTitle = sanitizeId(title);
       const cleanId =
         sanitizedFromRaw ||
@@ -1793,8 +1986,17 @@ export async function executeWorkbenchAction(
       const category = rawCategory as PreferenceCategory;
       const alwaysOn = params.always_on === false || params.always_on === 'false' ? false : true;
       const tags = Array.isArray(params.tags) ? params.tags.map(String).filter(Boolean) : [];
-      const resolved = resolveTargetStorage(ws, 'preference', params);
+      const supersedesCleanId =
+        typeof params.supersedes_id === 'string' && params.supersedes_id.trim()
+          ? sanitizeId(params.supersedes_id)
+          : '';
+      const lookupId = sanitizedFromRaw || supersedesCleanId || cleanId;
+      const resolved = resolveTargetStorage(ws, 'preference', params, lookupId);
       const targetStorage = resolved.storage;
+      const existingPref = targetStorage.getPreference(cleanId);
+      const supersededPref =
+        !existingPref && supersedesCleanId ? targetStorage.getPreference(supersedesCleanId) : null;
+      const basePref = existingPref ?? supersededPref;
       targetStorage.ensureInitialized();
 
       const payload: ProposalPayload = {
@@ -1815,10 +2017,8 @@ export async function executeWorkbenchAction(
         review_status:
           params.review_status === 'pending' || params.review_status === 'approved'
             ? params.review_status
-            : 'approved',
-        ...(typeof params.supersedes_id === 'string' && params.supersedes_id.trim()
-          ? { supersedes_id: sanitizeId(params.supersedes_id) }
-          : {}),
+            : (basePref?.review_status || 'approved'),
+        ...(supersedesCleanId ? { supersedes_id: supersedesCleanId } : {}),
       };
 
       const telem = new EvoTelemetry(targetStorage);
@@ -1876,7 +2076,32 @@ export async function executeWorkbenchAction(
     }
 
     case 'undo-preference': {
-      const resolved = resolveTargetStorage(ws, 'preference', params);
+      const hasExplicitId = params.id !== undefined && params.id !== null;
+      const rawId = typeof params.id === 'string' ? params.id.trim() : '';
+      const targetId = rawId ? sanitizeId(rawId) : undefined;
+      if (hasExplicitId && !targetId) {
+        return {
+          status: 400,
+          body: { ok: false, error: 'Bad Request: Invalid preference id' },
+        };
+      }
+      let resolved = resolveTargetStorage(ws, 'preference', params, targetId);
+      if (
+        targetId &&
+        !params.tier &&
+        !params.scope &&
+        resolved.isGlobal &&
+        hasValidEvoStructure(localStorage.evoDir) &&
+        !isGlobalFallbackRoot(ws)
+      ) {
+        const hasLocalMatch =
+          Boolean(localStorage.getPreference(targetId)) ||
+          localStorage.listArchivedCapabilities().some((a) => a.kind === 'preference' && a.id === targetId) ||
+          localStorage.listProfileHistory(50).some((e) => sanitizeId(e.id) === targetId);
+        if (hasLocalMatch) {
+          resolved = { storage: localStorage, isGlobal: false, rootDir: ws };
+        }
+      }
       const targetStorage = resolved.storage;
       const undoFn = (targetStorage as any).undoLastProfileChange;
       if (typeof undoFn !== 'function') {
@@ -1890,8 +2115,6 @@ export async function executeWorkbenchAction(
         };
       }
 
-      const targetId =
-        typeof params.id === 'string' && params.id.trim() ? params.id.trim() : undefined;
       const undoRes = await undoFn.call(targetStorage, targetId);
       if (!undoRes || (typeof undoRes === 'object' && undoRes.ok === false)) {
         return {
@@ -1971,20 +2194,17 @@ export async function executeWorkbenchAction(
         };
       }
       const rawCat =
-        typeof params.category === 'string' ? params.category.trim().toLowerCase() : 'style';
-      const defaultCategory: PreferenceCategory = PREFERENCE_CATEGORIES.includes(
-        rawCat as PreferenceCategory
-      )
-        ? (rawCat as PreferenceCategory)
-        : 'style';
-      const defaultAlwaysOn =
-        params.always_on === false || params.always_on === 'false' ? false : true;
+        typeof params.category === 'string' ? params.category.trim().toLowerCase() : '';
+      const explicitCategory: PreferenceCategory | undefined =
+        rawCat && PREFERENCE_CATEGORIES.includes(rawCat as PreferenceCategory)
+          ? (rawCat as PreferenceCategory)
+          : undefined;
+      const hasExplicitAlwaysOnFalse = params.always_on === false || params.always_on === 'false';
       const dryRun = Boolean(params.dryRun);
 
       const candidates = parseMarkdownToPreferenceCandidates(
         rawMd,
-        defaultCategory,
-        defaultAlwaysOn
+        typeof params.sourceLabel === 'string' ? params.sourceLabel : undefined
       );
       if (candidates.length === 0) {
         return {
@@ -2010,17 +2230,22 @@ export async function executeWorkbenchAction(
         message: string;
       }> = [];
 
-      const telem = new EvoTelemetry(targetStorage);
+      const telem = dryRun
+        ? createDryRunReadOnlyTelemetry(targetStorage)
+        : new EvoTelemetry(targetStorage);
       try {
         const gatekeeper = new EvoGatekeeper(targetStorage, telem);
         for (const cand of candidates) {
+          const candCategory = explicitCategory || cand.category;
+          const candAlwaysOn = hasExplicitAlwaysOnFalse ? false : cand.always_on;
           const payload: ProposalPayload = {
             kind: 'preference',
             id: cand.id,
             title: cand.title,
             l0_summary: cand.l0_summary,
-            category: cand.category,
-            always_on: cand.always_on,
+            category: candCategory,
+            always_on: candAlwaysOn,
+            ...(cand.trigger_cue ? { trigger_cue: cand.trigger_cue } : {}),
             scope: resolved.isGlobal ? 'global' : 'project',
             content: cand.content,
             origin: 'imported',
@@ -2032,7 +2257,7 @@ export async function executeWorkbenchAction(
             dryRun,
           });
           if (gateRes.passed) {
-            imported.push({ id: cand.id, title: cand.title, category: cand.category });
+            imported.push({ id: cand.id, title: cand.title, category: candCategory });
           } else {
             rejected.push({
               id: cand.id,
@@ -2050,8 +2275,12 @@ export async function executeWorkbenchAction(
       }
 
       let syncRes: ProfileSyncResult | undefined;
-      if (imported.length > 0 && !dryRun && (resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir))) {
-        syncRes = await invokeSyncGlobalUserProfile(targetStorage.rootDir, hooks);
+      if (imported.length > 0 && !dryRun) {
+        if (resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir)) {
+          syncRes = await invokeSyncGlobalUserProfile(targetStorage.rootDir, hooks);
+        } else {
+          await invokeSyncRuleBlocks(ws, hooks);
+        }
       }
 
       const snapshot = buildSnapshotSafe(ws, hooks);

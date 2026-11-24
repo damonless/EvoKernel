@@ -77,12 +77,40 @@ export function findGitRoot(startDir: string): string | null {
   }
 }
 
+type PairedProfileMarkers =
+  | { status: 'none' }
+  | { status: 'malformed' }
+  | { status: 'paired'; startIdx: number; endIdx: number };
+
+function findPairedProfileMarkers(content: string): PairedProfileMarkers {
+  const startIdx = content.indexOf(PROFILE_MARKER_START);
+  const firstEndIdx = content.indexOf(PROFILE_MARKER_END);
+  if (startIdx === -1 && firstEndIdx === -1) {
+    return { status: 'none' };
+  }
+  if (startIdx === -1 || (firstEndIdx !== -1 && firstEndIdx < startIdx)) {
+    return { status: 'malformed' };
+  }
+  const searchFrom = startIdx + PROFILE_MARKER_START.length;
+  const closingEndIdx = content.indexOf(PROFILE_MARKER_END, searchFrom);
+  if (closingEndIdx === -1) {
+    return { status: 'malformed' };
+  }
+  const nestedStartIdx = content.indexOf(PROFILE_MARKER_START, searchFrom);
+  if (nestedStartIdx !== -1 && nestedStartIdx < closingEndIdx) {
+    return { status: 'malformed' };
+  }
+  return { status: 'paired', startIdx, endIdx: closingEndIdx };
+}
+
 export function upsertProfileBlock(existingContent: string, profileBlock: string): string {
-  const startIdx = existingContent.indexOf(PROFILE_MARKER_START);
-  const endIdx = existingContent.indexOf(PROFILE_MARKER_END);
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const before = existingContent.slice(0, startIdx).trimEnd();
-    const after = existingContent.slice(endIdx + PROFILE_MARKER_END.length).trimStart();
+  const markers = findPairedProfileMarkers(existingContent);
+  if (markers.status === 'malformed') {
+    return existingContent;
+  }
+  if (markers.status === 'paired') {
+    const before = existingContent.slice(0, markers.startIdx).trimEnd();
+    const after = existingContent.slice(markers.endIdx + PROFILE_MARKER_END.length).trimStart();
     return [before, profileBlock.trim(), after].filter(Boolean).join('\n\n') + '\n';
   }
   if (!existingContent.trim()) {
@@ -92,13 +120,12 @@ export function upsertProfileBlock(existingContent: string, profileBlock: string
 }
 
 export function removeProfileBlock(existingContent: string): string {
-  const startIdx = existingContent.indexOf(PROFILE_MARKER_START);
-  const endIdx = existingContent.indexOf(PROFILE_MARKER_END);
-  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
+  const markers = findPairedProfileMarkers(existingContent);
+  if (markers.status !== 'paired') {
     return existingContent;
   }
-  const before = existingContent.slice(0, startIdx).trimEnd();
-  const after = existingContent.slice(endIdx + PROFILE_MARKER_END.length).trimStart();
+  const before = existingContent.slice(0, markers.startIdx).trimEnd();
+  const after = existingContent.slice(markers.endIdx + PROFILE_MARKER_END.length).trimStart();
   const combined = [before, after].filter(Boolean).join('\n\n');
   return combined ? combined + '\n' : '';
 }
@@ -108,23 +135,59 @@ export function truncateProfileBlockForWindsurf(
   maxChars: number = WINDSURF_PROFILE_MAX_CHARS
 ): string {
   const trimmed = profileBlock.trim();
-  if (!trimmed || profileBlock.length <= maxChars) {
+  if (!trimmed) {
+    return profileBlock;
+  }
+  if (profileBlock.length <= maxChars) {
     return profileBlock;
   }
   if (trimmed.length <= maxChars) {
     return trimmed;
   }
-  const suffix = `\n...(truncated to fit ${maxChars}-char limit)\n${PROFILE_MARKER_END}\n`;
-  if (maxChars <= suffix.length) {
-    return `${PROFILE_MARKER_START}\n${PROFILE_MARKER_END}\n`.slice(0, maxChars);
+  const minEmptyMarkers = `${PROFILE_MARKER_START}\n${PROFILE_MARKER_END}`;
+  if (maxChars < minEmptyMarkers.length) {
+    return '';
   }
+  const suffix = `\n...(truncated to fit ${maxChars}-char limit)\n${PROFILE_MARKER_END}\n`;
   const available = maxChars - suffix.length;
+  if (available < PROFILE_MARKER_START.length) {
+    const withNewline = `${minEmptyMarkers}\n`;
+    return withNewline.length <= maxChars ? withNewline : minEmptyMarkers;
+  }
   let head = trimmed.slice(0, available);
   const lastNewline = head.lastIndexOf('\n');
   if (lastNewline > PROFILE_MARKER_START.length + 20) {
     head = head.slice(0, lastNewline);
   }
   return `${head.trimEnd()}${suffix}`;
+}
+
+export function computeEffectiveProfileBlockForTarget(
+  target: ProfileTargetDescriptor,
+  profileBlock: string,
+  existingContent: string = ''
+): string {
+  if (!profileBlock.trim()) {
+    return '';
+  }
+  if (!isWindsurfTarget(target.host, target.path)) {
+    return profileBlock;
+  }
+  const markers = findPairedProfileMarkers(existingContent);
+  if (markers.status === 'malformed') {
+    return profileBlock;
+  }
+  let overhead: number;
+  if (markers.status === 'paired') {
+    const before = existingContent.slice(0, markers.startIdx).trimEnd();
+    const after = existingContent.slice(markers.endIdx + PROFILE_MARKER_END.length).trimStart();
+    overhead = (before ? before.length + 2 : 0) + (after ? after.length + 2 : 0) + 1;
+  } else {
+    const trimmedExisting = existingContent.trimEnd();
+    overhead = trimmedExisting ? trimmedExisting.length + 3 : 1;
+  }
+  const available = Math.max(0, WINDSURF_PROFILE_MAX_CHARS - overhead);
+  return truncateProfileBlockForWindsurf(profileBlock, available);
 }
 
 function inferHostFromTargetPath(targetPath: string): string {
@@ -345,9 +408,11 @@ export function syncGlobalUserProfile(
       continue;
     }
 
-    const effectiveBlock = isWindsurfTarget(target.host, targetPath)
-      ? truncateProfileBlockForWindsurf(profileBlock, WINDSURF_PROFILE_MAX_CHARS)
-      : profileBlock;
+    const effectiveBlock = computeEffectiveProfileBlockForTarget(target, profileBlock, existing);
+    if (!effectiveBlock) {
+      targets.push({ host: target.host, path: targetPath, status: 'skipped' });
+      continue;
+    }
 
     let next: string;
     if (isStandaloneCursorMdc && !existing.trim()) {

@@ -42,28 +42,40 @@ const rawArgs = process.argv.slice(2);
 const VALUE_FLAGS = new Set([
   '--workspace', '-w', '--port', '-p', '--host', '--token', '--export', '--svg', '--html',
   '--targets', '--link', '--ide',
-  '--payload', '--harness', '--event', '--tool', '--tool-name', '--file', '--target-file',
+  '--payload', '--harness', '--event', '--tool', '--file', '--tool-name', '--target-file',
+  '--max-commits', '--token-budget', '--skill-budget',
+  '--category', '--title', '--summary', '--content', '--id', '--trigger', '--preset',
 ]);
+const FREE_TEXT_VALUE_FLAGS = new Set(['--title', '--summary', '--content', '--trigger']);
 let firstPositional = '';
 let firstPositionalIdx = -1;
+let hasHelpOrVersionFlag = false;
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
-  if (a.startsWith('-')) {
-    if (VALUE_FLAGS.has(a.toLowerCase()) && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('-')) {
-      i++;
+  const lower = a.toLowerCase();
+  if (a.startsWith('-') && a !== '-') {
+    if (lower === '--help' || lower === '-h' || lower === '--version' || lower === '-v') {
+      hasHelpOrVersionFlag = true;
+    } else if (!a.includes('=') && VALUE_FLAGS.has(lower) && i + 1 < rawArgs.length) {
+      const next = rawArgs[i + 1];
+      if (
+        !next.startsWith('-') ||
+        (FREE_TEXT_VALUE_FLAGS.has(lower) &&
+          (next.toLowerCase() === '-h' || next.toLowerCase() === '-v' || !next.startsWith('--')))
+      ) {
+        i++;
+      }
     }
     continue;
   }
-  firstPositional = a.toLowerCase();
-  firstPositionalIdx = i;
-  break;
+  if (!firstPositional) {
+    firstPositional = lower;
+    firstPositionalIdx = i;
+  }
 }
 const hasExplicitCliIntent =
   (Boolean(firstPositional) && firstPositional !== 'mcp') ||
-  rawArgs.some((a) => {
-    const lower = a.toLowerCase();
-    return lower === '--help' || lower === '-h' || lower === '--version' || lower === '-v';
-  });
+  hasHelpOrVersionFlag;
 const forwardedArgs = hasExplicitCliIntent
   ? rawArgs
   : [

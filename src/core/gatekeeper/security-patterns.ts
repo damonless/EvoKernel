@@ -23,23 +23,48 @@ export const UNIVERSAL_SECURITY_PATTERNS: Array<{ pattern: RegExp; reason: strin
   },
 ];
 
-export const SCRIPT_EXECUTION_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+export const DESTRUCTIVE_SHELL_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   {
-    pattern: /\brm\s+-rf\s+(\/|~|\$HOME|\$EVO_WORKSPACE|\.\.(?:\/|\\|\s|$)|[A-Za-z]:\\)/i,
-    reason: 'Destructive root/home/parent directory deletion detected',
+    pattern: /\brm\s+(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|-r\s+-f|-f\s+-r)\b/i,
+    reason: 'Destructive recursive shell deletion (rm -rf) detected',
   },
+  {
+    pattern: /\b(?:del|rd|rmdir)\b(?=[^\n]*\/s\b)(?=[^\n]*\/q\b)/i,
+    reason: 'Destructive Windows recursive deletion (del /s /q) detected',
+  },
+  {
+    pattern: /\b(?:Format-Volume|Clear-Disk|mkfs(?:\.[a-z0-9]+)?|dd\s+if=|format\s+[a-z]:)/i,
+    reason: 'Disk formatting or raw block overwrite command detected',
+  },
+];
+
+export const PROGRAMMATIC_DESTRUCTIVE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   {
     pattern:
       /\b(?:(?:fs(?:\.promises)?|fsPromises)\.(?:rmSync|rmdirSync|rm|rmdir)|rmSync|rmdirSync|rm|rmdir|shutil\.rmtree)\s*\(\s*(?:['"`](?:\/|~|\$HOME|\.\.(?:[/\\][^'"`]*)?|[A-Za-z]:\\)['"`]|os\.homedir\s*\(\)|os\.getcwd\s*\(\)|os\.path\.expanduser\s*\(\s*['"`]~[^'"`]*['"`]\s*\)|Path\.(?:home|cwd)\s*\(\)|process\.cwd\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE|EVO_WORKSPACE)\b|\[\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE|EVO_WORKSPACE)['"`]|workspace(?:Root)?\b)/i,
     reason: 'Destructive programmatic root/home/parent/workspace directory deletion detected',
   },
+];
+
+export const REMOTE_EXEC_AND_EXFIL_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   {
     pattern:
-      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE)|\[\s*['"`](?:HOME|USERPROFILE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[\s\S]{0,80}[\/\\'"`]\.(?:ssh|aws|gnupg|kube|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|kube|env)\b|[\/\\]\.(?:ssh|aws|gnupg|kube)(?:[\/\\][A-Za-z0-9_.-]+|[\/\\]?['"`])|(?:\.kube[\/\\]config\b|['"`]\.kube['"`]\s*,\s*['"`]config['"`]|['"`]\.kube\/?['"`]\s*\+\s*['"`]\/?config['"`])/i,
-    reason: 'Sensitive home credential directory access (~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.env) detected',
+      /\b(curl|wget|Invoke-WebRequest|iwr)\b[^\n]*\|\s*(?:(?:sudo|env)\s+)?(sh|bash|zsh|pwsh|powershell|iex|Invoke-Expression)\b/i,
+    reason: 'Remote code pipe execution detected',
   },
-  { pattern: /\b(Format-Volume|Clear-Disk|mkfs\.|dd\s+if=)/i, reason: 'Disk formatting command detected' },
-  { pattern: /\b(curl|wget|Invoke-WebRequest|iwr)\b.*\|\s*(sh|bash|pwsh|powershell|iex|Invoke-Expression)/i, reason: 'Remote code pipe execution detected' },
+  {
+    pattern:
+      /\bInvoke-Expression\b|\biex\b|\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s-enc(?:odedcommand)?\b|(?:^|\s)-EncodedCommand\b|\bFromBase64String\s*\(/i,
+    reason: 'PowerShell remote/encoded execution (Invoke-Expression/iex/-enc) detected',
+  },
+  {
+    pattern:
+      /(?:~|\$HOME|%USERPROFILE%|os\.homedir\s*\(\)|Path\.home\s*\(\)|process\.env(?:\.(?:HOME|USERPROFILE)|\[\s*['"`](?:HOME|USERPROFILE)['"`]\s*\])|os\.(?:environ(?:\.get)?|getenv)\s*[\[(]\s*['"`](?:HOME|USERPROFILE)['"`])[\s\S]{0,80}[\/\\'"`]\.(?:ssh|aws|gnupg|kube|env)\b|(?:~|\$HOME|%USERPROFILE%)[\/\\]\.(?:ssh|aws|gnupg|kube|env)\b|[\/\\]\.(?:ssh|aws|gnupg|kube)(?:[\/\\][A-Za-z0-9_.-]+|[\/\\]?['"`])|(?:\.kube[\/\\]config\b|['"`]\.kube['"`]\s*,\s*['"`]config['"`]|['"`]\.kube\/?['"`]\s*\+\s*['"`]\/?config['"`])|\/etc\/(?:shadow|sudoers)\b|(?:^|[\s'"`\/\\~])\.aws[\/\\]credentials\b|(?:^|[\s'"`\/\\~])\.ssh[\/\\]id_(?:rsa|dsa|ecdsa|ed25519)\b/i,
+    reason: 'Sensitive credential/system secret access (~/.ssh, ~/.aws/credentials, /etc/shadow, ~/.gnupg, ~/.kube, ~/.env) detected',
+  },
+];
+
+export const DYNAMIC_CODE_EXEC_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   {
     pattern:
       /\b(?:eval|new\s+Function|vm\.(?:runInNewContext|runInThisContext))\s*\([\s\S]{0,120}\b(?:Buffer\.from|atob|base64|process|fs|child_process)\b/i,
@@ -72,11 +97,41 @@ export const SCRIPT_EXECUTION_PATTERNS: Array<{ pattern: RegExp; reason: string 
     pattern: /\bmodule\.createRequire\s*\(/,
     reason: 'Dynamic module.createRequire bypass detected',
   },
-  {
-    pattern: /(?:^|\s)-EncodedCommand\b|\bFromBase64String\s*\(/i,
-    reason: 'PowerShell encoded/base64 payload obfuscation detected',
-  },
 ];
+
+export const SCRIPT_EXECUTION_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  ...DESTRUCTIVE_SHELL_PATTERNS,
+  ...PROGRAMMATIC_DESTRUCTIVE_PATTERNS,
+  ...REMOTE_EXEC_AND_EXFIL_PATTERNS,
+  ...DYNAMIC_CODE_EXEC_PATTERNS,
+];
+
+const CLAUSE_NEGATION_PROHIBITION_SUFFIX =
+  /(?:\b(?:never|do\s+not|don't|dont|must\s+not|mustn't|should\s+not|shouldn't|avoid|forbid|prohibit|refuse\s+to|stop)(?:\s+(?:ever\s+)?(?:run(?:ning)?|exec(?:ut(?:e|ing))?|us(?:e|ing)|call(?:ing)?|invok(?:e|ing)|try(?:ing)?))?|(?:禁止|不要|别|切勿|严禁|勿用|勿|不得|不允许)(?:直接|随意|盲目)?(?:运行|执行|使用|调用)?)[\s"'`:：]*$/i;
+
+export function findUnnegatedDestructiveShellPattern(proseText: string): string | null {
+  for (const rule of DESTRUCTIVE_SHELL_PATTERNS) {
+    const flags = rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`;
+    const re = new RegExp(rule.pattern.source, flags);
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(proseText)) !== null) {
+      const idx = match.index;
+      const beforeText = proseText.slice(0, idx);
+      let clauseStart = 0;
+      const sepRe = /[\r\n.;!?。；！？,，]|&&|\|\||[|;]/g;
+      let sepMatch: RegExpExecArray | null;
+      while ((sepMatch = sepRe.exec(beforeText)) !== null) {
+        clauseStart = sepMatch.index + sepMatch[0].length;
+      }
+      const prefixInClause = beforeText.slice(clauseStart);
+      if (!CLAUSE_NEGATION_PROHIBITION_SUFFIX.test(prefixInClause)) {
+        return rule.reason;
+      }
+      if (match[0].length === 0) re.lastIndex++;
+    }
+  }
+  return null;
+}
 
 export const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   ...UNIVERSAL_SECURITY_PATTERNS,

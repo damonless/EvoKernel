@@ -40,9 +40,13 @@ import {
 } from '../memory.js';
 import { spawnGitAsync } from '../memory/git-utils.js';
 import {
+  DESTRUCTIVE_SHELL_PATTERNS,
+  PROGRAMMATIC_DESTRUCTIVE_PATTERNS,
+  REMOTE_EXEC_AND_EXFIL_PATTERNS,
   SCRIPT_EXECUTION_PATTERNS,
   TOOL_NETWORK_PATTERNS,
   UNIVERSAL_SECURITY_PATTERNS,
+  findUnnegatedDestructiveShellPattern,
   isValidContrastiveEvidence,
   scanDangerousPatterns as scanDangerousTextPatterns,
   stripScriptComments,
@@ -124,13 +128,33 @@ interface ToolDryRunStaging {
   runCwd: string;
 }
 
+const EVO_BLOCK_MARKER_REGEX = /<!--\s*EVO:(?:PROFILE:)?(?:START|END)\s*-->/i;
+
+function hasEvoBlockMarkerInValue(value: unknown, depth = 0): boolean {
+  if (depth > 8 || value === null || value === undefined) return false;
+  if (typeof value === 'string') {
+    return EVO_BLOCK_MARKER_REGEX.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => hasEvoBlockMarkerInValue(item, depth + 1));
+  }
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some((v) =>
+      hasEvoBlockMarkerInValue(v, depth + 1)
+    );
+  }
+  return false;
+}
+
 const PREFERENCE_POLARITY_AXES: Array<{
   topic: string;
   sideA: RegExp;
   sideB: RegExp;
+  sideAIsNegation?: boolean;
 }> = [
   {
     topic: 'tables',
+    sideAIsNegation: true,
     sideA:
       /(?:禁用|不要|不用|别用|禁止|避免|切勿|勿用)[^。\n.,;!?，；！？]{0,16}表格|\bno\s+(?:markdown\s+)?tables?\b|\bavoid\s+(?:markdown\s+)?tables?\b|\bnever\s+use\s+(?:markdown\s+)?tables?\b|\bdo\s+not\s+use\s+(?:markdown\s+)?tables?\b|\bdon't\s+use\s+(?:markdown\s+)?tables?\b|\b(?:instead\s+of|rather\s+than)\s+(?:markdown\s+)?tables?\b/i,
     sideB:
@@ -162,11 +186,11 @@ const PREFERENCE_POLARITY_AXES: Array<{
 function classifyPolaritySides(text: string): Map<string, 'A' | 'B'> {
   const result = new Map<string, 'A' | 'B'>();
   const affirmativeText = text.replace(
-    /(?:instead\s+of\s+|rather\s+than\s+|avoid\s+|never\s+use\s+|do\s+not\s+use\s+|don't\s+use\s+|\bno\s+|不要|禁用|禁止|不用|别用|避免|切勿|勿用)[^.,;!\n。；！]*/gi,
+    /(?:instead\s+of\s+|rather\s+than\s+|avoid\s+|never\s+(?:use\s+)?|do\s+not\s+(?:use\s+)?|don't\s+(?:use\s+)?|\bno\s+|不要|禁用|禁止|不用|别用|避免|切勿|勿用)[^.,;!\n。；！，]*/gi,
     ' '
   );
   for (const axis of PREFERENCE_POLARITY_AXES) {
-    const hasA = axis.sideA.test(text);
+    const hasA = axis.sideA.test(axis.sideAIsNegation ? text : affirmativeText);
     const hasB = !hasA && axis.sideB.test(affirmativeText);
     if (hasA) result.set(axis.topic, 'A');
     else if (hasB) result.set(axis.topic, 'B');
@@ -175,13 +199,19 @@ function classifyPolaritySides(text: string): Map<string, 'A' | 'B'> {
 }
 
 export function detectPreferenceConflict(
-  candidate: { id?: string; title?: string; l0_summary?: string; content?: string },
+  candidate: {
+    id?: string;
+    title?: string;
+    l0_summary?: string;
+    content?: string;
+    always_on?: boolean;
+  },
   existingPrefs: EvoPreference[]
-): Array<{ id: string; topic: string; title: string }> {
+): Array<{ id: string; topic: string; title: string; always_on_mismatch?: boolean }> {
   const candText = [candidate.title || '', candidate.l0_summary || '', candidate.content || ''].join('\n');
   const candSides = classifyPolaritySides(candText);
   if (candSides.size === 0) return [];
-  const conflicts: Array<{ id: string; topic: string; title: string }> = [];
+  const conflicts: Array<{ id: string; topic: string; title: string; always_on_mismatch?: boolean }> = [];
   for (const pref of existingPrefs) {
     if (pref.enabled === false) continue;
     const prefText = [pref.title || '', pref.l0_summary || '', pref.content || ''].join('\n');
@@ -189,7 +219,14 @@ export function detectPreferenceConflict(
     for (const [topic, side] of candSides.entries()) {
       const existingSide = prefSides.get(topic);
       if (existingSide && existingSide !== side) {
-        conflicts.push({ id: pref.id, topic, title: pref.title || pref.id });
+        const alwaysOnMismatch =
+          candidate.always_on !== undefined && candidate.always_on !== (pref.always_on !== false);
+        conflicts.push({
+          id: pref.id,
+          topic,
+          title: pref.title || pref.id,
+          ...(alwaysOnMismatch ? { always_on_mismatch: true } : {}),
+        });
         break;
       }
     }
@@ -589,6 +626,13 @@ export class EvoGatekeeper {
       });
     }
 
+    const triggerCueText =
+      typeof rawProposal.trigger_cue === 'string'
+        ? rawProposal.trigger_cue
+        : rawProposal.trigger_cue !== undefined && rawProposal.trigger_cue !== null
+          ? String(rawProposal.trigger_cue)
+          : '';
+
     const fullPayloadText = [
       resolvedTitle,
       resolvedL0Summary,
@@ -596,12 +640,23 @@ export class EvoGatekeeper {
       resolvedSkillL1,
       resolvedSkillL2,
       resolvedPrefContent,
+      triggerCueText,
       rawProposal.script_code || '',
       resolvedSymptom,
       resolvedRootCause,
       resolvedSolution,
       ...normalizedTargetSymbols,
     ].join('\n');
+
+    if (hasEvoBlockMarkerInValue(rawProposal) || EVO_BLOCK_MARKER_REGEX.test(fullPayloadText)) {
+      return fail({
+        passed: false,
+        gate_failed: 'SCHEMA_SECURITY',
+        error_code: 'ERR_SECURITY_VIOLATION',
+        message:
+          'Security gate blocked proposal: EvoKernel managed block markers (<!-- EVO:START/END --> or <!-- EVO:PROFILE:START/END -->) are forbidden in proposal fields.',
+      });
+    }
 
     for (const rule of UNIVERSAL_SECURITY_PATTERNS) {
       if (rule.pattern.test(fullPayloadText)) {
@@ -614,21 +669,22 @@ export class EvoGatekeeper {
       }
     }
 
-    if (rawProposal.kind === 'rule' || rawProposal.kind === 'skill') {
-      const fencedBlocks = [...fullPayloadText.matchAll(/```[^\n]*\n([\s\S]*?)```/g)]
-        .map((m) => m[1] || '')
-        .join('\n');
-      const destructiveShellOnly = SCRIPT_EXECUTION_PATTERNS.slice(0, 5);
-      for (const rule of destructiveShellOnly) {
-        if (rule.pattern.test(fullPayloadText)) {
-          return fail({
-            passed: false,
-            gate_failed: 'SCHEMA_SECURITY',
-            error_code: 'ERR_SECURITY_VIOLATION',
-            message: `Security gate blocked proposal: ${rule.reason}`,
-          });
-        }
+    for (const rule of REMOTE_EXEC_AND_EXFIL_PATTERNS) {
+      if (rule.pattern.test(fullPayloadText)) {
+        return fail({
+          passed: false,
+          gate_failed: 'SCHEMA_SECURITY',
+          error_code: 'ERR_SECURITY_VIOLATION',
+          message: `Security gate blocked proposal: ${rule.reason}`,
+        });
       }
+    }
+
+    if (rawProposal.kind !== 'tool') {
+      const fencedRegex = /```[^\n`]*\n([\s\S]*?)```|```([\s\S]*?)```/g;
+      const fencedBlocks = [...fullPayloadText.matchAll(fencedRegex)]
+        .map((m) => m[1] ?? m[2] ?? '')
+        .join('\n');
       if (fencedBlocks) {
         for (const rule of SCRIPT_EXECUTION_PATTERNS) {
           if (rule.pattern.test(fencedBlocks)) {
@@ -639,6 +695,30 @@ export class EvoGatekeeper {
               message: `Security gate blocked proposal: ${rule.reason}`,
             });
           }
+        }
+      }
+
+      if (rawProposal.kind === 'rule' || rawProposal.kind === 'skill') {
+        for (const rule of [...DESTRUCTIVE_SHELL_PATTERNS, ...PROGRAMMATIC_DESTRUCTIVE_PATTERNS]) {
+          if (rule.pattern.test(fullPayloadText)) {
+            return fail({
+              passed: false,
+              gate_failed: 'SCHEMA_SECURITY',
+              error_code: 'ERR_SECURITY_VIOLATION',
+              message: `Security gate blocked proposal: ${rule.reason}`,
+            });
+          }
+        }
+      } else if (rawProposal.kind === 'preference' || isPersonalMemory) {
+        const proseWithoutFences = fullPayloadText.replace(fencedRegex, ' ');
+        const unnegatedReason = findUnnegatedDestructiveShellPattern(proseWithoutFences);
+        if (unnegatedReason) {
+          return fail({
+            passed: false,
+            gate_failed: 'SCHEMA_SECURITY',
+            error_code: 'ERR_SECURITY_VIOLATION',
+            message: `Security gate blocked proposal: ${unnegatedReason}`,
+          });
         }
       }
     }
@@ -705,27 +785,33 @@ export class EvoGatekeeper {
       }
     }
 
-    // Prompt-Injection / Directive Tripwire (Gate 1 for rule/skill/preference/personal memory)
+    // Prompt-Injection / Directive Tripwire (Gate 1 for rule/skill/preference/personal memory + trigger_cue on all kinds)
     if (
       rawProposal.kind === 'rule' ||
       rawProposal.kind === 'skill' ||
       rawProposal.kind === 'preference' ||
-      isPersonalMemory
+      isPersonalMemory ||
+      triggerCueText
     ) {
       const textToAudit =
         rawProposal.kind === 'rule'
-          ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${resolvedRuleContent}`
+          ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${triggerCueText}\n${resolvedRuleContent}`
           : rawProposal.kind === 'preference'
-            ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${resolvedPrefContent}`
+            ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${triggerCueText}\n${resolvedPrefContent}`
             : isPersonalMemory
-              ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${resolvedSymptom}\n${resolvedRootCause}\n${resolvedSolution}`
-              : `${rawProposal.title}\n${rawProposal.l0_summary}\n${rawProposal.trigger_cue || ''}\n${resolvedSkillL1}\n${resolvedSkillL2}`;
+              ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${triggerCueText}\n${resolvedSymptom}\n${resolvedRootCause}\n${resolvedSolution}`
+              : rawProposal.kind === 'skill'
+                ? `${rawProposal.title}\n${rawProposal.l0_summary}\n${triggerCueText}\n${resolvedSkillL1}\n${resolvedSkillL2}`
+                : triggerCueText;
       const strippedAuditText = stripCaseAnchorLines(textToAudit)
         .replace(/```[\s\S]*?```/g, '')
         .replace(/`[^`]*`/g, '');
       const PROMPT_INJECTION_REGEX =
         /\b(?:ignore\s+(?:all\s+)?previous\s+instructions|disregard\s+(?:all\s+)?system\s+prompts?|dangerously-skip-permissions|bypass\s+safety\s+guardrails?)\b/i;
-      if (PROMPT_INJECTION_REGEX.test(strippedAuditText)) {
+      if (
+        PROMPT_INJECTION_REGEX.test(strippedAuditText) ||
+        (triggerCueText && PROMPT_INJECTION_REGEX.test(triggerCueText))
+      ) {
         return fail({
           passed: false,
           gate_failed: 'SCHEMA_SECURITY',
@@ -967,8 +1053,7 @@ export class EvoGatekeeper {
 
       const bypassImplicitConfounded =
         options?.bypassConfoundedCheck === true ||
-        rawProposal.origin === 'compacted' ||
-        rawProposal.origin === 'optimized';
+        rawProposal.origin === 'compacted';
 
       if (
         !bypassImplicitConfounded &&
@@ -1830,6 +1915,7 @@ export class EvoGatekeeper {
     }
 
     // D8: Deterministic Preference Polarity Conflict Guard
+    let preferencePolarityWarning: string | undefined;
     if (rawProposal.kind === 'preference') {
       const candidatePool = this.storage
         .listPreferences()
@@ -1840,18 +1926,24 @@ export class EvoGatekeeper {
           title: resolvedTitle,
           l0_summary: resolvedL0Summary,
           content: resolvedPrefContent,
+          always_on: resolvedPrefAlwaysOn !== false,
         },
         candidatePool
       );
-      if (polarityConflicts.length > 0) {
-        const conflictIds = polarityConflicts.map((c) => c.id);
+      const blockingPolarityConflicts = polarityConflicts.filter((c) => !c.always_on_mismatch);
+      const mismatchedAlwaysOnConflicts = polarityConflicts.filter((c) => c.always_on_mismatch);
+      if (blockingPolarityConflicts.length > 0) {
+        const conflictIds = blockingPolarityConflicts.map((c) => c.id);
         return done({
           passed: false,
           gate_failed: 'DUPLICATE_CHECK',
           error_code: 'ERR_DUPLICATE_CAPABILITY',
-          message: `Preference '${cleanId}' conflicts with existing opposite-polarity preference(s): ${polarityConflicts.map((c) => `${c.id} [${c.topic}]`).join(', ')}. Pass supersedes_id: "${conflictIds[0]}" to cleanly replace the conflicting habit.`,
+          message: `Preference '${cleanId}' conflicts with existing opposite-polarity preference(s): ${blockingPolarityConflicts.map((c) => `${c.id} [${c.topic}]`).join(', ')}. Pass supersedes_id: "${conflictIds[0]}" to cleanly replace the conflicting habit.`,
           conflicting_ids: conflictIds,
         });
+      }
+      if (mismatchedAlwaysOnConflicts.length > 0) {
+        preferencePolarityWarning = `Preference '${cleanId}' (always_on=${resolvedPrefAlwaysOn !== false}) has opposite polarity to existing preference(s) with different always_on scope: ${mismatchedAlwaysOnConflicts.map((c) => `${c.id} [${c.topic}]`).join(', ')}. Allowed as context-specific override.`;
       }
     }
 
@@ -2523,6 +2615,10 @@ export class EvoGatekeeper {
         rawProposal.enabled !== undefined
           ? rawProposal.enabled !== false
           : basePref?.enabled !== false;
+      const prefTags = Array.isArray(rawProposal.tags)
+        ? rawProposal.tags.map((t) => String(t).trim()).filter(Boolean)
+        : (basePref?.tags || []);
+      const prefOrigin = rawProposal.origin || basePref?.origin || 'evolved';
 
       if (alwaysOn) {
         const MAX_ATOMIC_PREF_TOKENS = 150;
@@ -2546,6 +2642,8 @@ export class EvoGatekeeper {
           always_on: true,
           content,
           tokens: newPrefTokens,
+          tags: prefTags,
+          origin: prefOrigin,
           enabled: candidateEnabled,
           created_at: now,
           updated_at: now,
@@ -2584,6 +2682,7 @@ export class EvoGatekeeper {
         return done({
           passed: true,
           message: `Dry-run: Preference '${cleanId}' (${category}) passed all Gatekeeper checks (${newPrefTokens} tokens).`,
+          ...(preferencePolarityWarning ? { warning: preferencePolarityWarning } : {}),
           diagnostics: {
             id: cleanId,
             kind: 'preference',
@@ -2648,9 +2747,6 @@ export class EvoGatekeeper {
           ? sanitizedSupersedesPref
           : undefined;
 
-      const prefTags = Array.isArray(rawProposal.tags)
-        ? rawProposal.tags.map((t) => String(t).trim()).filter(Boolean)
-        : (basePref?.tags || []);
       const resolvedTriggerCue =
         typeof rawProposal.trigger_cue === 'string' && rawProposal.trigger_cue.trim()
           ? rawProposal.trigger_cue.trim()
@@ -2666,7 +2762,7 @@ export class EvoGatekeeper {
         content,
         tokens: newPrefTokens,
         tags: prefTags,
-        origin: rawProposal.origin || basePref?.origin || 'evolved',
+        origin: prefOrigin,
         supersedes_id: resolvedSupersedesId,
         enabled: candidateEnabled,
         review_status:
@@ -2705,6 +2801,7 @@ export class EvoGatekeeper {
       return done({
         passed: true,
         message: `Preference '${cleanId}' (${category}, always_on=${alwaysOn}) passed all Gatekeeper checks and is active (${newPrefTokens} tokens).`,
+        ...(preferencePolarityWarning ? { warning: preferencePolarityWarning } : {}),
         diagnostics: {
           id: cleanId,
           kind: 'preference',

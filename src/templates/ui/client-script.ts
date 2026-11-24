@@ -15,7 +15,7 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
   return `
 (function() {
   var snapshot = ${safeSnapshotJson};
-  var token = ${JSON.stringify(token)};
+  var token = ${JSON.stringify(token).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')};
   var isExport = ${isExport ? 'true' : 'false'};
   var isAnon = ${anon ? 'true' : 'false'};
 
@@ -1179,6 +1179,7 @@ ${PROFILE_CLIENT_SCRIPT}
       } else if (vscodeApi) {
         callKernelAction('export-html', {}).then(function(res) {
           if (res.ok) {
+            if (res.data && res.data.cancelled) return;
             var outPathVal = (res.data && res.data.path) || (res.result && res.result.path) || '';
             showToast('success', (lang === 'zh' ? '已导出独立 HTML 报告' : 'Exported standalone HTML') + (outPathVal ? ': ' + outPathVal : ''));
           } else if (res.error && res.error !== 'Export cancelled') {

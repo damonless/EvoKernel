@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as zlib from 'node:zlib';
 
                                                       
@@ -2004,13 +2005,21 @@ export function runDeliverableInspectorSelfTest()
 // ---------------------------------------------------------------------------
 // CLI & Self-Test Entrypoint
 // ---------------------------------------------------------------------------
-const isDeliverableCliDirectRun =
-  process.env.EVO_SELF_TEST === '1' ||
-  process.argv.includes('--self-test') ||
-  (Boolean(process.argv[1]) &&
-    !process.argv[1].includes('.test.') &&
-    path.resolve(process.argv[1]).toLowerCase() ===
-      path.resolve(import.meta.filename).toLowerCase());
+function isDirectExecution()          {
+  if (!process.argv[1]) return false;
+  const normalizePath = (p        )         => {
+    let resolved        ;
+    try {
+      resolved = fs.realpathSync(p);
+    } catch {
+      resolved = path.resolve(p);
+    }
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return normalizePath(process.argv[1]) === normalizePath(fileURLToPath(import.meta.url));
+}
+
+const isDeliverableCliDirectRun = isDirectExecution();
 
 if (isDeliverableCliDirectRun) {
   let evoArgs                      = {};

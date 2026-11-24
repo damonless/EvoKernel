@@ -1041,7 +1041,50 @@ export const UI_STYLES = `
       justify-content: flex-end;
       gap: 4px;
     }
+    .action-group {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
 
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: var(--text-xs);
+      font-weight: 600;
+      font-family: var(--font-mono);
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge-tier-core {
+      color: var(--status-ok);
+      background: var(--status-ok-bg);
+      border-color: var(--status-ok-border);
+    }
+    .badge-tier-scoped {
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.04);
+      border-color: var(--border-subtle);
+    }
+    .badge-pending {
+      color: var(--status-warn);
+      background: var(--status-warn-bg);
+      border-color: var(--status-warn-border);
+    }
+    .badge-paused {
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.03);
+      border-color: var(--border-subtle);
+    }
     .badge-kind {
       display: inline-block;
       font-size: var(--text-xs);
@@ -1682,6 +1725,11 @@ export const UI_STYLES = `
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       color: var(--text-primary);
+    }
+    .mono-dim {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--text-muted);
     }
     .inspector-placeholder .ast-footnote {
       padding: 8px 10px;

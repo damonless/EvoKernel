@@ -17,7 +17,14 @@ import {
   syncGlobalUserProfile,
   syncManagedRuleBlocks,
 } from './init.js';
-import { extractCodexTomlEvoEntry, hasStaleNpxMcpEntry, parseJsonc } from './harness.js';
+import {
+  ALL_HARNESS_ADAPTERS,
+  detectCascadedTargets,
+  extractCodexTomlEvoEntry,
+  hasStaleNpxMcpEntry,
+  parseJsonc,
+} from './harness.js';
+import { computeEffectiveProfileBlockForTarget } from '../core/profile-sync.js';
 import { parseMaxCommitsArg, runBootstrap } from './bootstrap.js';
 import { renderAuditReport, renderRefactorReport, runAudit, runRefactor } from './audit.js';
 import * as child_process from 'node:child_process';
@@ -456,7 +463,7 @@ export function readStdinTextWithTimeout(
       const stat = fs.fstatSync(0);
       if (stat.isFile()) {
         if (stat.size === 0) return resolve('');
-        return resolve(fs.readFileSync(0, 'utf8').trim());
+        return resolve(fs.readFileSync(0, 'utf8').replace(/^\uFEFF/, '').trim());
       }
     } catch {
       // fstat failed, continue to stream
@@ -472,32 +479,33 @@ export function readStdinTextWithTimeout(
         if (timer) clearTimeout(timer);
         try { process.stdin.pause(); } catch {}
         try { process.stdin.destroy(); } catch {}
-        resolve(res);
+        resolve(res.replace(/^\uFEFF/, '').trim());
       }
     }
 
     timer = setTimeout(() => {
-      finish(data.trim());
+      finish(data);
     }, initialTimeoutMs);
 
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk: string) => {
       data += chunk;
+      const cleaned = data.replace(/^\uFEFF/, '').trim();
       try {
-        JSON.parse(data.trim());
-        finish(data.trim());
+        JSON.parse(cleaned);
+        finish(cleaned);
       } catch {
         // Chunk arrived but JSON incomplete: data is actively streaming.
         // Reset timer so slow/large multi-chunk streams are not prematurely cut off.
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
-          finish(data.trim());
+          finish(data);
         }, chunkTimeoutMs);
       }
     });
 
     process.stdin.on('end', () => {
-      finish(data.trim());
+      finish(data);
     });
 
     process.stdin.on('error', () => {
@@ -1309,10 +1317,9 @@ export const VALUE_TAKING_FLAGS = new Set([
   '--file',
   '--tool-name',
   '--target-file',
-]);
-
-const PROFILE_VALUE_FLAGS = new Set([
-  ...VALUE_TAKING_FLAGS,
+  '--max-commits',
+  '--token-budget',
+  '--skill-budget',
   '--category',
   '--title',
   '--summary',
@@ -1321,6 +1328,8 @@ const PROFILE_VALUE_FLAGS = new Set([
   '--trigger',
   '--preset',
 ]);
+
+const PROFILE_VALUE_FLAGS = VALUE_TAKING_FLAGS;
 
 const FREE_TEXT_PROFILE_FLAGS = new Set([
   '--title',
@@ -1333,7 +1342,11 @@ function isFlagNextValue(flag: string, nextArg: string | undefined): boolean {
   if (nextArg === undefined) return false;
   if (!nextArg.startsWith('-')) return true;
   if (FREE_TEXT_PROFILE_FLAGS.has(flag.toLowerCase())) {
-    const nextFlag = nextArg.split('=')[0];
+    const nextLower = nextArg.toLowerCase();
+    if (nextLower === '-h' || nextLower === '-v') {
+      return true;
+    }
+    const nextFlag = nextLower.split('=')[0];
     if (!KNOWN_FLAGS.includes(nextFlag) && !/^--[a-z0-9-]+$/i.test(nextArg)) {
       return true;
     }
@@ -1342,16 +1355,29 @@ function isFlagNextValue(flag: string, nextArg: string | undefined): boolean {
 }
 
 function parseCliFlagValue(args: string[], flag: string): string | undefined {
-  const eqPrefix = `${flag}=`;
-  const eqArg = args.find((a) => a.startsWith(eqPrefix));
-  if (eqArg) {
-    return eqArg.slice(eqPrefix.length);
-  }
-  const idx = args.indexOf(flag);
-  if (idx !== -1 && idx + 1 < args.length) {
-    const val = args[idx + 1];
-    if (!val.startsWith('-') || !KNOWN_FLAGS.includes(val.split('=')[0])) {
-      return val;
+  const lowerFlag = flag.toLowerCase();
+  const eqPrefix = `${lowerFlag}=`;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const aLower = a.toLowerCase();
+    if (aLower.startsWith(eqPrefix)) {
+      return a.slice(eqPrefix.length);
+    }
+    if (aLower === lowerFlag) {
+      if (i + 1 < args.length && isFlagNextValue(lowerFlag, args[i + 1])) {
+        return args[i + 1];
+      }
+      return undefined;
+    }
+    if (
+      a.startsWith('-') &&
+      a !== '-' &&
+      !a.includes('=') &&
+      VALUE_TAKING_FLAGS.has(aLower) &&
+      i + 1 < args.length &&
+      isFlagNextValue(aLower, args[i + 1])
+    ) {
+      i++;
     }
   }
   return undefined;
@@ -1388,8 +1414,14 @@ function normalizeLeadingFlags(rawArgs: string[]): string[] {
   let i = 0;
   while (i < rawArgs.length && rawArgs[i].startsWith('-')) {
     const flag = rawArgs[i];
+    const flagLower = flag.toLowerCase();
     leadingFlags.push(flag);
-    if (VALUE_TAKING_FLAGS.has(flag.toLowerCase()) && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('-')) {
+    if (
+      !flag.includes('=') &&
+      VALUE_TAKING_FLAGS.has(flagLower) &&
+      i + 1 < rawArgs.length &&
+      isFlagNextValue(flagLower, rawArgs[i + 1])
+    ) {
       leadingFlags.push(rawArgs[i + 1]);
       i += 2;
     } else {
@@ -1412,16 +1444,25 @@ export function runCli(argv: string[]): void | Promise<void> {
     cmd = 'help';
   }
 
-  // Early version interception: ZERO side-effects (no file reads/writes, no global seed, exit code 0)
+  // Early version & help interception: ZERO side-effects (no file reads/writes, no global seed, exit code 0)
   let hasStandaloneVersionFlag = false;
+  let hasStandaloneHelpFlag = false;
   if (cmd !== 'hook' && cmd !== 'mcp') {
     for (let idx = 0; idx < args.length; idx++) {
       const a = args[idx];
-      if (a === '--version' || a === '-v') {
+      const lower = a.toLowerCase();
+      if (lower === '--version' || lower === '-v') {
         hasStandaloneVersionFlag = true;
-        break;
-      }
-      if (a.startsWith('-') && VALUE_TAKING_FLAGS.has(a.toLowerCase()) && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
+      } else if (lower === '--help' || lower === '-h') {
+        hasStandaloneHelpFlag = true;
+      } else if (
+        a.startsWith('-') &&
+        a !== '-' &&
+        !a.includes('=') &&
+        VALUE_TAKING_FLAGS.has(lower) &&
+        idx + 1 < args.length &&
+        isFlagNextValue(lower, args[idx + 1])
+      ) {
         idx++;
       }
     }
@@ -1438,11 +1479,11 @@ export function runCli(argv: string[]): void | Promise<void> {
 
   // Early help interception: ZERO side-effects (no file reads/writes, no global seed, exit code 0)
   const isHelpRequested =
-    args.includes('--help') ||
-    args.includes('-h') ||
+    hasStandaloneHelpFlag ||
     cmd === 'help' ||
     cmd === '--help' ||
-    cmd === '-h';
+    cmd === '-h' ||
+    (cmd === 'optimize' && (extractCliPositionalArgs(args, 1)[0] || '').toLowerCase() === 'help');
 
   if (isHelpRequested) {
     let targetSubcmd = cmd;
@@ -1450,8 +1491,14 @@ export function runCli(argv: string[]): void | Promise<void> {
       let sub = '';
       for (let idx = 0; idx < args.length; idx++) {
         const a = args[idx];
-        if (a.startsWith('-')) {
-          if (VALUE_TAKING_FLAGS.has(a.toLowerCase()) && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
+        if (a.startsWith('-') && a !== '-') {
+          const lowerFlag = a.toLowerCase();
+          if (
+            !a.includes('=') &&
+            VALUE_TAKING_FLAGS.has(lowerFlag) &&
+            idx + 1 < args.length &&
+            isFlagNextValue(lowerFlag, args[idx + 1])
+          ) {
             idx++;
           }
           continue;
@@ -1558,7 +1605,7 @@ export function runCli(argv: string[]): void | Promise<void> {
       if (!arg.startsWith('-') || arg === '-') {
         continue;
       }
-      const flag = arg.split('=')[0];
+      const flag = arg.split('=')[0].toLowerCase();
       if (!allowedFlags.includes(flag)) {
         const suggestion =
           suggestClosestToken(flag, allowedFlags) || suggestClosestToken(flag, KNOWN_FLAGS);
@@ -1589,16 +1636,7 @@ export function runCli(argv: string[]): void | Promise<void> {
     return;
   }
 
-  let wsVal: string | undefined;
-  const wsEq = args.find((a) => a.startsWith('--workspace='));
-  if (wsEq) {
-    wsVal = wsEq.slice('--workspace='.length);
-  } else {
-    const idx = args.indexOf('--workspace') !== -1 ? args.indexOf('--workspace') : args.indexOf('-w');
-    if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith('-')) {
-      wsVal = args[idx + 1];
-    }
-  }
+  const wsVal = parseCliFlagValue(args, '--workspace') ?? parseCliFlagValue(args, '-w');
 
   if (wsVal && cmd !== 'mcp' && cmd !== 'hook') {
     const resolvedWs = path.resolve(wsVal);
@@ -1620,12 +1658,14 @@ export function runCli(argv: string[]): void | Promise<void> {
       ? (extractCliPositionalArgs(args, 1)[0] || 'show').toLowerCase()
       : '';
   const isInitGlobal = cmd === 'init' && (args.includes('--global') || args.includes('-g'));
+  const isDryRun = args.includes('--dry-run');
+  const isProjectProfile = cmd === 'profile' && args.includes('--project');
   const isReadOnlyDiagnostic =
     ['score', 'ui', 'doctor', 'audit', 'check', 'inspect', 'tree', 'stats', 'version', '--version', '-v'].includes(cmd) ||
-    (isInitGlobal && args.includes('--dry-run')) ||
+    (cmd === 'init' && isDryRun) ||
     (cmd === 'profile' &&
       (['list', 'show', 'path'].includes(profileSubcmd) ||
-        ((profileSubcmd === 'sync' || profileSubcmd === 'clean') && args.includes('--dry-run')) ||
+        isDryRun ||
         ((profileSubcmd === 'import' || profileSubcmd === 'onboard') && !args.includes('--apply'))));
   const isIsolatedWithoutGlobalOverride =
     (Boolean(process.env.NODE_TEST_CONTEXT) || process.env.EVO_PROFILE_ISOLATED === '1') &&
@@ -1644,7 +1684,7 @@ export function runCli(argv: string[]): void | Promise<void> {
     ((cmd === 'memory' || cmd === 'memories') && (args.includes('refresh') || args.includes('--refresh')));
 
   let workspaceRoot: string;
-  if (isReadOnlyDiagnostic) {
+  if ((isReadOnlyDiagnostic && cmd !== 'init') || isProjectProfile) {
     const target = wsVal
       ? path.resolve(wsVal)
       : process.env.EVO_WORKSPACE
@@ -1699,6 +1739,7 @@ export function runCli(argv: string[]): void | Promise<void> {
         break;
       }
 
+      const dryRun = args.includes('--dry-run');
       const stealth = args.includes('--stealth');
       const targets = parseTargetsArg(args, workspaceRoot);
       const linkEvoFrom = parseLinkArg(args);
@@ -1706,15 +1747,86 @@ export function runCli(argv: string[]): void | Promise<void> {
       const noIde = args.includes('--no-ide');
       const ide = parseIdeTargetsArg(args);
       const installIde = args.includes('--install-ide') || (Boolean(ide?.length) && !noIde) ? true : undefined;
-      const res = runInit(workspaceRoot, {
-        stealth,
-        targets,
-        linkEvoFrom,
-        warmup,
-        installIde,
-        noIde,
-        ide,
-      });
+
+      if (dryRun) {
+        const plannedTargets = targets ?? detectCascadedTargets(workspaceRoot);
+        const preHadGeminiMd = fs.existsSync(path.join(workspaceRoot, 'GEMINI.md'));
+        const preHadAgentsMd = fs.existsSync(path.join(workspaceRoot, 'AGENTS.md'));
+        const targetsAgentsMd =
+          preHadAgentsMd ||
+          plannedTargets.some((t) => t === 'agents' || t === 'codex' || t === 'opencode');
+        const skipRedundantGeminiMd = targets === undefined && targetsAgentsMd && !preHadGeminiMd;
+        const plannedRuleFiles = Array.from(
+          new Set(
+            plannedTargets.flatMap((t) => {
+              const adapter = ALL_HARNESS_ADAPTERS[t];
+              if (!adapter) return [];
+              return adapter.ruleFiles.filter((f) => !(skipRedundantGeminiMd && f === 'GEMINI.md'));
+            })
+          )
+        );
+        const plannedMcpFiles = Array.from(
+          new Set(plannedTargets.flatMap((t) => ALL_HARNESS_ADAPTERS[t]?.mcpFiles || []))
+        );
+        const linkedPreview =
+          linkEvoFrom && linkEvoFrom.trim()
+            ? path.basename(path.resolve(workspaceRoot, linkEvoFrom.trim())) === '.evo'
+              ? path.resolve(workspaceRoot, linkEvoFrom.trim())
+              : path.join(path.resolve(workspaceRoot, linkEvoFrom.trim()), '.evo')
+            : undefined;
+        if (args.includes('--json')) {
+          console.log(
+            JSON.stringify(
+              {
+                ok: true,
+                dryRun: true,
+                workspaceRoot,
+                initializedHarnesses: plannedTargets,
+                updatedFiles: plannedRuleFiles,
+                mcpConfigFiles: plannedMcpFiles,
+                stealth,
+                warmup,
+                ...(linkedPreview ? { linkedSharedEvoDir: linkedPreview } : {}),
+              },
+              null,
+              2
+            )
+          );
+          break;
+        }
+        logInit('🧬 EvoKernel initialization preview (Dry Run — no files modified):');
+        logInit(`  ├─ Workspace       : ${workspaceRoot}`);
+        logInit(`  ├─ Harnesses       : ${plannedTargets.join(', ') || '(none)'}`);
+        logInit(`  ├─ Planned rules   : ${plannedRuleFiles.join(', ') || '(none)'}`);
+        logInit(`  ├─ Planned MCPs    : ${plannedMcpFiles.join(', ') || '(none)'}`);
+        if (linkedPreview) {
+          logInit(`  ├─ Shared .evo     : ${linkedPreview}`);
+        }
+        logInit(`  └─ Mode            : ${stealth ? 'Stealth (.git/info/exclude)' : 'Standard'}`);
+        break;
+      }
+
+      let res: ReturnType<typeof runInit>;
+      try {
+        res = runInit(workspaceRoot, {
+          stealth,
+          targets,
+          linkEvoFrom,
+          warmup,
+          installIde,
+          noIde,
+          ide,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (args.includes('--json')) {
+          console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+        } else {
+          console.error(formatTerminalOutput(`❌ Error: ${msg}`, cliTermOpts));
+        }
+        handleExit(1);
+        return;
+      }
       if (args.includes('--json')) {
         console.log(JSON.stringify({ ok: true, ...res }, null, 2));
         break;
@@ -1957,9 +2069,12 @@ export function runCli(argv: string[]): void | Promise<void> {
       const dryRun = args.includes('--dry-run');
       const apply = args.includes('--apply');
       const isProject = args.includes('--project');
+      const activeScope: 'global' | 'project' = isProject ? 'project' : 'global';
+      const activeRoot = isProject ? workspaceRoot : globalDir;
       const profileStorage = new EvoStorage(globalDir);
-      const hasGlobalEvo = hasValidEvoStructure(profileStorage.evoDir);
-      const cfg = hasGlobalEvo ? profileStorage.getConfig() : { ...DEFAULT_EVO_CONFIG };
+      const activeStorage = isProject ? new EvoStorage(workspaceRoot) : profileStorage;
+      const hasActiveEvo = hasValidEvoStructure(activeStorage.evoDir);
+      const cfg = hasActiveEvo ? activeStorage.getConfig() : { ...DEFAULT_EVO_CONFIG };
       const maxTokens = cfg.maxGlobalProfileTokens ?? 800;
       const maxMenuTokens = cfg.maxDirectoryMenuTokens ?? 250;
 
@@ -2070,8 +2185,49 @@ export function runCli(argv: string[]): void | Promise<void> {
             ? autoTitleId.slice(0, 48).replace(/-+$/, '')
             : `pref-${crypto.createHash('sha256').update(`${title}\0${content}`).digest('hex').slice(0, 8)}`);
 
-        const targetRoot = isProject ? workspaceRoot : globalDir;
-        const targetStorage = new EvoStorage(targetRoot);
+        const targetRoot = activeRoot;
+        const targetStorage = activeStorage;
+
+        if (dryRun) {
+          const receipt = `🧬 EvoKernel Evolution Receipt: [preference] ${cleanId} (${l0Summary})`;
+          const plannedHosts = isProject
+            ? []
+            : discoverGlobalProfileTargets(globalDir).map((t) => t.path);
+          if (isJson) {
+            console.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  dryRun: true,
+                  id: cleanId,
+                  scope: activeScope,
+                  category: rawCategory,
+                  title,
+                  l0_summary: l0Summary,
+                  always_on: alwaysOn,
+                  ...(triggerCue ? { trigger_cue: triggerCue } : {}),
+                  receipt,
+                  plannedHostTargets: plannedHosts,
+                  syncedTargets: [],
+                },
+                null,
+                2
+              )
+            );
+          } else {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile(`🧪 Dry Run — Would add preference '${cleanId}' (${activeScope}, ${rawCategory}): ${l0Summary}`);
+            if (!isProject) {
+              logProfile(
+                `  └─ Host Targets  : ${plannedHosts.length > 0 ? plannedHosts.join(', ') : '(none detected)'}`
+              );
+            } else {
+              logProfile(`  └─ Project Scope : ${workspaceRoot}`);
+            }
+          }
+          break;
+        }
+
         targetStorage.ensureInitialized();
 
         const payload: ProposalPayload = {
@@ -2167,12 +2323,12 @@ export function runCli(argv: string[]): void | Promise<void> {
         }
 
         const cleanId = sanitizeId(rawTargetId);
-        const targetStorage = isProject ? new EvoStorage(workspaceRoot) : profileStorage;
-        const existingPref = hasValidEvoStructure(targetStorage.evoDir)
+        const targetStorage = activeStorage;
+        const existingPref = hasActiveEvo
           ? targetStorage.getPreference(cleanId)
           : null;
         if (!existingPref) {
-          const msg = `Preference '${cleanId}' not found in ${isProject ? workspaceRoot : globalDir}`;
+          const msg = `Preference '${cleanId}' not found in ${activeRoot}`;
           if (isJson) {
             console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
           } else {
@@ -2182,9 +2338,35 @@ export function runCli(argv: string[]): void | Promise<void> {
           return;
         }
 
+        if (dryRun) {
+          const plannedHosts = isProject
+            ? []
+            : discoverGlobalProfileTargets(globalDir).map((t) => t.path);
+          if (isJson) {
+            console.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  dryRun: true,
+                  removed: cleanId,
+                  scope: activeScope,
+                  plannedHostTargets: plannedHosts,
+                  syncedTargets: [],
+                },
+                null,
+                2
+              )
+            );
+          } else {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile(`🧪 Dry Run — Would archive preference '${cleanId}' (${activeScope})`);
+          }
+          break;
+        }
+
         let prevSnapshot: string | undefined;
         const prefFilePath = path.join(targetStorage.preferencesDir, `${cleanId}.md`);
-        if (!isProject && fs.existsSync(prefFilePath)) {
+        if (fs.existsSync(prefFilePath)) {
           try {
             prevSnapshot = fs.readFileSync(prefFilePath, 'utf8');
           } catch {}
@@ -2203,17 +2385,15 @@ export function runCli(argv: string[]): void | Promise<void> {
           return;
         }
 
-        if (!isProject) {
-          targetStorage.appendProfileHistory({
-            ts: new Date().toISOString(),
-            action: 'archive',
-            id: cleanId,
-            kind: 'preference',
-            title: existingPref.title || cleanId,
-            ...(prevSnapshot ? { previous_snapshot: prevSnapshot } : {}),
-            reason,
-          });
-        }
+        targetStorage.appendProfileHistory({
+          ts: new Date().toISOString(),
+          action: 'archive',
+          id: cleanId,
+          kind: 'preference',
+          title: existingPref.title || cleanId,
+          ...(prevSnapshot ? { previous_snapshot: prevSnapshot } : {}),
+          reason,
+        });
 
         const telem = new EvoTelemetry(targetStorage);
         try {
@@ -2284,7 +2464,7 @@ export function runCli(argv: string[]): void | Promise<void> {
         const rawMd = fs.readFileSync(resolvedFile, 'utf8').replace(/^\uFEFF/, '');
         const candidates = parseMarkdownToPreferenceCandidates(rawMd, path.basename(resolvedFile));
 
-        if (!apply) {
+        if (!apply || dryRun) {
           if (isJson) {
             console.log(
               JSON.stringify(
@@ -2292,6 +2472,7 @@ export function runCli(argv: string[]): void | Promise<void> {
                   ok: true,
                   dryRun: true,
                   applied: false,
+                  scope: activeScope,
                   filePath: resolvedFile,
                   count: candidates.length,
                   candidates,
@@ -2317,17 +2498,19 @@ export function runCli(argv: string[]): void | Promise<void> {
 
         const { imported, rejected, syncRes } = commitCandidates(
           candidates,
-          profileStorage,
-          'global',
+          activeStorage,
+          activeScope,
           'imported'
         );
+        const allRejected = imported.length === 0 && rejected.length > 0;
         if (isJson) {
           console.log(
             JSON.stringify(
               {
-                ok: true,
+                ok: !allRejected,
                 dryRun: false,
                 applied: true,
+                scope: activeScope,
                 filePath: resolvedFile,
                 importedCount: imported.length,
                 rejectedCount: rejected.length,
@@ -2354,6 +2537,10 @@ export function runCli(argv: string[]): void | Promise<void> {
             );
           }
         }
+        if (allRejected) {
+          handleExit(1);
+          return;
+        }
         break;
       }
 
@@ -2375,7 +2562,7 @@ export function runCli(argv: string[]): void | Promise<void> {
           }
 
           const candidates = getOnboardingPresetCandidates(normalizedPreset);
-          if (!apply) {
+          if (!apply || dryRun) {
             if (isJson) {
               console.log(
                 JSON.stringify(
@@ -2383,6 +2570,7 @@ export function runCli(argv: string[]): void | Promise<void> {
                     ok: true,
                     dryRun: true,
                     applied: false,
+                    scope: activeScope,
                     preset: normalizedPreset,
                     candidates,
                   },
@@ -2403,17 +2591,19 @@ export function runCli(argv: string[]): void | Promise<void> {
 
           const { imported, rejected, syncRes } = commitCandidates(
             candidates,
-            profileStorage,
-            'global',
+            activeStorage,
+            activeScope,
             'onboarding'
           );
+          const allRejected = imported.length === 0 && rejected.length > 0;
           if (isJson) {
             console.log(
               JSON.stringify(
                 {
-                  ok: true,
+                  ok: !allRejected,
                   dryRun: false,
                   applied: true,
+                  scope: activeScope,
                   preset: normalizedPreset,
                   importedCount: imported.length,
                   rejectedCount: rejected.length,
@@ -2433,6 +2623,10 @@ export function runCli(argv: string[]): void | Promise<void> {
                 `  └─ Host Targets : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
               );
             }
+          }
+          if (allRejected) {
+            handleExit(1);
+            return;
           }
           break;
         }
@@ -2485,7 +2679,7 @@ export function runCli(argv: string[]): void | Promise<void> {
               await rl.question('[2/3] Optional custom communication/formatting rule (Enter to skip): ')
             ).trim();
             const confirm = (
-              await rl.question(`[3/3] Apply '${chosenPreset}' to global profile? [Y/n]: `)
+              await rl.question(`[3/3] Apply '${chosenPreset}' to ${isProject ? 'project' : 'global'} profile? [Y/n]: `)
             ).trim().toLowerCase();
 
             if (confirm === 'n' || confirm === 'no') {
@@ -2512,8 +2706,8 @@ export function runCli(argv: string[]): void | Promise<void> {
             }
             const { imported, rejected, syncRes } = commitCandidates(
               candidates,
-              profileStorage,
-              'global',
+              activeStorage,
+              activeScope,
               'onboarding'
             );
             logProfile(`🧬 Applied ${imported.length} preference(s) (${rejected.length} skipped).`);
@@ -2521,6 +2715,9 @@ export function runCli(argv: string[]): void | Promise<void> {
               logProfile(
                 `  └─ Host Targets : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
               );
+            }
+            if (imported.length === 0 && rejected.length > 0) {
+              handleExit(1);
             }
           } finally {
             rl.close();
@@ -2547,20 +2744,129 @@ export function runCli(argv: string[]): void | Promise<void> {
 
       if (action === 'undo') {
         const targetId = positionalArgs[1] ? positionalArgs[1].trim() : undefined;
-        const undoRes = hasGlobalEvo
-          ? profileStorage.undoLastProfileChange(targetId)
-          : { ok: false, message: `Global profile storage is not initialized at ${globalDir}` };
+        if (dryRun) {
+          if (targetId !== undefined && targetId !== '' && !sanitizeId(targetId)) {
+            const msg = 'Invalid target ID';
+            if (isJson) {
+              console.log(JSON.stringify({ ok: false, dryRun: true, scope: activeScope, ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }), message: msg }, null, 2));
+            } else {
+              console.error(formatTerminalOutput(`❌ ${msg}`, cliTermOpts));
+            }
+            handleExit(1);
+            return;
+          }
+          let dryCandidate: ReturnType<EvoStorage['listProfileHistory']>[number] | undefined;
+          if (hasActiveEvo) {
+            const historyChronological = [...activeStorage.listProfileHistory(500)].reverse();
+            const cleanTargetId = targetId ? sanitizeId(targetId) : undefined;
+            const undoBalance = new Map<string, number>();
+            for (let i = historyChronological.length - 1; i >= 0; i--) {
+              const entry = historyChronological[i];
+              const entryCleanId = sanitizeId(entry.id) || entry.id;
+              const key = `${entry.kind}:${sanitizeId(entry.id)}`;
+              if (entry.action === 'undo') {
+                undoBalance.set(key, (undoBalance.get(key) || 0) + 1);
+                continue;
+              }
+              if (cleanTargetId && sanitizeId(entry.id) !== cleanTargetId) {
+                continue;
+              }
+              const pendingUndos = undoBalance.get(key) || 0;
+              if (pendingUndos > 0) {
+                undoBalance.set(key, pendingUndos - 1);
+                continue;
+              }
+              if (entry.action === 'add' && !cleanTargetId) {
+                const isActiveOnDisk =
+                  entry.kind === 'preference'
+                    ? Boolean(activeStorage.getPreference(entryCleanId))
+                    : Boolean(activeStorage.getMemory(entryCleanId));
+                if (!isActiveOnDisk) {
+                  continue;
+                }
+              }
+              if (entry.action === 'add' || entry.action === 'update' || entry.action === 'archive') {
+                dryCandidate = entry;
+                break;
+              }
+            }
+          }
+          if (!hasActiveEvo || !dryCandidate) {
+            const msg = !hasActiveEvo
+              ? `${isProject ? 'Project' : 'Global'} profile storage is not initialized at ${activeRoot}`
+              : targetId
+                ? `No reversible profile change found for '${sanitizeId(targetId)}'.`
+                : 'No reversible profile change found to undo.';
+            if (isJson) {
+              console.log(
+                JSON.stringify(
+                  {
+                    ok: false,
+                    dryRun: true,
+                    scope: activeScope,
+                    ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }),
+                    message: msg,
+                  },
+                  null,
+                  2
+                )
+              );
+            } else {
+              console.error(formatTerminalOutput(`❌ ${msg}`, cliTermOpts));
+            }
+            handleExit(1);
+            return;
+          }
+          const previewMsg = `Would undo ${dryCandidate.action} of ${dryCandidate.kind} '${dryCandidate.id}'.`;
+          if (isJson) {
+            console.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  dryRun: true,
+                  scope: activeScope,
+                  ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }),
+                  undone: dryCandidate,
+                  message: previewMsg,
+                  syncedTargets: [],
+                },
+                null,
+                2
+              )
+            );
+          } else {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile(`🧪 Dry Run — ${previewMsg}`);
+          }
+          break;
+        }
+
+        const undoRes = hasActiveEvo
+          ? activeStorage.undoLastProfileChange(targetId)
+          : { ok: false, message: `${isProject ? 'Project' : 'Global'} profile storage is not initialized at ${activeRoot}` };
         if (!undoRes.ok) {
           if (isJson) {
-            console.log(JSON.stringify({ ok: false, globalRoot: globalDir, ...undoRes }, null, 2));
+            console.log(
+              JSON.stringify(
+                {
+                  ok: false,
+                  scope: activeScope,
+                  ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }),
+                  ...undoRes,
+                },
+                null,
+                2
+              )
+            );
           } else {
             console.error(formatTerminalOutput(`❌ ${undoRes.message}`, cliTermOpts));
           }
           handleExit(1);
           return;
         }
-        const syncRes = syncGlobalUserProfile(globalDir);
-        const gTele = new EvoTelemetry(profileStorage);
+        const syncRes = isProject ? undefined : syncGlobalUserProfile(globalDir);
+        const projectSynced = isProject ? syncManagedRuleBlocks(workspaceRoot) : undefined;
+        const gTele = new EvoTelemetry(activeStorage);
         try {
           gTele.syncFromDisk(true);
         } finally {
@@ -2571,13 +2877,18 @@ export function runCli(argv: string[]): void | Promise<void> {
             JSON.stringify(
               {
                 ok: true,
-                globalRoot: globalDir,
+                scope: activeScope,
+                ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }),
                 undone: undoRes.undone,
                 message: undoRes.message,
-                syncedTargets: syncRes.updatedTargets,
-                totalTokens: syncRes.totalTokens,
-                maxTokens: syncRes.maxTokens,
-                menuTokens: syncRes.menuTokens,
+                syncedTargets: syncRes ? syncRes.updatedTargets : projectSynced || [],
+                ...(syncRes
+                  ? {
+                      totalTokens: syncRes.totalTokens,
+                      maxTokens: syncRes.maxTokens,
+                      menuTokens: syncRes.menuTokens,
+                    }
+                  : {}),
               },
               null,
               2
@@ -2586,28 +2897,33 @@ export function runCli(argv: string[]): void | Promise<void> {
         } else {
           const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
           logProfile(`↩️  ${undoRes.message}`);
-          logProfile(
-            `  ├─ Token Budget  : ${syncRes.totalTokens}/${syncRes.maxTokens} tok (Menu: ${syncRes.menuTokens}/${syncRes.maxMenuTokens} tok)`
-          );
-          logProfile(
-            `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
-          );
+          if (syncRes) {
+            logProfile(
+              `  ├─ Token Budget  : ${syncRes.totalTokens}/${syncRes.maxTokens} tok (Menu: ${syncRes.menuTokens}/${syncRes.maxMenuTokens} tok)`
+            );
+            logProfile(
+              `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+            );
+          } else {
+            logProfile(`  └─ Project Files : ${projectSynced && projectSynced.length > 0 ? projectSynced.join(', ') : '(already up-to-date)'}`);
+          }
         }
         break;
       }
 
       if (action === 'path') {
         const payload = {
-          globalRoot: globalDir,
-          evoDir: profileStorage.evoDir,
-          preferencesDir: profileStorage.preferencesDir,
-          profileDigestPath: profileStorage.profileDigestPath,
-          profileHistoryPath: profileStorage.profileHistoryPath,
+          scope: activeScope,
+          ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }),
+          evoDir: activeStorage.evoDir,
+          preferencesDir: activeStorage.preferencesDir,
+          profileDigestPath: activeStorage.profileDigestPath,
+          profileHistoryPath: activeStorage.profileHistoryPath,
         };
         if (isJson) {
           console.log(JSON.stringify(payload, null, 2));
         } else {
-          console.log(formatTerminalOutput(`Global Root      : ${payload.globalRoot}`, cliTermOpts));
+          console.log(formatTerminalOutput(`${isProject ? 'Workspace Root   ' : 'Global Root      '}: ${activeRoot}`, cliTermOpts));
           console.log(formatTerminalOutput(`Preferences Dir  : ${payload.preferencesDir}`, cliTermOpts));
           console.log(formatTerminalOutput(`Profile Digest   : ${payload.profileDigestPath}`, cliTermOpts));
           console.log(formatTerminalOutput(`Profile History  : ${payload.profileHistoryPath}`, cliTermOpts));
@@ -2616,6 +2932,20 @@ export function runCli(argv: string[]): void | Promise<void> {
       }
 
       if (action === 'sync') {
+        if (isProject) {
+          const updatedTargets = dryRun ? [] : syncManagedRuleBlocks(workspaceRoot);
+          if (isJson) {
+            console.log(JSON.stringify({ scope: 'project', workspaceRoot, dryRun, updatedTargets }, null, 2));
+          } else {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile(`🧬 Project Profile ${dryRun ? '(Dry Run) ' : ''}Synced:`);
+            logProfile(`  ├─ Workspace Root: ${workspaceRoot}`);
+            logProfile(
+              `  └─ Project Files : ${updatedTargets.length > 0 ? updatedTargets.join(', ') : '(already up-to-date)'}`
+            );
+          }
+          break;
+        }
         const syncRes = syncGlobalUserProfile(globalDir, { dryRun });
         if (isJson) {
           console.log(JSON.stringify({ globalRoot: globalDir, dryRun, ...syncRes }, null, 2));
@@ -2634,13 +2964,13 @@ export function runCli(argv: string[]): void | Promise<void> {
         break;
       }
 
-      const prefs = hasGlobalEvo ? profileStorage.listPreferences() : [];
+      const prefs = hasActiveEvo ? activeStorage.listPreferences() : [];
       const activeAlwaysOn = prefs.filter((p) => p.always_on !== false && p.enabled !== false);
-      const { totalTokens } = hasGlobalEvo
-        ? profileStorage.getProfileTokenUsage()
+      const { totalTokens } = hasActiveEvo
+        ? activeStorage.getProfileTokenUsage()
         : { totalTokens: 0 };
-      const directoryMenu = hasGlobalEvo
-        ? profileStorage.formatTaskDirectoryMenu(maxMenuTokens)
+      const directoryMenu = hasActiveEvo
+        ? activeStorage.formatTaskDirectoryMenu(maxMenuTokens)
         : '';
       const menuTokens = estimateTokens(directoryMenu);
 
@@ -2649,7 +2979,8 @@ export function runCli(argv: string[]): void | Promise<void> {
           console.log(
             JSON.stringify(
               {
-                globalRoot: globalDir,
+                scope: activeScope,
+                ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }),
                 totalTokens,
                 maxTokens,
                 menuTokens,
@@ -2662,9 +2993,9 @@ export function runCli(argv: string[]): void | Promise<void> {
           );
         } else {
           const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
-          logProfile(`👤 User-Global Personal Preferences (${prefs.length} total | Always-On Budget: ${totalTokens}/${maxTokens} tokens)`);
+          logProfile(`👤 ${isProject ? 'Project' : 'User-Global'} Personal Preferences (${prefs.length} total | Always-On Budget: ${totalTokens}/${maxTokens} tokens)`);
           if (prefs.length === 0) {
-            logProfile('  └── (empty — use evo_propose(kind: "preference", scope: "global") to add preferences)');
+            logProfile(`  └── (empty — use evo_propose(kind: "preference"${isProject ? '' : ', scope: "global"'}) to add preferences)`);
           } else {
             prefs.forEach((p, idx) => {
               const branch = idx === prefs.length - 1 ? '└──' : '├──';
@@ -2681,18 +3012,19 @@ export function runCli(argv: string[]): void | Promise<void> {
 
       // action === 'show' (read-only)
       let digest = '';
-      if (fs.existsSync(profileStorage.profileDigestPath)) {
-        digest = fs.readFileSync(profileStorage.profileDigestPath, 'utf8').trim();
+      if (fs.existsSync(activeStorage.profileDigestPath)) {
+        digest = fs.readFileSync(activeStorage.profileDigestPath, 'utf8').trim();
       } else if (activeAlwaysOn.length > 0) {
-        digest = profileStorage.formatUserProfileDigest();
+        digest = activeStorage.formatUserProfileDigest();
       }
 
       if (isJson) {
         console.log(
           JSON.stringify(
             {
-              globalRoot: globalDir,
-              profileDigestPath: profileStorage.profileDigestPath,
+              scope: activeScope,
+              ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }),
+              profileDigestPath: activeStorage.profileDigestPath,
               totalTokens,
               maxTokens,
               menuTokens,
@@ -2707,7 +3039,7 @@ export function runCli(argv: string[]): void | Promise<void> {
         );
       } else {
         const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
-        logProfile(`👤 User-Global Profile Digest (${totalTokens}/${maxTokens} tokens | ${globalDir})`);
+        logProfile(`👤 ${isProject ? 'Project' : 'User-Global'} Profile Digest (${totalTokens}/${maxTokens} tokens | ${activeRoot})`);
         if (!digest) {
           logProfile('  (no active always-on preferences yet)');
         } else {
@@ -2811,22 +3143,6 @@ export function runCli(argv: string[]): void | Promise<void> {
         return handleExit(result.exitCode);
       }
       break;
-    }
-
-    case 'optimize': {
-      if (
-        args.includes('--help') ||
-        args.includes('-h') ||
-        args[1] === 'help' ||
-        args[1] === '--help' ||
-        args[1] === '-h'
-      ) {
-        printOptimizeHelp(args);
-        break;
-      }
-      console.error(formatTerminalOutput(RETIRED_OPTIMIZE_NOTICE, cliTermOpts));
-      handleExit(1);
-      return;
     }
 
     case 'doctor': {
@@ -3000,18 +3316,19 @@ export function runCli(argv: string[]): void | Promise<void> {
       const profileDigest = hasGlobalProfileEvo
         ? globalProfileStorage.formatUserProfileDigest()
         : '';
-      const expectedProfileBlock = renderUserProfileBlock(profileDigest, profileDirectoryMenu).trim();
+      const rawExpectedProfileBlock = renderUserProfileBlock(profileDigest, profileDirectoryMenu);
       const profileHostTargets = discoverGlobalProfileTargets(globalDir);
       const syncedProfileTargets: string[] = [];
       const driftedProfileTargets: string[] = [];
-      if (expectedProfileBlock) {
+      if (rawExpectedProfileBlock.trim()) {
         const normProfile = (s: string) => s.replace(/\r\n/g, '\n').trim();
         for (const tDesc of profileHostTargets) {
           const tPath = tDesc.path;
+          let rawT = '';
           let existingBlock = '';
           if (fs.existsSync(tPath)) {
             try {
-              const rawT = fs.readFileSync(tPath, 'utf8');
+              rawT = fs.readFileSync(tPath, 'utf8');
               const sIdx = rawT.indexOf(PROFILE_MARKER_START);
               const eIdx = rawT.indexOf(PROFILE_MARKER_END);
               if (sIdx !== -1 && eIdx !== -1 && eIdx > sIdx) {
@@ -3019,7 +3336,13 @@ export function runCli(argv: string[]): void | Promise<void> {
               }
             } catch {}
           }
-          if (normProfile(existingBlock) === normProfile(expectedProfileBlock)) {
+          const effectiveExpected = computeEffectiveProfileBlockForTarget(
+            tDesc,
+            rawExpectedProfileBlock,
+            rawT
+          );
+          if (!effectiveExpected) continue;
+          if (normProfile(existingBlock) === normProfile(effectiveExpected)) {
             syncedProfileTargets.push(tPath);
           } else {
             driftedProfileTargets.push(tPath);
@@ -3032,6 +3355,7 @@ export function runCli(argv: string[]): void | Promise<void> {
       const pluginSeedCandidates = [
         path.join(currentHome, '.gemini', 'config', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md'),
         path.join(currentHome, '.claude', 'plugins', 'evo-kernel', 'rules', 'AGENTS.md'),
+        path.join(currentHome, '.gemini', 'extensions', 'evo-kernel', 'templates', 'GEMINI.extension.md'),
         path.join(currentHome, '.gemini', 'extensions', 'evo-kernel', 'GEMINI.md'),
       ];
       for (const pSeed of pluginSeedCandidates) {
@@ -3041,7 +3365,8 @@ export function runCli(argv: string[]): void | Promise<void> {
           const isStale =
             content.includes('EvoKernel 演进回执') ||
             !content.includes('EvoKernel Recall:') ||
-            !content.includes('scope: "global"');
+            !content.includes('scope: "global"') ||
+            content.includes('evo_inspect(id, tier: "L2")');
           if (isStale) {
             stalePluginSeeds.push(pSeed);
             const relSeed = path.relative(currentHome, pSeed).replace(/\\/g, '/');
@@ -3051,6 +3376,12 @@ export function runCli(argv: string[]): void | Promise<void> {
       }
 
       const hasVersionDrift = versionDriftReasons.length > 0;
+      const versionDriftFixCommand =
+        stalePluginSeeds.length > 0
+          ? versionDriftReasons.length > stalePluginSeeds.length
+            ? 'npx -y evo-kernel init && npx -y evo-kernel init --global'
+            : 'npx -y evo-kernel init --global'
+          : 'npx -y evo-kernel init';
       const duplicateRootSeeds =
         seedInfo.valid.includes('AGENTS.md') && seedInfo.valid.includes('GEMINI.md');
 
@@ -3087,7 +3418,7 @@ export function runCli(argv: string[]): void | Promise<void> {
           versionDrift: {
             drifted: hasVersionDrift,
             reasons: versionDriftReasons,
-            fixCommand: 'npx -y evo-kernel init',
+            fixCommand: versionDriftFixCommand,
           },
           capabilities: {
             rules: rulesCount,
@@ -3181,7 +3512,7 @@ export function runCli(argv: string[]): void | Promise<void> {
 
       if (hasVersionDrift) {
         logDoctor(
-          `  ├─ [!] Version Sync          : Drift detected (${versionDriftReasons.join('; ')}) — fix: \`npx -y evo-kernel init\``
+          `  ├─ [!] Version Sync          : Drift detected (${versionDriftReasons.join('; ')}) — fix: \`${versionDriftFixCommand}\``
         );
       }
 
@@ -3244,7 +3575,7 @@ export function runCli(argv: string[]): void | Promise<void> {
             : '  ⚠️  Verdict: MCP stdio handshake failed — run `npx -y evo-kernel init` and reload your IDE'
         );
       } else if (hasVersionDrift) {
-        logDoctor('  ⚠️  Verdict: Workspace version/seed drift detected — run `npx -y evo-kernel init` to sync');
+        logDoctor(`  ⚠️  Verdict: Workspace version/seed drift detected — run \`${versionDriftFixCommand}\` to sync`);
       } else if (staleMems > 0) {
         logDoctor(`  ⚠️  Verdict: ${staleMems} stale memory(s) detected — run \`evo memory verify\``);
       } else {

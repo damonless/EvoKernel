@@ -34,30 +34,40 @@ const FALLBACK_CORRECTION_REGEX =
 
 let activeHookEngine = null;
 
+function isTrustedEvoPackageRoot(pkgRoot) {
+  if (!pkgRoot || typeof pkgRoot !== 'string') return false;
+  try {
+    const resolved = path.resolve(pkgRoot);
+    const pkgPath = path.join(resolved, 'package.json');
+    if (!fs.existsSync(pkgPath) || !fs.statSync(pkgPath).isFile()) return false;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8').replace(/^\uFEFF/, ''));
+    return Boolean(pkg && typeof pkg === 'object' && pkg.name === 'evo-kernel');
+  } catch {
+    return false;
+  }
+}
+
 async function loadHookEngine() {
   if (activeHookEngine) return activeHookEngine;
   const hereDir = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    process.env.EVO_PACKAGE_ROOT
-      ? path.join(path.resolve(process.env.EVO_PACKAGE_ROOT), 'dist', 'core', 'hook-engine.js')
-      : '',
-    process.env.EVO_KERNEL_ROOT
-      ? path.join(path.resolve(process.env.EVO_KERNEL_ROOT), 'dist', 'core', 'hook-engine.js')
-      : '',
-    path.resolve(hereDir, '..', 'dist', 'core', 'hook-engine.js'),
-    path.resolve(hereDir, '..', '..', 'dist', 'core', 'hook-engine.js'),
-    path.resolve(process.cwd(), 'dist', 'core', 'hook-engine.js'),
-    path.resolve(process.cwd(), 'node_modules', 'evo-kernel', 'dist', 'core', 'hook-engine.js'),
+  const isInsideDotAgents = path.basename(path.dirname(hereDir)).toLowerCase() === '.agents';
+  const rootCandidates = [
+    process.env.EVO_PACKAGE_ROOT ? path.resolve(process.env.EVO_PACKAGE_ROOT) : '',
+    process.env.EVO_KERNEL_ROOT ? path.resolve(process.env.EVO_KERNEL_ROOT) : '',
+    !isInsideDotAgents ? path.resolve(hereDir, '..') : '',
     process.env.APPDATA
-      ? path.join(process.env.APPDATA, 'npm', 'node_modules', 'evo-kernel', 'dist', 'core', 'hook-engine.js')
+      ? path.join(process.env.APPDATA, 'npm', 'node_modules', 'evo-kernel')
       : '',
-    path.resolve(process.execPath, '../../lib/node_modules/evo-kernel/dist/core/hook-engine.js'),
-    path.resolve(process.execPath, '../node_modules/evo-kernel/dist/core/hook-engine.js'),
-    path.join(os.homedir(), '.gemini', 'config', 'plugins', 'evo-kernel', 'dist', 'core', 'hook-engine.js'),
-    path.join(os.homedir(), '.gemini', 'extensions', 'evo-kernel', 'dist', 'core', 'hook-engine.js'),
+    path.resolve(process.execPath, '../../lib/node_modules/evo-kernel'),
+    path.resolve(process.execPath, '../node_modules/evo-kernel'),
+    path.join(os.homedir(), '.gemini', 'config', 'plugins', 'evo-kernel'),
+    path.join(os.homedir(), '.gemini', 'extensions', 'evo-kernel'),
   ].filter(Boolean);
-  for (const cand of candidates) {
+
+  for (const rootCand of rootCandidates) {
     try {
+      if (!isTrustedEvoPackageRoot(rootCand)) continue;
+      const cand = path.join(rootCand, 'dist', 'core', 'hook-engine.js');
       if (fs.existsSync(cand)) {
         activeHookEngine = await import(pathToFileURL(cand).href);
         return activeHookEngine;
@@ -395,15 +405,17 @@ function loadHookState(statePath) {
 
 function saveHookState(statePath, state, conversationId, convState) {
   let lockFd = null;
+  let tmpPath = '';
   const lockPath = `${statePath}.lock`;
   try {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    for (let attempt = 0; attempt < 10; attempt++) {
+    for (let attempt = 0; attempt < 25; attempt++) {
       try {
         lockFd = fs.openSync(lockPath, 'wx');
         break;
       } catch (err) {
-        if (err && err.code === 'EEXIST') {
+        const code = String(err?.code || '');
+        if (code === 'EEXIST') {
           try {
             const st = fs.statSync(lockPath);
             if (Date.now() - st.mtimeMs > 2000) {
@@ -414,8 +426,16 @@ function saveHookState(statePath, state, conversationId, convState) {
           sleepSyncMs(10);
           continue;
         }
+        if ((code === 'EPERM' || code === 'EACCES') && attempt < 24) {
+          sleepSyncMs(10);
+          continue;
+        }
         break;
       }
+    }
+
+    if (lockFd === null) {
+      return;
     }
 
     const { state: diskState, parseFailed } = loadHookStateSafe(statePath);
@@ -427,21 +447,30 @@ function saveHookState(statePath, state, conversationId, convState) {
       merged[conversationId] = convState;
     }
     const serialized = JSON.stringify(merged);
-    const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+    tmpPath = `${statePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     fs.writeFileSync(tmpPath, serialized, { encoding: 'utf8', mode: 0o600 });
-    try {
-      fs.renameSync(tmpPath, statePath);
-    } catch {
-      fs.writeFileSync(statePath, serialized, { encoding: 'utf8', mode: 0o600 });
+    for (let renameAttempt = 0; renameAttempt < 5; renameAttempt++) {
       try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // Ignore cleanup error
+        fs.renameSync(tmpPath, statePath);
+        tmpPath = '';
+        break;
+      } catch (err) {
+        const code = String(err?.code || '');
+        if ((code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') && renameAttempt < 4) {
+          sleepSyncMs(10 * (renameAttempt + 1));
+          continue;
+        }
+        throw err;
       }
     }
   } catch {
-    // Ignore write errors
+    // Ignore write/lock errors without falling back to non-atomic overwrite
   } finally {
+    if (tmpPath) {
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {}
+    }
     if (lockFd !== null) {
       try {
         fs.closeSync(lockFd);
@@ -796,6 +825,7 @@ function resolveTelemetryDbsForStop(input, steps = []) {
 
 function isSqliteBusyError(err) {
   if (!err) return false;
+  if (Number(err.errcode) === 5) return true;
   const code = String(err.code || err.errcode || '');
   const msg = String(err.message || err);
   return /SQLITE_BUSY|database is locked|database table is locked/i.test(`${code} ${msg}`);
@@ -942,20 +972,119 @@ function syncSessionStateToTelemetryDb(dbPath, syncInfo) {
   return result;
 }
 
+function resolveTargetTelemetryDbPath(resolvedDbs) {
+  if (resolvedDbs?.localDbPath && fs.existsSync(resolvedDbs.localDbPath)) {
+    return resolvedDbs.localDbPath;
+  }
+  if (resolvedDbs?.globalDbPath && fs.existsSync(resolvedDbs.globalDbPath)) {
+    return resolvedDbs.globalDbPath;
+  }
+  return '';
+}
+
+const STOP_EDIT_TOOL_NAMES = new Set([
+  ...EDIT_TOOL_NAMES,
+  'edit',
+  'multiedit',
+  'write',
+  'create_file',
+  'str_replace_editor',
+  'apply_patch',
+  'patch',
+]);
+
+function extractModifiedFilesForStop(steps, localRoot, db) {
+  const files = new Set();
+  const addPath = (raw) => {
+    if (!raw || typeof raw !== 'string') return;
+    let str = normalizeTranscriptString(raw);
+    if (!str) return;
+    if (localRoot && (path.isAbsolute(str) || /^file:\/\//i.test(str))) {
+      const resolved = normalizeCandidatePath(str);
+      if (resolved) {
+        const rel = path.relative(localRoot, resolved).replace(/\\/g, '/');
+        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+          str = rel;
+        } else {
+          str = resolved;
+        }
+      }
+    }
+    let norm = str.replace(/[\\/]+/g, '/').replace(/^\.\/+/, '');
+    if (
+      !norm ||
+      norm.startsWith('..') ||
+      norm.startsWith('.evo/') ||
+      norm.startsWith('.agents/teamwork/') ||
+      norm.startsWith('.git/') ||
+      norm.includes('/.evo/') ||
+      norm.includes('/.gemini/antigravity/brain/')
+    ) {
+      return;
+    }
+    files.add(norm);
+  };
+
+  try {
+    if (db) {
+      const row = db
+        .prepare("SELECT value FROM session_state WHERE key = 'session_edited_files'")
+        .get();
+      if (row && typeof row.value === 'string') {
+        for (const line of row.value.split('\n')) {
+          addPath(line.trim());
+        }
+      }
+    }
+  } catch {}
+
+  if (Array.isArray(steps)) {
+    for (const step of steps) {
+      const toolCalls = Array.isArray(step?.tool_calls) ? step.tool_calls : [];
+      for (const tc of toolCalls) {
+        const toolName = normalizeTranscriptString(tc?.name || tc?.tool_name || tc?.ToolName || '').toLowerCase();
+        const args = parseTranscriptObject(tc?.arguments || tc?.args || tc?.Arguments || {});
+        const innerArgs = parseTranscriptObject(args.Arguments || args);
+        const innerToolName = normalizeTranscriptString(args.ToolName || args.tool_name || '').toLowerCase();
+        if (STOP_EDIT_TOOL_NAMES.has(toolName) || STOP_EDIT_TOOL_NAMES.has(innerToolName)) {
+          const rawTarget =
+            innerArgs.Path ||
+            innerArgs.path ||
+            innerArgs.TargetFile ||
+            innerArgs.target_file ||
+            innerArgs.AbsolutePath ||
+            args.Path ||
+            args.path ||
+            args.TargetFile ||
+            args.target_file ||
+            args.AbsolutePath ||
+            '';
+          addPath(rawTarget);
+        }
+      }
+    }
+  }
+
+  return Array.from(files);
+}
+
 function closeRecalledTelemetryOnStop(
   input,
   hadTurnCorrection,
   resolvedDbs = null,
-  partitionInfo = null
+  partitionInfo = null,
+  steps = []
 ) {
   let localDb;
   let globalDb;
   try {
-    const { localDbPath, globalDbPath } = resolvedDbs || resolveTelemetryDbsForStop(input);
-    if (!localDbPath || !fs.existsSync(localDbPath)) {
+    const dbs = resolvedDbs || resolveTelemetryDbsForStop(input, steps);
+    const { globalDbPath } = dbs;
+    const effectiveDbPath = resolveTargetTelemetryDbPath(dbs);
+    if (!effectiveDbPath) {
       return;
     }
-    localDb = openTelemetryDb(localDbPath);
+    localDb = openTelemetryDb(effectiveDbPath);
     const getFlag = (key) => {
       const row = localDb.prepare('SELECT value FROM session_state WHERE key = ?').get(key);
       return row && row.value !== undefined ? String(row.value) : undefined;
@@ -993,7 +1122,7 @@ function closeRecalledTelemetryOnStop(
         if (!cleanId) continue;
         const kind = String(entry.kind || 'rule');
         if (entry.tier === 'GLOBAL') {
-          if (globalDbPath && !isSameDbPath(localDbPath, globalDbPath)) {
+          if (globalDbPath && !isSameDbPath(effectiveDbPath, globalDbPath)) {
             if (!globalDb) {
               globalDb = openTelemetryDb(globalDbPath);
             }
@@ -1027,12 +1156,13 @@ function closeRecalledTelemetryOnStop(
       }
     };
 
-    const cacheDir = path.dirname(localDbPath);
+    const cacheDir = path.dirname(effectiveDbPath);
     const evoDir = path.dirname(cacheDir);
     const localRoot =
       path.basename(cacheDir) === '.cache' && path.basename(evoDir) === '.evo'
         ? path.dirname(evoDir)
         : '';
+    const modifiedFiles = extractModifiedFilesForStop(steps, localRoot, localDb);
     const canUseUnifiedEngine = Boolean(
       activeHookEngine?.recordRecalledOutcomeUnified &&
         activeHookEngine?.EvoStorage &&
@@ -1063,14 +1193,17 @@ function closeRecalledTelemetryOnStop(
           localDb.close();
           localDb = null;
           const localStorage = new activeHookEngine.EvoStorage(localRoot);
-          const localTelemetry = new activeHookEngine.EvoTelemetry(localStorage);
+          const localTelemetry = withSqliteBusyRetry(
+            () => new activeHookEngine.EvoTelemetry(localStorage)
+          );
           try {
             for (const entry of entriesToRecord) {
               activeHookEngine.recordRecalledOutcomeUnified(
                 localStorage,
                 localTelemetry,
                 entry,
-                'contested'
+                'contested',
+                modifiedFiles
               );
             }
             if (keptAfterPropose !== null) {
@@ -1126,14 +1259,17 @@ function closeRecalledTelemetryOnStop(
         localDb.close();
         localDb = null;
         const localStorage = new activeHookEngine.EvoStorage(localRoot);
-        const localTelemetry = new activeHookEngine.EvoTelemetry(localStorage);
+        const localTelemetry = withSqliteBusyRetry(
+          () => new activeHookEngine.EvoTelemetry(localStorage)
+        );
         try {
           for (const entry of entriesToRecord) {
             activeHookEngine.recordRecalledOutcomeUnified(
               localStorage,
               localTelemetry,
               entry,
-              'helped'
+              'helped',
+              modifiedFiles
             );
           }
           localTelemetry.clearRecalledCapabilities();
@@ -1699,7 +1835,7 @@ Options:
       const needsEpochSync =
         Boolean(explicitConversationId) && cs.syncedEpoch !== explicitConversationId;
 
-      const syncRes = syncSessionStateToTelemetryDb(resolvedDbs.localDbPath, {
+      const syncRes = syncSessionStateToTelemetryDb(resolveTargetTelemetryDbPath(resolvedDbs), {
         setUserCorrectionTrue: hadTurnCorrection,
         clearUserCorrection: turnRepl.clearedInterruptedCorrection && !hadTurnCorrection,
         hasProposeAfterCorrection:
@@ -1731,10 +1867,16 @@ Options:
           : Date.now()
       : 0;
 
-    closeRecalledTelemetryOnStop(input, hadTurnCorrection, resolvedDbs, {
-      isPartitioned: isPartitionedByPropose,
-      proposeCutoffMs,
-    });
+    closeRecalledTelemetryOnStop(
+      input,
+      hadTurnCorrection,
+      resolvedDbs,
+      {
+        isPartitioned: isPartitionedByPropose,
+        proposeCutoffMs,
+      },
+      steps
+    );
 
     if (hasExistingState || steps.length > 0) {
       const maxCorrToClear = Math.max(
@@ -1763,8 +1905,9 @@ Options:
       const convState = { ...createDefaultConvState(), ...(allState[conversationId] || {}) };
       if (convState.syncedEpoch !== explicitConversationId) {
         const resolvedDbs = resolveTelemetryDbsForStop(input, []);
-        if (resolvedDbs.localDbPath && fs.existsSync(resolvedDbs.localDbPath)) {
-          const syncRes = syncSessionStateToTelemetryDb(resolvedDbs.localDbPath, {
+        const targetSyncDb = resolveTargetTelemetryDbPath(resolvedDbs);
+        if (targetSyncDb) {
+          const syncRes = syncSessionStateToTelemetryDb(targetSyncDb, {
             setUserCorrectionTrue: false,
             clearUserCorrection: false,
             hasProposeAfterCorrection: false,
@@ -1861,7 +2004,7 @@ Options:
         : lastProposeStepIndex >= 0
           ? '0'
           : null;
-    const syncRes = syncSessionStateToTelemetryDb(resolvedDbs.localDbPath, {
+    const syncRes = syncSessionStateToTelemetryDb(resolveTargetTelemetryDbPath(resolvedDbs), {
       setUserCorrectionTrue: isCurrentUserCorrection,
       clearUserCorrection: preTurnRepl.clearedInterruptedCorrection && !isCurrentUserCorrection,
       hasProposeAfterCorrection:

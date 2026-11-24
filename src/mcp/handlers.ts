@@ -1283,6 +1283,11 @@ export class EvoMcpDispatcher {
       };
     }
 
+    if (name === 'evo_propose') {
+      const schemaError = this.proposeSchemaError(args);
+      if (schemaError) return schemaError;
+    }
+
     if (name === 'evo_compact') {
       const schemaError = this.compactSchemaError(args);
       if (schemaError) return schemaError;
@@ -2749,6 +2754,87 @@ export class EvoMcpDispatcher {
     return finishPropose(gatekeeper.evaluateAndCommit(payload));
   }
 
+  private proposeSchemaError(args: Record<string, unknown>) {
+    const validKinds = new Set(['rule', 'skill', 'tool', 'memory', 'preference']);
+    const rawKind = typeof args.kind === 'string' ? args.kind.trim().toLowerCase() : '';
+    const fail = (message: string) => ({
+      isError: true,
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            {
+              passed: false,
+              gate_failed: 'SCHEMA_SECURITY',
+              error_code: 'ERR_INVALID_SCHEMA',
+              message,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    });
+
+    if (!validKinds.has(rawKind)) {
+      return fail(
+        `evo_propose requires a valid kind (${Array.from(validKinds).join(', ')}).`
+      );
+    }
+
+    const rawIdStr = typeof args.id === 'string' ? args.id.trim() : '';
+    const cleanId = rawIdStr ? sanitizeId(rawIdStr) : '';
+    const rawSupStr = typeof args.supersedes_id === 'string' ? args.supersedes_id.trim() : '';
+    const cleanSup = rawSupStr ? sanitizeId(rawSupStr) : '';
+
+    if (args.id !== undefined && (typeof args.id !== 'string' || cleanId.length < 3)) {
+      return fail('Proposal id must be a string with at least 3 alphanumeric/hyphen characters.');
+    }
+    if ((cleanId || cleanSup).length < 3) {
+      return fail('Proposal id must be at least 3 alphanumeric/hyphen characters.');
+    }
+
+    if (args.title !== undefined && (typeof args.title !== 'string' || !args.title.trim())) {
+      return fail('Proposal title must be a non-empty string.');
+    }
+    if (args.l0_summary !== undefined && typeof args.l0_summary !== 'string') {
+      return fail('Proposal l0_summary must be a non-empty string.');
+    }
+
+    const rawTitle = String(args.title ?? args.name ?? '').trim();
+    const rawL0 = String(args.l0_summary ?? '').trim();
+    const hasSupersedes = cleanSup.length >= 3;
+
+    if (!rawL0) {
+      let canInheritFromExisting = false;
+      if (hasSupersedes) {
+        if (this.isGlobalWriteRoute('evo_propose', args)) {
+          canInheritFromExisting = hasValidEvoStructure(
+            path.join(resolveGlobalFallbackDir(), '.evo')
+          );
+        } else {
+          const rawWs = args.workspace ?? args.workspace_path;
+          const wsStr = typeof rawWs === 'string' ? rawWs.trim() : '';
+          if (wsStr) {
+            const resolvedWs = path.isAbsolute(wsStr)
+              ? path.resolve(wsStr)
+              : path.resolve(this.clientRoots[0] || this.defaultRoot, wsStr);
+            canInheritFromExisting = Boolean(findNearestEvoWorkspace(resolvedWs));
+          } else {
+            canInheritFromExisting = hasValidEvoStructure(path.join(this.defaultRoot, '.evo'));
+          }
+        }
+      }
+      if (!canInheritFromExisting) {
+        return fail('Both title (or l0_summary fallback) and non-empty l0_summary are required.');
+      }
+    } else if (!rawTitle && args.name !== undefined && (typeof args.name !== 'string' || !args.name.trim())) {
+      return fail('Proposal title must be a non-empty string.');
+    }
+
+    return null;
+  }
+
   private compactSchemaError(args: Record<string, unknown>) {
     const rawTargetIds = Array.isArray(args.target_ids)
       ? args.target_ids.map((id) => sanitizeId(String(id))).filter(Boolean)
@@ -2941,6 +3027,24 @@ export class EvoMcpDispatcher {
         (t) => storage.getPreference(t.id) !== null || storage.getSkill(t.id) !== null
       );
       const hasAnyPrefTarget = existingTargets.some((t) => storage.getPreference(t.id) !== null);
+      const archivedPrefSnapshots: Array<{ id: string; title: string; snapshot: string }> = [];
+      for (const target of existingTargets) {
+        const pref = storage.getPreference(target.id);
+        if (!pref) continue;
+        const cleanPrefId = sanitizeId(target.id);
+        const prefPath = path.join(storage.preferencesDir, `${cleanPrefId}.md`);
+        if (fs.existsSync(prefPath)) {
+          try {
+            archivedPrefSnapshots.push({
+              id: cleanPrefId,
+              title: pref.title || cleanPrefId,
+              snapshot: fs.readFileSync(prefPath, 'utf8'),
+            });
+          } catch {
+            // ignore read error
+          }
+        }
+      }
       const archiveEntriesBefore = new Set(
         fs.existsSync(storage.archiveDir) ? fs.readdirSync(storage.archiveDir) : []
       );
@@ -2983,6 +3087,20 @@ export class EvoMcpDispatcher {
           }
           telemetry?.syncFromDisk();
         } else {
+          const archivedSet = new Set(archived.map((a) => sanitizeId(a)));
+          const nowTs = new Date().toISOString();
+          for (const prefSnap of archivedPrefSnapshots) {
+            if (!archivedSet.has(prefSnap.id)) continue;
+            storage.appendProfileHistory({
+              ts: nowTs,
+              action: 'archive',
+              id: prefSnap.id,
+              kind: 'preference',
+              title: prefSnap.title,
+              previous_snapshot: prefSnap.snapshot,
+              reason: `Compacted into ${mergedCleanId}: ${reason}`,
+            });
+          }
           this.recordSessionProposal(
             storage.rootDir,
             mergedCleanId,

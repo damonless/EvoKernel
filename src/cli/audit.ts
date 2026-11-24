@@ -25,7 +25,10 @@ import {
   renderManagedBlock,
   renderUserProfileBlock,
 } from '../templates/meta-rule.js';
-import { discoverGlobalProfileTargets } from '../core/profile-sync.js';
+import {
+  computeEffectiveProfileBlockForTarget,
+  discoverGlobalProfileTargets,
+} from '../core/profile-sync.js';
 import { MAX_TOOLS_CATALOG_TOKENS, runInit, syncManagedRuleBlocks } from './init.js';
 import type { EvoRule, EvoSkill, ProposalPayload } from '../core/types.js';
 
@@ -1242,16 +1245,17 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     }
     const digest = globalStorage.formatUserProfileDigest();
     const menu = globalStorage.formatTaskDirectoryMenu(maxMenuBudget);
-    const expectedBlock = renderUserProfileBlock(digest, menu).trim();
-    if (expectedBlock) {
+    const rawExpectedBlock = renderUserProfileBlock(digest, menu);
+    if (rawExpectedBlock.trim()) {
       const hostTargets = discoverGlobalProfileTargets(globalRoot, { homeDir: globalHomeDir });
       const normBlock = (s: string) => s.replace(/\r\n/g, '\n').trim();
       for (const targetDesc of hostTargets) {
         const targetPath = targetDesc.path;
+        let rawTarget = '';
         let existingBlock = '';
         if (fs.existsSync(targetPath)) {
           try {
-            const rawTarget = fs.readFileSync(targetPath, 'utf8');
+            rawTarget = fs.readFileSync(targetPath, 'utf8');
             const sIdx = rawTarget.indexOf(PROFILE_MARKER_START);
             const eIdx = rawTarget.indexOf(PROFILE_MARKER_END);
             if (sIdx !== -1 && eIdx !== -1 && eIdx > sIdx) {
@@ -1261,7 +1265,13 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
             // ignore read error
           }
         }
-        if (normBlock(existingBlock) !== normBlock(expectedBlock)) {
+        const effectiveExpected = computeEffectiveProfileBlockForTarget(
+          targetDesc,
+          rawExpectedBlock,
+          rawTarget
+        );
+        if (!effectiveExpected) continue;
+        if (normBlock(existingBlock) !== normBlock(effectiveExpected)) {
           const relTarget = path.relative(globalHomeDir, targetPath).replace(/\\/g, '/');
           const displayTarget =
             relTarget && !relTarget.startsWith('..') ? `~/${relTarget}` : targetPath;

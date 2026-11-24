@@ -8,10 +8,11 @@ import {
   EvoStorage,
   estimateTokens,
   hasValidEvoStructure,
+  parseFrontmatter,
   resolveGlobalFallbackDir,
 } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
-import { resolveGitPaths } from '../core/memory.js';
+import { isRealSubpathOf, resolveGitPaths } from '../core/memory.js';
 import {
   META_RULE_MARKER_END,
   META_RULE_MARKER_START,
@@ -349,7 +350,10 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
     try {
       if (fs.statSync(opencodePath).isFile()) {
         const rawJson = fs.readFileSync(opencodePath, 'utf8');
-        const parsed = JSON.parse(rawJson);
+        const parsed = parseJsonc(rawJson, opencodePath) as Record<string, any>;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('Invalid opencode.json root object');
+        }
         if (typeof parsed.instructions === 'string' && parsed.instructions.includes(META_RULE_MARKER_START)) {
           const next = upsertMarkerBlock(parsed.instructions, block);
           if (next !== parsed.instructions) {
@@ -366,8 +370,12 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
             if (typeof item === 'string' && item.trim()) {
               const relCustom = item.trim();
               if (!updated.includes(relCustom)) {
-                const customFullPath = path.join(workspaceRoot, relCustom);
-                if (fs.existsSync(customFullPath) && fs.statSync(customFullPath).isFile()) {
+                const customFullPath = path.resolve(workspaceRoot, relCustom);
+                if (
+                  isRealSubpathOf(workspaceRoot, customFullPath) &&
+                  fs.existsSync(customFullPath) &&
+                  fs.statSync(customFullPath).isFile()
+                ) {
                   const current = fs.readFileSync(customFullPath, 'utf8');
                   if (current.includes(META_RULE_MARKER_START)) {
                     const next = upsertMarkerBlock(current, block);
@@ -384,8 +392,12 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
         if (typeof parsed.instructionsFile === 'string' && parsed.instructionsFile.trim()) {
           const relCustom = parsed.instructionsFile.trim();
           if (!updated.includes(relCustom)) {
-            const customFullPath = path.join(workspaceRoot, relCustom);
-            if (fs.existsSync(customFullPath) && fs.statSync(customFullPath).isFile()) {
+            const customFullPath = path.resolve(workspaceRoot, relCustom);
+            if (
+              isRealSubpathOf(workspaceRoot, customFullPath) &&
+              fs.existsSync(customFullPath) &&
+              fs.statSync(customFullPath).isFile()
+            ) {
               const current = fs.readFileSync(customFullPath, 'utf8');
               if (current.includes(META_RULE_MARKER_START)) {
                 const next = upsertMarkerBlock(current, block);
@@ -399,7 +411,7 @@ export function syncManagedRuleBlocks(workspaceRoot: string): string[] {
         }
       }
     } catch {
-      // Ignore malformed JSON
+      // Ignore malformed JSONC
     }
   }
 
@@ -695,28 +707,40 @@ const rawArgs = process.argv.slice(2);
 const VALUE_FLAGS = new Set([
   '--workspace', '-w', '--port', '-p', '--host', '--token', '--export', '--svg', '--html',
   '--targets', '--link', '--ide',
-  '--payload', '--harness', '--event', '--tool', '--tool-name', '--file', '--target-file',
+  '--payload', '--harness', '--event', '--tool', '--file', '--tool-name', '--target-file',
+  '--max-commits', '--token-budget', '--skill-budget',
+  '--category', '--title', '--summary', '--content', '--id', '--trigger', '--preset',
 ]);
+const FREE_TEXT_VALUE_FLAGS = new Set(['--title', '--summary', '--content', '--trigger']);
 let firstPositional = '';
 let firstPositionalIdx = -1;
+let hasHelpOrVersionFlag = false;
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
-  if (a.startsWith('-')) {
-    if (VALUE_FLAGS.has(a.toLowerCase()) && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('-')) {
-      i++;
+  const lower = a.toLowerCase();
+  if (a.startsWith('-') && a !== '-') {
+    if (lower === '--help' || lower === '-h' || lower === '--version' || lower === '-v') {
+      hasHelpOrVersionFlag = true;
+    } else if (!a.includes('=') && VALUE_FLAGS.has(lower) && i + 1 < rawArgs.length) {
+      const next = rawArgs[i + 1];
+      if (
+        !next.startsWith('-') ||
+        (FREE_TEXT_VALUE_FLAGS.has(lower) &&
+          (next.toLowerCase() === '-h' || next.toLowerCase() === '-v' || !next.startsWith('--')))
+      ) {
+        i++;
+      }
     }
     continue;
   }
-  firstPositional = a.toLowerCase();
-  firstPositionalIdx = i;
-  break;
+  if (!firstPositional) {
+    firstPositional = lower;
+    firstPositionalIdx = i;
+  }
 }
 const hasExplicitCliIntent =
   (Boolean(firstPositional) && firstPositional !== 'mcp') ||
-  rawArgs.some((a) => {
-    const lower = a.toLowerCase();
-    return lower === '--help' || lower === '-h' || lower === '--version' || lower === '-v';
-  });
+  hasHelpOrVersionFlag;
 const forwardedArgs = hasExplicitCliIntent
   ? rawArgs
   : [
@@ -840,6 +864,11 @@ function healStaleWorkspaceMcpConfigs(
   }
 
   // Also heal stale _npx evo-kernel entries in existing global host MCP configs
+  const isIsolatedEnv =
+    Boolean(process.env.NODE_TEST_CONTEXT) || process.env.EVO_PROFILE_ISOLATED === '1';
+  if (!globalHomeDir && isIsolatedEnv) {
+    return { workspaceHealed, globalHealed };
+  }
   const homeDir = path.resolve(globalHomeDir || os.homedir());
   const globalLaunch = resolveGlobalEvoMcpLaunchConfig();
   const wsResolved = path.resolve(workspaceRoot);
@@ -987,38 +1016,83 @@ const RETIRED_GLOBAL_SEED_DIRS: { skills: RegExp[]; tools: RegExp[] } = {
   tools: [/^evo-release-preflight$/i],
 };
 
+function isSeedOrBootstrapOrigin(originValue: unknown): boolean {
+  if (typeof originValue !== 'string') return false;
+  const norm = originValue.trim().toLowerCase();
+  return norm === 'seed' || norm === 'bootstrap';
+}
+
+function moveToArchive(evoDir: string, relCategory: string, sourcePath: string): void {
+  const baseName = path.basename(sourcePath);
+  const archiveBaseDir = path.join(evoDir, 'archive', 'retired-seeds', relCategory);
+  fs.mkdirSync(archiveBaseDir, { recursive: true });
+  let destPath = path.join(archiveBaseDir, baseName);
+  if (fs.existsSync(destPath)) {
+    destPath = path.join(archiveBaseDir, `${Date.now()}-${baseName}`);
+  }
+  try {
+    fs.renameSync(sourcePath, destPath);
+  } catch {
+    fs.cpSync(sourcePath, destPath, { recursive: true, force: true });
+    fs.rmSync(sourcePath, { recursive: true, force: true });
+  }
+}
+
 function pruneRetiredGlobalSeeds(evoDir: string): void {
-  const removeMatchingFiles = (dir: string) => {
+  const archiveMatchingFiles = (dir: string, relCategory: string) => {
     if (!fs.existsSync(dir)) return;
     try {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile()) continue;
         if (RETIRED_GLOBAL_SEED_FILES.some((pat) => pat.test(entry.name))) {
+          const fullPath = path.join(dir, entry.name);
           try {
-            fs.unlinkSync(path.join(dir, entry.name));
+            const raw = fs.readFileSync(fullPath, 'utf8');
+            const { meta } = parseFrontmatter(raw);
+            if (isSeedOrBootstrapOrigin(meta.origin)) {
+              moveToArchive(evoDir, relCategory, fullPath);
+            }
           } catch {}
         }
       }
     } catch {}
   };
-  removeMatchingFiles(path.join(evoDir, 'rules'));
-  removeMatchingFiles(path.join(evoDir, 'rules', 'scoped'));
+  archiveMatchingFiles(path.join(evoDir, 'rules'), 'rules');
+  archiveMatchingFiles(path.join(evoDir, 'rules', 'scoped'), path.join('rules', 'scoped'));
 
-  const removeMatchingDirs = (dir: string, patterns: RegExp[]) => {
+  const archiveMatchingDirs = (dir: string, patterns: RegExp[], kind: 'skills' | 'tools') => {
     if (!fs.existsSync(dir)) return;
     try {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         if (patterns.some((pat) => pat.test(entry.name))) {
+          const fullDir = path.join(dir, entry.name);
           try {
-            fs.rmSync(path.join(dir, entry.name), { recursive: true, force: true });
+            let originValue: unknown;
+            if (kind === 'skills') {
+              const skillMd = path.join(fullDir, 'SKILL.md');
+              if (fs.existsSync(skillMd) && fs.statSync(skillMd).isFile()) {
+                const raw = fs.readFileSync(skillMd, 'utf8');
+                originValue = parseFrontmatter(raw).meta.origin;
+              }
+            } else {
+              const manifestPath = path.join(fullDir, 'manifest.json');
+              if (fs.existsSync(manifestPath) && fs.statSync(manifestPath).isFile()) {
+                const raw = fs.readFileSync(manifestPath, 'utf8').replace(/^\uFEFF/, '');
+                const parsed = JSON.parse(raw) as Record<string, unknown>;
+                originValue = parsed?.origin;
+              }
+            }
+            if (isSeedOrBootstrapOrigin(originValue)) {
+              moveToArchive(evoDir, kind, fullDir);
+            }
           } catch {}
         }
       }
     } catch {}
   };
-  removeMatchingDirs(path.join(evoDir, 'skills'), RETIRED_GLOBAL_SEED_DIRS.skills);
-  removeMatchingDirs(path.join(evoDir, 'tools'), RETIRED_GLOBAL_SEED_DIRS.tools);
+  archiveMatchingDirs(path.join(evoDir, 'skills'), RETIRED_GLOBAL_SEED_DIRS.skills, 'skills');
+  archiveMatchingDirs(path.join(evoDir, 'tools'), RETIRED_GLOBAL_SEED_DIRS.tools, 'tools');
 }
 
 export function ensureGlobalFallbackSeeded(
@@ -1151,6 +1225,10 @@ export function runInitGlobal(options?: InitGlobalOptions): InitGlobalResult {
         filePath: path.join(effectiveHomeDir, '.gemini', 'settings.json'),
       },
       {
+        dirExists: fs.existsSync(path.join(effectiveHomeDir, '.gemini', 'antigravity')),
+        filePath: path.join(effectiveHomeDir, '.gemini', 'antigravity', 'mcp_config.json'),
+      },
+      {
         dirExists:
           fs.existsSync(path.join(effectiveHomeDir, '.claude')) ||
           fs.existsSync(path.join(effectiveHomeDir, '.claude.json')),
@@ -1260,6 +1338,10 @@ export function runInitGlobal(options?: InitGlobalOptions): InitGlobalResult {
         pluginRoot: path.join(effectiveHomeDir, '.claude', 'plugins', 'evo-kernel'),
       },
       {
+        seedPath: path.join(effectiveHomeDir, '.gemini', 'extensions', 'evo-kernel', 'templates', 'GEMINI.extension.md'),
+        pluginRoot: path.join(effectiveHomeDir, '.gemini', 'extensions', 'evo-kernel'),
+      },
+      {
         seedPath: path.join(effectiveHomeDir, '.gemini', 'extensions', 'evo-kernel', 'GEMINI.md'),
         pluginRoot: path.join(effectiveHomeDir, '.gemini', 'extensions', 'evo-kernel'),
       },
@@ -1358,21 +1440,33 @@ export function runInit(
     const candidate = path.resolve(workspaceRoot, opts.linkEvoFrom.trim());
     const targetEvo =
       path.basename(candidate) === '.evo' ? candidate : path.join(candidate, '.evo');
+    const localEvoDir = path.join(workspaceRoot, '.evo');
+    const localConfigPath = path.join(localEvoDir, 'config.json');
+    let localCfg: Record<string, unknown> = {};
+    if (fs.existsSync(localConfigPath)) {
+      const rawCfg = fs.readFileSync(localConfigPath, 'utf8').replace(/^\uFEFF/, '');
+      let parsedCfg: unknown;
+      try {
+        parsedCfg = JSON.parse(rawCfg);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Corrupt .evo/config.json at ${localConfigPath}: ${msg}. Refusing to overwrite with {}.`
+        );
+      }
+      if (!parsedCfg || typeof parsedCfg !== 'object' || Array.isArray(parsedCfg)) {
+        throw new Error(
+          `Corrupt .evo/config.json at ${localConfigPath}: expected a JSON object. Refusing to overwrite.`
+        );
+      }
+      localCfg = parsedCfg as Record<string, unknown>;
+    }
+
     const masterStorage = new EvoStorage(path.dirname(targetEvo), targetEvo);
     masterStorage.ensureInitialized();
     linkedSharedEvoDir = targetEvo;
 
-    const localEvoDir = path.join(workspaceRoot, '.evo');
     fs.mkdirSync(localEvoDir, { recursive: true });
-    const localConfigPath = path.join(localEvoDir, 'config.json');
-    let localCfg: Record<string, unknown> = {};
-    if (fs.existsSync(localConfigPath)) {
-      try {
-        localCfg = JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
-      } catch {
-        localCfg = {};
-      }
-    }
     localCfg.sharedEvoDir = targetEvo;
     fs.writeFileSync(localConfigPath, JSON.stringify(localCfg, null, 2) + '\n', 'utf8');
   }

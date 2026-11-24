@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const srcDir = path.join(rootDir, 'src');
@@ -58,7 +58,7 @@ function buildDir(currentSrc, currentDist) {
   }
 }
 
-function syncCanonicalSeeds() {
+async function syncCanonicalSeeds() {
   const evoDir = path.join(rootDir, '.evo');
   const seedEvoDir = path.join(rootDir, 'templates', 'seed-evo');
   const rootSkillsDir = path.join(rootDir, 'skills');
@@ -233,12 +233,32 @@ function syncCanonicalSeeds() {
       }
     }
   }
+
+  // 5. Sync templates/GEMINI.extension.md from compiled dist/templates/meta-rule.js (SSOT)
+  const metaRuleDist = path.join(distDir, 'templates', 'meta-rule.js');
+  const geminiExtTemplate = path.join(rootDir, 'templates', 'GEMINI.extension.md');
+  if (fs.existsSync(metaRuleDist) && fs.existsSync(path.dirname(geminiExtTemplate))) {
+    try {
+      const mod = await import(pathToFileURL(metaRuleDist).href);
+      if (typeof mod.L0_META_RULE_SEED === 'string' && mod.L0_META_RULE_SEED.trim()) {
+        const nextExt = mod.L0_META_RULE_SEED.trim() + '\n';
+        const currExt = fs.existsSync(geminiExtTemplate)
+          ? fs.readFileSync(geminiExtTemplate, 'utf8').replace(/\r\n/g, '\n')
+          : '';
+        if (currExt !== nextExt) {
+          fs.writeFileSync(geminiExtTemplate, nextExt, 'utf8');
+        }
+      }
+    } catch {
+      // Ignore dynamic import errors during partial builds
+    }
+  }
 }
 
 const isRepoRootWithPkg = assertEvoKernelRepoRoot(rootDir);
 fs.rmSync(distDir, { recursive: true, force: true });
 buildDir(srcDir, distDir);
 if (isRepoRootWithPkg && fs.existsSync(path.join(rootDir, '.evo'))) {
-  syncCanonicalSeeds();
+  await syncCanonicalSeeds();
 }
 console.log('Built dist/ from src/ using native node:module.stripTypeScriptTypes (0 external dependencies).');
