@@ -2283,7 +2283,7 @@ export function runUninstall(
       const restoreRes = runVirtualize(workspaceRoot, { restore: true });
       restoredMcpCount = restoreRes.servers.length;
       if (restoredMcpCount > 0) {
-        cleanedFilesList.push(...restoreRes.modifiedFiles);
+        cleanedFilesList.push(...restoreRes.modifiedConfigFiles);
       }
     } catch {
       // Best-effort restore before removing markers

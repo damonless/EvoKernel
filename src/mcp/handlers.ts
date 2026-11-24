@@ -2691,7 +2691,7 @@ export class EvoMcpDispatcher {
         const human_receipt = hasCjk
           ? `已撤销偏好变更「${label}」。`
           : `Undid profile change "${label}".`;
-        const { undone: undoneEntry, ...restRes } = res;
+        const { undone: undoneEntry, ok: _ok, ...restRes } = res;
         return {
           content: [
             {
@@ -2716,6 +2716,7 @@ export class EvoMcpDispatcher {
       const human_receipt = hasCjk
         ? `无法撤销：${res.message}`
         : `Nothing to undo: ${res.message}`;
+      const { ok: _failOk, ...restFailRes } = res;
       return {
         isError: true,
         content: [
@@ -2725,7 +2726,7 @@ export class EvoMcpDispatcher {
               {
                 ok: false,
                 undone: false,
-                ...res,
+                ...restFailRes,
                 human_receipt,
               },
               null,
@@ -2918,7 +2919,7 @@ export class EvoMcpDispatcher {
               id: lowValId,
               kind: 'preference',
               title: lowPref.title,
-              prev_snapshot: prevSnap,
+              previous_snapshot: prevSnap,
               reason: 'Demoted to on-demand during auto_resolve budget eviction',
             });
             return payload;

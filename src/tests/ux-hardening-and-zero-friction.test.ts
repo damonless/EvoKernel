@@ -248,12 +248,13 @@ describe('UX Hardening & Zero-Friction Suite (AC-01..AC-13)', () => {
       target_symbols: ['src/sample.ts#calcLimit'],
       ast_fingerprints: {
         'src/sample.ts#calcLimit': {
-          file: 'src/sample.ts',
+          file_path: 'src/sample.ts',
           symbol: 'calcLimit',
           kind: 'function',
           start_line: 1,
           end_line: 3,
-          normalized_hash: 'deadbeef00000000',
+          signature: 'export function calcLimit(x: number): number',
+          ast_hash: 'deadbeef00000000',
         },
       },
       created_commit: 'HEAD',
@@ -281,7 +282,7 @@ describe('UX Hardening & Zero-Friction Suite (AC-01..AC-13)', () => {
     assert.ok(updatedClaudeMd.includes('<!-- EVO:START -->'), 'doctor --fix must restore missing CLAUDE.md seed');
     const refreshedMem = new EvoStorage(ws).getMemory('stale-sample-mem');
     assert.ok(
-      refreshedMem && refreshedMem.ast_fingerprints?.['src/sample.ts#calcLimit']?.normalized_hash !== 'deadbeef00000000',
+      refreshedMem && refreshedMem.ast_fingerprints?.['src/sample.ts#calcLimit']?.ast_hash !== 'deadbeef00000000',
       'doctor --fix must refresh drifted live AST hash'
     );
 
