@@ -2,14 +2,14 @@
 id: workbench-typography-and-github-showcase-sync
 title: "workbench-typography-and-github-showcase-sync"
 l0_summary: "Modernize Workbench UI typography stack, fix button fonts, and sync GitHub Pages/README showcase."
-created_commit: "09f2d69"
+created_commit: "d7477e5"
 created_branch: "main"
 target_symbols: ["renderUiClientHtml","exportUiHtml"]
-ast_fingerprints: {"renderUiClientHtml":{"symbol":"renderUiClientHtml","file_path":"src/templates/ui/shell.ts","file":"src/templates/ui/shell.ts","kind":"function","start_line":12,"end_line":283,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"5fab41e65bcbf556"},"exportUiHtml":{"symbol":"exportUiHtml","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1760,"end_line":1768,"signature":"export function exportUiHtml(","ast_hash":"2cca90d4bcf385fe"}}
+ast_fingerprints: {"renderUiClientHtml":{"symbol":"renderUiClientHtml","file_path":"src/templates/ui/shell.ts","file":"src/templates/ui/shell.ts","kind":"function","start_line":12,"end_line":288,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"2a1df5258b578f2f"},"exportUiHtml":{"symbol":"exportUiHtml","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1774,"end_line":1782,"signature":"export function exportUiHtml(","ast_hash":"2cca90d4bcf385fe"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-05T17:18:41.042Z"
-updated_at: "2026-11-24T06:56:54.687Z"
+updated_at: "2026-11-24T18:20:46.872Z"
 ---
 
 ## Symptom

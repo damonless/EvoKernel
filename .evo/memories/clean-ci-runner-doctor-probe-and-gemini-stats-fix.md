@@ -2,14 +2,14 @@
 id: clean-ci-runner-doctor-probe-and-gemini-stats-fix
 title: "Clean CI Runner & Offline Wrapper Hardening: Doctor MCP Probe, .cmd/env Forwarding & Gemini Score Isolation"
 l0_summary: "Pass EVO_KERNEL_ROOT & entry.env in doctor probe, resolve ./ .cmd wrappers & npm install guidance, and drop stale ~/.gemini cache."
-created_commit: "09f2d69"
+created_commit: "d7477e5"
 created_branch: "main"
 target_symbols: ["src/cli/index.ts#extractLaunchTargetFromEntry","src/cli/index.ts#probeMcpServerStdioSync","src/cli/score.ts#isProjectDirectoryFast","src/cli/score.ts#buildScoreReport"]
-ast_fingerprints: {"src/cli/index.ts#extractLaunchTargetFromEntry":{"symbol":"src/cli/index.ts#extractLaunchTargetFromEntry","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":885,"end_line":923,"signature":"function extractLaunchTargetFromEntry(","ast_hash":"ce39f03e759fd0b9"},"src/cli/index.ts#probeMcpServerStdioSync":{"symbol":"src/cli/index.ts#probeMcpServerStdioSync","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1215,"end_line":1267,"signature":"export function probeMcpServerStdioSync(","ast_hash":"624b4b586c589f0d"},"src/cli/score.ts#isProjectDirectoryFast":{"symbol":"src/cli/score.ts#isProjectDirectoryFast","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":40,"end_line":92,"signature":"export function isProjectDirectoryFast(dir: string): boolean","ast_hash":"60d800360af76241"},"src/cli/score.ts#buildScoreReport":{"symbol":"src/cli/score.ts#buildScoreReport","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":646,"end_line":1006,"signature":"export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions): ScoreReport","ast_hash":"b82bac0472f1e52a"}}
+ast_fingerprints: {"src/cli/index.ts#extractLaunchTargetFromEntry":{"symbol":"src/cli/index.ts#extractLaunchTargetFromEntry","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":903,"end_line":941,"signature":"function extractLaunchTargetFromEntry(","ast_hash":"ce39f03e759fd0b9"},"src/cli/index.ts#probeMcpServerStdioSync":{"symbol":"src/cli/index.ts#probeMcpServerStdioSync","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1233,"end_line":1285,"signature":"export function probeMcpServerStdioSync(","ast_hash":"624b4b586c589f0d"},"src/cli/score.ts#isProjectDirectoryFast":{"symbol":"src/cli/score.ts#isProjectDirectoryFast","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":40,"end_line":92,"signature":"export function isProjectDirectoryFast(dir: string): boolean","ast_hash":"60d800360af76241"},"src/cli/score.ts#buildScoreReport":{"symbol":"src/cli/score.ts#buildScoreReport","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":646,"end_line":1006,"signature":"export function buildScoreReport(workspaceRoot: string, options?: ScoreOptions): ScoreReport","ast_hash":"b82bac0472f1e52a"}}
 tags: ["ci","doctor","mcp-probe","windows-cmd","score","gemini","favicon"]
 origin: "evolved"
 created_at: "2026-11-11T08:12:29.700Z"
-updated_at: "2026-11-24T06:56:52.584Z"
+updated_at: "2026-11-24T18:20:44.081Z"
 ---
 
 ## Symptom

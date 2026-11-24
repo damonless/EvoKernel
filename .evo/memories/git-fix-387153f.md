@@ -2,14 +2,14 @@
 id: git-fix-387153f
 title: "Historical Fix Case (387153f): Multi-Workspace MCP Context Routing & Plugin CWD Hijacking Isolation"
 l0_summary: "Fixes plugin install directory CWD hijacking, single-dispatcher cross-project contamination, and missing workspace parameters."
-created_commit: "09f2d69"
+created_commit: "d7477e5"
 created_branch: "main"
 target_symbols: ["src/core/storage.ts#isPluginOrExtensionInstallDir","src/mcp/handlers.ts#EvoMcpDispatcher","src/cli/index.ts#resolveWorkspaceRoot"]
-ast_fingerprints: {"src/core/storage.ts#isPluginOrExtensionInstallDir":{"symbol":"src/core/storage.ts#isPluginOrExtensionInstallDir","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":171,"end_line":185,"signature":"export function isPluginOrExtensionInstallDir(dirPath: string): boolean","ast_hash":"5e125cb80d8c7a11"},"src/mcp/handlers.ts#EvoMcpDispatcher":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"class","start_line":341,"end_line":3226,"signature":"export class EvoMcpDispatcher","ast_hash":"9a23348653380a2c"},"src/cli/index.ts#resolveWorkspaceRoot":{"symbol":"src/cli/index.ts#resolveWorkspaceRoot","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":599,"end_line":653,"signature":"export function resolveWorkspaceRoot(","ast_hash":"f83e1694cb4be3fe"}}
+ast_fingerprints: {"src/core/storage.ts#isPluginOrExtensionInstallDir":{"symbol":"src/core/storage.ts#isPluginOrExtensionInstallDir","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"function","start_line":171,"end_line":185,"signature":"export function isPluginOrExtensionInstallDir(dirPath: string): boolean","ast_hash":"5e125cb80d8c7a11"},"src/mcp/handlers.ts#EvoMcpDispatcher":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"class","start_line":359,"end_line":3423,"signature":"export class EvoMcpDispatcher","ast_hash":"bf67a7634bec47de"},"src/cli/index.ts#resolveWorkspaceRoot":{"symbol":"src/cli/index.ts#resolveWorkspaceRoot","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":602,"end_line":656,"signature":"export function resolveWorkspaceRoot(","ast_hash":"f83e1694cb4be3fe"}}
 tags: ["git-history","fix","mcp","workspace-routing","plugin-isolation"]
 origin: "evolved"
 created_at: "2026-10-21T15:16:26.722Z"
-updated_at: "2026-11-24T06:56:53.044Z"
+updated_at: "2026-11-24T18:20:44.683Z"
 ---
 
 ## Symptom
