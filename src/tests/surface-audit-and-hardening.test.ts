@@ -1742,7 +1742,7 @@ Body text here`;
       assert.strictEqual(
         isCapabilityRelevantToModifiedFiles(
           storage,
-          { id: 'ui-colon-memory', kind: 'memory', tier: 'LOCAL' },
+          { id: 'ui-colon-memory', kind: 'memory', tier: 'LOCAL', ts: new Date().toISOString() },
           ['src/core/engine.ts']
         ),
         false,
@@ -1751,7 +1751,7 @@ Body text here`;
       assert.strictEqual(
         isCapabilityRelevantToModifiedFiles(
           storage,
-          { id: 'ui-colon-memory', kind: 'memory', tier: 'LOCAL' },
+          { id: 'ui-colon-memory', kind: 'memory', tier: 'LOCAL', ts: new Date().toISOString() },
           ['src/ui/view.tsx']
         ),
         true
@@ -2313,6 +2313,8 @@ Body text here`;
           'compute.cpp#compute': fpInitial,
         },
         created_commit: 'HEAD',
+        tags: ['cpp'],
+        origin: 'session',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -3508,7 +3510,6 @@ Body text here`;
     assert.strictEqual(getCanonicalToken('docx'), 'document');
     assert.strictEqual(getCanonicalToken('word'), 'document');
     const hwLex = compileLexiconConfig({
-      version: 1,
       domains: ['embedded-hardware'],
       synonyms: {
         voltage: ['current', 'adc', 'pin', 'hardware'],
@@ -4115,7 +4116,7 @@ Body text here`;
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s01-stats-'));
     try {
       runInit(ws, ['claude']);
-      const statsJson = buildEvoStatsJson(ws);
+      const statsJson = buildEvoStatsJson(ws) as any;
       // 4 seed tools * 1200 = 4800 was the old fabricated number when 0 telemetry runs existed
       assert.strictEqual(
         statsJson.telemetry.recordedTokensSaved,
@@ -4206,13 +4207,15 @@ Body text here`;
       }
 
       const score = buildScoreReport(ws);
-      assert.ok(score.window7d.searchEvents >= 1, 'window7d must count evo_search');
-      assert.ok(score.window7d.inspectEvents >= 1, 'window7d must count evo_inspect');
-      assert.ok(score.window7d.runEvents >= 1, 'window7d must count evo_run');
-      assert.ok(score.window7d.adoptedCount >= 2, 'window7d adoptedCount must sum inspect + run');
+      assert.ok(score.window7d, 'score.window7d must be defined');
+      const w7 = score.window7d!;
+      assert.ok(w7.searchEvents >= 1, 'window7d must count evo_search');
+      assert.ok(w7.inspectEvents >= 1, 'window7d must count evo_inspect');
+      assert.ok(w7.runEvents >= 1, 'window7d must count evo_run');
+      assert.ok(w7.adoptedCount >= 2, 'window7d adoptedCount must sum inspect + run');
 
       const uiSnap = buildUiSnapshot(ws);
-      assert.strictEqual(uiSnap.window7d.adoptedCount, score.window7d.adoptedCount);
+      assert.strictEqual(uiSnap.window7d.adoptedCount, w7.adoptedCount);
     } finally {
       safeCleanup(ws);
     }
@@ -5043,7 +5046,7 @@ Body text here`;
           ),
           'utf8'
         );
-        const geminiRoi = buildEvoStatsJson(wsGeminiOnly);
+        const geminiRoi = buildEvoStatsJson(wsGeminiOnly) as any;
         assert.strictEqual(geminiRoi.harnesses.mcpConfigured, true);
         assert.ok(
           geminiRoi.sessionStartTax.beforeTokens > 0,

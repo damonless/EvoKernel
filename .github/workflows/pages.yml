@@ -15,11 +15,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      pages_enabled: ${{ steps.pages_setup.outcome }}
     steps:
       - name: "Checkout: Repository"
         uses: actions/checkout@v4
@@ -55,12 +54,19 @@ jobs:
         with:
           path: public
 
-      - name: "Pages: Deploy"
-        if: steps.pages_setup.outcome == 'success'
-        id: deployment
-        uses: actions/deploy-pages@v4
-
       - name: "Pages: Skipped Notice"
         if: steps.pages_setup.outcome != 'success'
         run: |
           echo "::notice title=GitHub Pages Not Enabled::GitHub Pages is not yet enabled in repository settings (Settings -> Pages -> Build and deployment -> Source: GitHub Actions). Static Landing + EvoKernel Workbench Demo export succeeded in ./public/."
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.pages_enabled == 'success'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Pages: Deploy"
+        id: deployment
+        uses: actions/deploy-pages@v4
