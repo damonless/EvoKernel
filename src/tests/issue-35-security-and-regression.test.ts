@@ -30,7 +30,7 @@ import {
 import { verifyMemoryFreshness } from '../core/memory/freshness-verifier.js';
 import { EvoMcpDispatcher } from '../mcp/handlers.js';
 import { runAudit } from '../cli/audit.js';
-import { generateStackSeedRules, runBootstrap } from '../cli/bootstrap.js';
+import { detectProjectStacks, generateStackSeedRules, runBootstrap } from '../cli/bootstrap.js';
 import { upsertOpenCode } from '../cli/harness.js';
 import {
   ensureGlobalFallbackSeeded,
@@ -178,7 +178,7 @@ describe('Issue #35 Security, Parity & Regression Suite (100% Hermetic)', () => 
     const localAuditor = path.join(localAuditorDir, 'run.mjs');
     fs.copyFileSync(path.join(REPO_ROOT, 'templates', 'seed-evo', 'tools', 'agy-config-auditor', 'run.mjs'), localAuditor);
 
-    const envNoPkgRoot = { ...process.env, EVO_WORKSPACE: ws, EVO_GLOBAL_DIR: globalDir };
+    const envNoPkgRoot: NodeJS.ProcessEnv = { ...process.env, EVO_WORKSPACE: ws, EVO_GLOBAL_DIR: globalDir };
     delete envNoPkgRoot.EVO_PACKAGE_ROOT;
     const audRes = spawnSync(process.execPath, [localAuditor], {
       cwd: ws,
@@ -1398,7 +1398,7 @@ rl.on('line', (line) => {
     fs.writeFileSync(path.join(ws, 'dist', 'bundle.js'), 'console.log(1);\n', 'utf8');
 
     const bootReport = runBootstrap(ws);
-    const seedRules = generateStackSeedRules(bootReport.detectedStacks);
+    const seedRules = generateStackSeedRules(detectProjectStacks(ws));
     assert.ok(seedRules.length >= 1 || bootReport.detectedStacks.length >= 1);
     assert.equal(bootReport.detectedStacks.includes('Python'), false, 'bootstrap scanner must skip .evo/ files');
 

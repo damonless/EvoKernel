@@ -144,8 +144,11 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
             scope_glob: '**/*.ts',
             core: false,
             priority: 50,
+            tokens: 20,
             content: 'Always verify isolated DB handles before computing statistics.',
             origin: 'evolved',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
           });
           globalTel.syncFromDisk();
 
@@ -216,8 +219,11 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
           scope_glob: '**/*.ts',
           core: false,
           priority: 50,
+          tokens: 20,
           content: 'Preserve local handle tier classification across telemetry refreshes.',
           origin: 'evolved',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
         const dispatcher = new EvoMcpDispatcher(ws);
         try {
@@ -493,8 +499,11 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
         scope_glob: '**/*.ts',
         core: false,
         priority: 50,
+        tokens: 20,
         content: 'Keep alphaonlykey strictly isolated inside workspace one telemetry.',
         origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
       s2.saveRule({
         id: 'beta-ws2-token',
@@ -503,8 +512,11 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
         scope_glob: '**/*.ts',
         core: false,
         priority: 50,
+        tokens: 20,
         content: 'Keep betaonlykey strictly isolated inside workspace two telemetry.',
         origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
 
       const slowScript = [
@@ -519,7 +531,7 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
         l0_summary: 'Delays briefly to test concurrent non-blocking dispatch',
         runtime: 'node',
         script_code: slowScript,
-        self_test_args: ['--self-test'],
+        self_test_args: {},
       });
       assert.equal(toolProp.passed, true);
 
@@ -807,7 +819,7 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
             "const targetUrl = 'https://example.com';",
             'fetch(targetUrl).catch(() => {});',
           ].join('\n'),
-          self_test_args: ['--self-test'],
+          self_test_args: {},
         };
         const blockedNet = await gk.evaluateAndCommitAsync(fetchToolPayload);
         assert.equal(blockedNet.passed, false);
@@ -833,7 +845,7 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
           l0_summary: 'Writes into workspace during self-test',
           runtime: 'node',
           script_code: mutatingScript,
-          self_test_args: ['--self-test'],
+          self_test_args: {},
         });
         assert.equal(mutateRes.passed, false);
         assert.equal(mutateRes.error_code, 'ERR_SANDBOX_SELF_TEST');
@@ -952,8 +964,12 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
           l0_summary: 'Discovered dynamically from templates/seed-evo.',
           runtime: 'node',
           entry_script: 'run.mjs',
-          self_test_args: ['--self-test'],
+          input_schema: { type: 'object', properties: {} },
+          self_test_args: {},
+          timeout_ms: 3000,
           origin: 'evolved',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         },
         'process.exit(0);'
       );
@@ -964,9 +980,12 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
         scope_glob: '**/*.ts',
         core: false,
         priority: 50,
+        tokens: 20,
         content: 'Do not leak internal rule during anon export.',
         visibility: 'local',
         origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
       storage.saveRule({
         id: 'excluded-by-cfg',
@@ -975,8 +994,11 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
         scope_glob: '**/*.ts',
         core: false,
         priority: 50,
+        tokens: 20,
         content: 'Do not leak configured exclusion rule.',
         origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
 
       const tel = new EvoTelemetry(storage);
@@ -1092,8 +1114,11 @@ describe('Issues #31/#32/#33 Bucket A Residuals & B1-B9 Hardening Suite', () => 
         scope_glob: '**/*.ts',
         core: false,
         priority: 50,
+        tokens: 20,
         content: 'Run gatekeeper validation before writing capabilities.',
         origin: 'evolved',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
       const tel = new EvoTelemetry(storage);
       try {

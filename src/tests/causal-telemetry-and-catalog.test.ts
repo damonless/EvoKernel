@@ -1752,7 +1752,7 @@ describe('Causal Telemetry, Outcome Attribution & Dynamic Section 5 Catalog Suit
 
         // Switch to detached HEAD and refreshMemories -> created_branch must be preserved!
         spawnSync('git', ['checkout', '--detach', 'HEAD'], { cwd: ws, encoding: 'utf8' });
-        refreshMemories(ws, storage, telemetry, { targetIds: ['abs-target-norm-mem'] });
+        refreshMemories(ws, ['abs-target-norm-mem']);
         const reloadedMem = storage.getMemory('abs-target-norm-mem');
         assert.equal(
           reloadedMem?.created_branch,
@@ -1817,6 +1817,7 @@ describe('Causal Telemetry, Outcome Attribution & Dynamic Section 5 Catalog Suit
         solution: 'Sample fix',
         target_symbols: [],
         ast_fingerprints: {},
+        created_commit: 'uncommitted',
         tags: ['sample'],
         origin: 'test',
         created_at: '2026-01-01T00:00:00.000Z',

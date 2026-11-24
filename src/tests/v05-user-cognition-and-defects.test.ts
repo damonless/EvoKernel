@@ -166,6 +166,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Avoid unnecessary jargon.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       review_status: 'pending',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -298,6 +300,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Write short direct sentences without fluff.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -358,6 +362,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
         always_on: true,
         content: longFiller,
         tokens: 200,
+        tags: [],
+        origin: 'evolved',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
@@ -399,6 +405,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Prefer concise bullets.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: prefNow,
       updated_at: prefNow,
     });
@@ -567,6 +575,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Always prefix PR titles with [core] or [cli].',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -578,6 +588,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: false,
       content: 'Use template when publishing.',
       tokens: 18,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -764,6 +776,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
             always_on: true,
             content: '必须使用 Markdown 表格输出。',
             tokens: 15,
+            tags: [],
+            origin: 'evolved',
             created_at: '',
             updated_at: '',
           },
@@ -813,6 +827,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Concise output.',
       tokens: 15,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -884,6 +900,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Concise bullets.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -979,6 +997,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Start every reply with the direct conclusion.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1033,6 +1053,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
         trigger_cue: `running workflow task ${i}`,
         content: `Step-by-step workflow instruction ${i}.`,
         tokens: 25,
+        tags: [],
+        origin: 'evolved',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
@@ -1154,6 +1176,7 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       priority: 1,
       content: 'Core invariant.',
       tokens: 1440,
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1166,6 +1189,7 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       priority: 2,
       content: 'Extra invariant.',
       tokens: 100,
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1193,6 +1217,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: Array.from({ length: 28 }, (_, i) => `constraint${i}`).join(' '),
       tokens: 70,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1207,6 +1233,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
         always_on: true,
         content: `Maintain consistent convention number ${i} across all repository tasks, diagnostics, formatting checks, and code reviews with concrete evidence.`,
         tokens: 55,
+        tags: [],
+        origin: 'evolved',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
@@ -1248,6 +1276,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Check totals first.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1259,6 +1289,8 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
       always_on: true,
       content: 'Check formatting second.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });

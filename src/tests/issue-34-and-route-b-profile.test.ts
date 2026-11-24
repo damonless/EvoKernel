@@ -1290,12 +1290,12 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
       // Direct unit check on detectPreferenceConflict across other axes + Chinese negation forms
       const concConflicts = detectPreferenceConflict(
         { id: 'c2', title: 'Verbose replies', l0_summary: 'Provide detailed comprehensive explanations', content: 'Always write in-depth long essays.' },
-        [{ id: 'c1', title: 'Concise replies', l0_summary: 'Keep replies concise (3-5 bullets)', category: 'style', always_on: true, content: 'Be brief.', tokens: 10, created_at: '', updated_at: '' }]
+        [{ id: 'c1', title: 'Concise replies', l0_summary: 'Keep replies concise (3-5 bullets)', category: 'style', always_on: true, content: 'Be brief.', tokens: 10, tags: [], origin: 'evolved', created_at: '', updated_at: '' }]
       );
       assert.strictEqual(concConflicts[0]?.topic, 'verbosity');
       const zhNegConflicts = detectPreferenceConflict(
         { id: 'zh-yes', title: '用表格', l0_summary: '输出表格形式对比', content: '请使用表格输出参数。' },
-        [{ id: 'zh-no', title: '不要使用表格', l0_summary: '不要使用表格，改用要点列表', category: 'formatting', always_on: true, content: '回答时不要用表格。', tokens: 10, created_at: '', updated_at: '' }]
+        [{ id: 'zh-no', title: '不要使用表格', l0_summary: '不要使用表格，改用要点列表', category: 'formatting', always_on: true, content: '回答时不要用表格。', tokens: 10, tags: [], origin: 'evolved', created_at: '', updated_at: '' }]
       );
       assert.strictEqual(zhNegConflicts[0]?.topic, 'tables');
 
@@ -1412,6 +1412,8 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
           always_on: true,
           content: `Keep engineering constraint number ${idx} active across all repository tasks, diagnostics, and code reviews.`,
           tokens: 55,
+          tags: [],
+          origin: 'evolved',
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
@@ -1449,6 +1451,8 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
       always_on: true,
       content: 'Use [core] or [cli] prefix on commits in this repo.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1466,6 +1470,7 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
       priority: 1,
       content: 'Keep core invariants concise.',
       tokens: 1450,
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1478,6 +1483,7 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
       priority: 2,
       content: 'Extra core constraint.',
       tokens: 120,
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1500,6 +1506,8 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
       always_on: true,
       content: 'First preference directive.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -1511,6 +1519,8 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
       always_on: true,
       content: 'Second preference directive.',
       tokens: 20,
+      tags: [],
+      origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });

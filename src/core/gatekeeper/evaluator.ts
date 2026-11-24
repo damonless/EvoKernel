@@ -1211,9 +1211,9 @@ export class EvoGatekeeper {
         });
       }
 
-      memoryExisting = this.storage.getMemory(cleanId);
+      memoryExisting = this.storage.getMemory(cleanId) ?? undefined;
       const supersededMem = rawProposal.supersedes_id
-        ? this.storage.getMemory(sanitizeId(rawProposal.supersedes_id))
+        ? this.storage.getMemory(sanitizeId(rawProposal.supersedes_id)) ?? undefined
         : undefined;
       memoryBaseMem = memoryExisting ?? supersededMem;
       if (isPersonalMemory) {

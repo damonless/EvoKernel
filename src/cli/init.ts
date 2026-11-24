@@ -106,7 +106,7 @@ export interface InitResult {
 }
 
 export interface InitOptions {
-  targets?: string[];
+  targets?: string | string[];
   stealth?: boolean;
   linkEvoFrom?: string;
   warmup?: boolean;
@@ -1934,7 +1934,10 @@ export function mountIdeExtensionIntoDir(
       const linkType = process.platform === 'win32' ? 'junction' : 'dir';
       fs.symlinkSync(bundleSourceDir, targetPath, linkType);
       syncIdeExtensionRegistry(extensionsDir, IDE_EXTENSION_FOLDER, targetPath);
-      return { method: linkType, status: exists ? 'updated' : 'installed' };
+      return {
+        method: linkType === 'junction' ? 'junction' : 'symlink',
+        status: exists ? 'updated' : 'installed',
+      };
     } catch {
       // Junction/symlink failed (cross-drive EXDEV or permission), fallback to copy
     }

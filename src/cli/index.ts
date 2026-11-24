@@ -1997,7 +1997,7 @@ export function runCli(argv: string[]): void | Promise<void> {
               total: verifications.length,
               verified: verifications.filter((v) => v.overall_status === 'VERIFIED').length,
               otherBranch: verifications.filter((v) => v.overall_status === 'OTHER_BRANCH').length,
-              stale: verifications.filter((v) => v.overall_status === 'STALE' || v.overall_status === 'ORPHANED').length,
+              stale: verifications.filter((v) => v.overall_status === 'STALE').length,
               memories: verifications,
             },
             null,
@@ -2849,7 +2849,6 @@ export function runCli(argv: string[]): void | Promise<void> {
             console.log(
               JSON.stringify(
                 {
-                  ok: false,
                   scope: activeScope,
                   ...(isProject ? { workspaceRoot: activeRoot } : { globalRoot: globalDir }),
                   ...undoRes,
@@ -3628,6 +3627,7 @@ export function runCli(argv: string[]): void | Promise<void> {
             ok: false,
             format: 'unsupported',
             filePath: targetPath,
+            canonicalText: '',
             stats: {},
             defects: [
               {

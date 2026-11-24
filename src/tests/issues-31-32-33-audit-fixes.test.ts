@@ -656,9 +656,7 @@ describe('Issues #31, #32, #33 Bucket A Audit Fixes Regression Suite', () => {
       storageA.saveTool(
         {
           id: 'secret-repo-a-tool',
-          name: 'secret-repo-a-tool',
           title: 'Secret Repo A Tool',
-          description: 'Only in Repo A',
           l0_summary: 'Only in Repo A',
           runtime: 'node',
           entry_script: 'run.mjs',
@@ -747,9 +745,7 @@ console.log(JSON.stringify(args));`;
       gStorage.saveTool(
         {
           id: 'global-req-tool',
-          name: 'global-req-tool',
           title: 'Global Required Tool',
-          description: 'Tests required arg validation and global dirty check',
           l0_summary: 'Global required arg tool',
           runtime: 'node',
           entry_script: 'run.mjs',
@@ -964,6 +960,7 @@ console.log(JSON.stringify(args));`;
         ast_fingerprints: {},
         created_commit: head2,
         created_branch: 'main',
+        tags: [],
         enabled: true,
         review_status: 'approved',
         origin: 'session',

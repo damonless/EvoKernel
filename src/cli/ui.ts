@@ -330,7 +330,7 @@ export function buildUiSnapshot(
       fs.existsSync(path.join(ws, 'templates', 'seed-evo')) &&
       fs.existsSync(path.join(ws, 'src', 'core', 'gatekeeper.ts'));
     const bundledSeedIds = discoverBundledSeedIds(ws);
-    const cfg = storage.getConfig() as Record<string, unknown>;
+    const cfg = storage.getConfig() as unknown as Record<string, unknown>;
     const configExcludeIds = new Set<string>(
       Array.isArray(cfg?.anonExcludeIds) ? cfg.anonExcludeIds.map((x) => String(x)) : []
     );

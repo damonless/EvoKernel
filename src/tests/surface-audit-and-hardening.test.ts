@@ -1731,9 +1731,10 @@ Body text here`;
         root_cause: 'Wrong constant',
         solution: 'Update v',
         target_symbols: ['src/ui/view.tsx:v'],
+        ast_fingerprints: {},
+        created_commit: 'uncommitted',
         tags: ['ui'],
-        confidence: 'high',
-        tokens: 30,
+        origin: 'session',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
@@ -3032,7 +3033,7 @@ Body text here`;
     // 3. Non-stealth runInit creates boot-mcp.mjs with npx fallback and EVO_DISABLE_NPX_FALLBACK guard
     const ws = createTempWorkspace();
     try {
-      runInit(ws, ['claude'], { stealth: false, ascii: true });
+      runInit(ws, { targets: ['claude'], stealth: false });
       const bootMcpPath = path.join(ws, '.evo', 'boot-mcp.mjs');
       assert.ok(fs.existsSync(bootMcpPath), '.evo/boot-mcp.mjs must be generated');
       const bootContent = fs.readFileSync(bootMcpPath, 'utf8');
@@ -3594,7 +3595,7 @@ Body text here`;
         core: false,
         priority: 100,
         tokens: 20,
-        confidence: 'HIGH',
+        confidence: 'high',
         origin: 'evolved',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -4156,7 +4157,7 @@ Body text here`;
         core: false,
         priority: 50,
         tokens: 20,
-        confidence: 'HIGH',
+        confidence: 'high',
         origin: 'evolved',
         transfer_scenarios: ['Scenario 1', 'Scenario 2'],
         content: 'Check sample recall invariant.',
@@ -4171,6 +4172,8 @@ Body text here`;
           runtime: 'node',
           entry_script: 'run.mjs',
           input_schema: { type: 'object', properties: {} },
+          self_test_args: {},
+          timeout_ms: 3000,
           origin: 'evolved',
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -4760,7 +4763,7 @@ Body text here`;
       ];
       for (const cmdArgs of cliCommandsToCheck) {
         // Non-TTY pipe default (without FORCE_COLOR) must emit zero \x1b[
-        const pipeEnv = { ...process.env };
+        const pipeEnv: NodeJS.ProcessEnv = { ...process.env };
         delete pipeEnv.FORCE_COLOR;
         const pipeRes = child_process.spawnSync(process.execPath, [cliEntry, ...cmdArgs], {
           encoding: 'utf8',
@@ -4906,8 +4909,8 @@ Body text here`;
 
       const storage = new EvoStorage(ws);
       storage.ensureInitialized();
-      const scoreRep = buildScoreReport(ws, { mode: 'local' });
-      const asciiScore = renderScoreAnsi(scoreRep, { noColor: true, ascii: true });
+      const scoreRep = buildScoreReport(ws, { includeGlobal: false });
+      const asciiScore = renderScoreAnsi(scoreRep, { color: false, ascii: true });
       assert.match(asciiScore, /^[\x00-\x7F]*$/);
       const boxLines = asciiScore
         .split('\n')
@@ -5011,7 +5014,7 @@ Body text here`;
       );
       assert.strictEqual(preHeal.staleNpxPath, true, 'Expected staleNpxPath=true before init');
 
-      runInit(ws, ['claude'], { globalHomeDir: fakeHome });
+      runInit(ws, { targets: ['claude'], globalHomeDir: fakeHome });
 
       const postHeal = checkMcpGatewayConfigs(ws, fakeHome);
       assert.strictEqual(postHeal.staleNpxPath, false, 'runInit must heal stale _npx in .windsurf/mcp.json and .cline/mcp.json');
@@ -5257,7 +5260,7 @@ Body text here`;
     const ws = createTempWorkspace();
     const fakeHome = createTempWorkspace();
     try {
-      const cleanEnv = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, EVO_GLOBAL_DIR: path.join(fakeHome, '.evo-global') };
+      const cleanEnv: NodeJS.ProcessEnv = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, EVO_GLOBAL_DIR: path.join(fakeHome, '.evo-global') };
       delete cleanEnv.FORCE_COLOR;
 
       const helpAscii = child_process.spawnSync(process.execPath, [cliEntry, '--help', '--ascii'], {
@@ -5518,7 +5521,7 @@ Body text here`;
       delete cleanCiEnv.EVO_KERNEL_ROOT;
 
       // (1) Standalone initialized workspace on clean runner resolves invoking CLI version offline via EVO_KERNEL_ROOT
-      runInit(wsProbe, ['claude'], { globalHomeDir: emptyHome });
+      runInit(wsProbe, { targets: ['claude'], globalHomeDir: emptyHome });
       const docRes = child_process.spawnSync(
         process.execPath,
         [cliEntry, 'doctor', '--json', '--workspace', wsProbe],
@@ -5588,7 +5591,7 @@ Body text here`;
       fs.mkdirSync(fakePluginCli, { recursive: true });
       fs.copyFileSync(cliEntry, path.join(fakePluginCli, 'index.js'));
 
-      runInit(wsOffline, ['claude'], { globalHomeDir: fakeHome });
+      runInit(wsOffline, { targets: ['claude'], globalHomeDir: fakeHome });
 
       // Point .mcp.json to a custom wrapper script (.cmd on Windows, .sh on POSIX) + entry.env flags
       const isWin = process.platform === 'win32';
@@ -5776,12 +5779,13 @@ Body text here`;
       storageMcp.saveTool(
         {
           id: 'paused-tool',
-          name: 'paused-tool',
           title: 'Paused Tool',
-          description: 'Tool disabled for runtime invocation.',
           l0_summary: 'Disabled tool for MCP pause test.',
           runtime: 'node',
+          entry_script: 'run.mjs',
           input_schema: { type: 'object', properties: {} },
+          self_test_args: {},
+          timeout_ms: 3000,
           tags: ['test'],
           origin: 'session',
           enabled: false,

@@ -12,6 +12,8 @@ import { syncManagedRuleBlocks } from '../cli/init.js';
 import { executeWorkbenchAction } from '../core/workbench-actions.js';
 
 // --- Ambient Structural Types for VS Code API (Zero Runtime Dependencies) ---
+export type Thenable<T> = PromiseLike<T>;
+
 export interface VsCodePosition {
   readonly line: number;
   readonly character: number;

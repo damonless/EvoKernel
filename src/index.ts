@@ -9,6 +9,7 @@ export * from './mcp/handlers.js';
 export * from './mcp/server.js';
 export * from './cli/init.js';
 export * from './cli/harness.js';
+export { isEphemeralNpxCachePath } from './cli/harness.js';
 export * from './cli/hook.js';
 export * from './cli/virtualize.js';
 export * from './cli/bootstrap.js';

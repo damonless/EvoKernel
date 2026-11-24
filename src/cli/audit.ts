@@ -71,11 +71,19 @@ export interface RedundancyOverlap {
   recommendation: string;
 }
 
+export type AuditGateViolation =
+  | Gate1_5Violation
+  | {
+      code: 'ERR_GLOBAL_RULE_REPO_LEAK';
+      message: string;
+      details?: string[];
+    };
+
 export interface GateViolationWarning {
   scope: 'workspace' | 'global';
   ruleId: string;
   displayPath: string;
-  violations: Gate1_5Violation[];
+  violations: AuditGateViolation[];
 }
 
 export interface SurfaceViolation {
@@ -1086,11 +1094,11 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
   if (fs.existsSync(localStorage.rulesDir)) {
     const localRules = localStorage.listRules();
     for (const rule of localRules) {
-      const violations = auditRuleGate1_5(rule);
+      const violations: AuditGateViolation[] = [...auditRuleGate1_5(rule)];
       if (isWorkspaceSameAsGlobal && REPO_ANCHORED_GLOBAL_GLOB_REGEX.test(rule.scope_glob.trim())) {
         violations.push({
           code: 'ERR_GLOBAL_RULE_REPO_LEAK',
-          detail: `Global rule '${rule.id}' has repo-anchored scope_glob '${rule.scope_glob}'; global rules must use repo-agnostic globs (e.g., '**/*.ts' or '**/*').`,
+          message: `Global rule '${rule.id}' has repo-anchored scope_glob '${rule.scope_glob}'; global rules must use repo-agnostic globs (e.g., '**/*.ts' or '**/*').`,
         });
       }
       if (violations.length > 0) {
@@ -1116,11 +1124,11 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
     if (fs.existsSync(globalStorage.rulesDir)) {
       const globalRules = globalStorage.listRules();
       for (const rule of globalRules) {
-        const violations = auditRuleGate1_5(rule);
+        const violations: AuditGateViolation[] = [...auditRuleGate1_5(rule)];
         if (REPO_ANCHORED_GLOBAL_GLOB_REGEX.test(rule.scope_glob.trim())) {
           violations.push({
             code: 'ERR_GLOBAL_RULE_REPO_LEAK',
-            detail: `Global rule '${rule.id}' has repo-anchored scope_glob '${rule.scope_glob}'; global rules must use repo-agnostic globs (e.g., '**/*.ts' or '**/*').`,
+            message: `Global rule '${rule.id}' has repo-anchored scope_glob '${rule.scope_glob}'; global rules must use repo-agnostic globs (e.g., '**/*.ts' or '**/*').`,
           });
         }
         if (violations.length > 0) {

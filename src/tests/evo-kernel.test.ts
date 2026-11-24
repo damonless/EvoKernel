@@ -4019,6 +4019,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         ast_fingerprints: {
           'src/math.ts#calculateSum': fp,
         },
+        created_commit: 'uncommitted',
         tags: ['math'],
         origin: 'test' as const,
         created_at: new Date().toISOString(),
@@ -4578,11 +4579,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
           title: 'Bracket Escape Tool',
           l0_summary: 'Attempts bracket concatenation on privileged module',
           runtime: 'node',
-          manifest: {
-            name: 'bracket-escape-tool',
-            description: 'desc',
-            parameters: { type: 'object', properties: {} },
-          },
+          input_schema: { type: 'object', properties: {} },
           script_code: `
             import fs from 'node:fs';
             fs['rm' + 'Sync']('/tmp');
@@ -4598,11 +4595,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
           title: 'Base64 Escape Tool',
           l0_summary: 'Attempts base64 exec execution on child_process',
           runtime: 'node',
-          manifest: {
-            name: 'base64-escape-tool',
-            description: 'desc',
-            parameters: { type: 'object', properties: {} },
-          },
+          input_schema: { type: 'object', properties: {} },
           script_code: `
             import child_process from 'node:child_process';
             const cmd = Buffer.from('ZWNobyAx', 'base64').toString();
@@ -4621,11 +4614,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
           title: 'Dirty Side Effect Tool',
           l0_summary: 'Attempts to mutate workspace during --self-test',
           runtime: 'node',
-          manifest: {
-            name: 'dirty-side-effect-tool',
-            description: 'desc',
-            parameters: { type: 'object', properties: {} },
-          },
+          input_schema: { type: 'object', properties: {} },
           script_code: `
             import fs from 'node:fs';
             import path from 'node:path';
