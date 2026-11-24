@@ -3510,7 +3510,7 @@ Body text here`;
     assert.strictEqual(getCanonicalToken('docx'), 'document');
     assert.strictEqual(getCanonicalToken('word'), 'document');
     const hwLex = compileLexiconConfig({
-      domains: ['embedded-hardware'],
+      name: 'embedded-hardware',
       synonyms: {
         voltage: ['current', 'adc', 'pin', 'hardware'],
         电压: ['voltage', 'vcc'],
