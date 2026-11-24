@@ -8,16 +8,16 @@ import type { CapabilityOutcome, RecalledCapabilityEntry } from './types.js';
 export { EvoStorage, EvoTelemetry };
 
 export const BILINGUAL_STYLE_REGEX =
-  /(?:太啰嗦|稍微精简|精简|大白话|不要(?:用)?表格|不美观|排版|格式不对|格式有误|语言风格|文风|太详细|吃力|费劲|concise|too verbose|plain language|no tables|formatting|tone|bullet points)/i;
+  /(?:太啰嗦|稍微精简|精简|大白话|不要(?:用)?表格|不美观|排版|格式不对|格式有误|语言风格|文风|太详细|吃力|费劲|concise|too verbose|plain language|no tables|bullet points)/i;
 
 export const BILINGUAL_WORKFLOW_REQUIREMENT_REGEX =
-  /(?:以后都按这个流程|记住我的要求|工作流程|每次写周报|汇报标准|以后都这样|from now on|remember my requirement|always follow this workflow|weekly report|report format|my standard)/i;
+  /(?:以后都按这个流程|记住我的要求|每次写周报|汇报标准|以后都这样|from now on|remember my requirement|always follow this workflow|report format|my standard)/i;
 
 export const BILINGUAL_PERSONAL_EXPERIENCE_REGEX =
   /(?:记住这个经验|个人经验|我的经验|个人笔记|踩过的坑|教训|以后记住|记下来|个人备忘|personal experience|remember this lesson|lesson learned|my note|personal note|note to self|keep this in mind|personal memory|remember for future)/i;
 
 export const CORRECTION_REGEX =
-  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|精简|大白话|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|排版|语言风格|文风|以后都这样|不要(?:用)?表格|以后都按这个流程|记住我的要求|工作流程|每次写周报|汇报标准|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|actually[\s,]|in fact[\s,]|concise|too verbose|plain language|no tables|formatting|tone|bullet points|from now on|remember my requirement|always follow this workflow|weekly report|report format|my standard)/i;
+  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|精简|大白话|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|排版|语言风格|文风|以后都这样|不要(?:用)?表格|以后都按这个流程|记住我的要求|每次写周报|汇报标准|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|in fact[\s,]|concise|too verbose|plain language|no tables|bullet points|from now on|remember my requirement|always follow this workflow|report format|my standard)/i;
 
 export interface ConversationEvolutionSignals {
   hasCorrection: boolean;

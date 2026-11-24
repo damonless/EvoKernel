@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "evo-kernel",
   "version": "0.5.0",
-  "description": "Two-Layer Local-First Context & Memory Kernel: Repo-Scoped AST-Verified Cognitive Memory, Cross-Workspace 3-Tier Personal Profile Push, Deliverable Canonical Inspection, and Zero Prompt-Cache Invalidation via a Single 5-Tool Meta-MCP Gateway",
+  "description": "Your AI coding agents remember your habits, preferences and work rules — across every project, locally.",
   "owner": {
     "name": "EvoKernel Contributors",
     "url": "https://github.com/damonless/EvoKernel"
@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "evo-kernel",
-      "description": "Two-Layer Local-First Context & Memory Kernel (Repo-Scoped Rules, Skills, Micro-Tools, AST Memories + Cross-Workspace 3-Tier Personal Preferences, Task Directory Menu & Personal Memories) for Claude Code and AI Agents",
+      "description": "Your AI coding agents remember your habits, preferences and work rules — across every project, locally.",
       "version": "0.5.0",
       "author": {
         "name": "EvoKernel Contributors"

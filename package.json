@@ -1,7 +1,7 @@
 {
   "name": "evo-kernel",
   "version": "0.5.0",
-  "description": "Slim Dual-Core Local-First Context & Memory Kernel for MCP-Capable AI Agents — Repo-Scoped AST-Verified Engineering Memory + 3-Tier Offline User Cognition (800-tok Profile Card, 250-tok Task Directory Menu, Global Personal Memory), Deliverable Canonical Inspection, and 100% Byte-Stable KV Cache via a 5-Tool Meta-MCP Gateway.",
+  "description": "Your AI coding agents remember your habits, preferences and work rules — across every project, locally.",
   "type": "module",
   "bin": {
     "evo": "./bin/evo.mjs",

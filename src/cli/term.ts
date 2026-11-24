@@ -80,8 +80,10 @@ export function toAsciiOutput(str: string): string {
     .replace(/…/g, '...')
     .replace(/[\uFE0E\uFE0F]/g, '');
 
-  // Strip remaining non-ASCII glyphs (e.g. emojis/CJK headers) cleanly without leaving double spaces
-  out = out.replace(/[^\x00-\x7F]+[ ]{1,2}/g, '').replace(/[^\x00-\x7F]+/g, '');
+  // Strip remaining non-ASCII glyphs (e.g. emojis) cleanly while preserving CJK text
+  out = out
+    .replace(/[^\x00-\x7F\u4E00-\u9FFF\u3000-\u303F\uFF00-\uFFEF]+[ ]{1,2}/g, '')
+    .replace(/[^\x00-\x7F\u4E00-\u9FFF\u3000-\u303F\uFF00-\uFFEF]+/g, '');
 
   // Keep framed ASCII header boxes (+---+ / | ... | / +---+) flush-right aligned after glyph width changes
   if (out.includes('+---')) {
@@ -95,10 +97,11 @@ export function toAsciiOutput(str: string): string {
         (i + 1 < lines.length && borderRe.test(lines[i + 1]) ? lines[i + 1] : '');
       if (!adjBorder) continue;
       const targetLen = adjBorder.length;
-      if (line.length < targetLen) {
-        lines[i] = line.slice(0, -1) + ' '.repeat(targetLen - line.length) + '|';
-      } else if (line.length > targetLen) {
-        const excess = line.length - targetLen;
+      const lineW = visualWidth(line);
+      if (lineW < targetLen) {
+        lines[i] = line.slice(0, -1) + ' '.repeat(targetLen - lineW) + '|';
+      } else if (lineW > targetLen) {
+        const excess = lineW - targetLen;
         const m = line.match(/^(.*?)( +)\|$/);
         if (m && m[2].length > excess) {
           lines[i] = m[1] + ' '.repeat(m[2].length - excess) + '|';

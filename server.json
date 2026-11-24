@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schema/2025-10-17/server.json",
   "name": "io.github.damonless.evokernel",
   "title": "EvoKernel",
-  "description": "Two-layer local-first context & memory kernel with AST-verified cognitive memory, cross-workspace 3-tier personal profile push, and zero prompt-cache bloat.",
+  "description": "Your AI coding agents remember your habits, preferences and work rules — across every project, locally.",
   "version": "0.5.0",
   "homepage": "https://github.com/damonless/EvoKernel",
   "repository": {

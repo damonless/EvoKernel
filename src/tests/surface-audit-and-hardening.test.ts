@@ -3142,15 +3142,19 @@ Body text here`;
 
       const dispatcher = new EvoMcpDispatcher(ws);
       try {
-        // 1. evo_search includes Recall Provenance:
+        // 1. evo_search returns clean matched capability output without Recall Provenance noise
         const searchRes = await dispatcher.handleToolCall('evo_search', {
           query: 'provenance',
           workspace: ws,
         });
         const searchText = searchRes.content?.[0]?.text || '';
         assert.ok(
-          searchText.includes('Recall Provenance:'),
-          "evo_search output must contain 'Recall Provenance:'"
+          searchText.includes('provenance-test-rule'),
+          'evo_search output must contain matched capability ID'
+        );
+        assert.ok(
+          !searchText.includes('Recall Provenance:'),
+          "evo_search output must no longer contain 'Recall Provenance:' noise"
         );
 
         // 2. evo_inspect includes Telemetry: (with hits and verified helped)
@@ -4110,8 +4114,8 @@ Body text here`;
     assert.strictEqual(benchRes.status, 0);
     const benchJson = JSON.parse(benchRes.stdout);
     assert.strictEqual(benchJson.benchmark.rawEagerTokensPerTurn, 27150);
-    assert.strictEqual(benchJson.benchmark.evoBasePrefixTokens, 3103);
-    assert.strictEqual(benchJson.benchmark.staticPrefixReductionPct, 88.6);
+    assert.strictEqual(benchJson.benchmark.evoBasePrefixTokens, 3206);
+    assert.strictEqual(benchJson.benchmark.staticPrefixReductionPct, 88.2);
 
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s01-stats-'));
     try {
@@ -5367,18 +5371,24 @@ Body text here`;
       fs.mkdirSync(path.join(ws, '.evo', '.cache'), { recursive: true });
       fs.writeFileSync(path.join(ws, '.evo', '.cache', 'leaked-cache.db'), 'dummy', 'utf8');
       child_process.spawnSync('git', ['add', '-f', '.evo/.cache/leaked-cache.db'], { cwd: ws, stdio: 'ignore' });
-      const hookFailAscii = child_process.spawnSync(
+      const hookAutoUnstageAscii = child_process.spawnSync(
         process.execPath,
         [cliEntry, 'hook', 'pre-commit', '--workspace', ws, '--ascii'],
         { encoding: 'utf8', env: cleanEnv }
       );
-      assert.strictEqual(hookFailAscii.status, 1);
-      assert.match(hookFailAscii.stdout, /^[\x00-\x7F]*$/, 'Blocked evo hook pre-commit --ascii leaked non-ASCII');
+      assert.strictEqual(hookAutoUnstageAscii.status, 0, hookAutoUnstageAscii.stderr);
+      assert.match(hookAutoUnstageAscii.stdout, /^[\x00-\x7F]*$/, 'Auto-unstaged evo hook pre-commit --ascii leaked non-ASCII');
       assert.ok(
-        hookFailAscii.stdout.includes('[ERROR] [EvoKernel Pre-Commit Hook] COMMIT BLOCKED'),
-        `Unexpected pre-commit output: ${hookFailAscii.stdout}`
+        hookAutoUnstageAscii.stdout.includes('[OK] [EvoKernel Pre-Commit Hook]'),
+        `Expected [OK] [EvoKernel Pre-Commit Hook] in pre-commit output: ${hookAutoUnstageAscii.stdout}`
       );
-      child_process.spawnSync('git', ['reset'], { cwd: ws, stdio: 'ignore' });
+      const gitStatusAfter = child_process.spawnSync('git', ['status', '--porcelain'], { cwd: ws, encoding: 'utf8' });
+      assert.ok(
+        !gitStatusAfter.stdout.includes('A  .evo/.cache/leaked-cache.db'),
+        `Expected .evo/.cache/leaked-cache.db to be unstaged, got: ${gitStatusAfter.stdout}`
+      );
+      const gitExclude = fs.readFileSync(path.join(ws, '.git', 'info', 'exclude'), 'utf8');
+      assert.ok(gitExclude.includes('.evo/.cache/'), 'Expected .evo/.cache/ in .git/info/exclude');
       fs.rmSync(path.join(ws, '.evo', '.cache', 'leaked-cache.db'), { force: true });
 
       const uninstallAscii = child_process.spawnSync(

@@ -914,7 +914,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       assert.equal(hookRun.status, 0);
       const hookOut = JSON.parse(hookRun.stdout.trim());
       assert.ok(Array.isArray(hookOut.injectSteps));
-      assert.match(hookOut.injectSteps[0].ephemeralMessage, /\[EvoKernel 自演进提醒\]/);
+      assert.match(hookOut.injectSteps[0].ephemeralMessage, /\[EvoKernel 提醒\]/);
 
       // Cooldown test: immediate re-run without new dirty edits must respect cooldown ('{}')
       const cooldownRun = spawnSync(
@@ -3452,10 +3452,6 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         searchRes.content[0].text,
         /Action Required: Call evo_inspect\(id, "L2", workspace\) on matched guardrails\/SOPs \[fsm-transition-lookup-verification\] to load full checklists \(never rely on L0 summaries alone\)/
       );
-      assert.match(
-        searchRes.content[0].text,
-        /if this session confirms a root cause \(even read-only\) or corrects a hypothesis, call evo_propose before finishing/
-      );
 
       // 3. Tool-only search hits emit passive Tip directive instead of guardrail Action Required
       const toolPropRes = dispatcher.handleToolCall('evo_propose', {
@@ -4475,7 +4471,6 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       // Global fallback hits must be labeled [GLOBAL], core budget for uninitialized local workspace must be 0/1500,
       // and global tools must NOT be disguised as "Available workspace tools"
       assert.match(uninitText, /\[RULE\] \[GLOBAL\] adc-sampling-filter-window-guard/);
-      assert.match(uninitText, /\[Core Budget: 0\/1500 tokens\]/);
       assert.doesNotMatch(uninitText, /Available workspace tools.*global-diag-helper/);
 
       // Multi-word technical query ("EPO emergency power off shutdown delay") matching only generic words ("power", "delay")

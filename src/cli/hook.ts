@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import type { DatabaseSync } from 'node:sqlite';
 import { EvoStorage, openSqliteReadOnly } from '../core/storage.js';
 import { EvoTelemetry } from '../core/telemetry.js';
@@ -14,6 +14,7 @@ import {
 } from '../core/hook-engine.js';
 import { executeSandboxedScript } from '../core/sandbox.js';
 import { renderAuditReport, runAudit } from './audit.js';
+import { ensureGitInfoExclude } from './init.js';
 import { formatTerminalOutput } from './term.js';
 import type { CapabilityOutcome, RecalledCapabilityEntry } from '../core/types.js';
 
@@ -116,18 +117,128 @@ export const READ_TOOL_NAMES = new Set([
   'codegraph_impact',
 ]);
 
+function stripEvoTranscriptMarkers(text: string): string {
+  return String(text || '')
+    .replace(/<SYSTEM_MESSAGE>[\s\S]*?<\/SYSTEM_MESSAGE>/gi, ' ')
+    .replace(/<SYSTEM_MESSAGE>[\s\S]*$/gi, ' ')
+    .replace(/<!--\s*EVO:START\s*-->[\s\S]*?<!--\s*EVO:END\s*-->/gi, ' ')
+    .replace(/<!--\s*EVO:PROFILE:START\s*-->[\s\S]*?<!--\s*EVO:PROFILE:END\s*-->/gi, ' ')
+    .replace(/<!--\s*EVO:[\s\S]*?-->/gi, ' ')
+    .replace(/\[EvoKernel[^\]]*\][^\n]*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractUserTextFromJsonlEntry(entry: Record<string, unknown>): string | null {
+  const topRole = typeof entry.role === 'string' ? entry.role.toLowerCase() : '';
+  const msgObj =
+    entry.message && typeof entry.message === 'object' && !Array.isArray(entry.message)
+      ? (entry.message as Record<string, unknown>)
+      : null;
+  const msgRole = msgObj && typeof msgObj.role === 'string' ? msgObj.role.toLowerCase() : '';
+  const topType = typeof entry.type === 'string' ? entry.type : '';
+  const topSource = typeof entry.source === 'string' ? entry.source : '';
+
+  if (topSource === 'SYSTEM') return null;
+
+  const isUserRole =
+    topRole === 'user' ||
+    msgRole === 'user' ||
+    topType === 'USER_INPUT' ||
+    topSource === 'USER_EXPLICIT';
+  if (!isUserRole) return null;
+
+  const rawContent = msgObj ? msgObj.content : (entry.content ?? entry.text);
+  if (typeof rawContent === 'string') {
+    const cleaned = stripEvoTranscriptMarkers(rawContent);
+    return cleaned || null;
+  }
+  if (Array.isArray(rawContent)) {
+    const parts: string[] = [];
+    for (const item of rawContent) {
+      if (typeof item === 'string') {
+        const cleaned = stripEvoTranscriptMarkers(item);
+        if (cleaned) parts.push(cleaned);
+      } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const block = item as Record<string, unknown>;
+        if (block.type === 'tool_result') continue;
+        if (typeof block.text === 'string') {
+          const cleaned = stripEvoTranscriptMarkers(block.text);
+          if (cleaned) parts.push(cleaned);
+        } else if (typeof block.content === 'string' && block.type === 'text') {
+          const cleaned = stripEvoTranscriptMarkers(block.content);
+          if (cleaned) parts.push(cleaned);
+        }
+      }
+    }
+    return parts.length > 0 ? parts.join(' ') : null;
+  }
+  return null;
+}
+
 export function readTranscriptTail(transcriptPath: unknown): string {
   if (typeof transcriptPath !== 'string' || !transcriptPath) return '';
   try {
     if (!fs.existsSync(transcriptPath)) return '';
     const stat = fs.statSync(transcriptPath);
-    if (!stat.isFile()) return '';
+    if (!stat.isFile() || stat.size === 0) return '';
     const fd = fs.openSync(transcriptPath, 'r');
     const readSize = Math.min(stat.size, 65536);
+    const startOffset = Math.max(0, stat.size - readSize);
     const buffer = Buffer.alloc(readSize);
-    fs.readSync(fd, buffer, 0, readSize, Math.max(0, stat.size - readSize));
+    fs.readSync(fd, buffer, 0, readSize, startOffset);
     fs.closeSync(fd);
-    return buffer.toString('utf8');
+
+    const rawText = buffer.toString('utf8');
+    const rawLines = rawText.split(/\r?\n/);
+    if (startOffset > 0 && rawLines.length > 1) {
+      rawLines.shift();
+    }
+
+    let parsedJsonlCount = 0;
+    let latestTurnUserTexts: string[] = [];
+    let inUserTurn = false;
+
+    for (const line of rawLines) {
+      const trimmed = line.replace(/^\uFEFF/, '').trim();
+      if (!trimmed || !trimmed.startsWith('{')) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      parsedJsonlCount++;
+
+      const entry = parsed as Record<string, unknown>;
+      const userText = extractUserTextFromJsonlEntry(entry);
+      if (userText !== null) {
+        if (!inUserTurn) {
+          latestTurnUserTexts = [userText];
+          inUserTurn = true;
+        } else {
+          latestTurnUserTexts.push(userText);
+        }
+      } else {
+        const msgObj =
+          entry.message && typeof entry.message === 'object' && !Array.isArray(entry.message)
+            ? (entry.message as Record<string, unknown>)
+            : null;
+        const role = String(entry.role || msgObj?.role || '').toLowerCase();
+        const type = String(entry.type || '');
+        if (role === 'assistant' || role === 'model' || type === 'assistant' || type === 'PLANNER_RESPONSE') {
+          inUserTurn = false;
+        }
+      }
+    }
+
+    if (parsedJsonlCount > 0) {
+      return latestTurnUserTexts.join('\n').trim();
+    }
+
+    // Fallback for plain non-JSONL text in unit tests
+    return stripEvoTranscriptMarkers(rawText);
   } catch {
     return '';
   }
@@ -1097,8 +1208,7 @@ export function handleStop(
     const isTier1 = Boolean(dirtyId) || hasUserCorrection || monotonicRecovery;
     const isTier2 =
       !isTier1 &&
-      (hasHeavyDiagnosticReads ||
-        editCount >= 6 ||
+      (editCount >= 6 ||
         modifiedFiles.length >= 6 ||
         evolutionSignals.shouldRemindGlobalMemory);
     const isTier3 = !isTier1 && !isTier2;
@@ -1245,7 +1355,30 @@ export function handlePreCommit(
       : undefined;
   const fmt = (s: string) => (termOpts ? formatTerminalOutput(s, termOpts) : s);
   const storage = new EvoStorage(workspaceRoot);
-  const stagedFiles = getGitFiles(workspaceRoot, true);
+  let stagedFiles = getGitFiles(workspaceRoot, true);
+  const cacheStaged = stagedFiles.filter((file) =>
+    /\.evo\/\.cache\//.test(file.replace(/\\/g, '/'))
+  );
+  if (cacheStaged.length > 0 && !options.dryRun) {
+    try {
+      execFileSync('git', ['reset', 'HEAD', '--', ...cacheStaged], {
+        cwd: workspaceRoot,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+    } catch {
+      try {
+        execFileSync('git', ['rm', '--cached', '-r', '--', ...cacheStaged], {
+          cwd: workspaceRoot,
+          stdio: ['pipe', 'pipe', 'ignore'],
+        });
+      } catch {
+        // ignore if both git reset and git rm --cached fail
+      }
+    }
+    ensureGitInfoExclude(workspaceRoot, ['.evo/.cache/']);
+    stagedFiles = getGitFiles(workspaceRoot, true);
+  }
+
   const forbiddenStaged = stagedFiles.filter((file) => {
     const norm = file.replace(/\\/g, '/');
     return FORBIDDEN_STAGED_PATTERNS.some((pat) => pat.test(norm));

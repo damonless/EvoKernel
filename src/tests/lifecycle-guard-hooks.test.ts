@@ -710,12 +710,14 @@ console.log('active');
     assert.ok(schemaProps.contrastive_evidence, 'evo_propose must expose contrastive_evidence');
     assert.ok(schemaProps.hook_trigger, 'evo_propose must expose hook_trigger');
 
-    assert.deepEqual(proposeTool.inputSchema.required, [
-      'kind',
-      'id',
-      'title',
-      'l0_summary',
-    ]);
+    assert.deepEqual(proposeTool.inputSchema.required, []);
+    assert.ok(schemaProps.kind, 'evo_propose must expose kind');
+    assert.ok(schemaProps.id, 'evo_propose must expose id');
+    assert.ok(schemaProps.title, 'evo_propose must expose title');
+    assert.ok(schemaProps.l0_summary, 'evo_propose must expose l0_summary');
+    assert.ok(schemaProps.undo, 'evo_propose must expose undo');
+    assert.ok(schemaProps.undo_id, 'evo_propose must expose undo_id');
+    assert.ok(schemaProps.auto_resolve, 'evo_propose must expose auto_resolve');
     assert.ok(schemaProps.workspace, 'evo_propose must still expose optional workspace property');
     assert.ok(schemaProps.memory_type, 'evo_propose must expose memory_type');
   });

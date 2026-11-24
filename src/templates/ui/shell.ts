@@ -74,7 +74,7 @@ ${UI_STYLES}
         </span>
         <span id="lang-label" class="sr-only">EN</span>
       </button>
-      <button class="topbar-btn" id="btn-export-html" type="button" title="Export Standalone HTML">
+      <button class="topbar-btn" id="btn-export-html" type="button" title="Export Standalone HTML"${isExport ? ' style="display:none;"' : ''}>
         <span id="btn-export-label">Export</span>
       </button>
     </div>
@@ -200,6 +200,11 @@ ${UI_STYLES}
 
     <!-- Column 2: Center Stage Canvas (flex: 1) -->
     <main class="center-stage" id="center-stage">
+      <!-- Read-Only Static Export Banner -->
+      <div class="export-readonly-banner" id="export-readonly-banner" style="display: ${isExport ? 'flex' : 'none'};" role="status">
+        <span id="export-readonly-msg">Read-only snapshot · Run evo ui locally to edit</span>
+      </div>
+
       <!-- SSE Disconnect Banner -->
       <div class="sse-disconnect-banner" id="sse-disconnect-banner" style="display: none;" role="alert">
         <span id="sse-disconnect-msg">Live update stream disconnected.</span>

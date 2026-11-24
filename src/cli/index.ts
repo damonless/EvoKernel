@@ -7,9 +7,11 @@ import * as readline from 'node:readline/promises';
 import { DatabaseSync } from 'node:sqlite';
 import {
   cleanGlobalUserProfile,
+  detectAutoInitTargets,
   discoverGlobalProfileTargets,
   ensureGlobalFallbackSeeded,
   findGitRoot,
+  hasNonEvoGeminiMd,
   parseInitTargets,
   runInit,
   runInitGlobal,
@@ -67,6 +69,8 @@ import { EvoGatekeeper } from '../core/gatekeeper.js';
 import {
   ONBOARDING_PRESETS,
   getOnboardingPresetCandidates,
+  inferPreferenceCategory,
+  inferSituationalOnDemand,
   parseMarkdownToPreferenceCandidates,
   type OnboardingPresetName,
   type ParsedPreferenceCandidate,
@@ -296,7 +300,7 @@ Scan workspace and global rules/skills for domain leaks, overlap, and token budg
 Options:
   --global, -g         Include user-level global rules (~/.gemini, ~/.claude, ~/.cursor)
   --token-budget <N>   Override per-file token budget limit (default: 1500)
-  --skill-budget <N>   Override per-skill token budget limit (default: 1000)
+  --skill-budget <N>   Override per-skill token budget limit (default: 3000)
   --json               Output audit report in JSON format
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
@@ -315,9 +319,10 @@ Launch 4-stage Rule & Skill decoupling workflow via built-in evo-rule-architect 
 
 Options:
   --apply              Apply suggested rule & skill refactoring migrations
-  --local-only         Refactor project workspace rules only (exclude global)
+  --global, -g         Include user-level global rules/skills (default: workspace only)
+  --yes, -y            Skip interactive confirmation when applying changes
   --token-budget <N>   Override per-file token budget limit (default: 1500)
-  --skill-budget <N>   Override per-skill token budget limit (default: 1000)
+  --skill-budget <N>   Override per-skill token budget limit (default: 3000)
   --workspace <path>   Target workspace directory (default: current directory)
   -h, --help           Show this help message
 `,
@@ -554,42 +559,40 @@ export function checkNodeRuntimeVersion(
 function printHelp(args?: string[]): void {
   logHelp(
     `
-🧬 EvoKernel v${EVO_KERNEL_VERSION} — AST-Verified Cognitive Memory & Deterministic Context OS for AI Agents
+🧬 EvoKernel v${EVO_KERNEL_VERSION} — AST-Verified Cognitive Memory & Context OS for AI Agents
 
 Usage:
   evo <command> [options]
 
-Core Commands (6):
-  init [--global] [--stealth] [--targets <list|auto>] [--warmup] [--install-ide]
-                      Wire L0 Meta-Rule Seed + Single 5-Tool Meta-MCP (--global wires desktop hosts)
-  doctor [--roi] [--no-probe] [--json]
-                      Verify runtime, live MCP stdio handshake, seed/version parity, AST* memories & ROI
+Core Commands:
+  init [--all] [--global] [--stealth] [--targets <list|auto>] [--dry-run]
+                      Set up EvoKernel rules and MCP gateway in this workspace (--global for desktop hosts)
+  doctor [--fix] [--strict] [--roi] [--no-probe] [--json]
+                      Check setup health, MCP connection, memories, and fix common issues (--fix)
+  profile [list|show|add|remove|sync|undo|import|onboard|clean|path]
+                      Save and sync personal preferences across AI hosts (~/.evo/global)
   ui [-p <N>] [--open] [--app] [--desktop] [--export [path]] [--anon]
-                      Launch local EvoKernel Workbench (7d recall pulse, Needs Attention triage & topology)
-  score [--json] [--badge] [--svg <path>] [--html <path>] [--anon]
-                      Generate shareable X-Ray report of session-start token tax & git fragility hotspots
-  memory [verify|refresh]
-                      Verify or re-anchor 16-hex AST* structural fingerprints across Episodic Memories
-  audit [--global] [--json] [--token-budget <N>] [--skill-budget <N>]
-                      Audit workspace & global rule/skill files for domain leaks, duplicates, and bloat
+                      Open the local EvoKernel Workbench dashboard
 
-Advanced & Automation Commands:
+More Commands:
+  score [--json] [--badge] [--svg <path>] [--html <path>] [--anon]
+                      Score session-start token overhead and git fragility hotspots
+  memory [verify|refresh]
+                      Verify or refresh AST* fingerprints across episodic memories
+  audit [--global] [--json] [--token-budget <N>] [--skill-budget <N>]
+                      Audit rules and skills for domain leaks, duplicates, and token bloat
+  refactor [--apply] [--global] [--yes] [--token-budget <N>] [--skill-budget <N>]
+                      Decouple bloated rules/skills into scoped rules (backups saved on --apply)
   bootstrap [--max-commits <N>]
-                      Cold-start repo gene mining: extract verified Rules, Skills, Micro-Tools & Memories
+                      Extract initial rules, skills, and memories from git history
   virtualize [--dry-run] [--restore] [--global]
-                      Fold third-party stdio MCPs into .evo/mcp-pool.json (preview first with --dry-run)
-  refactor [--apply] [--local-only] [--token-budget <N>] [--skill-budget <N>]
-                      Decouple bloated rules/skills via built-in evo-rule-architect workflow
-  profile [list|show|add|remove|sync|undo|import|onboard|clean|path] [options]
-                      Manage, import, onboard, sync, or undo User-Global preferences (~/.evo/global)
+                      Fold third-party stdio MCPs into .evo/mcp-pool.json
   tree [--full] [--json]
-                      Render ASCII capability & cognitive memory tree (.evo/)
+                      Show .evo/ capability and memory tree
   check <file> [--json]
-                      Canonical defect inspection for deliverables (.xlsx, .docx, .pptx, .csv, .json, .md)
-  hook <event>        Lifecycle hook router (pre-tool | post-tool | stop | pre-commit)
-  mcp                 Start stdio JSON-RPC 2.0 Single Meta-MCP Server (Fixed 5 Meta-Tools)
-  uninstall [--global]
-                      Cleanly remove EvoKernel marker blocks and MCP entries from host configs
+                      Inspect deliverables (.xlsx, .docx, .pptx, .csv, .json, .md) for defects
+  uninstall [--global] [--purge] [--dry-run] [--yes]
+                      Remove EvoKernel markers and MCP entries from host configs
   version, --version  Print EvoKernel CLI version
 `,
     args
@@ -769,6 +772,7 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     ...GLOBAL_COMMON_FLAGS,
     '--global',
     '-g',
+    '--all',
     '--dry-run',
     '--json',
     '--stealth',
@@ -780,7 +784,17 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--no-ide',
     '--ide',
   ],
-  uninstall: [...GLOBAL_COMMON_FLAGS, '--global', '-g', '--unmount-ide', '--ide'],
+  uninstall: [
+    ...GLOBAL_COMMON_FLAGS,
+    '--global',
+    '-g',
+    '--unmount-ide',
+    '--ide',
+    '--dry-run',
+    '--yes',
+    '-y',
+    '--purge',
+  ],
   bootstrap: [...GLOBAL_COMMON_FLAGS, '--max-commits'],
   virtualize: [...GLOBAL_COMMON_FLAGS, '--dry-run', '--restore', '--global', '-g'],
   memory: [...GLOBAL_COMMON_FLAGS, '--refresh', '--json'],
@@ -792,6 +806,8 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--local-only',
     '--global',
     '-g',
+    '--yes',
+    '-y',
     '--token-budget',
     '--skill-budget',
     '--json',
@@ -802,6 +818,8 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
     '--dry-run',
     '--global',
     '-g',
+    '--yes',
+    '-y',
     '--category',
     '--title',
     '--summary',
@@ -816,7 +834,7 @@ export const COMMAND_VALID_FLAGS: Record<string, string[]> = {
   tree: [...GLOBAL_COMMON_FLAGS, '--json', '--full'],
   stats: [...GLOBAL_COMMON_FLAGS, '--json', '--global', '-g'],
   hook: [...GLOBAL_COMMON_FLAGS, '--payload', '--harness', '--dry-run', '--tool', '--file', '--tool-name', '--target-file'],
-  doctor: [...GLOBAL_COMMON_FLAGS, '--json', '--roi', '--probe', '--no-probe'],
+  doctor: [...GLOBAL_COMMON_FLAGS, '--json', '--roi', '--probe', '--no-probe', '--fix', '--strict'],
   check: [...GLOBAL_COMMON_FLAGS, '--json'],
   inspect: [...GLOBAL_COMMON_FLAGS, '--json'],
   version: [...GLOBAL_COMMON_FLAGS],
@@ -1434,9 +1452,39 @@ function normalizeLeadingFlags(rawArgs: string[]): string[] {
   return rawArgs;
 }
 
+const DEPRECATED_COMMANDS = new Set(['stats', 'memories', 'inspect', 'optimize']);
+
+function suggestFlag(flag: string, allowedFlags: string[]): string | null {
+  const norm = flag.trim().toLowerCase();
+  const candidates = allowedFlags.filter((c) => c.trim().toLowerCase() !== norm);
+  return suggestClosestToken(norm, candidates);
+}
+
+function suggestCommand(cmd: string): string | null {
+  const norm = cmd.trim().toLowerCase();
+  const candidates = VALID_COMMANDS.filter(
+    (c) => !DEPRECATED_COMMANDS.has(c) && c.trim().toLowerCase() !== norm
+  );
+  return suggestClosestToken(norm, candidates);
+}
+
+async function confirmInteractiveAction(promptText: string): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return true;
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const ans = (await rl.question(`${promptText} [y/N] `)).trim().toLowerCase();
+    return ans === 'y' || ans === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
 export function runCli(argv: string[]): void | Promise<void> {
   const args = normalizeLeadingFlags(argv.slice(2));
   const cliTermOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
+  const cliPrefix = formatCliInvocationPrefix(argv);
   let cmd = (args[0] || '').toLowerCase();
   if (!cmd && process.stdout.isTTY && !process.env.CI) {
     cmd = 'score';
@@ -1607,8 +1655,7 @@ export function runCli(argv: string[]): void | Promise<void> {
       }
       const flag = arg.split('=')[0].toLowerCase();
       if (!allowedFlags.includes(flag)) {
-        const suggestion =
-          suggestClosestToken(flag, allowedFlags) || suggestClosestToken(flag, KNOWN_FLAGS);
+        const suggestion = suggestFlag(flag, allowedFlags);
         console.error(
           formatTerminalOutput(
             `❌ Error: Unknown option '${flag}' for '${cmd}'.${
@@ -1740,6 +1787,7 @@ export function runCli(argv: string[]): void | Promise<void> {
       }
 
       const dryRun = args.includes('--dry-run');
+      const isInitAll = args.includes('--all');
       const stealth = args.includes('--stealth');
       const targets = parseTargetsArg(args, workspaceRoot);
       const linkEvoFrom = parseLinkArg(args);
@@ -1749,8 +1797,8 @@ export function runCli(argv: string[]): void | Promise<void> {
       const installIde = args.includes('--install-ide') || (Boolean(ide?.length) && !noIde) ? true : undefined;
 
       if (dryRun) {
-        const plannedTargets = targets ?? detectCascadedTargets(workspaceRoot);
-        const preHadGeminiMd = fs.existsSync(path.join(workspaceRoot, 'GEMINI.md'));
+        const plannedTargets = targets ?? detectAutoInitTargets(workspaceRoot);
+        const preHadGeminiMd = hasNonEvoGeminiMd(workspaceRoot);
         const preHadAgentsMd = fs.existsSync(path.join(workspaceRoot, 'AGENTS.md'));
         const targetsAgentsMd =
           preHadAgentsMd ||
@@ -1827,8 +1875,9 @@ export function runCli(argv: string[]): void | Promise<void> {
         handleExit(1);
         return;
       }
+      const globalRes = isInitAll ? runInitGlobal({ dryRun: false }) : undefined;
       if (args.includes('--json')) {
-        console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+        console.log(JSON.stringify({ ok: true, ...res, ...(globalRes ? { global: globalRes } : {}) }, null, 2));
         break;
       }
       logInit('🧬 EvoKernel initialized successfully!');
@@ -1848,6 +1897,15 @@ export function runCli(argv: string[]): void | Promise<void> {
         logInit(`  ├─ IDE Extensions  : ${mountSummary}`);
       } else if (noIde) {
         logInit('  ├─ IDE Extensions  : skipped (--no-ide)');
+      }
+      if (globalRes) {
+        logInit(`  ├─ Global Root     : ${globalRes.globalRoot}`);
+        logInit(
+          `  ├─ Global MCPs     : ${globalRes.mcpTargetsUpdated.length > 0 ? globalRes.mcpTargetsUpdated.join(', ') : '(already configured or none detected)'}`
+        );
+        logInit(
+          `  ├─ Plugin L0 Seeds : ${globalRes.pluginSeedsUpdated.length > 0 ? globalRes.pluginSeedsUpdated.join(', ') : '(up-to-date or none detected)'}`
+        );
       }
       logInit(
         `  └─ Git Exclude     : ${
@@ -1884,7 +1942,6 @@ export function runCli(argv: string[]): void | Promise<void> {
           logInit(`  └─ Context Health  : ${healthDisplay}`);
         }
       }
-      const cliPrefix = formatCliInvocationPrefix(argv);
       console.log('');
       logInit('🚀 Next Steps:');
       logInit(
@@ -2027,15 +2084,39 @@ export function runCli(argv: string[]): void | Promise<void> {
     }
 
     case 'refactor': {
-      const includeGlobal = !args.includes('--local-only');
+      const includeGlobal = args.includes('--global') || args.includes('-g');
       const apply = args.includes('--apply');
+      const skipConfirm = args.includes('--yes') || args.includes('-y');
       const termOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
-      const result = runRefactor(workspaceRoot, { includeGlobal, apply, tokenBudgetLimit: parsePositiveIntFlag(args, '--token-budget'), skillBudgetLimit: parsePositiveIntFlag(args, '--skill-budget') });
-      if (args.includes('--json')) {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        console.log(renderRefactorReport(result, termOpts));
+      const executeRefactor = () => {
+        const result = runRefactor(workspaceRoot, {
+          includeGlobal,
+          apply,
+          tokenBudgetLimit: parsePositiveIntFlag(args, '--token-budget'),
+          skillBudgetLimit: parsePositiveIntFlag(args, '--skill-budget'),
+        });
+        if (args.includes('--json')) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(renderRefactorReport(result, termOpts));
+          if (result.backupDir) {
+            console.log(formatTerminalOutput(`💾 Backup saved to: ${result.backupDir}`, termOpts));
+          }
+        }
+      };
+      if (apply && !skipConfirm && process.stdin.isTTY && process.stdout.isTTY) {
+        return (async () => {
+          const confirmed = await confirmInteractiveAction(
+            `Apply automated refactoring to ${includeGlobal ? 'workspace + global' : 'workspace'} rules/skills? (Backups will be saved to .evo/.cache/refactor-backups/)`
+          );
+          if (!confirmed) {
+            console.log(formatTerminalOutput('Cancelled (no files modified).', termOpts));
+            return;
+          }
+          executeRefactor();
+        })();
       }
+      executeRefactor();
       break;
     }
 
@@ -2134,18 +2215,19 @@ export function runCli(argv: string[]): void | Promise<void> {
       };
 
       if (action === 'add') {
-        const rawCategory = (parseCliFlagValue(args, '--category') || 'style').trim().toLowerCase();
+        const explicitCategory = parseCliFlagValue(args, '--category');
         const rawTitle = (parseCliFlagValue(args, '--title') || '').trim();
         const rawSummary = (parseCliFlagValue(args, '--summary') || '').trim();
         const rawContent = (parseCliFlagValue(args, '--content') || '').trim();
         const rawId = (parseCliFlagValue(args, '--id') || '').trim();
-        const triggerCue = (parseCliFlagValue(args, '--trigger') || '').trim();
-        const alwaysOn = !args.includes('--on-demand');
+        const explicitTrigger = parseCliFlagValue(args, '--trigger');
+        const explicitOnDemand = args.includes('--on-demand');
 
-        const content = rawContent || rawSummary || rawTitle;
+        const positionalText = positionalArgs.slice(1).join(' ').trim();
+        const content = rawContent || positionalText || rawSummary || rawTitle;
         if (!content) {
           const msg =
-            'Missing preference content. Usage: evo profile add --category <cat> --title "..." --summary "..." --content "..."';
+            'Missing preference content. Usage: evo profile add "<text>" [--category <cat>] [--on-demand]';
           if (isJson) {
             console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
           } else {
@@ -2154,6 +2236,29 @@ export function runCli(argv: string[]): void | Promise<void> {
           handleExit(1);
           return;
         }
+        const rawCategory = (
+          explicitCategory !== undefined
+            ? explicitCategory
+            : inferPreferenceCategory(content, rawTitle)
+        )
+          .trim()
+          .toLowerCase();
+        const inferredSituational =
+          !explicitOnDemand && explicitTrigger === undefined
+            ? inferSituationalOnDemand(content)
+            : undefined;
+        const alwaysOn = explicitOnDemand
+          ? false
+          : explicitTrigger !== undefined
+            ? false
+            : inferredSituational
+              ? inferredSituational.alwaysOn
+              : true;
+        const triggerCue = (
+          explicitTrigger !== undefined
+            ? explicitTrigger
+            : inferredSituational?.triggerCue || ''
+        ).trim();
         if (!PREFERENCE_CATEGORIES.includes(rawCategory as PreferenceCategory)) {
           const msg = `Invalid category '${rawCategory}'. Must be one of: ${PREFERENCE_CATEGORIES.join(', ')}`;
           if (isJson) {
@@ -2299,12 +2404,33 @@ export function runCli(argv: string[]): void | Promise<void> {
             logProfile(
               `  ├─ Token Budget  : ${syncRes.totalTokens}/${syncRes.maxTokens} tok (Menu: ${syncRes.menuTokens}/${syncRes.maxMenuTokens} tok)`
             );
-            logProfile(
-              `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+            const externalAiTargets = syncRes.targets.filter(
+              (t) => t.host !== 'isolated' && !/USER_PROFILE\.md$/i.test(String(t.path || ''))
             );
+            const externalUpdated = syncRes.updatedTargets.filter(
+              (p) => !/USER_PROFILE\.md$/i.test(String(p))
+            );
+            const localProfileTargets = syncRes.targets
+              .filter(
+                (t) => t.host === 'isolated' || /USER_PROFILE\.md$/i.test(String(t.path || ''))
+              )
+              .map((t) => t.path);
+            if (externalUpdated.length > 0) {
+              logProfile(`  ├─ Host Targets  : ${externalUpdated.join(', ')}`);
+            } else if (externalAiTargets.length === 0) {
+              if (localProfileTargets.length > 0) {
+                logProfile(`  ├─ Local Profile : ${localProfileTargets.join(', ')}`);
+              }
+              logProfile(
+                `  ├─ Host Targets  : ⚠️ Preference saved locally, but 0 AI hosts detected. Run \`${cliPrefix} init --global\` to connect.`
+              );
+            } else {
+              logProfile(`  ├─ Host Targets  : (already up-to-date)`);
+            }
           } else {
-            logProfile(`  └─ Project Scope : ${workspaceRoot}`);
+            logProfile(`  ├─ Project Scope : ${workspaceRoot}`);
           }
+          logProfile(`  └─ Undo          : ${cliPrefix} profile undo${isProject ? ' --project' : ''}`);
         }
         break;
       }
@@ -2428,9 +2554,10 @@ export function runCli(argv: string[]): void | Promise<void> {
           logProfile(`🗑️  Archived preference '${cleanId}' (${isProject ? 'project' : 'global'})`);
           if (syncRes) {
             logProfile(
-              `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
+              `  ├─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : syncRes.targets.length === 0 ? `(0 AI hosts detected — run \`${cliPrefix} init --global\` to connect)` : '(already up-to-date)'}`
             );
           }
+          logProfile(`  └─ Undo          : ${cliPrefix} profile undo${isProject ? ' --project' : ''}`);
         }
         break;
       }
@@ -2729,16 +2856,37 @@ export function runCli(argv: string[]): void | Promise<void> {
       }
 
       if (action === 'clean') {
-        const cleanRes = cleanGlobalUserProfile(globalDir, { dryRun });
-        if (isJson) {
-          console.log(JSON.stringify({ ok: true, globalRoot: globalDir, dryRun, ...cleanRes }, null, 2));
-        } else {
-          const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
-          logProfile(`🧹 User-Global Profile ${dryRun ? '(Dry Run) ' : ''}Cleaned:`);
-          logProfile(
-            `  └─ Host Targets  : ${cleanRes.updatedTargets.length > 0 ? cleanRes.updatedTargets.join(', ') : '(no EVO:PROFILE blocks found)'}`
-          );
+        const skipConfirm = args.includes('--yes') || args.includes('-y');
+        const executeClean = () => {
+          const cleanRes = cleanGlobalUserProfile(globalDir, { dryRun });
+          if (isJson) {
+            console.log(JSON.stringify({ ok: true, globalRoot: globalDir, dryRun, ...cleanRes }, null, 2));
+          } else {
+            const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
+            logProfile(
+              dryRun
+                ? '🧪 Dry Run — Would clean User-Global Profile blocks from host targets:'
+                : '🧹 User-Global Profile Cleaned:'
+            );
+            logProfile(
+              `  ├─ Host Targets  : ${cleanRes.updatedTargets.length > 0 ? cleanRes.updatedTargets.join(', ') : '(no EVO:PROFILE blocks found)'}`
+            );
+            logProfile(`  └─ Restore anytime: ${cliPrefix} profile sync`);
+          }
+        };
+        if (!dryRun && !skipConfirm && process.stdin.isTTY && process.stdout.isTTY) {
+          return (async () => {
+            const confirmed = await confirmInteractiveAction(
+              'Remove EvoKernel profile blocks from detected global AI host configs?'
+            );
+            if (!confirmed) {
+              console.log(formatTerminalOutput('Cancelled (no files modified).', cliTermOpts));
+              return;
+            }
+            executeClean();
+          })();
         }
+        executeClean();
         break;
       }
 
@@ -2994,7 +3142,9 @@ export function runCli(argv: string[]): void | Promise<void> {
           const logProfile = (line: string) => console.log(formatTerminalOutput(line, cliTermOpts));
           logProfile(`👤 ${isProject ? 'Project' : 'User-Global'} Personal Preferences (${prefs.length} total | Always-On Budget: ${totalTokens}/${maxTokens} tokens)`);
           if (prefs.length === 0) {
-            logProfile(`  └── (empty — use evo_propose(kind: "preference"${isProject ? '' : ', scope: "global"'}) to add preferences)`);
+            logProfile(
+              `  └── (empty — run \`${cliPrefix} profile add "<text>"${isProject ? ' --project' : ''}\` or \`${cliPrefix} profile onboard\` to add preferences)`
+            );
           } else {
             prefs.forEach((p, idx) => {
               const branch = idx === prefs.length - 1 ? '└──' : '├──';
@@ -3146,6 +3296,83 @@ export function runCli(argv: string[]): void | Promise<void> {
 
     case 'doctor': {
       const storage = new EvoStorage(workspaceRoot);
+      const fixMode = args.includes('--fix');
+      const strictMode = args.includes('--strict');
+      const fixSummary: string[] = [];
+      if (fixMode) {
+        const preHasEvo = hasValidEvoStructure(storage.evoDir);
+        const preSeedInfo = checkSeedIntegrity(workspaceRoot);
+        const preMcpInfo = checkMcpGatewayConfigs(workspaceRoot);
+        if (preHasEvo) {
+          try {
+            const refreshRes = refreshMemories(workspaceRoot);
+            if (refreshRes.refreshed.length > 0) {
+              fixSummary.push(`Refreshed ${refreshRes.refreshed.length} stale/drifted memory(s)`);
+            }
+          } catch {}
+        }
+        const seedDriftCandidates = Array.from(
+          new Set([...preSeedInfo.valid, '.cursor/rules/evo-kernel.mdc'])
+        );
+        let hasPreSeedDrift = false;
+        for (const vf of seedDriftCandidates) {
+          const seedAbs = path.join(workspaceRoot, vf);
+          if (!fs.existsSync(seedAbs)) continue;
+          try {
+            const rawSeed = fs.readFileSync(seedAbs, 'utf8');
+            if (vf === '.cursor/rules/evo-kernel.mdc' && !rawSeed.includes('<!-- EVO:START -->')) {
+              continue;
+            }
+            if (
+              rawSeed.includes('EvoKernel 演进回执') ||
+              !rawSeed.includes('EvoKernel Recall:') ||
+              rawSeed.includes('evo_inspect(id, tier: "L2")')
+            ) {
+              hasPreSeedDrift = true;
+              break;
+            }
+          } catch {}
+        }
+        if (
+          !preHasEvo ||
+          !preMcpInfo.registered ||
+          preMcpInfo.staleNpxPath ||
+          preSeedInfo.valid.length === 0 ||
+          preSeedInfo.duplicateBlocks > 0 ||
+          hasPreSeedDrift
+        ) {
+          try {
+            const initRes = runInit(workspaceRoot, { targets: ['auto'] });
+            fixSummary.push(
+              `Synced workspace seeds & MCP config (${initRes.updatedFiles.join(', ') || 'up-to-date'})`
+            );
+          } catch {}
+        }
+        try {
+          const globalRes = runInitGlobal({ dryRun: false });
+          if (globalRes.pluginSeedsUpdated.length > 0 || globalRes.mcpTargetsUpdated.length > 0) {
+            fixSummary.push(
+              `Synced global hosts/plugin seeds (${[...globalRes.mcpTargetsUpdated, ...globalRes.pluginSeedsUpdated].length} updated)`
+            );
+          }
+          if (globalRes.profileSync.updatedTargets.length > 0) {
+            fixSummary.push(
+              `Re-synced global profile targets (${globalRes.profileSync.updatedTargets.join(', ')})`
+            );
+          }
+        } catch {}
+        if (!args.includes('--json')) {
+          const docFixTermOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
+          console.log(
+            formatTerminalOutput(
+              fixSummary.length > 0
+                ? `🔧 Doctor --fix applied:\n${fixSummary.map((s) => `  • ${s}`).join('\n')}\n`
+                : '🔧 Doctor --fix: everything is already synced.\n',
+              docFixTermOpts
+            )
+          );
+        }
+      }
       const hasEvo = hasValidEvoStructure(storage.evoDir);
       const showRoi = args.includes('--roi');
       const noProbe = args.includes('--no-probe');
@@ -3287,10 +3514,22 @@ export function runCli(argv: string[]): void | Promise<void> {
           }
         } catch {}
       }
-      for (const vf of seedInfo.valid) {
+      const runtimeSeedDriftCandidates = Array.from(
+        new Set([...seedInfo.valid, '.cursor/rules/evo-kernel.mdc'])
+      );
+      for (const vf of runtimeSeedDriftCandidates) {
+        const seedAbs = path.join(workspaceRoot, vf);
+        if (!fs.existsSync(seedAbs)) continue;
         try {
-          const rawSeed = fs.readFileSync(path.join(workspaceRoot, vf), 'utf8');
-          if (rawSeed.includes('EvoKernel 演进回执') || !rawSeed.includes('EvoKernel Recall:')) {
+          const rawSeed = fs.readFileSync(seedAbs, 'utf8');
+          if (vf === '.cursor/rules/evo-kernel.mdc' && !rawSeed.includes('<!-- EVO:START -->')) {
+            continue;
+          }
+          if (
+            rawSeed.includes('EvoKernel 演进回执') ||
+            !rawSeed.includes('EvoKernel Recall:') ||
+            rawSeed.includes('evo_inspect(id, tier: "L2")')
+          ) {
             versionDriftReasons.push(`${vf} L0 seed block is from an older schema`);
             break;
           }
@@ -3378,15 +3617,31 @@ export function runCli(argv: string[]): void | Promise<void> {
       const versionDriftFixCommand =
         stalePluginSeeds.length > 0
           ? versionDriftReasons.length > stalePluginSeeds.length
-            ? 'npx -y evo-kernel init && npx -y evo-kernel init --global'
-            : 'npx -y evo-kernel init --global'
-          : 'npx -y evo-kernel init';
+            ? `${cliPrefix} init --all`
+            : `${cliPrefix} init --global`
+          : `${cliPrefix} init`;
       const duplicateRootSeeds =
         seedInfo.valid.includes('AGENTS.md') && seedInfo.valid.includes('GEMINI.md');
+      const cursorRulePath = path.join(workspaceRoot, '.cursor', 'rules', 'evo-kernel.mdc');
+      const hasValidCursorSeed =
+        fs.existsSync(cursorRulePath) &&
+        fs.readFileSync(cursorRulePath, 'utf8').includes('<!-- EVO:START -->');
+      const isDoctorHealthy =
+        hasEvo &&
+        mcpRegistered &&
+        !staleNpxPath &&
+        staleMems === 0 &&
+        (!probeResult.attempted || probeResult.reachable) &&
+        !hasVersionDrift &&
+        (seedInfo.valid.length > 0 || hasValidCursorSeed) &&
+        seedInfo.duplicateBlocks === 0 &&
+        !duplicateRootSeeds;
 
       if (args.includes('--json')) {
         const doctorJson: Record<string, unknown> = {
-          ok: true,
+          ok: strictMode ? isDoctorHealthy : true,
+          healthy: isDoctorHealthy,
+          ...(fixMode ? { fixSummary } : {}),
           cliVersion: EVO_KERNEL_VERSION,
           workspaceRoot,
           nodeVersion: process.version,
@@ -3446,11 +3701,20 @@ export function runCli(argv: string[]): void | Promise<void> {
           doctorJson.roi = buildEvoStatsJson(workspaceRoot);
         }
         console.log(JSON.stringify(doctorJson, null, 2));
+        if (strictMode && !isDoctorHealthy) {
+          handleExit(1);
+          return;
+        }
         break;
       }
 
       const doctorTermOpts = { color: isColorEnabled(args), ascii: isAsciiMode(args) };
       const logDoctor = (line: string) => console.log(formatTerminalOutput(line, doctorTermOpts));
+
+      const hasWorkspaceSeedIssue =
+        seedInfo.duplicateBlocks > 0 ||
+        duplicateRootSeeds ||
+        versionDriftReasons.some((r) => r.includes('L0 seed block is from an older schema'));
 
       const nodeIcon = '[✓]';
       const sqliteIcon = ftsEnabled ? '[✓]' : '[!]';
@@ -3460,12 +3724,12 @@ export function runCli(argv: string[]): void | Promise<void> {
       const seedIcon =
         seedInfo.valid.length === 0
           ? '[!]'
-          : seedInfo.duplicateBlocks > 0 || duplicateRootSeeds || hasVersionDrift
+          : hasWorkspaceSeedIssue
             ? '[!]'
             : '[✓]';
       const mcpIcon = staleNpxPath ? '[✗]' : mcpRegistered ? '[✓]' : '[!]';
       const probeIcon = !probeResult.attempted
-        ? '[!]'
+        ? (noProbe ? '[-]' : '[!]')
         : probeResult.reachable
           ? '[✓]'
           : '[✗]';
@@ -3486,10 +3750,14 @@ export function runCli(argv: string[]): void | Promise<void> {
             : 'Not initialized (run `evo init` to activate)'
         }`
       );
+      const doctorTaxDisplay =
+        sessionStartSavings.afterTokens > sessionStartSavings.beforeTokens
+          ? `+${(sessionStartSavings.afterTokens - sessionStartSavings.beforeTokens).toLocaleString()} tok/turn (small repo baseline; drops as knowledge accumulates)`
+          : `Saved ${sessionStartSavings.savingsPercent}% (${sessionStartSavings.beforeTokens.toLocaleString()} → ${sessionStartSavings.afterTokens.toLocaleString()} tok/turn)`;
       logDoctor(
         `  ├─ ${telemetryIcon} Session Tax & 7d ROI  : ${
           hasEvo
-            ? `Saved ${sessionStartSavings.savingsPercent}% (${sessionStartSavings.beforeTokens.toLocaleString()} → ${sessionStartSavings.afterTokens.toLocaleString()} tok/turn) · 7d: ${window7d.searchEvents} searches, ${window7d.adoptedCount} adopted, ${window7d.helpedCount} helped · ${totalHits} all-time hits (${totalTokensSaved.toLocaleString()} tok reclaimed | Core: ${coreRuleTokens}/${maxCoreRuleTokens} tok)`
+            ? `${doctorTaxDisplay} · 7d: ${window7d.searchEvents} searches, ${window7d.adoptedCount} adopted, ${window7d.helpedCount} helped · ${totalHits} all-time hits (${totalTokensSaved.toLocaleString()} tok reclaimed | Core: ${coreRuleTokens}/${maxCoreRuleTokens} tok)`
             : 'No telemetry yet (0 recalls)'
         }`
       );
@@ -3554,31 +3822,28 @@ export function runCli(argv: string[]): void | Promise<void> {
       }
 
       console.log('');
-      if (
-        hasEvo &&
-        mcpRegistered &&
-        !staleNpxPath &&
-        staleMems === 0 &&
-        (!probeResult.attempted || probeResult.reachable) &&
-        !hasVersionDrift
-      ) {
+      if (isDoctorHealthy) {
         logDoctor('  ✅ Verdict: Context OS is healthy and ready.');
       } else if (!hasEvo || !mcpRegistered) {
-        logDoctor('  ⚠️  Verdict: Run `npx -y evo-kernel init` to wire local workspace');
+        logDoctor(`  ⚠️  Verdict: Run \`${cliPrefix} init\` to wire local workspace`);
       } else if (staleNpxPath) {
-        logDoctor('  ⚠️  Verdict: Stale _npx path detected in MCP config — run `npx -y evo-kernel init` to repair');
+        logDoctor(`  ⚠️  Verdict: Stale _npx path detected in MCP config — run \`${cliPrefix} init\` to repair`);
       } else if (probeResult.attempted && !probeResult.reachable) {
         logDoctor(
           probeNeedsLocalInstall
             ? '  ⚠️  Verdict: MCP stdio handshake failed — run `npm install --save-dev evo-kernel` (or `npm install -g evo-kernel`) and reload your IDE'
-            : '  ⚠️  Verdict: MCP stdio handshake failed — run `npx -y evo-kernel init` and reload your IDE'
+            : `  ⚠️  Verdict: MCP stdio handshake failed — run \`${cliPrefix} init\` and reload your IDE`
         );
       } else if (hasVersionDrift) {
         logDoctor(`  ⚠️  Verdict: Workspace version/seed drift detected — run \`${versionDriftFixCommand}\` to sync`);
       } else if (staleMems > 0) {
-        logDoctor(`  ⚠️  Verdict: ${staleMems} stale memory(s) detected — run \`evo memory verify\``);
+        logDoctor(`  ⚠️  Verdict: ${staleMems} stale memory(s) detected — run \`${cliPrefix} memory refresh\` or \`${cliPrefix} doctor --fix\``);
       } else {
-        logDoctor('  ⚠️  Verdict: Run `evo doctor` or `npx -y evo-kernel init` to verify setup');
+        logDoctor(`  ⚠️  Verdict: Run \`${cliPrefix} doctor --fix\` or \`${cliPrefix} init\` to verify setup`);
+      }
+      if (strictMode && !isDoctorHealthy) {
+        handleExit(1);
+        return;
       }
       break;
     }
@@ -3693,17 +3958,78 @@ export function runCli(argv: string[]): void | Promise<void> {
       const unmountIde = args.includes('--unmount-ide');
       const ide = parseIdeTargetsArg(args);
       const isGlobal = args.includes('--global') || args.includes('-g');
-      const res = runUninstall(workspaceRoot, {
-        unmountIde,
-        ide,
-        ...(isGlobal ? { global: true } : {}),
-      });
-      console.log(
-        formatTerminalOutput(
-          `🧹 Cleaned EvoKernel markers from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`,
-          cliTermOpts
-        )
-      );
+      const dryRun = args.includes('--dry-run');
+      const purge = args.includes('--purge');
+      const skipConfirm = args.includes('--yes') || args.includes('-y');
+
+      const executeUninstall = () => {
+        const res = runUninstall(workspaceRoot, {
+          unmountIde,
+          ide,
+          dryRun,
+          purge,
+          ...(isGlobal ? { global: true } : {}),
+        });
+        if (dryRun) {
+          console.log(
+            formatTerminalOutput(
+              `🧪 Dry Run — Would clean EvoKernel markers/configs from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`,
+              cliTermOpts
+            )
+          );
+          if (res.wouldPurge) {
+            console.log(
+              formatTerminalOutput(
+                `  └─ Would purge: .evo/${isGlobal ? ' and ~/.evo/global/' : ''}`,
+                cliTermOpts
+              )
+            );
+          }
+          return;
+        }
+        console.log(
+          formatTerminalOutput(
+            `🧹 Cleaned EvoKernel markers from: ${res.cleanedFiles.join(', ') || '(no files modified)'}`,
+            cliTermOpts
+          )
+        );
+        if (res.restoredMcpCount && res.restoredMcpCount > 0) {
+          console.log(
+            formatTerminalOutput(
+              `  ├─ Restored ${res.restoredMcpCount} virtualized MCP server(s) from .evo/mcp-pool.json`,
+              cliTermOpts
+            )
+          );
+        }
+        console.log(
+          formatTerminalOutput(
+            `  ├─ Storage: ${purge ? 'Purged (.evo/ removed)' : 'Preserved (.evo/ kept; pass --purge to delete)'}`,
+            cliTermOpts
+          )
+        );
+        console.log(
+          formatTerminalOutput(
+            `  └─ Re-enable anytime: ${cliPrefix} init${isGlobal ? ' --global' : ''}`,
+            cliTermOpts
+          )
+        );
+      };
+
+      if (!dryRun && !skipConfirm && process.stdin.isTTY && process.stdout.isTTY) {
+        return (async () => {
+          const targetDesc = isGlobal ? 'workspace and global AI host configs' : 'workspace host configs';
+          const purgeDesc = purge ? ' AND permanently delete .evo/ storage' : ' (.evo/ data will be preserved)';
+          const confirmed = await confirmInteractiveAction(
+            `Uninstall EvoKernel markers/MCP entries from ${targetDesc}${purgeDesc}?`
+          );
+          if (!confirmed) {
+            console.log(formatTerminalOutput('Cancelled (no files modified).', cliTermOpts));
+            return;
+          }
+          executeUninstall();
+        })();
+      }
+      executeUninstall();
       break;
     }
 
@@ -3722,7 +4048,7 @@ export function runCli(argv: string[]): void | Promise<void> {
 
     default: {
       if (cmd && cmd !== 'help' && cmd !== '--help' && cmd !== '-h') {
-        const suggestion = suggestClosestToken(cmd, VALID_COMMANDS);
+        const suggestion = suggestCommand(cmd);
         console.error(
           formatTerminalOutput(
             `❌ Error: Unknown command '${args[0]}'.${

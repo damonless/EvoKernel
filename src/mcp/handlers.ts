@@ -32,6 +32,12 @@ import {
   syncManagedRuleBlocks,
 } from '../cli/init.js';
 import { McpProxyManager, parseExternalToolId, type ExternalToolRecord } from './proxy.js';
+import {
+  buildDeterministicId,
+  cleanMarkdownInline,
+  inferPreferenceCategory,
+  inferSituationalOnDemand,
+} from '../core/profile-import.js';
 
 const WORKSPACE_PARAM_SCHEMA = {
   type: 'string',
@@ -239,9 +245,21 @@ export const META_MCP_TOOLS = [
           type: 'object',
           description: 'Optional declarative pre-tool/post-tool guard trigger for micro-tools.',
         },
+        undo: {
+          type: 'boolean',
+          description: '[preference] Undo the latest global profile preference change in chat.',
+        },
+        undo_id: {
+          type: 'string',
+          description: '[preference] Optional specific preference ID to undo when undo=true.',
+        },
+        auto_resolve: {
+          type: 'boolean',
+          description: '[preference] Automatically resolve duplicate conflicts (via supersedes_id) or profile budget overflow (demoting lowest-value candidate) on retry.',
+        },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
-      required: ['kind', 'id', 'title', 'l0_summary'],
+      required: [],
     },
   },
   {
@@ -1044,6 +1062,7 @@ export class EvoMcpDispatcher {
     const topScope = typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : '';
     if (topScope === 'global') return true;
     if (toolName === 'evo_propose') {
+      if (args.undo === true) return true;
       const kind = typeof args.kind === 'string' ? args.kind.trim().toLowerCase() : '';
       const memType = typeof args.memory_type === 'string' ? args.memory_type.trim().toLowerCase() : '';
       return (kind === 'preference' || (kind === 'memory' && memType === 'personal')) && topScope !== 'project';
@@ -1256,40 +1275,45 @@ export class EvoMcpDispatcher {
     args: Record<string, unknown>,
     asyncMode: boolean
   ): any {
+    let effectiveArgs = args;
     const rawWs = args.workspace ?? args.workspace_path;
     if (
       (name === 'evo_propose' || name === 'evo_compact') &&
       (typeof rawWs !== 'string' || !rawWs.trim()) &&
       !this.isGlobalWriteRoute(name, args)
     ) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(
-              {
-                passed: false,
-                gate_failed: 'SCHEMA_SECURITY',
-                error_code: 'ERR_INVALID_SCHEMA',
-                message:
-                  'Non-empty workspace path is required for project-scoped evo_propose and evo_compact (or omit workspace with scope: "global", kind: "preference", or memory_type: "personal").',
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      if (this.clientRoots.length === 1) {
+        effectiveArgs = { ...args, workspace: this.clientRoots[0] };
+      } else {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  passed: false,
+                  gate_failed: 'SCHEMA_SECURITY',
+                  error_code: 'ERR_INVALID_SCHEMA',
+                  message:
+                    'Non-empty workspace path is required for project-scoped evo_propose and evo_compact (or omit workspace with scope: "global", kind: "preference", or memory_type: "personal").',
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
     }
 
     if (name === 'evo_propose') {
-      const schemaError = this.proposeSchemaError(args);
+      const schemaError = this.proposeSchemaError(effectiveArgs);
       if (schemaError) return schemaError;
     }
 
     if (name === 'evo_compact') {
-      const schemaError = this.compactSchemaError(args);
+      const schemaError = this.compactSchemaError(effectiveArgs);
       if (schemaError) return schemaError;
     }
 
@@ -1297,7 +1321,7 @@ export class EvoMcpDispatcher {
     let isAsyncResult = false;
     let boundCtx: RequestContext | undefined;
     try {
-      const reqCtx = this.bindActiveContext(name, args);
+      const reqCtx = this.bindActiveContext(name, effectiveArgs);
       boundCtx = reqCtx;
       const needsSync =
         (name === 'evo_search' || name === 'evo_inspect') &&
@@ -1309,54 +1333,54 @@ export class EvoMcpDispatcher {
         case 'evo_search':
           if (needsSync) {
             result = this.ensureExternalToolsSynced(reqCtx).then(() => {
-              const freshCtx = this.bindActiveContext(name, args);
+              const freshCtx = this.bindActiveContext(name, effectiveArgs);
               if (boundCtx) {
                 this.releaseContextRef(boundCtx.wsCtx);
               }
               boundCtx = freshCtx;
               return asyncMode
-                ? this.handleSearchAsync(args, freshCtx)
-                : this.handleSearch(args, freshCtx);
+                ? this.handleSearchAsync(effectiveArgs, freshCtx)
+                : this.handleSearch(effectiveArgs, freshCtx);
             });
           } else {
             result = asyncMode
-              ? this.handleSearchAsync(args, reqCtx)
-              : this.handleSearch(args, reqCtx);
+              ? this.handleSearchAsync(effectiveArgs, reqCtx)
+              : this.handleSearch(effectiveArgs, reqCtx);
           }
           break;
         case 'evo_inspect':
           if (needsSync) {
             result = this.ensureExternalToolsSynced(reqCtx).then(() => {
-              const freshCtx = this.bindActiveContext(name, args);
+              const freshCtx = this.bindActiveContext(name, effectiveArgs);
               if (boundCtx) {
                 this.releaseContextRef(boundCtx.wsCtx);
               }
               boundCtx = freshCtx;
               return asyncMode
-                ? this.handleInspectAsync(args, freshCtx)
-                : this.handleInspect(args, freshCtx);
+                ? this.handleInspectAsync(effectiveArgs, freshCtx)
+                : this.handleInspect(effectiveArgs, freshCtx);
             });
           } else {
             result = asyncMode
-              ? this.handleInspectAsync(args, reqCtx)
-              : this.handleInspect(args, reqCtx);
+              ? this.handleInspectAsync(effectiveArgs, reqCtx)
+              : this.handleInspect(effectiveArgs, reqCtx);
           }
           break;
         case 'evo_run':
-          result = this.handleRun(args, reqCtx);
+          result = this.handleRun(effectiveArgs, reqCtx);
           break;
         case 'evo_propose':
           result = this.withWorkspaceWriteLock(reqCtx.wsCtx, () =>
             asyncMode
-              ? this.handleProposeAsync(args as unknown as ProposalPayload, reqCtx)
-              : this.handlePropose(args as unknown as ProposalPayload, reqCtx)
+              ? this.handleProposeAsync(effectiveArgs as unknown as ProposalPayload, reqCtx)
+              : this.handlePropose(effectiveArgs as unknown as ProposalPayload, reqCtx)
           );
           break;
         case 'evo_compact':
           result = this.withWorkspaceWriteLock(reqCtx.wsCtx, () =>
             asyncMode
-              ? this.handleCompactAsync(args, reqCtx)
-              : this.handleCompact(args, reqCtx)
+              ? this.handleCompactAsync(effectiveArgs, reqCtx)
+              : this.handleCompact(effectiveArgs, reqCtx)
           );
           break;
         default:
@@ -1610,22 +1634,18 @@ export class EvoMcpDispatcher {
     );
     const footerDirective =
       topGuardrailIds.length > 0
-        ? `Action Required: Call evo_inspect(id, "L2", workspace) on matched guardrails/SOPs [${topGuardrailIds.join(', ')}] to load full checklists (never rely on L0 summaries alone), or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}${antiPoisonReminder}`
-        : `Tip: Call evo_inspect(id, "L1"|"L2", workspace) for details/topology anchors or evo_run(tool_id, args) to execute a TOOL; if this session confirms a root cause (even read-only) or corrects a hypothesis, call evo_propose before finishing.${toolFooter}${antiPoisonReminder}`;
-
-    const provenanceLine =
-      '🛡️ Recall Provenance: Local observable chain active (search -> inspect/run -> verified outcome tracked in .evo/.cache/telemetry.db; 0 outbound telemetry).';
+        ? `Action Required: Call evo_inspect(id, "L2", workspace) on matched guardrails/SOPs [${topGuardrailIds.join(', ')}] to load full checklists (never rely on L0 summaries alone), or evo_run(tool_id, args) to execute a TOOL.${toolFooter}${antiPoisonReminder}`
+        : `Tip: Call evo_inspect(id, "L1"|"L2", workspace) for details/topology anchors or evo_run(tool_id, args) to execute a TOOL.${toolFooter}${antiPoisonReminder}`;
 
     return {
       content: [
         {
           type: 'text' as const,
           text: [
-            `Found ${hits.length} capability(s) [Core Budget: ${totalTokens}/${maxTokens} tokens]:`,
+            `Found ${hits.length} capability(s):`,
             ...lines,
             '',
             footerDirective,
-            provenanceLine,
           ].join('\n'),
         },
       ],
@@ -2656,6 +2676,66 @@ export class EvoMcpDispatcher {
   private executePropose(proposal: ProposalPayload, reqCtx: RequestContext, asyncMode: boolean): any {
     reqCtx.wsCtx.callsSinceLastPropose = 0;
     reqCtx.wsCtx.watermarkDirtySig = reqCtx.wsCtx.lastDirtySig;
+    const storage = reqCtx.storage;
+
+    if ((proposal as any).undo === true) {
+      const undoId =
+        typeof (proposal as any).undo_id === 'string' && (proposal as any).undo_id.trim()
+          ? (proposal as any).undo_id.trim()
+          : undefined;
+      const res = storage.undoLastProfileChange(undoId);
+      if (res.ok) {
+        const syncRes = syncGlobalUserProfile(storage.rootDir);
+        const label = res.undone?.title || res.undone?.id || undoId || '';
+        const hasCjk = /[\u4e00-\u9fff]/.test(`${label} ${res.message}`);
+        const human_receipt = hasCjk
+          ? `已撤销偏好变更「${label}」。`
+          : `Undid profile change "${label}".`;
+        const { undone: undoneEntry, ...restRes } = res;
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  ok: true,
+                  ...restRes,
+                  undone: true,
+                  ...(undoneEntry ? { undone_entry: undoneEntry } : {}),
+                  synced_profile_targets: syncRes.updatedTargets,
+                  human_receipt,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+      const hasCjk = /[\u4e00-\u9fff]/.test(`${undoId || ''} ${res.message}`);
+      const human_receipt = hasCjk
+        ? `无法撤销：${res.message}`
+        : `Nothing to undo: ${res.message}`;
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                ok: false,
+                undone: false,
+                ...res,
+                human_receipt,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
     const payload: ProposalPayload = {
       ...proposal,
       trigger_cue:
@@ -2667,8 +2747,32 @@ export class EvoMcpDispatcher {
           : undefined,
       hook_trigger: proposal.hook_trigger,
     };
+
+    if (payload.kind === 'preference' && typeof payload.content === 'string' && payload.content.trim()) {
+      const rawContent = payload.content.trim();
+      const cleaned = cleanMarkdownInline(rawContent);
+      const situational = inferSituationalOnDemand(rawContent);
+      if (payload.always_on === undefined) {
+        payload.always_on = situational.alwaysOn;
+      }
+      if ((!payload.trigger_cue || !payload.trigger_cue.trim()) && situational.triggerCue) {
+        payload.trigger_cue = situational.triggerCue;
+      }
+      if (!payload.category) {
+        payload.category = inferPreferenceCategory(rawContent, '', undefined, 'mcp');
+      }
+      if (!payload.title || !String(payload.title).trim()) {
+        payload.title = cleaned.slice(0, 72) || 'User Preference';
+      }
+      if (!payload.l0_summary || !String(payload.l0_summary).trim()) {
+        payload.l0_summary = cleaned.slice(0, 130) || payload.title;
+      }
+      if (!payload.id || !String(payload.id).trim()) {
+        payload.id = buildDeterministicId(payload.title || payload.l0_summary, rawContent, new Set());
+      }
+    }
+
     const gatekeeper = reqCtx.wsCtx.gatekeeper || reqCtx.gatekeeper!;
-    const storage = reqCtx.storage;
     const telemetry = reqCtx.wsCtx.telemetry || reqCtx.telemetry;
     const activeEpoch =
       telemetry && !telemetry.isClosed()
@@ -2738,23 +2842,114 @@ export class EvoMcpDispatcher {
         syncManagedRuleBlocks(storage.rootDir);
       }
 
+      const displayTitle = String(payload.title || payload.l0_summary || committedId).trim();
+      const textForLang = [
+        payload.content,
+        payload.title,
+        payload.l0_summary,
+        payload.symptom,
+        payload.solution,
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const hasCjk = /[\u4e00-\u9fff]/.test(textForLang);
+      let human_receipt: string;
+      if (payload.kind === 'preference') {
+        if (hasCjk) {
+          human_receipt =
+            payload.always_on === false
+              ? `已记住按需偏好「${displayTitle}」（触发：${payload.trigger_cue || '按需'}）。说「撤销」即可取消。`
+              : `已记住偏好「${displayTitle}」，之后会自动生效。说「撤销」即可取消。`;
+        } else {
+          human_receipt = `Saved preference "${displayTitle}". Say 'undo' to remove it.`;
+        }
+      } else {
+        human_receipt = hasCjk
+          ? `已记录 ${payload.kind}「${displayTitle}」（${committedId}）。`
+          : `Saved ${payload.kind} "${displayTitle}" (${committedId}).`;
+      }
+
       return {
         content: [
           {
             type: 'text' as const,
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify({ ...result, human_receipt }, null, 2),
           },
         ],
       };
     };
 
+    const autoResolve = Boolean((proposal as any).auto_resolve) && payload.kind === 'preference';
+    const tryBuildAutoResolveRetry = (
+      result: ReturnType<EvoGatekeeper['evaluateAndCommit']>
+    ): ProposalPayload | null => {
+      if (result.passed || !autoResolve) return null;
+      if (result.error_code === 'ERR_DUPLICATE_CAPABILITY') {
+        const conflictId =
+          (result as any).conflicting_ids?.[0] ||
+          (storage.getPreference(sanitizeId(payload.id || ''))
+            ? sanitizeId(payload.id || '')
+            : undefined);
+        if (conflictId) {
+          return { ...payload, supersedes_id: conflictId };
+        }
+      } else if (result.error_code === 'ERR_PROFILE_BUDGET_EXCEEDED') {
+        const lowValId = (result as any).low_value_candidates?.[0]?.id;
+        if (lowValId) {
+          const lowPref = storage.getPreference(lowValId);
+          if (lowPref) {
+            const prefPath = path.join(storage.preferencesDir, `${lowValId}.md`);
+            let prevSnap: string | undefined;
+            if (fs.existsSync(prefPath)) {
+              try {
+                prevSnap = fs.readFileSync(prefPath, 'utf8');
+              } catch {}
+            }
+            const nowIso = new Date().toISOString();
+            storage.savePreference({
+              ...lowPref,
+              always_on: false,
+              trigger_cue: lowPref.trigger_cue || lowPref.l0_summary,
+              updated_at: nowIso,
+            });
+            storage.appendProfileHistory({
+              ts: nowIso,
+              action: 'update',
+              id: lowValId,
+              kind: 'preference',
+              title: lowPref.title,
+              prev_snapshot: prevSnap,
+              reason: 'Demoted to on-demand during auto_resolve budget eviction',
+            });
+            return payload;
+          }
+        }
+      }
+      return null;
+    };
+
     if (asyncMode) {
-      return gatekeeper.evaluateAndCommitAsync(payload).then(finishPropose);
+      return gatekeeper.evaluateAndCommitAsync(payload).then((res) => {
+        const retryPayload = tryBuildAutoResolveRetry(res);
+        if (retryPayload) {
+          return gatekeeper.evaluateAndCommitAsync(retryPayload).then(finishPropose);
+        }
+        return finishPropose(res);
+      });
     }
-    return finishPropose(gatekeeper.evaluateAndCommit(payload));
+    const firstRes = gatekeeper.evaluateAndCommit(payload);
+    const retryPayload = tryBuildAutoResolveRetry(firstRes);
+    if (retryPayload) {
+      return finishPropose(gatekeeper.evaluateAndCommit(retryPayload));
+    }
+    return finishPropose(firstRes);
   }
 
   private proposeSchemaError(args: Record<string, unknown>) {
+    if (args.undo === true) {
+      return null;
+    }
+
     const validKinds = new Set(['rule', 'skill', 'tool', 'memory', 'preference']);
     const rawKind = typeof args.kind === 'string' ? args.kind.trim().toLowerCase() : '';
     const fail = (message: string) => ({
@@ -2786,11 +2981,13 @@ export class EvoMcpDispatcher {
     const cleanId = rawIdStr ? sanitizeId(rawIdStr) : '';
     const rawSupStr = typeof args.supersedes_id === 'string' ? args.supersedes_id.trim() : '';
     const cleanSup = rawSupStr ? sanitizeId(rawSupStr) : '';
+    const isPrefWithContent =
+      rawKind === 'preference' && typeof args.content === 'string' && args.content.trim().length > 0;
 
     if (args.id !== undefined && (typeof args.id !== 'string' || cleanId.length < 3)) {
       return fail('Proposal id must be a string with at least 3 alphanumeric/hyphen characters.');
     }
-    if ((cleanId || cleanSup).length < 3) {
+    if (!isPrefWithContent && (cleanId || cleanSup).length < 3) {
       return fail('Proposal id must be at least 3 alphanumeric/hyphen characters.');
     }
 
@@ -2805,7 +3002,7 @@ export class EvoMcpDispatcher {
     const rawL0 = String(args.l0_summary ?? '').trim();
     const hasSupersedes = cleanSup.length >= 3;
 
-    if (!rawL0) {
+    if (!rawL0 && !isPrefWithContent) {
       let canInheritFromExisting = false;
       if (hasSupersedes) {
         if (this.isGlobalWriteRoute('evo_propose', args)) {

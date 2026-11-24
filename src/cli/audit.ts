@@ -140,6 +140,7 @@ export interface RefactorResult {
   skillInstalled: string;
   stages: RefactorStageAction[];
   appliedChanges: string[];
+  backupDir?: string;
 }
 
 const DOMAIN_LEAK_PATTERNS: Array<{
@@ -198,15 +199,15 @@ export const EVO_RULE_ARCHITECT_PROPOSAL: ProposalPayload = {
     '- **Outputs**: Purified global rules, desensitized global skills, scoped `.evo/rules/scoped/*.md` rules, and STE-Lite local skills wired to `evo_search` + `evo_propose`.',
   ].join('\n'),
   l2_sop: [
-    '1. **Stage 1 — Global Rule Purification (全局提纯)**:',
+    '1. **Stage 1 — Global Rule Purification**:',
     '   - Strip all language-specific file globs, code-indexing tool routing, and business domain constraints from global files (`~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`).',
     '   - Retain only: (a) EvoKernel L0 Meta-Rule Seed, (b) universal epistemic & anti-sycophancy protocol, and (c) concise communication style.',
-    '2. **Stage 2 — Global Skill Desensitization (全局技能脱敏)**:',
+    '2. **Stage 2 — Global Skill Desensitization**:',
     '   - Scan global `SKILL.md` files for project-specific macro names, repo paths, or domain terms and replace them with domain-neutral placeholders.',
-    '3. **Stage 3 — Local Demotion & Scoped Splitting (局部下沉与 Scoped 拆分)**:',
+    '3. **Stage 3 — Local Demotion & Scoped Splitting**:',
     '   - Move code workflow and code-indexing tool rules into the project-local `AGENTS.md`.',
     '   - Convert domain/language-specific guardrails into on-demand scoped rules via `evo_propose(kind: "rule", core: false, scope_glob: "...")`.',
-    '4. **Stage 4 — Local Skill STE-Lite Conversion (局部技能 STE-Lite 化)**:',
+    '4. **Stage 4 — Local Skill STE-Lite Conversion**:',
     '   - Remove paragraphs in local `.agents/skills/*/SKILL.md` that duplicate `AGENTS.md` invariants.',
     '   - Add a Pre-Task Recall step (`evo_search` -> `evo_inspect`) and a Post-Task Crystallization step (`evo_propose`) to each local workflow skill.',
   ].join('\n'),
@@ -1580,7 +1581,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
   const stages: RefactorStageAction[] = [
     {
       stage: 1,
-      title: '全局提纯 (Global Rule Purification)',
+      title: 'Global Rule Purification',
       targets: stage1Targets,
       actions:
         stage1Actions.length > 0
@@ -1589,7 +1590,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     },
     {
       stage: 2,
-      title: '全局技能脱敏 (Global Skill Desensitization)',
+      title: 'Global Skill Desensitization',
       targets: globalSkillLeaks.map((l) => l.displayPath),
       actions:
         globalSkillLeaks.length > 0
@@ -1601,7 +1602,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     },
     {
       stage: 3,
-      title: '局部下沉与 Scoped 拆分 (Local Demotion & Scoped Splitting)',
+      title: 'Local Demotion & Scoped Splitting',
       targets: Array.from(
         new Set([...uniqueLocalTargets, ...contestedCoreRules.map((c) => `.evo/rules/${c.id}.md`)])
       ),
@@ -1612,7 +1613,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     },
     {
       stage: 4,
-      title: '局部技能 STE-Lite 化 (Local Skill STE-Lite Conversion)',
+      title: 'Local Skill STE-Lite Conversion',
       targets: stage4Targets,
       actions:
         stage4Actions.length > 0
@@ -1622,11 +1623,33 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
   ];
 
   const appliedChanges: string[] = [];
+  let backupDir: string | undefined;
 
   if (options.apply) {
     const storage = new EvoStorage(root);
     storage.ensureInitialized();
     const now = new Date().toISOString();
+    const backupStamp = now.replace(/[:.]/g, '-');
+    const plannedBackupDir = path.join(root, '.evo', '.cache', 'refactor-backups', backupStamp);
+    const backedUpFiles = new Set<string>();
+    const backupFileBeforeOverwrite = (filePath: string) => {
+      try {
+        const resolved = path.resolve(filePath);
+        if (backedUpFiles.has(resolved) || !fs.existsSync(resolved)) return;
+        const rel = path.relative(root, resolved);
+        const destRel =
+          rel.startsWith('..') || path.isAbsolute(rel)
+            ? path.join('_external', `${backedUpFiles.size}-${path.basename(resolved)}`)
+            : rel;
+        const dest = path.join(plannedBackupDir, destRel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(resolved, dest);
+        backedUpFiles.add(resolved);
+        backupDir = plannedBackupDir;
+      } catch {
+        // Best-effort backup
+      }
+    };
 
     for (const leak of audit.domainLeaks.filter((l) => l.scope === 'workspace' && l.kind === 'rule')) {
       const targetMetric = audit.files.find((f) => f.displayPath === leak.displayPath);
@@ -1669,6 +1692,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
         '',
       ].join('\n');
 
+      backupFileBeforeOverwrite(targetMetric.fullPath);
       fs.writeFileSync(targetMetric.fullPath, pointerHeader, 'utf8');
       runInit(root, { targets: ['auto'] });
       appliedChanges.push(
@@ -1715,6 +1739,11 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
         }
 
         if (modified) {
+          const rulePath = updatedRule.core
+            ? path.join(targetStorage.rulesDir, `${updatedRule.id}.md`)
+            : path.join(targetStorage.rulesDir, 'scoped', `${updatedRule.id}.md`);
+          const fallbackRulePath = path.join(targetStorage.rulesDir, `${updatedRule.id}.md`);
+          backupFileBeforeOverwrite(fs.existsSync(rulePath) ? rulePath : fallbackRulePath);
           updatedRule.updated_at = now;
           targetStorage.saveRule(updatedRule);
           appliedChanges.push(
@@ -1800,6 +1829,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
             changed = true;
           }
           if (changed) {
+            backupFileBeforeOverwrite(f);
             const lines: string[] = ['---'];
             for (const [k, v] of Object.entries(meta)) {
               lines.push(`${k}: ${JSON.stringify(v)}`);
@@ -1820,6 +1850,8 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     for (const c of contestedCoreRules) {
       const rule = storage.getRule(c.id);
       if (rule && rule.core) {
+        const corePath = path.join(storage.rulesDir, `${rule.id}.md`);
+        backupFileBeforeOverwrite(corePath);
         rule.core = false;
         rule.updated_at = now;
         storage.saveRule(rule);
@@ -1836,6 +1868,7 @@ export function runRefactor(workspaceRoot: string, options: RefactorOptions = {}
     skillInstalled: `.evo/skills/${skill.id}/SKILL.md`,
     stages,
     appliedChanges,
+    ...(backupDir ? { backupDir } : {}),
   };
 }
 

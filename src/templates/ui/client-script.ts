@@ -30,6 +30,9 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
   var activeGkFilter = 'all';
   var selectedCapability = null; // { kind: string, item: any }
   var inspectorMode = 'preview'; // 'preview' | 'edit'
+  var editorDirty = false;
+  var editorOriginalText = '';
+  var editorPendingBgUpdate = false;
   var sseOffline = false;
   var activeEventSource = null;
   var sseReconnectAttempt = 0;
@@ -250,7 +253,14 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
       if (foundItem) {
         selectedCapability.item = foundItem;
       }
-      renderInspector();
+      if (inspectorMode === 'edit' && editorDirty) {
+        editorPendingBgUpdate = true;
+        if (typeof showInspectorBgUpdateBanner === 'function') {
+          showInspectorBgUpdateBanner();
+        }
+      } else {
+        renderInspector();
+      }
     }
   }
 
@@ -280,11 +290,152 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
     });
   }
 
+  function formatActionName(action) {
+    var dict = i18n[lang] || i18n.en;
+    var map = {
+      'run-tool-test': dict.actRunToolTest,
+      'run-tool': dict.actRunToolTest,
+      'approve-item': dict.actApproveItem,
+      'archive-item': dict.actArchiveItem,
+      'restore-item': dict.actRestoreItem,
+      'toggle-enabled': dict.actToggleEnabled,
+      'toggle-rule-tier': dict.actToggleRuleTier,
+      'update-content': dict.actUpdateContent,
+      'verify-memory': dict.actVerifyMemory,
+      'refresh-memories': dict.actVerifyMemory,
+      'rebind-memory-ast': dict.actRebindMemory,
+      'open-editor': dict.actOpenEditor,
+      'create-preference': dict.actCreatePreference,
+      'sync-profile': dict.actSyncProfile,
+      'import-profile-markdown': dict.actImportProfile,
+      'undo-preference': dict.actUndoPreference
+    };
+    return map[action] || action;
+  }
+
+  function formatFriendlyError(res, fallbackMsg) {
+    var dict = i18n[lang] || i18n.en;
+    var code = res && res.code ? String(res.code) : '';
+    var rawErr = res && res.error ? String(res.error) : '';
+    var details = (res && res.details) || {};
+    if (code === 'ERR_PROFILE_BUDGET_EXCEEDED') {
+      var maxP = details.maxTokens || (snapshot.userProfile && snapshot.userProfile.maxTokens) || 800;
+      return dict.errProfileBudgetFriendly.replace('{max}', String(maxP));
+    }
+    if (code === 'ERR_BUDGET_EXCEEDED') {
+      var curC = details.currentTokens !== undefined ? details.currentTokens : computeActiveCoreTokens();
+      var maxC = details.maxTokens || getMaxCoreRuleTokens();
+      return dict.errCoreBudgetFriendly.replace('{cur}', String(curC)).replace('{max}', String(maxC));
+    }
+    if (code === 'ERR_DUPLICATE_CAPABILITY') {
+      return dict.errDuplicateFriendly;
+    }
+    if (code === 'NOT_FOUND' || /^Not Found:/i.test(rawErr)) {
+      return dict.errNotFoundFriendly;
+    }
+    return rawErr || fallbackMsg || dict.errUnknown;
+  }
+
+  function showActionError(res, fallbackMsg, recoveryCtx) {
+    if (res && res.offlineExport) return;
+    var dict = i18n[lang] || i18n.en;
+    var msg = formatFriendlyError(res, fallbackMsg);
+    if (res && res.code === 'ERR_PROFILE_BUDGET_EXCEEDED' && recoveryCtx) {
+      showToast('error', msg, 8000, {
+        label: dict.makeOnDemandBtn,
+        run: function() {
+          if (typeof recoveryCtx.makeOnDemandCb === 'function') {
+            recoveryCtx.makeOnDemandCb();
+            return;
+          }
+          if (recoveryCtx.id) {
+            var it = recoveryCtx.item || {};
+            callKernelAction('create-preference', {
+              id: recoveryCtx.id,
+              supersedes_id: recoveryCtx.id,
+              tier: recoveryCtx.tier || it.tier || 'GLOBAL',
+              title: it.title || recoveryCtx.id,
+              l0_summary: it.l0_summary || it.title || recoveryCtx.id,
+              category: it.category || 'style',
+              always_on: false,
+              tags: Array.isArray(it.tags) ? it.tags : [],
+              content: it.content || it.l0_summary || it.title || recoveryCtx.id,
+              enabled: true,
+              review_status: it.review_status || 'approved'
+            }).then(function(r2) {
+              var d2 = i18n[lang] || i18n.en;
+              if (r2 && r2.ok) {
+                if (r2.snapshot) snapshot = r2.snapshot;
+                rerenderAllViews();
+                showToast('success', d2.profileModeUpdatedToast.replace('{id}', recoveryCtx.id));
+              } else if (!r2 || !r2.offlineExport) {
+                showToast('error', formatFriendlyError(r2, d2.errSaveFailed));
+              }
+            });
+          }
+        }
+      });
+      return;
+    }
+    showToast('error', msg);
+  }
+
+  function runWithButtonLock(btn, busyLabel, fn) {
+    if (!btn) return fn();
+    var origHtml = btn.innerHTML;
+    var wasDisabled = btn.disabled;
+    btn.disabled = true;
+    if (busyLabel) btn.textContent = busyLabel;
+    return Promise.resolve().then(fn).then(function(res) {
+      btn.disabled = wasDisabled;
+      if (btn.isConnected) btn.innerHTML = origHtml;
+      return res;
+    }, function(err) {
+      btn.disabled = wasDisabled;
+      if (btn.isConnected) btn.innerHTML = origHtml;
+      throw err;
+    });
+  }
+
+  function copyToClipboardText(text) {
+    var str = String(text || '');
+    if (!str) return;
+    if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(str).catch(function() {});
+      return;
+    }
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = str;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) {}
+  }
+
+  function handleOpenEditorResult(res, displayPath) {
+    var dict = i18n[lang] || i18n.en;
+    if (res && res.ok) {
+      if (res.data && res.data.launched === false) {
+        var copyPath = (res.data && res.data.opened) || displayPath;
+        copyToClipboardText(copyPath);
+        showToast('info', dict.openEditorCopiedToast.replace('{path}', displayPath));
+      } else {
+        showToast('success', dict.openedInIdeToast.replace('{path}', displayPath));
+      }
+    } else if (!res || !res.offlineExport) {
+      showActionError(res, dict.openFileFailedToast);
+    }
+  }
+
   function callKernelAction(action, params) {
     params = params || {};
     var dict = i18n[lang] || i18n.en;
     if (isExport && !vscodeApi) {
-      var readOnlyMsg = dict.offlineActionToast.replace('{action}', action);
+      var readOnlyMsg = dict.offlineActionToast.replace('{action}', formatActionName(action));
       showToast('info', readOnlyMsg);
       return Promise.resolve({ ok: false, offlineExport: true, error: readOnlyMsg });
     }
@@ -380,6 +531,8 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
       actBtn.textContent = actSpec.label;
       actBtn.addEventListener('click', function(e) {
         e.stopPropagation();
+        if (dismissTimer) { clearTimeout(dismissTimer); dismissTimer = null; }
+        if (removeTimer) { clearTimeout(removeTimer); removeTimer = null; }
         if (toast.parentNode) toast.parentNode.removeChild(toast);
         actSpec.run();
       });
@@ -387,13 +540,29 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
     }
 
     boxEl.appendChild(toast);
-    setTimeout(function() {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateY(8px)';
-      setTimeout(function() {
-        if (toast.parentNode) toast.parentNode.removeChild(toast);
-      }, 220);
-    }, durationMs || (actSpec ? 5500 : 3500));
+    var ttl = durationMs || (actSpec ? 8000 : 3500);
+    var dismissTimer = null;
+    var removeTimer = null;
+    function scheduleDismiss(ms) {
+      if (dismissTimer) clearTimeout(dismissTimer);
+      dismissTimer = setTimeout(function() {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(8px)';
+        removeTimer = setTimeout(function() {
+          if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 220);
+      }, ms);
+    }
+    toast.addEventListener('mouseenter', function() {
+      if (dismissTimer) { clearTimeout(dismissTimer); dismissTimer = null; }
+      if (removeTimer) { clearTimeout(removeTimer); removeTimer = null; }
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateY(0)';
+    });
+    toast.addEventListener('mouseleave', function() {
+      scheduleDismiss(Math.min(ttl, 3000));
+    });
+    scheduleDismiss(ttl);
   }
 
   function archiveAndOfferUndo(kindPlural, itemId, itemTier) {
@@ -409,7 +578,7 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
         }
         rerenderAllViews();
         if (!selectedCapability) renderInspector();
-        showToast('success', (lang === 'zh' ? '已归档 ' : 'Archived ') + itemId, 5500, {
+        showToast('success', (lang === 'zh' ? '已归档 ' : 'Archived ') + itemId, 8000, {
           label: dict.undoArchive,
           run: function() {
             var restorePayload = { kind: sKind, id: itemId };
@@ -420,13 +589,13 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
                 rerenderAllViews();
                 showToast('success', (lang === 'zh' ? '已恢复 ' : 'Restored ') + itemId);
               } else if (!rRes.offlineExport) {
-                showToast('error', rRes.error || dict.errRestoreFailed);
+                showActionError(rRes, dict.errRestoreFailed);
               }
             });
           }
         });
       } else if (!res.offlineExport) {
-        showToast('error', res.error || dict.errArchiveFailed);
+        showActionError(res, dict.errArchiveFailed);
       }
     });
   }
@@ -578,10 +747,8 @@ ${PROFILE_CLIENT_SCRIPT}
 
         var actItem = {
           execute: function() {
-            var curDict = i18n[lang] || i18n.en;
             callKernelAction('open-editor', { filePath: h.filePath, line: 1 }).then(function(res) {
-              if (res.ok) showToast('success', curDict.openedInIdeToast.replace('{path}', h.filePath));
-              else if (!res.offlineExport) showToast('error', res.error || curDict.openFileFailedToast);
+              handleOpenEditorResult(res, h.filePath);
             });
             closeCommandPalette();
           }
@@ -721,6 +888,9 @@ ${PROFILE_CLIENT_SCRIPT}
 
     if (el('sse-disconnect-msg')) el('sse-disconnect-msg').textContent = dict.sseDisconnectedMsg;
     if (el('btn-sse-reconnect')) el('btn-sse-reconnect').textContent = dict.sseReconnectBtn;
+    if (el('export-readonly-msg')) el('export-readonly-msg').textContent = dict.exportReadonlyBanner;
+    if (el('bento-health')) el('bento-health').title = dict.bentoHealthTooltip;
+    if (el('bento-budget')) el('bento-budget').title = dict.bentoBudgetTooltip;
 
     // Input Placeholders
     if (el('caps-search-input')) el('caps-search-input').placeholder = dict.capsSearchPlaceholder;
@@ -773,6 +943,33 @@ ${PROFILE_CLIENT_SCRIPT}
     if (el('lbl-profile-mode')) el('lbl-profile-mode').textContent = dict.profileFieldMode;
     if (el('lbl-profile-tags')) el('lbl-profile-tags').textContent = dict.profileFieldTags;
     if (el('lbl-profile-content')) el('lbl-profile-content').textContent = dict.profileFieldContent;
+    if (el('profile-more-options-summary')) el('profile-more-options-summary').textContent = dict.profileMoreOptions;
+    if (el('profile-inp-title')) el('profile-inp-title').placeholder = lang === 'zh' ? '例如：简洁工程风格' : 'e.g. Concise Engineering Style';
+    if (el('profile-inp-l0')) el('profile-inp-l0').placeholder = lang === 'zh' ? '一句话摘要，用于常驻卡片或目录菜单' : '1-line summary shown in Always-On card or Directory Menu';
+    if (el('profile-inp-tags')) el('profile-inp-tags').placeholder = lang === 'zh' ? '风格, 简洁, ts' : 'style, concise, ts';
+    if (el('profile-inp-content')) el('profile-inp-content').placeholder = lang === 'zh' ? '输入可跨工作区复用的个人习惯或偏好...' : 'Write the reusable cross-workspace instruction...';
+    var catSel = el('profile-inp-category');
+    if (catSel) {
+      var catOpts = {
+        style: dict.catStyle,
+        formatting: dict.catFormatting,
+        communication: dict.catCommunication,
+        workflow: dict.catWorkflow,
+        requirement: dict.catRequirement,
+        knowledge: dict.catKnowledge
+      };
+      catSel.querySelectorAll('option').forEach(function(o) {
+        if (catOpts[o.value]) o.textContent = catOpts[o.value];
+      });
+    }
+    ['profile-inp-always-on', 'profile-import-always-on'].forEach(function(selId) {
+      var modeSel = el(selId);
+      if (modeSel) {
+        modeSel.querySelectorAll('option').forEach(function(o) {
+          o.textContent = o.value === 'false' ? dict.profileModeOnDemand : dict.profileModeAlwaysOn;
+        });
+      }
+    });
     if (el('btn-profile-save')) el('btn-profile-save').textContent = dict.profileCreateSubmit;
     if (el('btn-profile-cancel')) el('btn-profile-cancel').textContent = dict.cancel;
     if (el('profile-import-title')) el('profile-import-title').textContent = dict.profileImportTitle;
@@ -814,7 +1011,9 @@ ${PROFILE_CLIENT_SCRIPT}
     if (el('th-hs-action')) el('th-hs-action').textContent = dict.thHsAction;
 
     // Empty States
-    if (el('caps-empty-state')) el('caps-empty-state').textContent = dict.capsEmptyState;
+    if (el('caps-empty-state-msg')) el('caps-empty-state-msg').textContent = dict.capsEmptyState;
+    else if (el('caps-empty-state')) el('caps-empty-state').textContent = dict.capsEmptyState;
+    if (el('btn-caps-clear-filters')) el('btn-caps-clear-filters').textContent = dict.clearFiltersBtn;
     if (el('hotspots-empty-state')) el('hotspots-empty-state').textContent = dict.hotspotsEmptyState;
 
     // Topology Legend (Semantic Kind + Freshness Status)
@@ -1010,17 +1209,123 @@ ${PROFILE_CLIENT_SCRIPT}
     });
   }
 
+  // Hero Quick Habit Form & Clear Filters
+  var heroHabitForm = el('hero-habit-form');
+  if (heroHabitForm) {
+    heroHabitForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      var inp = el('hero-habit-input');
+      var saveBtn = el('btn-hero-habit-save');
+      var text = inp ? inp.value.trim() : '';
+      if (!text) return;
+      var dict = i18n[lang] || i18n.en;
+      runWithButtonLock(saveBtn, dict.savingLabel, function() {
+        return callKernelAction('create-preference', {
+          tier: 'GLOBAL',
+          title: text.slice(0, 60),
+          l0_summary: text.slice(0, 120),
+          category: 'style',
+          always_on: true,
+          content: text
+        }).then(function(res) {
+          var curDict = i18n[lang] || i18n.en;
+          if (res && res.ok) {
+            if (inp) inp.value = '';
+            if (res.snapshot) snapshot = res.snapshot;
+            rerenderAllViews();
+            var createdId = (res.data && res.data.id) ? res.data.id : text.slice(0, 24);
+            showToast('success', curDict.profileCreatedToast.replace('{id}', createdId));
+          } else if (!res || !res.offlineExport) {
+            showActionError(res, curDict.profileCreateFailedToast, {
+              makeOnDemandCb: function() {
+                callKernelAction('create-preference', {
+                  tier: 'GLOBAL',
+                  title: text.slice(0, 60),
+                  l0_summary: text.slice(0, 120),
+                  category: 'style',
+                  always_on: false,
+                  content: text
+                }).then(function(r2) {
+                  if (r2 && r2.ok) {
+                    if (inp) inp.value = '';
+                    if (r2.snapshot) snapshot = r2.snapshot;
+                    rerenderAllViews();
+                    var cId = (r2.data && r2.data.id) ? r2.data.id : text.slice(0, 24);
+                    showToast('success', curDict.profileCreatedToast.replace('{id}', cId));
+                  } else if (!r2 || !r2.offlineExport) {
+                    showActionError(r2, curDict.profileCreateFailedToast);
+                  }
+                });
+              }
+            });
+          }
+        });
+      });
+    });
+  }
+
+  var btnClearFilters = el('btn-caps-clear-filters');
+  if (btnClearFilters) {
+    btnClearFilters.addEventListener('click', function() {
+      activeCapsKind = 'all';
+      activeCapsStatus = 'all';
+      capsSearchQuery = '';
+      capsSortByTokens = false;
+      if (el('caps-search-input')) el('caps-search-input').value = '';
+      if (kindPillGroup) {
+        kindPillGroup.querySelectorAll('.filter-pill').forEach(function(p) {
+          p.classList.toggle('active', (p.getAttribute('data-kind') || 'all') === 'all');
+        });
+      }
+      if (statusPillGroup) {
+        statusPillGroup.querySelectorAll('.filter-pill').forEach(function(p) {
+          p.classList.toggle('active', (p.getAttribute('data-status') || 'all') === 'all');
+        });
+      }
+      renderCapabilitiesTable();
+    });
+  }
+
   // Batch Action Buttons (Approve All Pending / Pause All Stale)
   var btnBatchApprove = el('btn-batch-approve-pending');
   if (btnBatchApprove) {
     btnBatchApprove.addEventListener('click', function() {
-      callKernelAction('approve-item', { approveAll: true }).then(function(res) {
-        if (res.ok) {
-          if (res.snapshot) snapshot = res.snapshot;
-          rerenderAllViews();
-          var approvedCount = (res.data && res.data.approvedCount !== undefined) ? res.data.approvedCount : (res.approvedCount || 0);
-          showToast('success', (lang === 'zh' ? '已批量确认 ' : 'Approved ') + approvedCount + (lang === 'zh' ? ' 项待审能力' : ' pending capabilities'));
-        }
+      var confirmBar = el('batch-approve-confirm-bar');
+      var bd = typeof getPendingBreakdown === 'function' ? getPendingBreakdown() : { total: countPendingCapabilities(), globalPrefCount: 0 };
+      if (!bd.total) return;
+      var dict = i18n[lang] || i18n.en;
+      if (!confirmBar) return;
+      var msg = bd.globalPrefCount > 0
+        ? dict.batchApproveConfirmWithGlobal.replace('{n}', String(bd.total)).replace('{m}', String(bd.globalPrefCount))
+        : dict.batchApproveConfirmAll.replace('{n}', String(bd.total));
+      confirmBar.style.display = 'flex';
+      confirmBar.innerHTML =
+        '<span>' + esc(msg) + '</span>' +
+        '<div class="inline-confirm-actions">' +
+          '<button type="button" class="btn-action" id="btn-batch-approve-cancel">' + esc(dict.cancel) + '</button>' +
+          '<button type="button" class="btn-action btn-primary" id="btn-batch-approve-confirm">' + esc(dict.confirmBtn) + '</button>' +
+        '</div>';
+      confirmBar.querySelector('#btn-batch-approve-cancel').addEventListener('click', function() {
+        confirmBar.style.display = 'none';
+        confirmBar.innerHTML = '';
+      });
+      var confirmBtn = confirmBar.querySelector('#btn-batch-approve-confirm');
+      confirmBtn.addEventListener('click', function() {
+        var curDict = i18n[lang] || i18n.en;
+        runWithButtonLock(confirmBtn, curDict.savingLabel, function() {
+          return callKernelAction('approve-item', { approveAll: true }).then(function(res) {
+            if (res && res.ok) {
+              confirmBar.style.display = 'none';
+              confirmBar.innerHTML = '';
+              if (res.snapshot) snapshot = res.snapshot;
+              rerenderAllViews();
+              var approvedCount = (res.data && res.data.approvedCount !== undefined) ? res.data.approvedCount : (res.approvedCount || bd.total);
+              showToast('success', (lang === 'zh' ? '已批量确认 ' : 'Approved ') + approvedCount + (lang === 'zh' ? ' 项待审能力' : ' pending capabilities'));
+            } else if (!res || !res.offlineExport) {
+              showActionError(res, curDict.errApproveFailed);
+            }
+          });
+        });
       });
     });
   }
@@ -1035,12 +1340,17 @@ ${PROFILE_CLIENT_SCRIPT}
         return { kind: 'memory', id: m.id };
       });
       if (staleList.length === 0) return;
-      callKernelAction('toggle-enabled', { items: staleList, enabled: false }).then(function(res) {
-        if (res.ok) {
-          if (res.snapshot) snapshot = res.snapshot;
-          rerenderAllViews();
-          showToast('success', (lang === 'zh' ? '已搁置 ' : 'Paused ') + staleList.length + (lang === 'zh' ? ' 条失效记忆' : ' stale memories'));
-        }
+      var dict = i18n[lang] || i18n.en;
+      runWithButtonLock(btnBatchPauseStale, dict.savingLabel, function() {
+        return callKernelAction('toggle-enabled', { items: staleList, enabled: false }).then(function(res) {
+          if (res && res.ok) {
+            if (res.snapshot) snapshot = res.snapshot;
+            rerenderAllViews();
+            showToast('success', (lang === 'zh' ? '已搁置 ' : 'Paused ') + staleList.length + (lang === 'zh' ? ' 条失效记忆' : ' stale memories'));
+          } else if (!res || !res.offlineExport) {
+            showActionError(res, dict.errToggleFailed);
+          }
+        });
       });
     });
   }
@@ -1106,6 +1416,25 @@ ${PROFILE_CLIENT_SCRIPT}
       if (cmdPaletteOpen) {
         e.preventDefault();
         closeCommandPalette();
+        return;
+      }
+      var activeElForEsc = document.activeElement;
+      if (activeElForEsc && (activeElForEsc.tagName === 'TEXTAREA' || activeElForEsc.tagName === 'INPUT')) {
+        if (typeof activeElForEsc.blur === 'function') activeElForEsc.blur();
+        return;
+      }
+      if (inspectorMode === 'edit' && editorDirty && typeof confirmDiscardDraft === 'function') {
+        e.preventDefault();
+        confirmDiscardDraft(function() {
+          var inspEl2 = el('right-inspector');
+          if (inspEl2) inspEl2.classList.remove('open');
+          if (selectedCapability) {
+            selectedCapability = null;
+            inspectorMode = 'preview';
+            renderInspector();
+            renderCapabilitiesTable();
+          }
+        });
         return;
       }
       var inspEl = el('right-inspector');
@@ -1190,7 +1519,7 @@ ${PROFILE_CLIENT_SCRIPT}
         var dlUrl = '/api/export?token=' + encodeURIComponent(token);
         var dlLink = document.createElement('a');
         dlLink.href = dlUrl;
-        dlLink.download = 'evokernel-cockpit-snapshot.html';
+        dlLink.download = 'evo-workbench-' + new Date().toISOString().slice(0, 10) + '.html';
         document.body.appendChild(dlLink);
         dlLink.click();
         document.body.removeChild(dlLink);
@@ -1226,7 +1555,7 @@ ${PROFILE_CLIENT_SCRIPT}
     var sseBanner = el('sse-disconnect-banner');
     if (isExport && !vscodeApi) {
       if (dot) {
-        dot.classList.remove('offline');
+        dot.classList.remove('offline', 'reconnecting');
         dot.classList.add('snapshot');
       }
       if (label) label.textContent = dict.serverSnapshot;
@@ -1234,13 +1563,23 @@ ${PROFILE_CLIENT_SCRIPT}
       if (sseBanner) sseBanner.style.display = 'none';
       return;
     }
+    var retriesExhausted = sseOffline && sseReconnectAttempt >= 4;
     if (dot) {
       dot.classList.remove('snapshot');
-      dot.classList.toggle('offline', sseOffline);
+      dot.classList.toggle('reconnecting', sseOffline && !retriesExhausted);
+      dot.classList.toggle('offline', retriesExhausted);
     }
-    if (label) label.textContent = sseOffline ? dict.serverOffline : dict.serverLive;
-    if (statusWrap) statusWrap.title = sseOffline ? dict.serverOffline : dict.serverLive;
-    if (sseBanner) sseBanner.style.display = sseOffline ? 'flex' : 'none';
+    if (label) {
+      label.textContent = retriesExhausted
+        ? dict.serverOffline
+        : (sseOffline ? dict.serverReconnecting : dict.serverLive);
+    }
+    if (statusWrap) {
+      statusWrap.title = retriesExhausted
+        ? dict.serverOffline
+        : (sseOffline ? dict.serverReconnectingTitle : dict.serverLive);
+    }
+    if (sseBanner) sseBanner.style.display = retriesExhausted ? 'flex' : 'none';
   }
 
   function scheduleSseReconnect() {
@@ -1271,12 +1610,12 @@ ${PROFILE_CLIENT_SCRIPT}
         var wasOffline = sseOffline;
         try { evSrc.close(); } catch (e) {}
         if (activeEventSource === evSrc) activeEventSource = null;
+        scheduleSseReconnect();
         updateServerStatusUi(true);
         if (!wasOffline) {
           var curDict = i18n[lang] || i18n.en;
           showToast('warn', curDict.sseDisconnectedToast);
         }
-        scheduleSseReconnect();
       });
       evSrc.addEventListener('open', function() {
         var wasOffline = sseOffline;
@@ -1313,8 +1652,16 @@ ${PROFILE_CLIENT_SCRIPT}
   var inspBackdrop = el('inspector-backdrop');
   if (inspBackdrop) {
     inspBackdrop.addEventListener('click', function() {
-      var inspEl = el('right-inspector');
-      if (inspEl) inspEl.classList.remove('open');
+      confirmDiscardDraft(function() {
+        var inspEl = el('right-inspector');
+        if (inspEl) inspEl.classList.remove('open');
+        if (selectedCapability) {
+          selectedCapability = null;
+          inspectorMode = 'preview';
+          renderInspector();
+          renderCapabilitiesTable();
+        }
+      });
     });
   }
 

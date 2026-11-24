@@ -54,6 +54,7 @@ export interface UserProfileSnapshot {
 export interface UiSnapshot {
   score: ScoreReport;
   window7d: RecallWindowStats;
+  maxCoreRuleTokens?: number;
   rules: any[];
   skills: any[];
   tools: any[];
@@ -936,6 +937,7 @@ export function buildUiSnapshot(
           try {
             const rawHistEntries = (rawHistoryFn.call(globalStorage, 50) || []) as any[];
             const undoBalance = new Map<string, number>();
+            const seenUndoableIds = new Set<string>();
             const processed = rawHistEntries.map((entry: any) => {
               const entryId = String(entry?.id || '');
               const cleanEntryId = sanitizeId(entryId) || entryId;
@@ -954,8 +956,11 @@ export function buildUiSnapshot(
                 if (pendingUndos > 0) {
                   undoBalance.set(balKey, pendingUndos - 1);
                   undoable = false;
-                } else {
+                } else if (!seenUndoableIds.has(balKey)) {
                   undoable = true;
+                  seenUndoableIds.add(balKey);
+                } else {
+                  undoable = false;
                 }
               }
 
@@ -1038,9 +1043,15 @@ export function buildUiSnapshot(
       }
     }
 
+    const maxCoreRuleTokens =
+      typeof cfg?.maxCoreRuleTokens === 'number' && Number.isFinite(cfg.maxCoreRuleTokens)
+        ? cfg.maxCoreRuleTokens
+        : (DEFAULT_EVO_CONFIG.maxCoreRuleTokens ?? 1500);
+
     const rawSnapshot: UiSnapshot = {
       score,
       window7d,
+      maxCoreRuleTokens,
       rules,
       skills,
       tools,
@@ -1578,7 +1589,9 @@ export async function startUiServer(
         return;
       }
       if (pathname === '/api/export') {
-        const exportHtml = buildExportHtmlContent(ws, { anon: options.anon });
+        const anonParam = reqUrl.searchParams.get('anon');
+        const exportAnon = anonParam === '0' || anonParam === 'false' ? false : true;
+        const exportHtml = buildExportHtmlContent(ws, { anon: exportAnon });
         const exportScriptMatch = exportHtml.match(/<script>([\s\S]*?)<\/script>/);
         if (exportScriptMatch) {
           const exportHash = crypto
@@ -1590,9 +1603,10 @@ export async function startUiServer(
             `default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; script-src 'sha256-${exportHash}'; connect-src 'none'; frame-ancestors 'none'`
           );
         }
+        const exportDate = new Date().toISOString().slice(0, 10);
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
-          'Content-Disposition': 'attachment; filename="evo-workbench-export.html"',
+          'Content-Disposition': `attachment; filename="evo-workbench-${exportDate}.html"`,
         });
         res.end(exportHtml);
         return;
@@ -1809,11 +1823,12 @@ export async function runUiCli(workspaceRoot: string, args: string[]): Promise<v
   const exportOpt = parseCliOption(args, '--export');
 
   if (exportOpt.matched) {
+    const exportAnon = args.includes('--no-anon') ? false : true;
     const out =
       exportOpt.value && exportOpt.value.trim()
         ? path.resolve(exportOpt.value.trim())
         : path.join(path.resolve(workspaceRoot), 'evo-cockpit.html');
-    exportUiHtml(workspaceRoot, out, { anon: isAnon });
+    exportUiHtml(workspaceRoot, out, { anon: exportAnon });
     logUi(`✅ EvoKernel Workbench exported to: ${out}`);
     return;
   }

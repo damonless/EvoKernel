@@ -59,19 +59,20 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
   var dict = {
     en: {
       eyebrow: 'Zero-Dependency Cognitive Context OS · Node.js >= 22.5',
-      heroTitle: 'Stop Repeating the Same Bug Across Coding Sessions.',
-      heroSub: 'AST-verified* cognitive memory, visible 1-line recall receipts, and a 6-stage deterministic Gatekeeper for 10 AI coding agents — cutting session-start token tax by ${pct}% (${rawPrefix} → ${evoPrefix} tok/turn) with 100% KV cache retention.',
+      heroTitle: 'Tell your AI once. It remembers you.',
+      heroSub: 'Your habits, preferences and work rules follow you across Claude Code, Codex, Cursor, Gemini — and every project.',
+      heroTrust: 'Stored only on your machine. See it, undo it, or wipe it anytime.',
       navFeatures: 'Capabilities',
       navBenchmark: 'Benchmark',
       navTrust: 'Reversibility',
       navGithub: 'GitHub',
       ctaDemo: 'Interactive Workbench Demo →',
       ctaGithub: 'View on GitHub',
-      installLabel: 'Safe 30-Second Trial (Zero Git Pollution)',
+      installLabel: 'One command to connect all your AI tools',
       copyBtn: 'Copy',
       copiedBtn: 'Copied',
-      kpi1Val: 'Saved ${pct}%',
-      kpi1Sub: '${rawPrefix} → ${evoPrefix} tok/turn session-start prefix',
+      kpi1Val: 'Modeled -${pct}%',
+      kpi1Sub: '${rawPrefix} → ${evoPrefix} tok/turn modeled prefix (8 MCPs / 77 tools)',
       kpi2Val: '100%',
       kpi2Sub: 'Byte-stable KV prompt cache (5 fixed meta-tools)',
       kpi3Val: '6 Gates',
@@ -87,14 +88,14 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       p2Tag: 'GATEKEEPER · AST GROUNDING',
       p2Title: '6-Stage Deterministic Gatekeeper & Conflict Guard',
       p2Desc: 'Every candidate rule, skill, micro-tool, personal preference, or memory must pass static security, lexical de-symbolization, isolated --self-test rollback, hybrid BM25 + polarity conflict checks, 1,500-tok core / 800-tok profile / 250-tok directory budgets, and causal attribution.',
-      p3Tag: 'VIRTUALIZATION · 10 HOSTS',
-      p3Title: 'Fixed 5-Tool Meta-MCP & 3-Tier Personal Cognition Across 10 Hosts',
-      p3Desc: 'Folds sprawling third-party MCP schemas, monolithic CLAUDE.md files, and cross-workspace 3-tier personal habits/workflows/experiences behind evo_search, evo_inspect, evo_run, evo_propose, and evo_compact across Claude Code, Cursor, Codex, Windsurf, Cline, Roo, Copilot, OpenCode, Gemini, and Antigravity.',
-      secBench: 'Reproducible 50-Turn Session Benchmark (npm run benchmark)',
+      p3Tag: 'VIRTUALIZATION · 10 PROJECT / 8 PROFILE HOSTS',
+      p3Title: 'Fixed 5-Tool Meta-MCP (10 Project Hosts) & 8-Host Personal Profile Sync',
+      p3Desc: 'Folds sprawling third-party MCP schemas, monolithic CLAUDE.md files, and 3-tier personal habits/workflows/experiences behind evo_search, evo_inspect, evo_run, evo_propose, and evo_compact — supporting 10 project-memory hosts (incl. Copilot) and 8 desktop hosts for global personal-profile sync.',
+      secBench: '50-Turn Context-Tax Model (8 Common MCP Servers / 77 Tools, npm run benchmark)',
       thMetric: 'Metric',
       thRaw: 'Raw Multi-MCP + Monolithic CLAUDE.md',
       thEvo: 'EvoKernel 5-Tool Meta-Gateway',
-      thDelta: 'Measured Delta',
+      thDelta: 'Modeled Delta',
       rowSchemas: 'Exposed Tool Schemas',
       rowPrefix: 'Session-Start Static Prefix / Turn',
       rowCache: 'Mid-Session Cache Invalidations',
@@ -106,26 +107,27 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       t1Title: 'Stealth or Team-Shared',
       t1Desc: 'Use --stealth to isolate trial files in .git/info/exclude with zero working-tree noise, or commit .evo/ so every teammate shares verified root-cause memories.',
       t2Title: '1-Command Lossless Teardown',
-      t2Desc: 'Run npx -y evo-kernel virtualize --restore && npx -y evo-kernel uninstall at any time to strip <!-- EVO:START --> markers and restore host configs byte-cleanly.',
+      t2Desc: 'Run npx -y evo-kernel uninstall at any time to restore virtualized MCPs, strip EvoKernel markers/hooks/MCPs, and keep .evo/ user data safe by default (pass --purge to wipe .evo/, --dry-run to preview).',
       t3Title: '100% Local SQLite Storage',
       t3Desc: 'Zero cloud accounts, zero external API keys, and zero outbound network telemetry. Inspect everything locally via npx -y evo-kernel ui or doctor.',
       footerText: 'MIT License · Zero External Dependencies · Built on Native Node.js >= 22.5'
     },
     zh: {
       eyebrow: '零外部依赖认知上下文操作系统 · Node.js >= 22.5',
-      heroTitle: '让 AI 编程助手告别跨会话重复踩坑。',
-      heroSub: '面向 10 款主流 AI 编程环境的 AST 级防漂移*认知记忆、单行可见召回回执与 6 道确定性沙盒门禁 —— 削减 ${pct}% 会话启动 Token 税（${rawPrefix} → ${evoPrefix} tok/轮），保持 100% KV 缓存字节级命中。',
+      heroTitle: '告诉 AI 一次，它就一直记得你。',
+      heroSub: '你的习惯、偏好和工作要求，在 Claude Code、Codex、Cursor、Gemini 等工具和每个项目里自动生效。',
+      heroTrust: '全部存在你自己的电脑上——随时查看、撤销或一键清除。',
       navFeatures: '核心能力',
-      navBenchmark: '基准实测',
+      navBenchmark: '基准推演',
       navTrust: '可逆与隐私',
       navGithub: 'GitHub',
       ctaDemo: '打开交互式工作台演示 →',
       ctaGithub: '访问 GitHub 仓库',
-      installLabel: '30 秒无痕安全试用（零 Git 脏文件污染）',
+      installLabel: '一条命令接入你所有的 AI 工具',
       copyBtn: '复制',
       copiedBtn: '已复制',
-      kpi1Val: '已节省 ${pct}%',
-      kpi1Sub: '${rawPrefix} → ${evoPrefix} tok/轮 会话启动静态前缀',
+      kpi1Val: '模型推算 -${pct}%',
+      kpi1Sub: '${rawPrefix} → ${evoPrefix} tok/轮（8 个常见 MCP / 77 个工具）',
       kpi2Val: '100%',
       kpi2Sub: 'KV 缓存字节级稳定（恒定暴露 5 个元工具）',
       kpi3Val: '6 道门禁',
@@ -141,16 +143,16 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       p2Tag: '确定性门禁 · 冲突拦截',
       p2Title: '6 道确定性沙盒门禁与 AST 锚定',
       p2Desc: '所有候选规则、技能、微工具、个人偏好与排障记忆均须通过静态安全审查、去符号化泛化、沙盒 --self-test 零污染回滚、混合 BM25 与极性冲突校验、1,500-tok 核心 / 800-tok 个人画像 / 250-tok 任务目录硬顶与因果归因校验。',
-      p3Tag: '网关虚拟化 · 10 大宿主',
-      p3Title: '恒定 5 元工具网关与三层个人认知引擎无缝适配 10 大宿主',
-      p3Desc: '将臃肿的下游 MCP 工具、巨石规则与跨项目三层个人习惯/工作流/个人经验折叠至 evo_search、evo_inspect、evo_run、evo_propose、evo_compact 背后，原生支持 Claude Code、Cursor、Codex、Windsurf、Cline、Roo、Copilot、OpenCode、Gemini 与 Antigravity。',
-      secBench: '可复现 50 轮工程会话基准实测 (npm run benchmark)',
+      p3Tag: '网关虚拟化 · 10 项目 / 8 画像宿主',
+      p3Title: '恒定 5 元工具网关（10 大项目宿主）与 8 宿主个人画像同步',
+      p3Desc: '将臃肿的下游 MCP 工具、巨石规则与跨项目三层个人习惯/工作流/个人经验折叠至 evo_search、evo_inspect、evo_run、evo_propose、evo_compact 背后 —— 项目级记忆支持 10 款宿主（含 Copilot），全局个人画像同步覆盖 8 大桌面宿主。',
+      secBench: '50 轮工程会话基准推演（基于 8 个常见 MCP 服务 / 77 个工具，npm run benchmark）',
       thMetric: '核心指标',
       thRaw: '直连多 MCP + 巨石 CLAUDE.md',
       thEvo: 'EvoKernel 5-Tool 元网关',
-      thDelta: '实测收益',
+      thDelta: '模型推算',
       rowSchemas: '暴露给宿主的顶层工具 Schema',
-      rowPrefix: '会话启动静态前缀税 / 轮',
+      rowPrefix: '每次对话固定开销 / 轮',
       rowCache: '中途演进引发的缓存击穿',
       rowTotal: '50 轮累计输入 Tokens',
       rowSonnet: '50 轮账单成本 (Claude Sonnet 4.5)',
@@ -160,7 +162,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       t1Title: '个人无痕试用或团队协同共享',
       t1Desc: '使用 --stealth 将试用配置隔离写入 .git/info/exclude 实现零 Git 干扰；或提交 .evo/ 目录让团队全员共享根因记忆。',
       t2Title: '一条命令无损卸载还原',
-      t2Desc: '随时运行 npx -y evo-kernel virtualize --restore && npx -y evo-kernel uninstall 即可剥离受控标记块并完整恢复宿主配置。',
+      t2Desc: '随时运行 npx -y evo-kernel uninstall 即可还原虚拟化 MCP、剥离 EvoKernel 标记/Hook/MCP 注册，并默认保留 .evo/ 用户数据（传入 --purge 才会清理 .evo/，--dry-run 可预览）。',
       t3Title: '100% 本地 SQLite 零外发遥测',
       t3Desc: '无需注册云端账号、无需外部 API Key、零网络外发请求。通过 npx -y evo-kernel ui 或 doctor 随时在本地透明审查全部数据。',
       footerText: 'MIT 开源协议 · 零第三方依赖 · 基于 Node.js >= 22.5 原生构建'
@@ -227,8 +229,8 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; script-src 'sha256-${scriptHash}'; connect-src 'none'; base-uri 'self';" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2L4 6v6c0 5.25 3.4 10.1 8 11.4 4.6-1.3 8-6.15 8-11.4V6l-8-4z'/%3E%3Cpath d='M9 12l2 2 4-4'/%3E%3C/svg%3E" />
-  <title>EvoKernel — Deterministic Cognitive Memory &amp; Meta-Kernel for AI Coding Agents</title>
-  <meta name="description" content="AST-verified cognitive memory, visible recall receipts, and 6-stage deterministic Gatekeeper for AI coding agents — with 88.6% lower session-start token tax and 0 dependencies." />
+  <title>EvoKernel — Tell your AI once. It remembers you.</title>
+  <meta name="description" content="Your AI coding agents remember your habits, preferences and work rules — across every project, locally." />
   <style>
     :root {
       --bg-app: #09090b;
@@ -304,7 +306,10 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       font-weight: 800; max-width: 880px; margin-bottom: 18px;
     }
     .hero-sub {
-      font-size: 16.5px; color: var(--text-secondary); max-width: 820px; margin-bottom: 28px;
+      font-size: 16.5px; color: var(--text-secondary); max-width: 820px; margin-bottom: 10px;
+    }
+    .hero-trust {
+      font-size: 14px; color: var(--accent); max-width: 820px; margin-bottom: 28px; font-weight: 500;
     }
     .install-card {
       background: var(--bg-panel); border: 1px solid var(--border-subtle);
@@ -435,16 +440,17 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
   <main class="container">
     <div class="hero">
       <div class="eyebrow" data-i18n="eyebrow">Zero-Dependency Cognitive Context OS · Node.js &gt;= 22.5</div>
-      <h1 data-i18n="heroTitle">Stop Repeating the Same Bug Across Coding Sessions.</h1>
-      <p class="hero-sub" data-i18n="heroSub">AST-verified* cognitive memory, visible 1-line recall receipts, and a 6-stage deterministic Gatekeeper for 10 AI coding agents — cutting session-start token tax by ${pct}% (${rawPrefix} → ${evoPrefix} tok/turn) with 100% KV cache retention.</p>
+      <h1 data-i18n="heroTitle">Tell your AI once. It remembers you.</h1>
+      <p class="hero-sub" data-i18n="heroSub">Your habits, preferences and work rules follow you across Claude Code, Codex, Cursor, Gemini — and every project.</p>
+      <p class="hero-trust" data-i18n="heroTrust">Stored only on your machine. See it, undo it, or wipe it anytime.</p>
 
       <div class="install-card">
         <div class="install-header">
-          <span data-i18n="installLabel">Safe 30-Second Trial (Zero Git Pollution)</span>
+          <span data-i18n="installLabel">One command to connect all your AI tools</span>
           <span class="mono">npx evo-kernel ui · score</span>
         </div>
         <div class="install-row">
-          <code id="install-cmd-text" class="install-cmd">npx -y evo-kernel init --stealth &amp;&amp; npx -y evo-kernel doctor</code>
+          <code id="install-cmd-text" class="install-cmd">npx -y evo-kernel init --global</code>
           <button type="button" id="btn-copy-install" class="copy-btn" data-i18n="copyBtn">Copy</button>
         </div>
       </div>
@@ -456,8 +462,8 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
 
       <div class="kpi-grid">
         <div class="kpi-card">
-          <div class="kpi-val" data-i18n="kpi1Val">Saved ${pct}%</div>
-          <div class="kpi-sub" data-i18n="kpi1Sub">${rawPrefix} → ${evoPrefix} tok/turn session-start prefix</div>
+          <div class="kpi-val" data-i18n="kpi1Val">Modeled -${pct}%</div>
+          <div class="kpi-sub" data-i18n="kpi1Sub">${rawPrefix} → ${evoPrefix} tok/turn modeled prefix (8 MCPs / 77 tools)</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-val" data-i18n="kpi2Val">100%</div>
@@ -498,15 +504,15 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
           <p data-i18n="p2Desc">Every candidate rule, skill, micro-tool, personal preference, or memory must pass static security, lexical de-symbolization, isolated --self-test rollback, hybrid BM25 + polarity conflict checks, 1,500-tok core / 800-tok profile / 250-tok directory budgets, and causal attribution.</p>
         </article>
         <article class="card">
-          <span class="tag tag-mcp" data-i18n="p3Tag">VIRTUALIZATION · 10 HOSTS</span>
-          <h3 data-i18n="p3Title">Fixed 5-Tool Meta-MCP &amp; 3-Tier Personal Cognition Across 10 Hosts</h3>
-          <p data-i18n="p3Desc">Folds sprawling third-party MCP schemas, monolithic CLAUDE.md files, and cross-workspace 3-tier personal habits/workflows/experiences behind evo_search, evo_inspect, evo_run, evo_propose, and evo_compact across Claude Code, Cursor, Codex, Windsurf, Cline, Roo, Copilot, OpenCode, Gemini, and Antigravity.</p>
+          <span class="tag tag-mcp" data-i18n="p3Tag">VIRTUALIZATION · 10 PROJECT / 8 PROFILE HOSTS</span>
+          <h3 data-i18n="p3Title">Fixed 5-Tool Meta-MCP (10 Project Hosts) &amp; 8-Host Personal Profile Sync</h3>
+          <p data-i18n="p3Desc">Folds sprawling third-party MCP schemas, monolithic CLAUDE.md files, and 3-tier personal habits/workflows/experiences behind evo_search, evo_inspect, evo_run, evo_propose, and evo_compact — supporting 10 project-memory hosts (incl. Copilot) and 8 desktop hosts for global personal-profile sync.</p>
         </article>
       </div>
     </section>
 
     <section id="benchmark">
-      <h2 data-i18n="secBench">Reproducible 50-Turn Session Benchmark (npm run benchmark)</h2>
+      <h2 data-i18n="secBench">50-Turn Context-Tax Model (8 Common MCP Servers / 77 Tools, npm run benchmark)</h2>
       <div class="table-wrap">
         <table>
           <thead>
@@ -514,7 +520,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
               <th data-i18n="thMetric">Metric</th>
               <th data-i18n="thRaw">Raw Multi-MCP + Monolithic CLAUDE.md</th>
               <th data-i18n="thEvo">EvoKernel 5-Tool Meta-Gateway</th>
-              <th data-i18n="thDelta">Measured Delta</th>
+              <th data-i18n="thDelta">Modeled Delta</th>
             </tr>
           </thead>
           <tbody>
@@ -569,7 +575,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
         </article>
         <article class="card">
           <h3 data-i18n="t2Title">1-Command Lossless Teardown</h3>
-          <p data-i18n="t2Desc">Run npx -y evo-kernel virtualize --restore &amp;&amp; npx -y evo-kernel uninstall at any time to strip &lt;!-- EVO:START --&gt; markers and restore host configs byte-cleanly.</p>
+          <p data-i18n="t2Desc">Run npx -y evo-kernel uninstall at any time to restore virtualized MCPs, strip EvoKernel markers/hooks/MCPs, and keep .evo/ user data safe by default (pass --purge to wipe .evo/, --dry-run to preview).</p>
         </article>
         <article class="card">
           <h3 data-i18n="t3Title">100% Local SQLite Storage</h3>

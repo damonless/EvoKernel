@@ -2,20 +2,15 @@
 
 # 🧬 EvoKernel (evo-kernel)
 
-### 让 AI 编程助手告别跨会话重复踩坑与反复交代个人习惯 —— 精简双核记忆与 3 层离线用户认知体系，削减 88.6% 会话启动 Token 税，纯原生 0 外部依赖。
+### 告诉 AI 一次，它就一直记得你。
 
-**面向兼容 MCP 的 AI 智能体的「精简双核本地优先上下文与记忆内核」**  
-*Claude Code · Cursor · Codex · Windsurf · Cline · Roo · GitHub Copilot · OpenCode · Gemini · Antigravity*
+**你的习惯、偏好和工作要求，在 Claude Code、Codex、Cursor、Gemini 等工具和每个项目里自动生效。**  
+*全部存在你自己的电脑上——随时查看、撤销或一键清除。*
 
 [![CI & Gatekeeper Audit](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml/badge.svg)](https://github.com/damonless/EvoKernel/actions/workflows/ci.yml)
 [![EvoKernel Workbench Demo](https://img.shields.io/badge/EvoKernel_Workbench-在线交互演示-38bdf8?style=flat-square&logo=github)](https://damonless.github.io/EvoKernel/demo/)
-[![EvoKernel Score](https://img.shields.io/badge/EvoKernel_Score-100%2F100_(A%2B)-34d399?style=flat-square)](#-30-秒极速上手)
 [![Version](https://img.shields.io/badge/npm-v0.5.0-blue?style=flat-square&logo=npm)](https://www.npmjs.com/package/evo-kernel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-22.5%2B%20%7C%2024%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![Dependencies](https://img.shields.io/badge/dependencies-0%20(零供应链风险)-brightgreen?style=flat-square)](#-零依赖原生架构)
-[![Prompt Cache](https://img.shields.io/badge/Prompt%20Cache-100%25%20字节级稳定-ff6b6b?style=flat-square)](#-核心架构5-个固定元工具原语)
-[![Tests](https://img.shields.io/badge/tests-381%20通过%20%7C%2015%20套件-brightgreen?style=flat-square)](#-完备测试与确定性回归验证)
 
 **[English](README.md) · [简体中文](README.zh-CN.md) · [🌐 产品主页](https://damonless.github.io/EvoKernel/) · [🖥️ 在线交互式工作台 (EvoKernel Workbench)](https://damonless.github.io/EvoKernel/demo/) · [📊 基准评测 (Benchmarks)](benchmarks/README.md)**
 
@@ -25,10 +20,7 @@
 
 </div>
 
-> **EvoKernel 是什么？** EvoKernel 是**面向兼容 MCP 的 AI 智能体的精简双核本地优先上下文与记忆内核**。它将 **Layer 1 仓库级 AST 防漂移工程记忆、单行可见召回回执（`🛡️ EvoKernel Recall`）与 6 道确定性沙盒门禁**，与 **Layer 2 三层离线用户认知体系**（推送至 8 大桌面 AI 宿主的 800-Token 常驻个人画像卡、250-Token 动态任务与工作流目录菜单、支持 1 秒撤销的全局个人经验记忆）结合；同时将臃肿的第三方 MCP 工具定义与巨石规则文件折叠进 5 个支持可选 `workspace` 参数的固定元工具原语（**削减 88.6% 会话启动 Token 税：`27,150 → 3,103` tok/轮、100% KV 缓存命中、0 外部依赖**）。
-
-> [!NOTE]
-> **消歧说明：** EvoKernel (`evo-kernel`) 是面向 AI 编程智能体（Claude Code、Cursor、Windsurf、Codex、Gemini 等）的智能体架构与上下文工程框架，与同名的学术 ICML 论文/基准测试或 Linux 内核项目无关。
+> **EvoKernel 是什么？** EvoKernel 是**面向兼容 MCP 的 AI 智能体的精简双核本地优先上下文与记忆内核**。它将 **Layer 1 覆盖 10 大项目宿主（含 Copilot）的仓库级 AST 防漂移工程记忆、单行可见召回回执（`🛡️ EvoKernel Recall`）与 6 道确定性沙盒门禁**，与 **Layer 2 三层离线用户认知体系**（推送至 8 大桌面 AI 宿主的 800-Token 常驻个人画像卡、250-Token 动态任务与工作流目录菜单、支持 1 秒撤销的全局个人经验记忆）结合；同时将臃肿的第三方 MCP 工具定义与巨石规则文件折叠进 5 个支持可选 `workspace` 参数的固定元工具原语（**基于 8 个常见 MCP 服务 / 77 个工具模型推算，每次对话固定开销降低 88.2%：`27,150 → 3,206` tok/轮、100% KV 缓存命中、0 外部依赖**）。
 
 ---
 
@@ -36,10 +28,10 @@
 
 EvoKernel 作为**面向兼容 MCP 的 AI 智能体的精简双核本地优先上下文与记忆内核**运行：
 
-1. **第一层（Layer 1）— 仓库级确定性工程记忆（Repo-Scoped, `.evo/`）**：
-   - 跨 Git 分支的 AST 级防漂移情景记忆（`[VERIFIED]` / `[OTHER_BRANCH]` / `[STALE]`）、严格收敛的 **1,500-Token** 核心不变式预算、按路径匹配的领域防护规则（`scope_glob`）与通过 `--self-test` 验证的沙盒微工具。
-2. **第二层（Layer 2）— 跨工作区用户认知体系（3 层离线召回，`User-Global`）**：
-   1. **Tier 1 — 常驻个人画像卡片（`800`-Token 全渲染预算）**：将显式个人习惯（`style | formatting | communication | workflow | requirement | knowledge`）通过 `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` 自动推送到 **8 大桌面 AI 宿主**：Claude Code（`~/.claude/CLAUDE.md`）、Gemini / Antigravity（`~/.gemini/GEMINI.md`）、Codex（`~/.codex/AGENTS.md`）、Windsurf（`~/.codeium/windsurf/memories/global_rules.md`）、Cursor（`~/.cursor/rules/evo-user-profile.mdc`）、Cline（`~/.cline/rules/evo-user-profile.md`）、Roo（`~/.roo/rules/evo-user-profile.md`）与 OpenCode（`~/.config/opencode/AGENTS.md`）。
+1. **第一层（Layer 1）— 仓库级确定性工程记忆（Repo-Scoped, `.evo/`，覆盖 10 大项目宿主含 Copilot）**：
+   - 跨 Git 分支的 AST 级防漂移情景记忆（`[VERIFIED]` / `[OTHER_BRANCH]` / `[STALE]`）、严格收敛的 **1,500-Token** 核心不变式预算、按路径匹配的领域防护规则（`scope_glob`）与通过 `--self-test` 验证的沙盒微工具，覆盖 **10 大项目记忆宿主**（Claude Code、Cursor、Codex、Windsurf、Cline、Roo Code、GitHub Copilot、OpenCode、Gemini CLI 与 Antigravity）。
+2. **第二层（Layer 2）— 跨工作区用户认知体系（3 层离线召回，覆盖 8 大个人画像同步宿主）**：
+   1. **Tier 1 — 常驻个人画像卡片（`800`-Token 全渲染预算）**：将显式个人习惯（`style | formatting | communication | workflow | requirement | knowledge`）通过 `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` 自动推送到 **8 大桌面 AI 宿主**（不含 GitHub Copilot，因 Copilot 无全局个人规则文件目标）：Claude Code（`~/.claude/CLAUDE.md`）、Gemini / Antigravity（`~/.gemini/GEMINI.md`）、Codex（`~/.codex/AGENTS.md`）、Windsurf（`~/.codeium/windsurf/memories/global_rules.md`）、Cursor（`~/.cursor/rules/evo-user-profile.mdc`）、Cline（`~/.cline/rules/evo-user-profile.md`）、Roo（`~/.roo/rules/evo-user-profile.md`）与 OpenCode（`~/.config/opencode/AGENTS.md`）。
    2. **Tier 2 — 动态任务与工作流目录菜单（`250`-Token 上限）**：将 `always_on: false` 的按需偏好与带 `trigger_cue` 的非种子全局技能随画像卡片同步推送，使 AI 智能体无需猜测关键词即可语义化调用 `evo_inspect(id, "L2")` 加载高频工作流与工作要求。
    3. **Tier 3 — 全局非代码个人经验记忆（`memory_type: "personal"`）**：跨工作区个人经验沉淀，无需绑定代码 AST 符号（标记为 `[PERSONAL]`），配合扩充的双语办公/写作/工作流词库在 0 启动 Token 开销下实现精准召回。
    - **即时生效 + 1 秒撤销**：显式偏好与个人经验提交后立即生效（`approved`）并输出可见回执，同时写入只追加账本 `profile-history.jsonl`，支持通过 `evo profile undo` 或 Workbench **Personal Profile Studio** 一键撤销回滚。
@@ -49,27 +41,33 @@ EvoKernel 作为**面向兼容 MCP 的 AI 智能体的精简双核本地优先�
 
 | 边界类别 | 具体说明 |
 | :--- | :--- |
-| **✅ 做什么（In Scope）** | • **Layer 1 仓库 AST 校验记忆**：跨 Git 分支追踪符号级排障记忆、1,500-Token 核心不变式与领域规则。<br/>• **5 工具固定元 MCP 网关**：`evo_search`、`evo_inspect`、`evo_run`、`evo_propose`、`evo_compact` —— 全量支持可选 `workspace` 参数适配空白/非代码对话（0 外部依赖、100% 本地优先、100% 字节级 KV Cache 稳定）。<br/>• **Layer 2 三层离线用户认知体系**：800-Token 画像卡推送至 8 大桌面 AI 宿主、250-Token 动态任务目录菜单、Tier 3 `memory_type: "personal"` 经验沉淀、Markdown 导入与引导预设，以及即时生效 + 1 秒撤销（`evo profile undo` 与 Workbench 个人画像工作室）。<br/>• **确定性微工具与规范核检**：`--self-test` 沙盒微工具、交付物规范核检（`evo check`）与规则膨胀审计（`evo audit`、`evo refactor`）。 |
-| **🚫 明确不做什么（Out of Scope）** | • **不是消费级跨应用“第二大脑”**：不接入网页版聊天窗口（ChatGPT / Claude Web）、手机 App 或缺乏本地 MCP 与规则文件钩子的即时通讯软件。<br/>• **不是后台云端 LLM 读心器**：不会在后台调用云端模型默默猜测或外传未显式表达的隐含习惯。<br/>• **不是自主离线 Worktree 改写优化器**：`evo optimize` 命令已退役，以保持内核精简、可预期且完全确定性。 |
+| **✅ 做什么（In Scope）** | • **Layer 1 仓库 AST 校验记忆（10 大项目宿主含 Copilot）**：跨 Git 分支追踪符号级排障记忆、1,500-Token 核心不变式与领域规则。<br/>• **5 工具固定元 MCP 网关**：`evo_search`、`evo_inspect`、`evo_run`、`evo_propose`、`evo_compact` —— 全量支持可选 `workspace` 参数适配空白/非代码对话（0 外部依赖、100% 本地优先、100% 字节级 KV Cache 稳定）。<br/>• **Layer 2 三层离线用户认知体系（8 大个人画像同步宿主）**：800-Token 画像卡推送至 8 大桌面 AI 宿主、250-Token 动态任务目录菜单、Tier 3 `memory_type: "personal"` 经验沉淀、Markdown 导入与引导预设，以及即时生效 + 1 秒撤销（`evo profile undo` 与 Workbench 个人画像工作室）。<br/>• **确定性微工具与规范核检**：`--self-test` 沙盒微工具、交付物规范核检（`evo check`）与规则膨胀审计（`evo audit`、`evo refactor`）。 |
+| **🚫 明确不做什么（Out of Scope）** | • **不是消费级跨应用“第二大脑”**：不接入网页版聊天窗口（ChatGPT / Claude Web）、手机 App 或缺乏本地 MCP 与规则文件钩子的即时通讯软件。<br/>• **不是后台云端 LLM 读心器**：不会在后台调用云端模型默默猜测或外传未显式表达的隐含习惯。<br/>• **不会在后台自动改写你的代码**：EvoKernel 只负责记录和召回规则、习惯与经验，绝不会在后台擅自修改你的源码。 |
 
 ---
 
 ## ⚡ 30 秒极速上手
 
-只需 3 条命令，无需安装任何全局 npm 包：
+只需 3 步，让你的 AI 工具记住第一条个人习惯（无需提前安装全局 npm 包）：
 
 ```bash
-# 1. 毫秒级零写入 X-Ray 诊断 (<25ms) — 扫描宿主规则、Git 热点与记忆覆盖率
-npx -y evo-kernel score
+# 1. 一次接入你的所有 AI 工具（如仅试用单个仓库，可使用 `init --stealth`）
+npx -y evo-kernel init --global
 
-# 2. 一键安全接入与环境体检 — 以隐身模式安全接入 10 款编码环境（或使用 --global 一次全局安装）
-npx -y evo-kernel init --stealth && npx -y evo-kernel doctor
-# (无仓库空白对话冷启动推荐：npx -y evo-kernel init --global)
-# (如需预览 MCP 虚拟化节省的 Token，可执行：npx -y evo-kernel virtualize --dry-run)
+# 2. 保存你的第一条习惯（也可直接在对话中告诉 AI：“记住：以后回复先给 diff”）
+npx -y evo-kernel profile onboard --preset concise-ceo --apply
 
-# 3. 启动 EvoKernel Workbench 可视化工作台，检视能力树、AST 记忆与近 7 日召回实绩
+# 3. 打开 EvoKernel Workbench 可视化工作台查看一切（或用 `npx -y evo-kernel doctor` 检查接入状态）
 npx -y evo-kernel ui
 ```
+
+### 👀 随时查看 / 撤销 / 清除它记住的内容
+
+EvoKernel 记住的一切都保存在你自己的电脑上，随时可查、可撤、可删：
+
+- **查看它记住了什么**：`npx -y evo-kernel profile show`（打印当前生效的个人画像卡与任务目录菜单）
+- **1 秒撤销刚才的改动**：`npx -y evo-kernel profile undo` —— 或直接在对话中说“撤销刚才的偏好”（支持对话内撤销与 Workbench 一键撤销）
+- **忘掉某条习惯或一键清除全部**：`npx -y evo-kernel profile remove <id>`（运行 `npx -y evo-kernel uninstall --global --purge` 可彻底清除全部数据）
 
 > 💡 **Node.js 18 / 20 免全局升级一键极速体验：**  
 > `npx -y -p node@22 evo-kernel score`  
@@ -114,7 +112,7 @@ node ./scripts/build.mjs
 # 将 L0 元规则种子与单一固定元 MCP 注入当前生效的编码智能体
 node ./dist/cli/index.js init --targets auto --stealth
 
-# 冷启动挖掘当前仓库架构、技术栈规约与 Git 历史 Bug 修复基因
+# 冷启动挖掘当前仓库架构、技术栈规约与 Git 历史 Bug 修复经验
 node ./dist/cli/index.js bootstrap --max-commits=50
 
 # 一次全局安装（初始化 ~/.evo/global、挂载全局 MCP、刷新插件 L0 种子并同步画像）
@@ -148,17 +146,18 @@ EvoKernel 从设计之初就坚持极低试错门槛、完全透明可审查与�
 
 ### 1. `evo init` 动了哪些文件与一键无损卸载还原
 执行 `npx evo-kernel init` 时，仅精准修改以下三处隔离边界：
-- **宿主 Agent 规则文件**：在检测到的宿主规则文件（`CLAUDE.md`、`AGENTS.md`、`.cursor/rules/evo-kernel.mdc`，或在存在 `.gemini/` 目录时注入 `GEMINI.md`——自动检测模式下避免根目录重复注入相同块）中插入紧凑（<1,100 tok L0 种子）、由 `<!-- EVO:START -->` 与 `<!-- EVO:END -->` 严格包裹的受控元规则块。标记块之外的原有规则内容绝不触碰。
+- **宿主 Agent 规则文件**：在检测到的宿主规则文件（`CLAUDE.md`、`AGENTS.md`、`.cursor/rules/evo-kernel.mdc`，或在存在 `.gemini/` 目录时注入 `GEMINI.md`——自动检测模式下避免根目录重复注入相同块）中插入紧凑（< 1,100 tokens L0 种子，`≈1,050 tokens`）、由 `<!-- EVO:START -->` 与 `<!-- EVO:END -->` 严格包裹的受控元规则块。标记块之外的原有规则内容绝不触碰。
 - **宿主 MCP 配置文件**：仅为宿主注册唯一的 `evo-kernel` stdio 元网关服务项（未执行虚拟化时绝不修改已有第三方 MCP 配置）。
 - **项目本地 `.evo/` 资产目录**：初始化局部能力树与情景记忆结构（`.evo/rules/`, `.evo/skills/`, `.evo/memories/`, `.evo/tools/`, `.evo/.cache/`）。
 
-若需将项目与宿主配置完全还原至接入前的初始状态，仅需一条命令：
+若需将项目与宿主配置还原至接入前的初始状态，运行：
 ```bash
-npx -y evo-kernel virtualize --restore && npx -y evo-kernel uninstall
-# 如需同时剥离全局宿主文件中的 <!-- EVO:PROFILE:START --> 标记块：
-npx -y evo-kernel uninstall --global
+npx -y evo-kernel uninstall --dry-run   # 预览将还原的 MCP 与剥离的标记，不写入文件
+npx -y evo-kernel uninstall             # 还原虚拟化 MCP、剥离标记/Hook/MCP（默认保留 .evo/ 数据安全）
+# 传入 --purge 才会删除 .evo/ 用户数据，传入 --global 同时剥离全局 <!-- EVO:PROFILE:START --> 标记块：
+npx -y evo-kernel uninstall --global --purge
 ```
-该命令会自动还原已虚拟化的第三方 MCP 配置、彻底剥离所有宿主规则中的 `<!-- EVO:START -->` 注入块、清理注册的生命周期 Hook，并安全删除 `.evo/` 目录，实现**零残留无损还原**。
+`evo uninstall` 会自动还原已虚拟化的第三方 MCP 配置、剥离所有 `<!-- EVO:START -->` 注入块、清理注册的生命周期 Hook 与 `evo-kernel` MCP 注册项，并**默认保留你的 `.evo/` 用户数据安全**；仅当显式传入 `--purge` 时才会删除 `.evo/`（`--dry-run` 可预览全部变更）。
 
 ### 2. 多人团队协作共享 vs. `--stealth` 个人无痕试用模式
 - **多人团队协作共享（默认 `evo init`）**：将 `.evo/rules/`、`.evo/memories/` 与 `.evo/tools/` 提交至 Git 远端仓库。团队中所有成员及其编码智能体均可实时复用沉淀的根因排障记忆与受控沙盒微工具；内部临时缓存（`.evo/.cache/`）已自动加入忽略规则。
@@ -169,19 +168,19 @@ EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数
 
 ---
 
-## 📈 50 轮上下文税推演模型与本地引擎微基准实测 (`npm run benchmark`)
+## 📈 50 轮每次对话固定开销推演模型与本地引擎微基准 (`npm run benchmark`)
 
-基于典型全栈工程挂载 **8 个主流 MCP 服务**（`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` —— 共计 **77 个工具**）+ 成熟仓库知识库（10 条规则、4 个技能、5 个微工具、15 条排障记忆），在 **50 轮连续对话 + 3 次中途规则/工具演进**下的上下文税分析推演模型与本地引擎微基准实测（本地执行 `npm run benchmark` 即可复现）。
+基于典型全栈工程挂载 **8 个常见 MCP 服务**（`github`, `playwright`, `kubernetes`, `docker`, `linear`, `postgres`, `sentry`, `context7` —— 共计 **77 个工具**）+ 成熟仓库知识库（10 条规则、4 个技能、5 个微工具、15 条排障记忆），在 **50 轮连续对话 + 3 次中途规则/工具演进**下的上下文开销推演模型与本地引擎微基准（本地执行 `npm run benchmark` 即可复现）。
 *零前缀失效前提说明*：0 次中途缓存击穿建立在新演进资产以默认的 `core: false` 领域规则（Scoped Rules）、技能、微工具或排障记忆（`memory`）形态沉淀至 `.evo/` 的前提之上——此类演进不修改顶层 `tools/list` Schema 与宿主 `CLAUDE.md` 常驻 L0 前缀。
 
-| 核心指标 | 传统直连多 MCP + 巨石 `CLAUDE.md` | **🧬 EvoKernel 5-Tool 虚拟网关** | 推演/实测收益 |
+| 核心指标 | 传统直连多 MCP + 巨石 `CLAUDE.md` | **🧬 EvoKernel 5-Tool 虚拟网关** | 模型推算（8 个常见 MCP / 77 个工具） |
 | :--- | :---: | :---: | :---: |
-| **暴露给模型的工具 Schema** | 77 个工具定义 (`14,700` tok) | **5 个固定元工具原语 (`1,953` tok)** | **-93.5% Schema 数量 (`-86.7%` 体积)** |
-| **会话启动静态前缀税 / 轮** | 27,150 tokens | **3,103 tokens** | **-88.6% 会话启动 Token 税削减** |
+| **暴露给模型的工具 Schema** | 77 个工具定义 (`14,700` tok) | **5 个固定元工具原语 (`2,056` tok)** | **-93.5% Schema 数量 (`-86.0%` 体积)** |
+| **每次对话固定开销 / 轮** | 27,150 tokens | **3,206 tokens** | **-88.2% 模型推算每次对话固定开销** |
 | **中途演进引发的缓存击穿** | 3 次全量前缀重算 | **0 次（100% 命中缓存）** | **100% KV Cache 护盾** |
-| **50 轮累计输入 Tokens** | 1,931,250 tokens | **740,420 tokens** | **-61.7% 累计负载** |
-| **50 轮账单成本 (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **节省 70.3% API 成本** |
-| **50 轮账单成本 (Claude Opus 4.5)** | \$5.76 | **\$1.71** | **节省 70.3% API 成本** |
+| **50 轮累计输入 Tokens** | 1,931,250 tokens | **745,570 tokens** | **-61.4% 累计负载** |
+| **50 轮账单成本 (Claude Sonnet 4.5)** | \$1.15 | **\$0.34** | **节省 70.2% API 成本** |
+| **50 轮账单成本 (Claude Opus 4.5)** | \$5.76 | **\$1.72** | **节省 70.2% API 成本** |
 | **本地引擎 AST 校验速率** | 无校验（重构后静默腐败） | **~11.4 ms / 条记忆** | **~500 ms 批量校验 44 条记忆¹** |
 
 > ¹ *术语说明：* AST 防漂移/符号指纹采用**零依赖词法-结构骨架指纹（Zero-Dep Lexical-Structural Skeleton Fingerprinting）**，无需外部重型编译器即可对注释修改、代码格式化和行号漂移天然免疫。
@@ -216,7 +215,7 @@ EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数
 | 对比维度 | `MemGPT / Letta` | `Aider` | 传统 MCP 代理 (直通型) | `affaan-m/ECC` | `AMAP-ML/SkillClaw` | **🧬 EvoKernel v0.5.0 (本项目)** |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **核心定位** | 有状态对话 Agent 记忆数据库 | Git 驱动的终端结对编程工具 | 聚合多个 MCP 端口的直通桥梁 | 静态工程提示词与规则合集 | 后台 LLM 演化学习 Agent | **面向 AI 编程智能体的确定性自演进元内核** |
-| **接入形态** | 依赖外部服务 / Postgres / 独立进程 | 独立 Python CLI 替代主流 IDE | 暴露所有子工具到 host tools/list | 静态预置 Markdown 模板 | 劫持 `/v1/chat` 本地反向代理 | **寄生型单一 Meta-MCP + <80行元规则种子注入既有 IDE** |
+| **接入形态** | 依赖外部服务 / Postgres / 独立进程 | 独立 Python CLI 替代主流 IDE | 暴露所有子工具到 host tools/list | 静态预置 Markdown 模板 | 劫持 `/v1/chat` 本地反向代理 | **直接接入现有工具的单一 Meta-MCP + < 1,100 tokens 种子 (`≈1,050 tokens`)** |
 | **运行依赖** | 笨重依赖（Postgres、Python、向量库） | Python pip 工具链 | Node / Python 复杂依赖 | 零依赖（纯 Markdown 文本） | Python FastAPI 守护进程 | **0 依赖（纯 Node.js `>= 22.5` 原生特性：`node:sqlite`, `node:module`, `node:test`）** |
 | **Prompt Cache 稳定性** | 频繁刷新全量上下文，缓存命中极低 | 随代码编辑频繁波动 | **破坏性**（暴露所有子工具，任何增删均导致前缀击穿） | 初始静态前缀偏大 | 中立 | **100% 字节级稳定：对宿主仅暴露恒定 5 个元工具原语** |
 | **下游 MCP 虚拟化** | 无 | 无 | 直通暴露（50+ 工具全量倾倒至提示词） | 无 | 无 | **零缓存击穿的 FTS5 索引 + 按需 stdio JSON-RPC 动态转发代理** |
@@ -227,7 +226,7 @@ EvoKernel **不包含任何网络外发请求**，不收集任何用户使用数
 | **工作台与诊断体检** | 独立 Web + Postgres 服务 | 无 | 无 | 无 | Web 界面 | **`evo score`（<25ms 零写入体检卡）与 `evo ui`（0 依赖 EvoKernel Workbench 工业级工作台、双模态原生微窗口、SSE 实时同步、严格 CSP、单文件导出）** |
 | **因果遥测与成效归因** | 无 | Git 变更行数 | 无 | 无 | 胜率计数器 | **细粒度成效记账本（`helped` / `hurt` / `contested`）与 `ERR_CONFOUNDED_CAUSATION` 防混淆** |
 | **多 Agent 宿主矩阵支持** | 仅独立模式 | 仅独立模式 | 通用 MCP 客户端 | 仅限 Claude Code / Cursor | 通用反代 | **原生支持 10 款主流编码环境（Claude, Cursor, Windsurf, Cline, Roo, Copilot, Codex, OpenCode, Gemini, Antigravity）** |
-| **冷启动仓库基因挖掘** | 初始为空，依赖会话积累 | Git 仓库扫描 | 初始为空 | 静态合集 | 初始为空 | **`evo bootstrap`：10 秒内自动挖掘项目多栈基因与 Git 历史 Bug 修复沉淀** |
+| **冷启动仓库经验挖掘** | 初始为空，依赖会话积累 | Git 仓库扫描 | 初始为空 | 静态合集 | 初始为空 | **`evo bootstrap`：10 秒内自动挖掘项目多栈经验与 Git 历史 Bug 修复沉淀** |
 
 </details>
 
@@ -284,9 +283,10 @@ evo virtualize             # 一键将第三方 stdio MCP 服务折叠接入 Evo
 evo virtualize --restore   # 无损还原：随时将虚拟化的 MCP 配置写回原宿主配置文件
 ```
 
-### 通用生命周期 Hook 路由（`evo hook <event>`）
+### 通用生命周期 Hook 路由（`evo hook <pre-tool | post-tool | stop | pre-commit>`）
 
 ```bash
+evo hook pre-tool --tool Bash --command "..."               # 工具执行前安全校验与作用域规则检查
 evo hook post-tool --tool Edit --file src/core/storage.ts   # 监控文件修改、只读排障诊断 (>=10 次读取) 并召回局部规则
 evo hook stop                                               # 会话结束提示沉淀经验并触发反污染脏文件告警
 evo hook pre-commit                                         # 在 git commit 前拦截内部缓存与超出 1500-Token 的超额规约
@@ -441,7 +441,7 @@ node ./scripts/test.mjs
 
 | # | 测试套件文件 | 覆盖领域 | 测试用例数 |
 | :---: | :--- | :--- | :---: |
-| 1 | `dist/tests/bootstrap.test.js` | 仓库冷启动与多技术栈基因挖掘测试套件 | 22 tests |
+| 1 | `dist/tests/bootstrap.test.js` | 仓库冷启动与多技术栈经验挖掘测试套件 | 22 tests |
 | 2 | `dist/tests/causal-telemetry-and-catalog.test.js` | 因果遥测、成效归因与动态目录测试套件 | 20 tests |
 | 3 | `dist/tests/deliverable-inspector.test.js` | 零依赖交付物规范消费核检器测试套件 | 34 tests |
 | 4 | `dist/tests/evo-kernel.test.js` | 核心沙盒门禁、AST 认知记忆与架构不变式测试套件 | 54 tests |
@@ -468,6 +468,13 @@ EvoKernel 是一个从零自主设计的开源工程运行时，基于 Node.js 2
 - **渐进式披露与上下文工程**：5 个固定元工具原语（`evo_search`, `evo_inspect`, `evo_run`, `evo_propose`, `evo_compact`）与 L0/L1/L2 渐进加载模型，深度汲取了 Anthropic 关于上下文经济学、Prompt Cache 保持与技能渐进披露的设计理念。
 - **精简双核上下文隔离与交付物规范验证**：将仓库级工程护栏与 3 层离线跨工作区用户认知体系（`evo profile`）解耦隔离，并结合规范交付物核检（`evo check`），在不污染会话前缀的前提下兼顾跨 IDE 一致性。
 - **EvoKernel 原创贡献**：6 道确定性沙盒门禁（静态安全审查、词法去符号化、沙盒 `--self-test` Dry-Run、BM25 查重、1,500 Token 预算硬顶与因果防混淆）、基于 Git 拓扑的 3 阶段 AST 防漂移认知记忆（`VERIFIED` / `OTHER_BRANCH` / `STALE`）、3 层离线用户认知体系（推送至 8 大宿主的 800-Token 个人画像卡、250-Token 任务目录菜单与支持 1 秒撤销的全局个人经验记忆）以及 10 大宿主无损适配矩阵，均为 EvoKernel 的自主原创研发。
+
+---
+
+## ❓ 常见问题 (FAQ)
+
+- **EvoKernel 与同名的学术 ICML 论文或 Linux 内核项目有关吗？**  
+  无关。EvoKernel (`evo-kernel`) 是面向 AI 编程智能体（Claude Code、Cursor、Windsurf、Codex、Gemini 等）的独立智能体架构与上下文工程框架，与同名的学术 ICML 论文/基准测试或 Linux 内核项目没有任何关联。
 
 ---
 

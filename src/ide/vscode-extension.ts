@@ -372,6 +372,7 @@ export async function handleWebviewAction(
         return { opened: targetPath, line, editor: 'vscode-api', launched: true };
       },
       exportHtml: async (targetWs, exportParams) => {
+        const defaultExportFilename = `evo-workbench-${new Date().toISOString().slice(0, 10)}.html`;
         let outPath = '';
         if (typeof exportParams?.outPath === 'string' && exportParams.outPath.trim()) {
           const resolvedOut = path.resolve(targetWs, exportParams.outPath.trim());
@@ -384,7 +385,7 @@ export async function handleWebviewAction(
           outPath = resolvedOut;
         } else if (typeof vscode?.window?.showSaveDialog === 'function') {
           const defaultUri = vscode?.Uri?.file
-            ? vscode.Uri.file(path.join(targetWs, 'evo-cockpit.html'))
+            ? vscode.Uri.file(path.join(targetWs, defaultExportFilename))
             : undefined;
           const selectedUri = await vscode.window.showSaveDialog({
             defaultUri,
@@ -394,11 +395,12 @@ export async function handleWebviewAction(
           if (!selectedUri) {
             return { status: 200, body: { ok: true, data: { cancelled: true } } };
           }
-          outPath = selectedUri.fsPath || selectedUri.path || path.join(targetWs, 'evo-cockpit.html');
+          outPath = selectedUri.fsPath || selectedUri.path || path.join(targetWs, defaultExportFilename);
         } else {
-          outPath = path.join(targetWs, 'evo-cockpit.html');
+          outPath = path.join(targetWs, defaultExportFilename);
         }
-        exportUiHtml(targetWs, outPath, { anon: Boolean(exportParams?.anon) });
+        const exportAnon = exportParams?.anon === false ? false : true;
+        exportUiHtml(targetWs, outPath, { anon: exportAnon });
         return {
           status: 200,
           body: { ok: true, data: { path: outPath, exportedPath: outPath } },

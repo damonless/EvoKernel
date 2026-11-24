@@ -1148,8 +1148,10 @@ rl.on('line', (line) => {
     const parsedDoc = JSON.parse(docRes.stdout.trim());
     assert.equal(parsedDoc.versionDrift?.drifted, true, `Expected versionDrift for stale GEMINI.extension.md: ${docRes.stdout}`);
     assert.ok(
-      String(parsedDoc.versionDrift?.fixCommand || '').includes('npx -y evo-kernel init --global'),
-      `Expected fixCommand to emit npx -y evo-kernel init --global: ${JSON.stringify(parsedDoc.versionDrift)}`
+      ['evo init --global', 'doctor --fix', 'init --all'].some((cmd) =>
+        String(parsedDoc.versionDrift?.fixCommand || '').includes(cmd)
+      ) && !String(parsedDoc.versionDrift?.fixCommand || '').includes('&&'),
+      `Expected shell-safe fixCommand without '&&': ${JSON.stringify(parsedDoc.versionDrift)}`
     );
     assert.ok(fs.existsSync(path.join(REPO_ROOT, 'templates', 'GEMINI.extension.md')));
   });

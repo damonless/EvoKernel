@@ -485,7 +485,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.ok(Array.isArray(pre1.injectSteps), 'First PreInvocation should inject reminder');
     assert.match(pre1.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
 
-    // 2. Step 3 (1 step after reminder at step 2): Agent calls read-only view_file -> cooldown (COOLDOWN_STEPS = 4) suppresses every-step spam!
+    // 2. Step 3 & Step 6 (same user turn 2): user-turn cooldown suppresses re-injection ('{}')
     baseSteps.push({
       step_index: 3,
       type: 'GENERIC',
@@ -504,10 +504,9 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.deepEqual(
       preDuringCooldown,
       {},
-      'PreInvocation at step 3 (within 4-step cooldown of step 2) must not spam reminder'
+      'PreInvocation at step 3 (same user turn) must not spam reminder'
     );
 
-    // Once cooldown expires (step 6 >= 2 + 4), pending correction after read-only work re-injects reminder!
     baseSteps.push({
       step_index: 6,
       type: 'GENERIC',
@@ -522,17 +521,23 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       ],
     });
     writeSteps(baseSteps);
-    const preAfterRead = runAgyHook('PreInvocation');
-    assert.ok(
-      Array.isArray(preAfterRead.injectSteps),
-      'PreInvocation after cooldown expiration must re-inject pending correction reminder'
+    const preSameUserTurn = runAgyHook('PreInvocation');
+    assert.deepEqual(
+      preSameUserTurn,
+      {},
+      'PreInvocation at step 6 (same user turn) must still return {} under user-turn cooldown'
     );
-    assert.match(preAfterRead.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
 
-    // 3. Real Antigravity transcript format: PLANNER_RESPONSE has run_command without inline output, and next GENERIC step has content with command output!
+    // 3. New user turn (step 7) + Real Antigravity transcript format: PLANNER_RESPONSE has run_command without inline output, and next GENERIC step has content with command output!
     baseSteps.push(
       {
         step_index: 7,
+        type: 'USER_INPUT',
+        source: 'USER_EXPLICIT',
+        content: 'Please run the xlsx update script and verify the output.',
+      },
+      {
+        step_index: 8,
         type: 'PLANNER_RESPONSE',
         source: 'MODEL',
         tool_calls: [
@@ -546,7 +551,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         ],
       },
       {
-        step_index: 8,
+        step_index: 9,
         type: 'PLANNER_RESPONSE',
         source: 'MODEL',
         tool_calls: [
@@ -565,14 +570,14 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         ],
       },
       {
-        step_index: 9,
+        step_index: 10,
         type: 'GENERIC',
         source: 'MODEL',
         status: 'DONE',
         content: 'Created At: 2026-10-27T00:00:00Z\nShowing lines 1-5 of 5\nHeader OK',
       },
       {
-        step_index: 10,
+        step_index: 11,
         type: 'GENERIC',
         source: 'MODEL',
         status: 'DONE',
@@ -580,7 +585,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
           'Created At: 2026-10-27T00:00:01Z\nCompleted At: 2026-10-27T00:00:02Z\nCommand exited with code 1.\n\nCommand output:\nTraceback (most recent call last):\nValueError: invalid format',
       },
       {
-        step_index: 11,
+        step_index: 12,
         type: 'PLANNER_RESPONSE',
         source: 'MODEL',
         tool_calls: [
@@ -593,7 +598,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
         ],
       },
       {
-        step_index: 12,
+        step_index: 13,
         type: 'GENERIC',
         source: 'MODEL',
         status: 'DONE',
@@ -603,14 +608,15 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     );
     writeSteps(baseSteps);
 
-    // PreInvocation right after recovery (step 12): immediate edge trigger for new error recovery
+    // PreInvocation right after recovery (step 13): immediate edge trigger for new error recovery on new user turn
     const preAfterRecovery = runAgyHook('PreInvocation');
     assert.ok(Array.isArray(preAfterRecovery.injectSteps));
     assert.match(preAfterRecovery.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
+    assert.match(preAfterRecovery.injectSteps[0].ephemeralMessage, /已编写 1 个临时分析\/交付物生成脚本尚未结晶/);
 
-    // Step 13 (1 step after step 12): cooldown suppresses immediate repeat spam
+    // Step 14 (same user turn 7): user-turn cooldown suppresses repeat spam
     baseSteps.push({
-      step_index: 13,
+      step_index: 14,
       type: 'PLANNER_RESPONSE',
       source: 'MODEL',
       tool_calls: [
@@ -626,46 +632,29 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     assert.deepEqual(
       runAgyHook('PreInvocation'),
       {},
-      'Step 13 must respect 4-step cooldown after step 12 reminder'
+      'Step 14 must respect user-turn cooldown after step 13 reminder'
     );
-
-    // Step 16 (16 - 12 >= 4): cooldown expired -> retains correction, error-recovery, and scratch script reminders!
-    baseSteps.push({
-      step_index: 16,
-      type: 'PLANNER_RESPONSE',
-      source: 'MODEL',
-      tool_calls: [
-        {
-          name: '"view_file"',
-          args: {
-            AbsolutePath: '"C:\\\\workspace\\\\final_check.txt"',
-          },
-        },
-      ],
-    });
-    writeSteps(baseSteps);
-
-    const preFinal = runAgyHook('PreInvocation');
-    assert.ok(
-      Array.isArray(preFinal.injectSteps),
-      'PreInvocation after cooldown expiration must still retain all pending reminders'
-    );
-    assert.match(preFinal.injectSteps[0].ephemeralMessage, /检测到用户纠偏\/交付物反馈信号/);
-    assert.match(preFinal.injectSteps[0].ephemeralMessage, /检测到命令\/脚本执行报错并恢复成功/);
-    assert.match(preFinal.injectSteps[0].ephemeralMessage, /已编写 1 个临时分析\/交付物生成脚本尚未结晶/);
 
     // 4. Stop event clears the correction and error-recovery state for this turn
     const stopOut = runAgyHook('Stop');
     assert.equal(stopOut.decision, 'allow');
 
-    // Even after cooldown expires (step 20 - 15 >= 4), Stop has cleared correction & error-recovery state
+    // New user turn (step 19) after Stop: Stop has cleared correction & error-recovery state
     // (only the uncrystallized temp_script_writes counter remains until evo_propose is called)
-    baseSteps.push({
-      step_index: 20,
-      type: 'PLANNER_RESPONSE',
-      source: 'MODEL',
-      content: 'Done.',
-    });
+    baseSteps.push(
+      {
+        step_index: 19,
+        type: 'USER_INPUT',
+        source: 'USER_EXPLICIT',
+        content: 'Continue checking the remaining items.',
+      },
+      {
+        step_index: 20,
+        type: 'PLANNER_RESPONSE',
+        source: 'MODEL',
+        content: 'Done.',
+      }
+    );
     writeSteps(baseSteps);
     const afterStop = runAgyHook('PreInvocation');
     assert.ok(Array.isArray(afterStop.injectSteps));
@@ -790,7 +779,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
       '9 source/codegraph reads + 6 ignored meta reads (including grep_search/find_by_name on .evo/* and relative .evo/.agents/.gemini paths) must not trigger heavy diagnostic reads (< 10)'
     );
 
-    // Boundary check: 1..3 source edits + 10th source read via find_by_name (closing the 1..3 editCount dead zone) triggers hasHeavyDiagnosticReads!
+    // Boundary check (AC-07): 1..3 source edits + 10th source read via find_by_name NO LONGER triggers a nagging reminder
     steps.push({
       step_index: 11,
       type: 'PLANNER_RESPONSE',
@@ -808,13 +797,10 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     });
     writeSteps(steps);
     const preRead10 = runAgyHook('PreInvocation');
-    assert.ok(
-      Array.isArray(preRead10.injectSteps),
-      '10th source/codegraph/grep_search inspection with 1..3 edits must trigger diagnostic crystallization reminder'
-    );
-    assert.match(
-      preRead10.injectSteps[0].ephemeralMessage,
-      /已累计深度精读\/图谱检索 10 次源码尚未结晶/
+    assert.deepEqual(
+      preRead10,
+      {},
+      'AC-07: >=10 read-only diagnostic reads with <4 edits must NOT trigger a nagging reminder'
     );
 
     // 2. Structural user corrections: rhetorical counter-questions (@[Quote], 为什么要, 不就是, 不是吗, 这么理解对吗) and empirical contradictions (已经确认, confirmed that, 实际...显示, 但实验室)
@@ -836,14 +822,22 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     // Clear turn state via Stop
     runAgyHook('Stop');
 
-    // 3. Native subagent wakeup via SYSTEM_MESSAGE (sender=<subagent-uuid>) triggers immediate audit reminder even within cooldown
-    steps.push({
-      step_index: 13,
-      type: 'SYSTEM_MESSAGE',
-      source: 'SYSTEM',
-      content:
-        '[Message] timestamp=2026-10-27T13:50:00Z sender=9f8e7d6c-1111-2222-3333-444455556666 priority=MESSAGE_PRIORITY_HIGH content=Subagent verification complete: overturned 2 assumptions and confirmed deadlock in fsm_lookup.c:L142.',
-    });
+    // 3. Native subagent wakeup via SYSTEM_MESSAGE (sender=<subagent-uuid>) on a new user turn triggers immediate audit reminder
+    steps.push(
+      {
+        step_index: 13,
+        type: 'USER_INPUT',
+        source: 'USER_EXPLICIT',
+        content: 'Review the subagent findings.',
+      },
+      {
+        step_index: 14,
+        type: 'SYSTEM_MESSAGE',
+        source: 'SYSTEM',
+        content:
+          '[Message] timestamp=2026-10-27T13:50:00Z sender=9f8e7d6c-1111-2222-3333-444455556666 priority=MESSAGE_PRIORITY_HIGH content=Subagent verification complete: overturned 2 assumptions and confirmed deadlock in fsm_lookup.c:L142.',
+      }
+    );
     writeSteps(steps);
     const preSubagent = runAgyHook('PreInvocation');
     assert.ok(
@@ -857,7 +851,7 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
 
     // 4. Calling evo_propose resets codeReadCountSinceLastPropose, latestAuditStepIndex, and user correction state, AND persists cleared watermarks before early return
     steps.push({
-      step_index: 14,
+      step_index: 15,
       type: 'PLANNER_RESPONSE',
       source: 'MODEL',
       tool_calls: [
@@ -873,9 +867,9 @@ describe('EvoKernel Universal Hook Router & M2 Hardening Suite', () => {
     writeSteps(steps);
     assert.deepEqual(runAgyHook('PreInvocation'), {});
 
-    // 5. >128KB transcript tail truncation after evo_propose: steps 1..14 scroll out of the 128KB window, must NOT resurrect cleared correction or subagent audit!
+    // 5. >128KB transcript tail truncation after evo_propose: steps 1..15 scroll out of the 128KB window, must NOT resurrect cleared correction or subagent audit!
     const hugePadding = 'X'.repeat(40 * 1024);
-    for (let p = 15; p <= 19; p++) {
+    for (let p = 16; p <= 20; p++) {
       steps.push({
         step_index: p,
         type: 'GENERIC',

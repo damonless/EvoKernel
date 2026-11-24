@@ -6,7 +6,7 @@ All notable changes to **EvoKernel (`evo-kernel`)** will be documented in this f
 
 ### Added
 - **3-Tier Personal User Cognition Engine (`~/.evo/global/`)**:
-  - **Tier 1 (`always_on: true` preferences)**: 800-token Profile Card synced cleanly into host global instruction files (`CLAUDE.md`, `GEMINI.md`, `AGENTS.md`, Windsurf, Cursor, OpenCode, etc.) via unified `profile-sync` markers, with `evo profile add/list/remove/undo/export/import` and Workbench 1-Click Undo.
+  - **Tier 1 (`always_on: true` preferences)**: 800-token Profile Card synced cleanly into host global instruction files (`CLAUDE.md`, `GEMINI.md`, `AGENTS.md`, Windsurf, Cursor, OpenCode, etc.) via unified `profile-sync` markers, with `evo profile list/show/add/remove/undo/import/onboard/sync/clean/path` and Workbench 1-Click Undo.
   - **Tier 2 (`always_on: false` preferences & global non-seed skills)**: 250-token On-Demand Task Directory Menu with `trigger_cue` discovery (`evo_search(query, scope: "global")` + `evo_inspect(id, "L2")`).
   - **Tier 3 (`memory_type: "personal"`, `scope: "global"`)**: Cross-workspace personal lessons at 0 startup tokens, treated as `VERIFIED` across `doctor`, `tree --json`, `memory --json`, and `agy-config-auditor`.
 - **Semantic Polarity Conflict Guard**: Bilingual polarity conflict detection across verbosity, ordering, confirmation, and comment preferences before pushing into the global Profile Card.

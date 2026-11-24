@@ -1200,7 +1200,7 @@ export function renderScoreAnsi(
   const arrowGlyph = isAscii ? '->' : '→';
   const virtualizedGainLine =
     report.contextSavings.afterTokens > report.contextSavings.beforeTokens
-      ? `  ├─ Virtualized Gain: ${c.bold}${c.green}Fixed L0 Gateway · ${formatCompactTok(report.contextSavings.afterTokens)} tok (100% KV-cache shielded)${c.reset}`
+      ? `  ├─ Net Overhead    : ${c.yellow}+${(report.contextSavings.afterTokens - report.contextSavings.beforeTokens).toLocaleString()} tok/turn${c.reset} (small repo baseline; drops as knowledge accumulates)`
       : `  ├─ Virtualized Gain: ${c.bold}${c.green}Saved ${report.contextSavings.savingsPercent}% · ${formatCompactTok(report.contextSavings.beforeTokens)} ${arrowGlyph} ${formatCompactTok(report.contextSavings.afterTokens)} tok${c.reset} (${report.contextSavings.savedTokens.toLocaleString()} tokens saved)`;
   lines.push(virtualizedGainLine);
   lines.push(

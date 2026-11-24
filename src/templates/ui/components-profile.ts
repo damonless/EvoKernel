@@ -61,42 +61,45 @@ export function renderProfileSectionHtml(): string {
             <div class="profile-card-hdr">
               <span id="profile-editor-heading">Create Personal Preference</span>
             </div>
-            <div class="profile-form-grid">
-              <div class="profile-field">
-                <label id="lbl-profile-title" for="profile-inp-title" class="profile-field-label">Title</label>
-                <input id="profile-inp-title" type="text" class="profile-input" placeholder="e.g. Concise Engineering Style" />
-              </div>
-              <div class="profile-field">
-                <label id="lbl-profile-category" for="profile-inp-category" class="profile-field-label">Category</label>
-                <select id="profile-inp-category" class="profile-select">
-                  <option value="style">Style</option>
-                  <option value="formatting">Formatting</option>
-                  <option value="communication">Communication</option>
-                  <option value="workflow">Workflow</option>
-                  <option value="requirement">Requirement</option>
-                  <option value="knowledge">Knowledge</option>
-                </select>
-              </div>
-              <div class="profile-field">
-                <label id="lbl-profile-l0" for="profile-inp-l0" class="profile-field-label">L0 Summary (&lt;=140 chars)</label>
-                <input id="profile-inp-l0" type="text" class="profile-input" placeholder="1-line summary shown in Always-On card or Directory Menu" />
-              </div>
-              <div class="profile-field">
-                <label id="lbl-profile-mode" for="profile-inp-always-on" class="profile-field-label">Injection Mode</label>
-                <select id="profile-inp-always-on" class="profile-select">
-                  <option value="true">ALWAYS-ON</option>
-                  <option value="false">ON-DEMAND</option>
-                </select>
-              </div>
-              <div class="profile-field">
-                <label id="lbl-profile-tags" for="profile-inp-tags" class="profile-field-label">Tags (comma-separated)</label>
-                <input id="profile-inp-tags" type="text" class="profile-input" placeholder="style, concise, ts" />
-              </div>
-            </div>
             <div class="profile-field">
               <label id="lbl-profile-content" for="profile-inp-content" class="profile-field-label">Preference Instruction</label>
               <textarea id="profile-inp-content" class="profile-textarea" placeholder="Write the reusable cross-workspace instruction..."></textarea>
             </div>
+            <details id="profile-more-options" class="profile-more-options">
+              <summary id="profile-more-options-summary">More options</summary>
+              <div class="profile-form-grid">
+                <div class="profile-field">
+                  <label id="lbl-profile-title" for="profile-inp-title" class="profile-field-label">Title</label>
+                  <input id="profile-inp-title" type="text" class="profile-input" placeholder="e.g. Concise Engineering Style" />
+                </div>
+                <div class="profile-field">
+                  <label id="lbl-profile-category" for="profile-inp-category" class="profile-field-label">Category</label>
+                  <select id="profile-inp-category" class="profile-select">
+                    <option value="style">Style</option>
+                    <option value="formatting">Formatting</option>
+                    <option value="communication">Communication</option>
+                    <option value="workflow">Workflow</option>
+                    <option value="requirement">Requirement</option>
+                    <option value="knowledge">Knowledge</option>
+                  </select>
+                </div>
+                <div class="profile-field">
+                  <label id="lbl-profile-l0" for="profile-inp-l0" class="profile-field-label">L0 Summary (&lt;=140 chars)</label>
+                  <input id="profile-inp-l0" type="text" class="profile-input" placeholder="1-line summary shown in Always-On card or Directory Menu" />
+                </div>
+                <div class="profile-field">
+                  <label id="lbl-profile-mode" for="profile-inp-always-on" class="profile-field-label">Injection Mode</label>
+                  <select id="profile-inp-always-on" class="profile-select">
+                    <option value="true">ALWAYS-ON</option>
+                    <option value="false">ON-DEMAND</option>
+                  </select>
+                </div>
+                <div class="profile-field">
+                  <label id="lbl-profile-tags" for="profile-inp-tags" class="profile-field-label">Tags (comma-separated)</label>
+                  <input id="profile-inp-tags" type="text" class="profile-input" placeholder="style, concise, ts" />
+                </div>
+              </div>
+            </details>
             <div class="profile-header-actions">
               <button type="button" id="btn-profile-save" class="btn-action" style="color:var(--status-ok);border-color:var(--status-ok-border);">Save via Gatekeeper</button>
               <button type="button" id="btn-profile-cancel" class="btn-action">Cancel</button>
@@ -175,6 +178,30 @@ export const PROFILE_CLIENT_SCRIPT = `
     };
   }
 
+  function formatProfileCategory(cat) {
+    var dict = i18n[lang] || i18n.en;
+    var c = String(cat || '').toLowerCase();
+    if (c === 'style') return dict.catStyle;
+    if (c === 'formatting') return dict.catFormatting;
+    if (c === 'communication') return dict.catCommunication;
+    if (c === 'workflow') return dict.catWorkflow;
+    if (c === 'requirement') return dict.catRequirement;
+    if (c === 'knowledge') return dict.catKnowledge;
+    return String(cat || '').toUpperCase();
+  }
+
+  function formatProfileHistoryAction(act) {
+    var dict = i18n[lang] || i18n.en;
+    var a = String(act || '').toLowerCase();
+    if (a === 'add') return dict.profileHistAdd;
+    if (a === 'update') return dict.profileHistUpdate;
+    if (a === 'archive' || a === 'archived') return dict.profileHistArchive;
+    if (a === 'undo') return dict.profileHistUndo;
+    if (a === 'paused') return dict.profileHistPaused;
+    if (a === 'saved') return dict.profileHistSaved;
+    return act || '';
+  }
+
   function renderProfileStudio() {
     var dict = i18n[lang] || i18n.en;
     var up = getUserProfileData();
@@ -246,6 +273,10 @@ export const PROFILE_CLIENT_SCRIPT = `
 
     // 3. Desktop Host Sync badges
     var hosts = Array.isArray(up.syncedHosts) ? up.syncedHosts : [];
+    var hasDriftedHost = hosts.some(function(h) { return h && !h.synced; });
+    if (el('btn-profile-add')) el('btn-profile-add').style.display = isExport ? 'none' : '';
+    if (el('btn-profile-import')) el('btn-profile-import').style.display = isExport ? 'none' : '';
+    if (el('btn-profile-sync')) el('btn-profile-sync').style.display = (!isExport && hasDriftedHost) ? '' : 'none';
     var hostCountEl = el('profile-hosts-count');
     var hostBadgesEl = el('profile-host-badges');
     if (hostCountEl) {
@@ -291,16 +322,17 @@ export const PROFILE_CLIENT_SCRIPT = `
           var chip = document.createElement('div');
           chip.className = 'profile-history-chip';
           var label = document.createElement('span');
-          label.textContent = (entry.action ? '[' + entry.action + '] ' : '') + (entry.title || undoId);
+          var actLbl = formatProfileHistoryAction(entry.action);
+          label.textContent = (actLbl ? actLbl + ' · ' : '') + (entry.title || undoId);
           chip.appendChild(label);
-          if (entry.undoable !== false && !isExport) {
+          if (entry.undoable === true && !isExport) {
             var undoBtn = document.createElement('button');
             undoBtn.type = 'button';
             undoBtn.className = 'btn-action';
             undoBtn.textContent = dict.profileUndoBtn;
             undoBtn.setAttribute('data-undo-id', undoId);
             undoBtn.addEventListener('click', function() {
-              handleUndoProfileChange(undoId);
+              handleUndoProfileChange(undoId, undoBtn);
             });
             chip.appendChild(undoBtn);
           }
@@ -397,7 +429,7 @@ export const PROFILE_CLIENT_SCRIPT = `
       if (it.category) {
         var catBadge = document.createElement('span');
         catBadge.className = 'badge badge-tier-scoped';
-        catBadge.textContent = String(it.category).toUpperCase();
+        catBadge.textContent = formatProfileCategory(it.category);
         top.appendChild(catBadge);
       }
       if (it.review_status === 'pending') {
@@ -443,13 +475,15 @@ export const PROFILE_CLIENT_SCRIPT = `
           restBtn.textContent = dict.restore;
           restBtn.addEventListener('click', function(ev) {
             ev.stopPropagation();
-            callKernelAction('restore-item', { kind: r.rawKind, id: it.id, tier: itemTier }).then(function(res) {
-              if (res && res.ok) {
-                if (res.snapshot) snapshot = res.snapshot;
-                rerenderAllViews();
-              } else if (!res || !res.offlineExport) {
-                showToast('error', (res && res.error) ? res.error : dict.errRestoreFailed);
-              }
+            runWithButtonLock(restBtn, dict.savingLabel, function() {
+              return callKernelAction('restore-item', { kind: r.rawKind, id: it.id, tier: itemTier }).then(function(res) {
+                if (res && res.ok) {
+                  if (res.snapshot) snapshot = res.snapshot;
+                  rerenderAllViews();
+                } else if (!res || !res.offlineExport) {
+                  showActionError(res, dict.errRestoreFailed);
+                }
+              });
             });
           });
           actions.appendChild(restBtn);
@@ -463,13 +497,15 @@ export const PROFILE_CLIENT_SCRIPT = `
             appBtn.textContent = dict.approve;
             appBtn.addEventListener('click', function(ev) {
               ev.stopPropagation();
-              callKernelAction('approve-item', { kind: r.rawKind, id: it.id, tier: itemTier }).then(function(res) {
-                if (res && res.ok) {
-                  if (res.snapshot) snapshot = res.snapshot;
-                  rerenderAllViews();
-                } else if (!res || !res.offlineExport) {
-                  showToast('error', (res && res.error) ? res.error : dict.errApproveFailed);
-                }
+              runWithButtonLock(appBtn, dict.savingLabel, function() {
+                return callKernelAction('approve-item', { kind: r.rawKind, id: it.id, tier: itemTier }).then(function(res) {
+                  if (res && res.ok) {
+                    if (res.snapshot) snapshot = res.snapshot;
+                    rerenderAllViews();
+                  } else if (!res || !res.offlineExport) {
+                    showActionError(res, dict.errApproveFailed);
+                  }
+                });
               });
             });
             actions.appendChild(appBtn);
@@ -483,26 +519,28 @@ export const PROFILE_CLIENT_SCRIPT = `
             modeBtn.addEventListener('click', function(ev) {
               ev.stopPropagation();
               var nextAlwaysOn = it.always_on === false;
-              callKernelAction('create-preference', {
-                id: it.id,
-                supersedes_id: it.id,
-                tier: itemTier,
-                title: it.title || it.id,
-                l0_summary: it.l0_summary || it.title || it.id,
-                category: it.category || 'style',
-                always_on: nextAlwaysOn,
-                tags: Array.isArray(it.tags) ? it.tags : [],
-                content: it.content || it.l0_summary || it.title || it.id,
-                enabled: it.enabled !== false,
-                review_status: it.review_status || 'approved'
-              }).then(function(res) {
-                if (res && res.ok) {
-                  if (res.snapshot) snapshot = res.snapshot;
-                  rerenderAllViews();
-                  showToast('success', dict.profileModeUpdatedToast.replace('{id}', it.id));
-                } else if (!res || !res.offlineExport) {
-                  showToast('error', (res && res.error) ? res.error : dict.profileCreateFailedToast);
-                }
+              runWithButtonLock(modeBtn, dict.savingLabel, function() {
+                return callKernelAction('create-preference', {
+                  id: it.id,
+                  supersedes_id: it.id,
+                  tier: itemTier,
+                  title: it.title || it.id,
+                  l0_summary: it.l0_summary || it.title || it.id,
+                  category: it.category || 'style',
+                  always_on: nextAlwaysOn,
+                  tags: Array.isArray(it.tags) ? it.tags : [],
+                  content: it.content || it.l0_summary || it.title || it.id,
+                  enabled: it.enabled !== false,
+                  review_status: it.review_status || 'approved'
+                }).then(function(res) {
+                  if (res && res.ok) {
+                    if (res.snapshot) snapshot = res.snapshot;
+                    rerenderAllViews();
+                    showToast('success', dict.profileModeUpdatedToast.replace('{id}', it.id));
+                  } else if (!res || !res.offlineExport) {
+                    showActionError(res, dict.profileCreateFailedToast, { id: it.id, tier: itemTier, item: it });
+                  }
+                });
               });
             });
             actions.appendChild(modeBtn);
@@ -524,18 +562,20 @@ export const PROFILE_CLIENT_SCRIPT = `
           pauseBtn.textContent = it.enabled === false ? dict.resumeItem : dict.pauseItem;
           pauseBtn.addEventListener('click', function(ev) {
             ev.stopPropagation();
-            callKernelAction('toggle-enabled', {
-              kind: r.rawKind,
-              id: it.id,
-              tier: itemTier,
-              enabled: it.enabled === false
-            }).then(function(res) {
-              if (res && res.ok) {
-                if (res.snapshot) snapshot = res.snapshot;
-                rerenderAllViews();
-              } else if (!res || !res.offlineExport) {
-                showToast('error', (res && res.error) ? res.error : dict.errToggleFailed);
-              }
+            runWithButtonLock(pauseBtn, dict.savingLabel, function() {
+              return callKernelAction('toggle-enabled', {
+                kind: r.rawKind,
+                id: it.id,
+                tier: itemTier,
+                enabled: it.enabled === false
+              }).then(function(res) {
+                if (res && res.ok) {
+                  if (res.snapshot) snapshot = res.snapshot;
+                  rerenderAllViews();
+                } else if (!res || !res.offlineExport) {
+                  showActionError(res, dict.errToggleFailed, { id: it.id, tier: itemTier, item: it });
+                }
+              });
             });
           });
           actions.appendChild(pauseBtn);
@@ -587,16 +627,18 @@ export const PROFILE_CLIENT_SCRIPT = `
     panel.classList.add('open');
   }
 
-  function handleUndoProfileChange(targetId) {
+  function handleUndoProfileChange(targetId, btnEl) {
     var dict = i18n[lang] || i18n.en;
-    callKernelAction('undo-preference', { id: targetId || undefined, tier: 'GLOBAL' }).then(function(res) {
-      if (res && res.ok) {
-        if (res.snapshot) snapshot = res.snapshot;
-        rerenderAllViews();
-        showToast('success', dict.profileUndoneToast);
-      } else if (!res || !res.offlineExport) {
-        showToast('error', (res && res.error) ? res.error : dict.profileUndoFailedToast);
-      }
+    runWithButtonLock(btnEl, dict.savingLabel, function() {
+      return callKernelAction('undo-preference', { id: targetId || undefined, tier: 'GLOBAL' }).then(function(res) {
+        if (res && res.ok) {
+          if (res.snapshot) snapshot = res.snapshot;
+          rerenderAllViews();
+          showToast('success', dict.profileUndoneToast);
+        } else if (!res || !res.offlineExport) {
+          showActionError(res, dict.profileUndoFailedToast);
+        }
+      });
     });
   }
 
@@ -623,12 +665,15 @@ export const PROFILE_CLIENT_SCRIPT = `
     if (saveBtn) {
       saveBtn.addEventListener('click', function() {
         var dict = i18n[lang] || i18n.en;
-        var title = el('profile-inp-title') ? el('profile-inp-title').value.trim() : '';
-        var l0 = el('profile-inp-l0') ? el('profile-inp-l0').value.trim() : '';
+        var content = el('profile-inp-content') ? el('profile-inp-content').value.trim() : '';
+        var rawTitle = el('profile-inp-title') ? el('profile-inp-title').value.trim() : '';
+        var rawL0 = el('profile-inp-l0') ? el('profile-inp-l0').value.trim() : '';
+        var firstLine = content.split(/\\r?\\n/)[0].trim();
+        var title = rawTitle || firstLine.slice(0, 60);
+        var l0 = rawL0 || firstLine.slice(0, 120);
         var category = el('profile-inp-category') ? el('profile-inp-category').value : 'style';
         var alwaysOn = el('profile-inp-always-on') ? el('profile-inp-always-on').value !== 'false' : true;
         var tagsRaw = el('profile-inp-tags') ? el('profile-inp-tags').value : '';
-        var content = el('profile-inp-content') ? el('profile-inp-content').value.trim() : '';
         var tags = tagsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
 
         var payload = {
@@ -646,20 +691,29 @@ export const PROFILE_CLIENT_SCRIPT = `
           payload.enabled = editingProfilePrefEnabled;
           payload.review_status = editingProfilePrefReviewStatus;
         }
-        callKernelAction('create-preference', payload).then(function(res) {
-          if (res && res.ok) {
-            if (res.snapshot) snapshot = res.snapshot;
-            editingProfilePrefId = null;
-            editingProfilePrefTier = 'GLOBAL';
-            editingProfilePrefEnabled = true;
-            editingProfilePrefReviewStatus = 'approved';
-            if (el('profile-editor-panel')) el('profile-editor-panel').classList.remove('open');
-            rerenderAllViews();
-            var createdId = (res.data && res.data.id) ? res.data.id : (title || 'preference');
-            showToast('success', dict.profileCreatedToast.replace('{id}', createdId));
-          } else if (!res || !res.offlineExport) {
-            showToast('error', (res && res.error) ? res.error : dict.profileCreateFailedToast);
-          }
+        runWithButtonLock(saveBtn, dict.savingLabel, function() {
+          return callKernelAction('create-preference', payload).then(function(res) {
+            if (res && res.ok) {
+              if (res.snapshot) snapshot = res.snapshot;
+              editingProfilePrefId = null;
+              editingProfilePrefTier = 'GLOBAL';
+              editingProfilePrefEnabled = true;
+              editingProfilePrefReviewStatus = 'approved';
+              if (el('profile-editor-panel')) el('profile-editor-panel').classList.remove('open');
+              rerenderAllViews();
+              var createdId = (res.data && res.data.id) ? res.data.id : (title || 'preference');
+              showToast('success', dict.profileCreatedToast.replace('{id}', createdId));
+            } else if (!res || !res.offlineExport) {
+              showActionError(res, dict.profileCreateFailedToast, {
+                id: editingProfilePrefId || undefined,
+                tier: payload.tier,
+                makeOnDemandCb: function() {
+                  if (el('profile-inp-always-on')) el('profile-inp-always-on').value = 'false';
+                  saveBtn.click();
+                }
+              });
+            }
+          });
         });
       });
     }
@@ -685,30 +739,32 @@ export const PROFILE_CLIENT_SCRIPT = `
         var dict = i18n[lang] || i18n.en;
         var md = el('profile-import-textarea') ? el('profile-import-textarea').value : '';
         var alwaysOn = el('profile-import-always-on') ? el('profile-import-always-on').value !== 'false' : true;
-        callKernelAction('import-profile-markdown', {
-          markdown: md,
-          always_on: alwaysOn,
-          tier: 'GLOBAL'
-        }).then(function(res) {
-          if (res && res.ok) {
-            if (res.snapshot) snapshot = res.snapshot;
-            var d = res.data || {};
-            var msg = dict.profileImportedToast
-              .replace('{ok}', String(d.importedCount || 0))
-              .replace('{skip}', String(d.rejectedCount || 0));
-            var detailSuffix = (Array.isArray(d.rejected) && d.rejected.length > 0 && d.rejected[0].message)
-              ? (' — ' + d.rejected[0].message)
-              : '';
-            var resEl = el('profile-import-result');
-            if (resEl) {
-              resEl.style.display = 'block';
-              resEl.textContent = msg + detailSuffix;
+        runWithButtonLock(importRunBtn, dict.savingLabel, function() {
+          return callKernelAction('import-profile-markdown', {
+            markdown: md,
+            always_on: alwaysOn,
+            tier: 'GLOBAL'
+          }).then(function(res) {
+            if (res && res.ok) {
+              if (res.snapshot) snapshot = res.snapshot;
+              var d = res.data || {};
+              var msg = dict.profileImportedToast
+                .replace('{ok}', String(d.importedCount || 0))
+                .replace('{skip}', String(d.rejectedCount || 0));
+              var detailSuffix = (Array.isArray(d.rejected) && d.rejected.length > 0 && d.rejected[0].message)
+                ? (' — ' + d.rejected[0].message)
+                : '';
+              var resEl = el('profile-import-result');
+              if (resEl) {
+                resEl.style.display = 'block';
+                resEl.textContent = msg + detailSuffix;
+              }
+              rerenderAllViews();
+              showToast('success', msg);
+            } else if (!res || !res.offlineExport) {
+              showActionError(res, dict.profileImportFailedToast);
             }
-            rerenderAllViews();
-            showToast('success', msg);
-          } else if (!res || !res.offlineExport) {
-            showToast('error', (res && res.error) ? res.error : dict.profileImportFailedToast);
-          }
+          });
         });
       });
     }
@@ -717,15 +773,17 @@ export const PROFILE_CLIENT_SCRIPT = `
     if (syncBtn) {
       syncBtn.addEventListener('click', function() {
         var dict = i18n[lang] || i18n.en;
-        callKernelAction('sync-profile', {}).then(function(res) {
-          if (res && res.ok) {
-            if (res.snapshot) snapshot = res.snapshot;
-            rerenderAllViews();
-            var targets = (res.data && Array.isArray(res.data.updatedTargets)) ? res.data.updatedTargets.length : 0;
-            showToast('success', dict.profileSyncedToast.replace('{n}', String(targets)));
-          } else if (!res || !res.offlineExport) {
-            showToast('error', (res && res.error) ? res.error : dict.profileSyncFailedToast);
-          }
+        runWithButtonLock(syncBtn, dict.savingLabel, function() {
+          return callKernelAction('sync-profile', {}).then(function(res) {
+            if (res && res.ok) {
+              if (res.snapshot) snapshot = res.snapshot;
+              rerenderAllViews();
+              var targets = (res.data && Array.isArray(res.data.updatedTargets)) ? res.data.updatedTargets.length : 0;
+              showToast('success', dict.profileSyncedToast.replace('{n}', String(targets)));
+            } else if (!res || !res.offlineExport) {
+              showActionError(res, dict.profileSyncFailedToast);
+            }
+          });
         });
       });
     }

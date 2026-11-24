@@ -70,7 +70,7 @@ function matchCategoryFromText(text: string): PreferenceCategory | null {
   return null;
 }
 
-function inferPreferenceCategory(
+export function inferPreferenceCategory(
   directiveText: string,
   heading: string,
   explicitCategory?: string,
@@ -120,7 +120,7 @@ function stripFencedCodeBlocks(text: string): string {
   return kept.join('\n');
 }
 
-function cleanMarkdownInline(raw: string): string {
+export function cleanMarkdownInline(raw: string): string {
   return raw
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/[`*_#]/g, '')
@@ -128,7 +128,77 @@ function cleanMarkdownInline(raw: string): string {
     .trim();
 }
 
-function buildDeterministicId(
+export function inferSituationalOnDemand(text: string): {
+  alwaysOn: boolean;
+  triggerCue?: string;
+} {
+  const raw = String(text || '').trim();
+  if (!raw) return { alwaysOn: true };
+
+  let hasOnDemandMarker = /\[on-demand\]/i.test(raw);
+  const triggerAttrMatch = raw.match(/\(trigger:\s*([^)]+)\)/i);
+  if (triggerAttrMatch && triggerAttrMatch[1]?.trim()) {
+    return {
+      alwaysOn: false,
+      triggerCue: triggerAttrMatch[1].trim().slice(0, 120),
+    };
+  }
+
+  const stripped = raw.replace(/\[on-demand\]/gi, '').trim();
+
+  // Chinese situational triggers: e.g., 写周报时..., 写代码评审时..., 当...时, 在...时
+  const zhActionMatch = stripped.match(
+    /(?:^|[\s，,。；;])(?:当|在|每次|如果)?((?:写|做|进行|处理|生成|总结|分析|调试|排查|评审|审查|回复|沟通|部署|重构)[^，,。；;：:\n]{1,30}?时)/
+  );
+  if (zhActionMatch && zhActionMatch[1]?.trim()) {
+    return {
+      alwaysOn: false,
+      triggerCue: zhActionMatch[1].trim().slice(0, 120),
+    };
+  }
+
+  const zhGenericMatch = stripped.match(
+    /(?:^|[\s，,。；;])((?:当|在)[^，,。；;：:\n]{2,30}?时)/
+  );
+  if (zhGenericMatch && zhGenericMatch[1]?.trim()) {
+    return {
+      alwaysOn: false,
+      triggerCue: zhGenericMatch[1].trim().slice(0, 120),
+    };
+  }
+
+  // English situational triggers: e.g., when writing ..., when reviewing ..., during code review
+  const enWhenMatch = stripped.match(
+    /\b((?:when|whenever|while)\s+(?:writing|reviewing|summarizing|debugging|generating|drafting|creating|editing|analyzing|deploying|refactoring)\b[^,.;:\n]{0,60})/i
+  );
+  if (enWhenMatch && enWhenMatch[1]?.trim()) {
+    return {
+      alwaysOn: false,
+      triggerCue: enWhenMatch[1].trim().slice(0, 120),
+    };
+  }
+
+  const enDuringMatch = stripped.match(
+    /\b(during\s+(?:code\s+reviews?|reviews?|weekly\s+reports?|debugging|incidents?|planning|standups?))\b/i
+  );
+  if (enDuringMatch && enDuringMatch[1]?.trim()) {
+    return {
+      alwaysOn: false,
+      triggerCue: enDuringMatch[1].trim().slice(0, 120),
+    };
+  }
+
+  if (hasOnDemandMarker) {
+    return {
+      alwaysOn: false,
+      triggerCue: cleanMarkdownInline(stripped).slice(0, 120) || 'on-demand',
+    };
+  }
+
+  return { alwaysOn: true };
+}
+
+export function buildDeterministicId(
   seedSource: string,
   rawText: string,
   seenIds: Set<string>,

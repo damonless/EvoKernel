@@ -53,6 +53,7 @@ import {
   parseHarnessTargets,
   parseJsonc,
   pruneEmptyDirs,
+  removeCodexToml,
   removeMarkerBlock,
   resolveEvoMcpLaunchConfig,
   resolveGlobalEvoMcpLaunchConfig,
@@ -70,6 +71,7 @@ export {
 } from './harness.js';
 import { buildScoreReport } from './score.js';
 import { runBootstrap } from './bootstrap.js';
+import { runVirtualize } from './virtualize.js';
 
 export interface IdeProfile {
   id: string;
@@ -1398,6 +1400,74 @@ export function runInitGlobal(options?: InitGlobalOptions): InitGlobalResult {
   };
 }
 
+export function hasNonEvoGeminiMd(workspaceRoot: string): boolean {
+  const geminiMdPath = path.join(workspaceRoot, 'GEMINI.md');
+  if (!fs.existsSync(geminiMdPath)) return false;
+  try {
+    return !fs.readFileSync(geminiMdPath, 'utf8').includes('<!-- EVO:START -->');
+  } catch {
+    return true;
+  }
+}
+
+export function detectAutoInitTargets(
+  workspaceRoot: string,
+  env: Record<string, string | undefined> = process.env,
+  homeDir: string = os.homedir()
+): string[] {
+  const nonEvoGemini = hasNonEvoGeminiMd(workspaceRoot);
+  const hasDotGemini = fs.existsSync(path.join(workspaceRoot, '.gemini'));
+
+  // Stage 1: Workspace Project Artifacts, ignoring Evo-managed root GEMINI.md unless .gemini/ exists
+  const stage1: string[] = [];
+  for (const adapter of Object.values(ALL_HARNESS_ADAPTERS)) {
+    if (adapter.id === 'gemini') {
+      if (hasDotGemini || nonEvoGemini) {
+        stage1.push(adapter.id);
+      }
+      continue;
+    }
+    if (adapter.detectWorkspace(workspaceRoot)) {
+      stage1.push(adapter.id);
+    }
+  }
+  if (stage1.length > 0) {
+    const uniqueStage1 = Array.from(new Set(stage1));
+    const dedicated = uniqueStage1.filter((id) => id !== 'agents');
+    return dedicated.length > 0 ? dedicated : uniqueStage1;
+  }
+
+  // Stage 2: Host Environment Variables & Process Indicators
+  const stage2: string[] = [];
+  for (const adapter of Object.values(ALL_HARNESS_ADAPTERS)) {
+    if (adapter.detectEnv(env)) {
+      stage2.push(adapter.id);
+    }
+  }
+  if (stage2.length > 0) {
+    const uniqueStage2 = Array.from(new Set(stage2));
+    const dedicated = uniqueStage2.filter((id) => id !== 'agents');
+    const hasAgentsFile = fs.existsSync(path.join(workspaceRoot, 'AGENTS.md'));
+    return dedicated.length > 0 && !hasAgentsFile ? dedicated : uniqueStage2;
+  }
+
+  // Stage 3: User Home Global installations
+  const stage3: string[] = [];
+  for (const adapter of Object.values(ALL_HARNESS_ADAPTERS)) {
+    if (adapter.detectGlobal(homeDir)) {
+      stage3.push(adapter.id);
+    }
+  }
+  if (stage3.length > 0) {
+    const uniqueStage3 = Array.from(new Set(stage3));
+    const dedicated = uniqueStage3.filter((id) => id !== 'agents');
+    const hasAgentsFile = fs.existsSync(path.join(workspaceRoot, 'AGENTS.md'));
+    return dedicated.length > 0 && !hasAgentsFile ? dedicated : uniqueStage3;
+  }
+
+  return ['agents'];
+}
+
 export function runInit(
   workspaceRoot: string,
   targetsOrOptions?: string[] | InitOptions
@@ -1414,11 +1484,12 @@ export function runInit(
       String(opts.targets[0]).trim().toLowerCase() === 'auto');
 
   const effectiveHomeDir = opts.globalHomeDir || os.homedir();
-  const rawTargets = opts.targets !== undefined
-    ? parseInitTargets(opts.targets, workspaceRoot, process.env, effectiveHomeDir)
-    : detectCascadedTargets(workspaceRoot, process.env, effectiveHomeDir);
+  const rawTargets =
+    opts.targets !== undefined && !isAutoDetect
+      ? parseInitTargets(opts.targets, workspaceRoot, process.env, effectiveHomeDir)
+      : detectAutoInitTargets(workspaceRoot, process.env, effectiveHomeDir);
 
-  const preHadGeminiMd = fs.existsSync(path.join(workspaceRoot, 'GEMINI.md'));
+  const preHadGeminiMd = hasNonEvoGeminiMd(workspaceRoot);
   const preHadAgentsMd = fs.existsSync(path.join(workspaceRoot, 'AGENTS.md'));
   const targetsAgentsMd =
     preHadAgentsMd ||
@@ -2050,6 +2121,56 @@ export function unmountIdeExtensions(
   return { cleanedTargets, errors };
 }
 
+function hasGlobalEvoMcpJsonEntry(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw.trim()) return false;
+    const parsed = parseJsonc(raw, filePath) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const servers = parsed.mcpServers;
+    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return false;
+    if (!('evo-kernel' in servers)) return false;
+    if (
+      path.basename(filePath) === 'mcp_config.json' &&
+      isPluginBootstrapEntry((servers as Record<string, unknown>)['evo-kernel'])
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeGlobalEvoMcpJsonEntry(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw.trim()) return false;
+    const parsed = parseJsonc(raw, filePath) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const servers = parsed.mcpServers;
+    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return false;
+    if (!('evo-kernel' in servers)) return false;
+    if (
+      path.basename(filePath) === 'mcp_config.json' &&
+      isPluginBootstrapEntry((servers as Record<string, unknown>)['evo-kernel'])
+    ) {
+      return false;
+    }
+    const bucket = servers as Record<string, unknown>;
+    delete bucket['evo-kernel'];
+    if (Object.keys(bucket).length === 0) {
+      delete parsed.mcpServers;
+    }
+    fs.writeFileSync(filePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function runUninstall(
   workspaceRoot: string,
   options?: {
@@ -2058,9 +2179,117 @@ export function runUninstall(
     ide?: string[];
     global?: boolean;
     homeDir?: string;
+    dryRun?: boolean;
+    purge?: boolean;
   }
-): { cleanedFiles: string[]; cleanedProfileTargets?: string[] } {
+): {
+  cleanedFiles: string[];
+  cleanedProfileTargets?: string[];
+  dryRun?: boolean;
+  wouldPurge?: boolean;
+  restoredMcpCount?: number;
+  purgedPaths?: string[];
+} {
+  const dryRun = Boolean(options?.dryRun);
+  const purge = Boolean(options?.purge);
   const cleanedFilesList: string[] = [];
+  const poolPath = path.join(workspaceRoot, '.evo', 'mcp-pool.json');
+  const hasPool = fs.existsSync(poolPath);
+
+  const isIsolatedEnv =
+    Boolean(process.env.NODE_TEST_CONTEXT) || process.env.EVO_PROFILE_ISOLATED === '1';
+  const effectiveHomeDir = options?.homeDir
+    ? path.resolve(options.homeDir)
+    : isIsolatedEnv
+      ? undefined
+      : os.homedir();
+
+  const globalJsonMcpTargets = effectiveHomeDir
+    ? [
+        path.join(effectiveHomeDir, '.gemini', 'settings.json'),
+        path.join(effectiveHomeDir, '.gemini', 'antigravity', 'mcp_config.json'),
+        path.join(effectiveHomeDir, '.claude.json'),
+        path.join(effectiveHomeDir, '.cursor', 'mcp.json'),
+        path.join(effectiveHomeDir, '.codeium', 'windsurf', 'mcp_config.json'),
+      ]
+    : [];
+  const globalCodexTomlPath = effectiveHomeDir
+    ? path.join(effectiveHomeDir, '.codex', 'config.toml')
+    : undefined;
+
+  if (dryRun) {
+    if (hasPool) {
+      cleanedFilesList.push('.evo/mcp-pool.json (restore virtualized MCPs)');
+    }
+    for (const adapter of Object.values(ALL_HARNESS_ADAPTERS)) {
+      for (const rel of [...adapter.ruleFiles, ...adapter.mcpFiles]) {
+        const full = path.join(workspaceRoot, rel);
+        if (!fs.existsSync(full)) continue;
+        try {
+          const txt = fs.readFileSync(full, 'utf8');
+          if (txt.includes('<!-- EVO:START -->') || txt.includes('evo-kernel')) {
+            cleanedFilesList.push(rel);
+          }
+        } catch {}
+      }
+    }
+    let cleanedProfileTargets: string[] | undefined;
+    if (options?.global) {
+      const cleanRes = cleanGlobalUserProfile(undefined, {
+        homeDir: options.homeDir,
+        dryRun: true,
+      });
+      cleanedProfileTargets = cleanRes.updatedTargets;
+      cleanedFilesList.push(...cleanRes.updatedTargets);
+      for (const gp of globalJsonMcpTargets) {
+        if (hasGlobalEvoMcpJsonEntry(gp)) {
+          cleanedFilesList.push(gp);
+        }
+      }
+      if (globalCodexTomlPath && fs.existsSync(globalCodexTomlPath)) {
+        try {
+          const rawToml = fs.readFileSync(globalCodexTomlPath, 'utf8');
+          if (extractCodexTomlEvoEntry(rawToml)) {
+            cleanedFilesList.push(globalCodexTomlPath);
+          }
+        } catch {}
+      }
+    }
+    if (purge) {
+      const localEvo = path.join(workspaceRoot, '.evo');
+      if (fs.existsSync(localEvo)) {
+        cleanedFilesList.push('.evo/');
+      }
+      if (options?.global && effectiveHomeDir) {
+        const globalEvo = process.env.EVO_GLOBAL_DIR
+          ? path.resolve(process.env.EVO_GLOBAL_DIR)
+          : path.join(effectiveHomeDir, '.evo', 'global');
+        if (fs.existsSync(globalEvo)) {
+          cleanedFilesList.push(globalEvo);
+        }
+      }
+    }
+    return {
+      cleanedFiles: Array.from(new Set(cleanedFilesList)),
+      ...(cleanedProfileTargets ? { cleanedProfileTargets } : {}),
+      dryRun: true,
+      wouldPurge: purge,
+    };
+  }
+
+  let restoredMcpCount = 0;
+  if (hasPool) {
+    try {
+      const restoreRes = runVirtualize(workspaceRoot, { restore: true });
+      restoredMcpCount = restoreRes.servers.length;
+      if (restoredMcpCount > 0) {
+        cleanedFilesList.push(...restoreRes.modifiedFiles);
+      }
+    } catch {
+      // Best-effort restore before removing markers
+    }
+  }
+
   const dirsToPrune: string[] = [
     '.claude/commands',
     '.cursor/commands',
@@ -2096,6 +2325,14 @@ export function runUninstall(
     const cleanRes = cleanGlobalUserProfile(undefined, { homeDir: options.homeDir });
     cleanedProfileTargets = cleanRes.updatedTargets;
     cleanedFilesList.push(...cleanRes.updatedTargets);
+    for (const gp of globalJsonMcpTargets) {
+      if (removeGlobalEvoMcpJsonEntry(gp)) {
+        cleanedFilesList.push(gp);
+      }
+    }
+    if (globalCodexTomlPath && removeCodexToml(globalCodexTomlPath)) {
+      cleanedFilesList.push(globalCodexTomlPath);
+    }
   }
 
   pruneEmptyDirs(workspaceRoot, dirsToPrune);
@@ -2118,8 +2355,28 @@ export function runUninstall(
       ];
   removeGitInfoExclude(workspaceRoot, patternsToRemove);
 
+  const purgedPaths: string[] = [];
+  if (purge) {
+    const localEvo = path.join(workspaceRoot, '.evo');
+    if (fs.existsSync(localEvo)) {
+      fs.rmSync(localEvo, { recursive: true, force: true });
+      purgedPaths.push('.evo/');
+    }
+    if (options?.global && effectiveHomeDir) {
+      const globalEvo = process.env.EVO_GLOBAL_DIR
+        ? path.resolve(process.env.EVO_GLOBAL_DIR)
+        : path.join(effectiveHomeDir, '.evo', 'global');
+      if (fs.existsSync(globalEvo)) {
+        fs.rmSync(globalEvo, { recursive: true, force: true });
+        purgedPaths.push(globalEvo);
+      }
+    }
+  }
+
   return {
     cleanedFiles: Array.from(new Set(cleanedFilesList)),
     ...(cleanedProfileTargets ? { cleanedProfileTargets } : {}),
+    ...(restoredMcpCount > 0 ? { restoredMcpCount } : {}),
+    ...(purgedPaths.length > 0 ? { purgedPaths } : {}),
   };
 }

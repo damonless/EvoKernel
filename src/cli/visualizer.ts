@@ -218,7 +218,7 @@ export function renderEvoTree(
   ];
 
   if (rules.length === 0) {
-    lines.push('│   └── (empty — run `evo bootstrap` or let your agent call `evo_propose`)');
+    lines.push('│   └── (empty — run `evo bootstrap` to extract rules from git history)');
   } else {
     rules.forEach((r, idx) => {
       const isLast = idx === rules.length - 1;
@@ -554,7 +554,7 @@ export function renderEvoStats(
   const sessionTaxSummary =
     hasEvo || hasMcpConfig || includeGlobal
       ? sessionStartSavings.afterTokens > sessionStartSavings.beforeTokens
-        ? `Fixed L0 Gateway (${sessionStartSavings.afterTokens.toLocaleString()} tok/turn · 100% KV-shielded)`
+        ? `+${(sessionStartSavings.afterTokens - sessionStartSavings.beforeTokens).toLocaleString()} tok/turn (small repo baseline; drops as knowledge accumulates)`
         : `Saved ${sessionStartSavings.savingsPercent}% · ${sessionStartSavings.beforeTokens.toLocaleString()} → ${sessionStartSavings.afterTokens.toLocaleString()} tok/turn`
       : '— (not initialized)';
 
@@ -607,7 +607,7 @@ export function renderMemoryVerifyReport(
 
   if (memories.length === 0) {
     lines.push(
-      '  (No episodic memories found in .evo/memories/. Run `evo bootstrap` or call `evo_propose(kind: "memory")`.)'
+      '  (No episodic memories found in .evo/memories/. Run `evo bootstrap` to seed memories from git history.)'
     );
     return formatTerminalOutput(lines.join('\n'), options);
   }

@@ -18,11 +18,10 @@ Call `evo_propose(...)` after a root-cause diagnosis is confirmed (including rea
 - **1-Level-Up Rule (`rule`)**: Cross-module invariant -> `kind: "rule"` (`l0_summary`, wildcard `scope_glob`, `core: false`, `transfer_scenarios`). **SSOT**: NEVER copy magic numbers or >=3 identifiers into rule bodies (use `memory` or `Case Anchor:`).
 - **User Correction (`rule`/`skill`)**: User corrects assumptions, workflow, or deliverables -> upgrade via `supersedes_id` (NEVER stop at `memory` for general methodologies).
 - **3-Tier Personal Layer (omit `workspace` or pass `scope: "global"`)**:
-  - *Tier 1 Always-On Habits*: `kind: "preference"`, `always_on: true`, `category: style|formatting|communication|workflow|requirement|knowledge` -> 800-tok Profile Card synced to host global rules.
-  - *Tier 2 Task Directory*: `kind: "preference"`, `always_on: false` (+ non-seed global `skill`) with `trigger_cue` -> 250-tok on-demand menu; inspect via `evo_inspect(id, "L2")`.
+  - *Tier 1 & 2 Habits/Workflows*: `evo_propose(kind: "preference", content: "...")` auto-infers `id`/`title`/`category`/`always_on`/`trigger_cue` and returns `human_receipt` (800-tok Profile Card + 250-tok Task Directory; inspect via `evo_inspect(id, "L2")`).
   - *Tier 3 Personal Memory*: `kind: "memory"`, `memory_type: "personal"`, `scope: "global"` -> cross-workspace lessons at 0 startup tokens.
 - **Reusable Script (`tool`)**: Temp script >15 lines (incl. `/scratch/`) -> Micro-Tool (`run.{mjs|py|sh|ps1}`) with `--self-test`.
-- **Evolution Receipt & Undo**: After `evo_propose`/`evo_compact`, emit: `🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)`. Users can revert any global profile change anytime via `evo profile undo` or Workbench 1-Click Undo.
+- **Evolution Receipt & Undo**: After `evo_propose`/`evo_compact`, emit: `🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)`. Revert in chat anytime via `evo_propose(undo: true)` (or `evo profile undo` / Workbench).
 
 > **Gatekeeper**: Enforces Security, De-Symbolization, `--self-test`/AST Grounding, BM25 & Polarity Conflict Dedup, Scoped Quotas (3/bucket), **1,500-tok core rule**, **800-tok profile**, and **250-tok menu** budgets. On `ERR_BUDGET_EXCEEDED`, `ERR_PROFILE_BUDGET_EXCEEDED`, `ERR_SCOPED_BUCKET_FULL`, or `ERR_DUPLICATE_CAPABILITY`, pass `supersedes_id` or call `evo_compact`.
 <!-- EVO:END -->

@@ -54,7 +54,7 @@
         },
         {
           "command": "evo.viewCockpit",
-          "when": "true"
+          "when": "false"
         }
       ]
     }

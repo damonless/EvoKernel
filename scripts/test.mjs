@@ -32,6 +32,7 @@ const testFiles = [
   path.join(rootDir, 'dist', 'tests', 'issue-34-and-route-b-profile.test.js'),
   path.join(rootDir, 'dist', 'tests', 'v05-user-cognition-and-defects.test.js'),
   path.join(rootDir, 'dist', 'tests', 'issue-35-security-and-regression.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'ux-hardening-and-zero-friction.test.js'),
 ].filter((f) => fs.existsSync(f));
 
 const testArgs = [
