@@ -2,14 +2,14 @@
 id: vscode-extension-unmount-and-realpath-bridge-fix
 title: "VS Code IDE Extension Ghost Removal and Symlink Bridge Entry Resolution"
 l0_summary: "VS Code extension package.json ENOENT -> runUninstall unmounted global IDE junction -> restrict unmount to opts.unmountIde & use realpath."
-created_commit: "09f2d69"
+created_commit: "37b86db"
 created_branch: "main"
 target_symbols: ["src/cli/init.ts#mountIdeExtensions","src/cli/init.ts#runUninstall","src/cli/init.ts#unmountIdeExtensions"]
-ast_fingerprints: {"src/cli/init.ts#mountIdeExtensions":{"symbol":"src/cli/init.ts#mountIdeExtensions","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":1949,"end_line":2006,"signature":"export function mountIdeExtensions(","ast_hash":"1b01a7f67947a0b3"},"src/cli/init.ts#runUninstall":{"symbol":"src/cli/init.ts#runUninstall","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":2050,"end_line":2122,"signature":"export function runUninstall(","ast_hash":"48a6b6a560547193"},"src/cli/init.ts#unmountIdeExtensions":{"symbol":"src/cli/init.ts#unmountIdeExtensions","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":2008,"end_line":2048,"signature":"export function unmountIdeExtensions(","ast_hash":"2e2bdb8c2708fea0"}}
+ast_fingerprints: {"src/cli/init.ts#mountIdeExtensions":{"symbol":"src/cli/init.ts#mountIdeExtensions","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":1952,"end_line":2009,"signature":"export function mountIdeExtensions(","ast_hash":"1b01a7f67947a0b3"},"src/cli/init.ts#runUninstall":{"symbol":"src/cli/init.ts#runUninstall","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":2053,"end_line":2125,"signature":"export function runUninstall(","ast_hash":"48a6b6a560547193"},"src/cli/init.ts#unmountIdeExtensions":{"symbol":"src/cli/init.ts#unmountIdeExtensions","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":2011,"end_line":2051,"signature":"export function unmountIdeExtensions(","ast_hash":"2e2bdb8c2708fea0"}}
 tags: ["vscode","extension","junction","ide","uninstall"]
 origin: "evolved"
 created_at: "2026-11-11T17:58:30.471Z"
-updated_at: "2026-11-24T06:56:54.612Z"
+updated_at: "2026-11-24T07:28:36.840Z"
 ---
 
 ## Symptom
