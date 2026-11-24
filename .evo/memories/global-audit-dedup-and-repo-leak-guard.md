@@ -2,14 +2,14 @@
 id: global-audit-dedup-and-repo-leak-guard
 title: "Global Audit Deduplication, Repo-Anchored Scope Guard & Duplicate EVO:START Detection"
 l0_summary: "Fix global audit double-reporting, ERR_GLOBAL_RULE_REPO_LEAK, duplicate EVO:START detection, and atomic hook state persistence."
-created_commit: "2fdf9f6"
+created_commit: "09f2d69"
 created_branch: "main"
 target_symbols: ["src/cli/audit.ts#discoverAuditableFiles","src/cli/audit.ts#auditHarnessSurfaces","src/cli/audit.ts#runAudit"]
-ast_fingerprints: {"src/cli/audit.ts#discoverAuditableFiles":{"symbol":"src/cli/audit.ts#discoverAuditableFiles","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":219,"end_line":355,"signature":"function discoverAuditableFiles(","ast_hash":"0504e415d5d11588"},"src/cli/audit.ts#auditHarnessSurfaces":{"symbol":"src/cli/audit.ts#auditHarnessSurfaces","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":384,"end_line":886,"signature":"export function auditHarnessSurfaces(","ast_hash":"83eaaa24d175256e"},"src/cli/audit.ts#runAudit":{"symbol":"src/cli/audit.ts#runAudit","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":891,"end_line":1342,"signature":"export function runAudit(workspaceRoot: string, options: AuditOptions = {}): AuditReport","ast_hash":"252e1b9565b3d3ad"}}
+ast_fingerprints: {"src/cli/audit.ts#discoverAuditableFiles":{"symbol":"src/cli/audit.ts#discoverAuditableFiles","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":222,"end_line":358,"signature":"function discoverAuditableFiles(","ast_hash":"0504e415d5d11588"},"src/cli/audit.ts#auditHarnessSurfaces":{"symbol":"src/cli/audit.ts#auditHarnessSurfaces","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":387,"end_line":889,"signature":"export function auditHarnessSurfaces(","ast_hash":"83eaaa24d175256e"},"src/cli/audit.ts#runAudit":{"symbol":"src/cli/audit.ts#runAudit","file_path":"src/cli/audit.ts","file":"src/cli/audit.ts","kind":"function","start_line":894,"end_line":1352,"signature":"export function runAudit(workspaceRoot: string, options: AuditOptions = {}): AuditReport","ast_hash":"e489627e4d5d1230"}}
 tags: ["audit","global-rules","agy-config-auditor","hook-concurrency"]
 origin: "evolved"
 created_at: "2026-11-08T16:58:49.823Z"
-updated_at: "2026-11-23T20:22:13.435Z"
+updated_at: "2026-11-24T06:56:53.126Z"
 ---
 
 ## Symptom

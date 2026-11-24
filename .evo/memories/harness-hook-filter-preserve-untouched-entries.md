@@ -2,14 +2,14 @@
 id: harness-hook-filter-preserve-untouched-entries
 title: "Hook Config Filter Must Preserve Untouched Entries"
 l0_summary: "Hook cleanup dropped user entries with empty inner hooks; corrupt settings overwritten"
-created_commit: "105df52"
+created_commit: "09f2d69"
 created_branch: "main"
 target_symbols: ["removeClaudeSettings","syncDeclaredPreToolHooks","isEvoHookCommand"]
-ast_fingerprints: {"removeClaudeSettings":{"symbol":"removeClaudeSettings","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":909,"end_line":972,"signature":"export function removeClaudeSettings(filePath: string): boolean","ast_hash":"01fa9ea7106e32b1"},"syncDeclaredPreToolHooks":{"symbol":"syncDeclaredPreToolHooks","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":974,"end_line":1254,"signature":"export function syncDeclaredPreToolHooks(workspaceRoot: string): void","ast_hash":"d89c90a5aa0d99ae"},"isEvoHookCommand":{"symbol":"isEvoHookCommand","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":795,"end_line":824,"signature":"export function isEvoHookCommand(cmd: string, needle?: string): boolean","ast_hash":"40d06c89798cdf3e"}}
+ast_fingerprints: {"removeClaudeSettings":{"symbol":"removeClaudeSettings","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":910,"end_line":973,"signature":"export function removeClaudeSettings(filePath: string): boolean","ast_hash":"01fa9ea7106e32b1"},"syncDeclaredPreToolHooks":{"symbol":"syncDeclaredPreToolHooks","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":975,"end_line":1255,"signature":"export function syncDeclaredPreToolHooks(workspaceRoot: string): void","ast_hash":"d89c90a5aa0d99ae"},"isEvoHookCommand":{"symbol":"isEvoHookCommand","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":796,"end_line":825,"signature":"export function isEvoHookCommand(cmd: string, needle?: string): boolean","ast_hash":"40d06c89798cdf3e"}}
 tags: []
 origin: "evolved"
 created_at: "2026-10-31T18:26:36.261Z"
-updated_at: "2026-11-23T16:49:13.889Z"
+updated_at: "2026-11-24T06:56:53.212Z"
 ---
 
 ## Symptom

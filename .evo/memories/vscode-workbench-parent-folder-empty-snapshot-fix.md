@@ -2,14 +2,14 @@
 id: vscode-workbench-parent-folder-empty-snapshot-fix
 title: "VS Code Workbench Empty Snapshot When Parent Umbrella Folder Is Opened"
 l0_summary: "Empty Workbench in umbrella folder -> resolveActiveWorkspaceRoot returned parent -> walk doc URI & scan child .evo."
-created_commit: "2fdf9f6"
+created_commit: "09f2d69"
 created_branch: "main"
 target_symbols: ["src/ide/vscode-extension.ts#resolveActiveWorkspaceRoot","src/ide/vscode-extension.ts#activate"]
-ast_fingerprints: {"src/ide/vscode-extension.ts#resolveActiveWorkspaceRoot":{"symbol":"src/ide/vscode-extension.ts#resolveActiveWorkspaceRoot","file_path":"src/ide/vscode-extension.ts","file":"src/ide/vscode-extension.ts","kind":"function","start_line":253,"end_line":311,"signature":"export function resolveActiveWorkspaceRoot(vscode: any, fallbackCwd: string = process.cwd()): string","ast_hash":"5fb76e40cce4dd44"},"src/ide/vscode-extension.ts#activate":{"symbol":"src/ide/vscode-extension.ts#activate","file_path":"src/ide/vscode-extension.ts","file":"src/ide/vscode-extension.ts","kind":"function","start_line":436,"end_line":596,"signature":"export async function activate(","ast_hash":"1cfb529e6f7f5b22"}}
+ast_fingerprints: {"src/ide/vscode-extension.ts#resolveActiveWorkspaceRoot":{"symbol":"src/ide/vscode-extension.ts#resolveActiveWorkspaceRoot","file_path":"src/ide/vscode-extension.ts","file":"src/ide/vscode-extension.ts","kind":"function","start_line":253,"end_line":311,"signature":"export function resolveActiveWorkspaceRoot(vscode: any, fallbackCwd: string = process.cwd()): string","ast_hash":"5fb76e40cce4dd44"},"src/ide/vscode-extension.ts#activate":{"symbol":"src/ide/vscode-extension.ts#activate","file_path":"src/ide/vscode-extension.ts","file":"src/ide/vscode-extension.ts","kind":"function","start_line":437,"end_line":612,"signature":"export async function activate(","ast_hash":"393a7a3ff8c4b37f"}}
 tags: ["vscode","workbench","workspace","umbrella","git-diff"]
 origin: "evolved"
 created_at: "2026-11-14T04:48:17.319Z"
-updated_at: "2026-11-23T20:22:14.786Z"
+updated_at: "2026-11-24T06:56:54.621Z"
 ---
 
 ## Symptom

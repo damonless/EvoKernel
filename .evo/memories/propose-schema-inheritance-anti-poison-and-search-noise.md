@@ -2,15 +2,15 @@
 id: propose-schema-inheritance-anti-poison-and-search-noise
 title: "Gatekeeper Supersede Inheritance, UI/IDE Update Parity, Skeleton Hash Guard & Search Noise Filtering"
 l0_summary: "Fix supersede field/tag/review inheritance, UI/IDE skill L1/L2 & memory anchor parity, skeleton_hash guard & low_overlap filter"
-created_commit: "2fdf9f6"
+created_commit: "09f2d69"
 created_branch: "main"
 target_symbols: ["src/core/gatekeeper.ts#EvoGatekeeper.evaluateAndCommitInternal","src/mcp/handlers.ts#EvoMcpDispatcher.handleSearch","src/core/telemetry.ts#EvoTelemetry.search","src/core/memory.ts#verifyMemoryFreshness"]
-ast_fingerprints: {"src/core/gatekeeper.ts#EvoGatekeeper.evaluateAndCommitInternal":{"symbol":"src/core/gatekeeper.ts#EvoGatekeeper.evaluateAndCommitInternal","file_path":"src/core/gatekeeper/evaluator.ts","file":"src/core/gatekeeper/evaluator.ts","kind":"method","start_line":253,"end_line":270,"signature":"private evaluateAndCommitInternal(","ast_hash":"658afa72c1b88f37"},"src/mcp/handlers.ts#EvoMcpDispatcher.handleSearch":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher.handleSearch","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":1630,"end_line":1697,"signature":"private handleSearch(args: Record<string, unknown>, reqCtx: RequestContext)","ast_hash":"4c679c3369ef6cfa"},"src/core/telemetry.ts#EvoTelemetry.search":{"symbol":"src/core/telemetry.ts#EvoTelemetry.search","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"method","start_line":1840,"end_line":1958,"signature":"public search(","ast_hash":"5dbfdfb1aeba04eb"},"src/core/memory.ts#verifyMemoryFreshness":{"symbol":"src/core/memory.ts#verifyMemoryFreshness","file_path":"src/core/memory/freshness-verifier.ts","file":"src/core/memory/freshness-verifier.ts","kind":"function","start_line":1181,"end_line":1780,"signature":"export function verifyMemoryFreshness(","ast_hash":"1ade475f7015081e"}}
+ast_fingerprints: {"src/core/gatekeeper.ts#EvoGatekeeper.evaluateAndCommitInternal":{"symbol":"src/core/gatekeeper.ts#EvoGatekeeper.evaluateAndCommitInternal","file_path":"src/core/gatekeeper/evaluator.ts","file":"src/core/gatekeeper/evaluator.ts","kind":"method","start_line":290,"end_line":307,"signature":"private evaluateAndCommitInternal(","ast_hash":"658afa72c1b88f37"},"src/mcp/handlers.ts#EvoMcpDispatcher.handleSearch":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher.handleSearch","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"method","start_line":1635,"end_line":1702,"signature":"private handleSearch(args: Record<string, unknown>, reqCtx: RequestContext)","ast_hash":"4c679c3369ef6cfa"},"src/core/telemetry.ts#EvoTelemetry.search":{"symbol":"src/core/telemetry.ts#EvoTelemetry.search","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"method","start_line":1840,"end_line":1958,"signature":"public search(","ast_hash":"5dbfdfb1aeba04eb"},"src/core/memory.ts#verifyMemoryFreshness":{"symbol":"src/core/memory.ts#verifyMemoryFreshness","file_path":"src/core/memory/freshness-verifier.ts","file":"src/core/memory/freshness-verifier.ts","kind":"function","start_line":1181,"end_line":1800,"signature":"export function verifyMemoryFreshness(","ast_hash":"d9f6cb5403cc12d7"}}
 tags: ["gatekeeper","memory-poisoning","schema-coercion","search-noise","ui-parity"]
 origin: "evolved"
 supersedes_id: "3ku-session-propose-schema-and-poisoned-memory-gaps"
 created_at: "2026-11-10T09:24:27.691Z"
-updated_at: "2026-11-23T20:22:14.442Z"
+updated_at: "2026-11-24T06:56:54.233Z"
 ---
 
 ## Symptom

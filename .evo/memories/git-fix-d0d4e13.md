@@ -2,15 +2,14 @@
 id: git-fix-d0d4e13
 title: "Historical Fix Case (d0d4e13): Global Fallback Isolation, Parent Git Stealth & SQLite FTS5 Resilience"
 l0_summary: "Fixes uninitialized repo pollution, parent .git discovery in subdirectories, and SQLite FTS5 missing module crash on Node v22."
-created_commit: "2fdf9f6"
+created_commit: "09f2d69"
 created_branch: "main"
 target_symbols: ["src/cli/index.ts#resolveWorkspaceRoot","src/cli/init.ts#findGitRoot","src/core/telemetry.ts#EvoTelemetry"]
-ast_fingerprints: {"src/cli/index.ts#resolveWorkspaceRoot":{"symbol":"src/cli/index.ts#resolveWorkspaceRoot","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":591,"end_line":645,"signature":"export function resolveWorkspaceRoot(","ast_hash":"f83e1694cb4be3fe"},"src/cli/init.ts#findGitRoot":{"symbol":"src/cli/init.ts#findGitRoot","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":40,"end_line":42,"signature":"export function findGitRoot(startDir: string): string | null","ast_hash":"d532c612ce267933"},"src/core/telemetry.ts#EvoTelemetry":{"symbol":"src/core/telemetry.ts#EvoTelemetry","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"class","start_line":916,"end_line":2829,"signature":"export class EvoTelemetry","ast_hash":"e2d513eedcbf924b"}}
+ast_fingerprints: {"src/cli/index.ts#resolveWorkspaceRoot":{"symbol":"src/cli/index.ts#resolveWorkspaceRoot","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":599,"end_line":653,"signature":"export function resolveWorkspaceRoot(","ast_hash":"f83e1694cb4be3fe"},"src/cli/init.ts#findGitRoot":{"symbol":"src/cli/init.ts#findGitRoot","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":41,"end_line":43,"signature":"export function findGitRoot(startDir: string): string | null","ast_hash":"d532c612ce267933"},"src/core/telemetry.ts#EvoTelemetry":{"symbol":"src/core/telemetry.ts#EvoTelemetry","file_path":"src/core/telemetry.ts","file":"src/core/telemetry.ts","kind":"class","start_line":916,"end_line":2829,"signature":"export class EvoTelemetry","ast_hash":"e2d513eedcbf924b"}}
 tags: ["git-history","fix","workspace-isolation","fts5","stealth"]
 origin: "evolved"
-supersedes_id: "git-fix-d0d4e13"
 created_at: "2026-10-21T15:16:26.906Z"
-updated_at: "2026-11-23T20:22:13.400Z"
+updated_at: "2026-11-24T06:56:53.086Z"
 ---
 
 ## Symptom
