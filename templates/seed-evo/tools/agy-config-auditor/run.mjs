@@ -63,6 +63,7 @@ function resolveDistDir() {
     { root: process.env.EVO_PACKAGE_ROOT ? path.resolve(process.env.EVO_PACKAGE_ROOT) : '', requireBin: false },
     { root: process.env.EVO_KERNEL_ROOT ? path.resolve(process.env.EVO_KERNEL_ROOT) : '', requireBin: false },
     { root: path.resolve(import.meta.dirname, '..', '..', '..'), requireBin: true },
+    { root: path.resolve(import.meta.dirname, '..', '..', '..', '..'), requireBin: true },
     {
       root: process.env.APPDATA
         ? path.join(process.env.APPDATA, 'npm', 'node_modules', 'evo-kernel')

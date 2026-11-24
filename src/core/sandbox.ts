@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import type { SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -607,13 +608,15 @@ export function executeSandboxedScript(
   );
 
   const start = Date.now();
-  const res = spawnSync(cmd, cmdArgs, {
+  const spawnOpts: SpawnSyncOptionsWithStringEncoding & { detached?: boolean } = {
     cwd,
     encoding: 'utf8',
     timeout: timeoutMs,
     windowsHide: true,
+    detached: process.platform !== 'win32',
     env,
-  });
+  };
+  const res = spawnSync(cmd, cmdArgs, spawnOpts);
 
   const durationMs = Date.now() - start;
   const timedOut = Boolean(res.error && (res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT');

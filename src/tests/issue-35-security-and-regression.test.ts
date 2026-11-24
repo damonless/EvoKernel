@@ -178,7 +178,15 @@ describe('Issue #35 Security, Parity & Regression Suite (100% Hermetic)', () => 
     const localAuditor = path.join(localAuditorDir, 'run.mjs');
     fs.copyFileSync(path.join(REPO_ROOT, 'templates', 'seed-evo', 'tools', 'agy-config-auditor', 'run.mjs'), localAuditor);
 
-    const envNoPkgRoot: NodeJS.ProcessEnv = { ...process.env, EVO_WORKSPACE: ws, EVO_GLOBAL_DIR: globalDir };
+    const envNoPkgRoot: NodeJS.ProcessEnv = {
+      ...process.env,
+      EVO_WORKSPACE: ws,
+      EVO_GLOBAL_DIR: globalDir,
+      EVO_KERNEL_ROOT: REPO_ROOT,
+      HOME: globalDir,
+      USERPROFILE: globalDir,
+      APPDATA: globalDir,
+    };
     delete envNoPkgRoot.EVO_PACKAGE_ROOT;
     const audRes = spawnSync(process.execPath, [localAuditor], {
       cwd: ws,
