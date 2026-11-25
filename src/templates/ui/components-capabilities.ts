@@ -5,6 +5,10 @@ export function renderCapabilitiesViewsHtml(): string {
         <div class="hero-learned-strip" id="hero-learned-strip">
           <div class="hero-learned-hdr">
             <span class="hero-learned-title" id="hero-learned-title">What EvoKernel Has Learned</span>
+            <div class="hero-helped-badge" id="hero-card-recently-helped">
+              <span class="hero-helped-badge-lbl" id="hero-recently-helped-lbl">Recently Helped</span>
+              <span class="hero-helped-badge-val" id="hero-recently-helped-list"></span>
+            </div>
           </div>
           <div class="hero-learned-grid">
             <div class="hero-learned-card" id="hero-card-about-you">
@@ -18,10 +22,6 @@ export function renderCapabilitiesViewsHtml(): string {
             <div class="hero-learned-card" id="hero-card-this-project">
               <div class="hero-card-label" id="hero-this-project-lbl">This Project</div>
               <div class="hero-card-list" id="hero-this-project-list"></div>
-            </div>
-            <div class="hero-learned-card" id="hero-card-recently-helped">
-              <div class="hero-card-label" id="hero-recently-helped-lbl">Recently Helped</div>
-              <div class="hero-card-list" id="hero-recently-helped-list"></div>
             </div>
           </div>
         </div>
@@ -416,20 +416,14 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       }
     }
 
-    // 3. Recently Helped: 7-day avoided issues & adoption
+    // 3. Recently Helped: compact inline 7-day badge in .hero-learned-hdr
     var helpedList = el('hero-recently-helped-list');
     if (helpedList) {
-      helpedList.innerHTML = '';
       var w7 = getWindow7dStats();
-      var summaryDiv = document.createElement('div');
-      summaryDiv.className = 'hero-card-item';
-      summaryDiv.style.whiteSpace = 'normal';
-      summaryDiv.style.lineHeight = '1.45';
-      summaryDiv.textContent = dict.heroHelpedSummary
+      helpedList.textContent = dict.heroHelpedSummary
         .replace('{pitfalls}', String(w7.pitfallsAvoided))
         .replace('{adopted}', String(w7.helped))
         .replace('{searches}', String(w7.searches));
-      helpedList.appendChild(summaryDiv);
     }
   }
 

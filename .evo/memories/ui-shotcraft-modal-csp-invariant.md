@@ -2,14 +2,14 @@
 id: ui-shotcraft-modal-csp-invariant
 title: "Interactive Theater Modal CSP & Constellation Cutout Invariants"
 l0_summary: "Interactive Theater Modal CSP & Constellation Cutout Scaling Invariant"
-created_commit: "a703e18"
+created_commit: "6a6a48b"
 created_branch: "main"
 target_symbols: ["src/templates/ui-client.ts#renderUiClientHtml","src/cli/score.ts#renderScoreSvg","scripts/render-promo-assets.mjs#findBrowserExecutable"]
-ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui/shell.ts","file":"src/templates/ui/shell.ts","kind":"function","start_line":12,"end_line":301,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"d2c58d2589da2b1e"},"src/cli/score.ts#renderScoreSvg":{"symbol":"src/cli/score.ts#renderScoreSvg","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":1014,"end_line":1143,"signature":"export function renderScoreSvg(report: ScoreReport): string","ast_hash":"31a2124f6b86b44c"},"scripts/render-promo-assets.mjs#findBrowserExecutable":{"symbol":"scripts/render-promo-assets.mjs#findBrowserExecutable","file_path":"scripts/render-promo-assets.mjs","file":"scripts/render-promo-assets.mjs","kind":"function","start_line":26,"end_line":42,"signature":"function findBrowserExecutable()","ast_hash":"c46a20bf576b248a"}}
+ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui/shell.ts","file":"src/templates/ui/shell.ts","kind":"function","start_line":12,"end_line":301,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"6fc30f532ab2135b"},"src/cli/score.ts#renderScoreSvg":{"symbol":"src/cli/score.ts#renderScoreSvg","file_path":"src/cli/score.ts","file":"src/cli/score.ts","kind":"function","start_line":1014,"end_line":1143,"signature":"export function renderScoreSvg(report: ScoreReport): string","ast_hash":"31a2124f6b86b44c"},"scripts/render-promo-assets.mjs#findBrowserExecutable":{"symbol":"scripts/render-promo-assets.mjs#findBrowserExecutable","file_path":"scripts/render-promo-assets.mjs","file":"scripts/render-promo-assets.mjs","kind":"function","start_line":26,"end_line":42,"signature":"function findBrowserExecutable()","ast_hash":"c46a20bf576b248a"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-04T19:20:13.278Z"
-updated_at: "2026-11-25T07:25:08.223Z"
+updated_at: "2026-11-25T08:32:21.650Z"
 ---
 
 ## Symptom

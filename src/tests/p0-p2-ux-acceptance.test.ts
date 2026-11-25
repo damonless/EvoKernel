@@ -985,4 +985,197 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
       dispatcher.close();
     }
   });
+
+  // =========================================================================
+  // Final Sign-Off Parity: Pages copy, Shell pre-hydration, 2-col Hero,
+  // Arbitrary-depth quote-free hooks.json, .evo/config.json 0.5.0, README, mcp_config.json
+  // =========================================================================
+  test('Sign-Off Parity: Pages copy, pre-hydration shell & 2-col hero, arbitrary-depth hooks.json, config 0.5.0, README, and mcp_config.json', () => {
+    const runShell = (cmd: string, cwd: string, env: NodeJS.ProcessEnv, stdinText: string) => {
+      if (process.platform === 'win32') {
+        return spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${cmd}"`], {
+          cwd,
+          env,
+          input: stdinText,
+          encoding: 'utf8',
+          windowsVerbatimArguments: true,
+          timeout: 15000,
+        });
+      }
+      return spawnSync('sh', ['-c', cmd], {
+        cwd,
+        env,
+        input: stdinText,
+        encoding: 'utf8',
+        timeout: 15000,
+      });
+    };
+
+    // 1. scripts/build-pages.mjs copy parity (Silent Recall, plain language, zero legacy receipts/jargon)
+    const buildPagesSrc = fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'build-pages.mjs'), 'utf8');
+    for (const banned of [
+      '🛡️ EvoKernel Recall',
+      '单行可见回执',
+      'AST-Verified* Cognitive Memory & Recall Receipts',
+      'AST-Verified* Cognitive Memory &amp; Recall Receipts',
+      '词法-结构骨架哈希锚定',
+      '全局个人画像',
+    ]) {
+      assert.strictEqual(
+        buildPagesSrc.includes(banned),
+        false,
+        `scripts/build-pages.mjs must not contain stale jargon/receipt copy: ${banned}`
+      );
+    }
+    assert.ok(buildPagesSrc.includes('Silent Recall'), 'build-pages.mjs EN copy must reflect Silent Recall');
+    assert.ok(buildPagesSrc.includes('静默召回'), 'build-pages.mjs ZH copy must reflect Silent Recall');
+
+    // 2. shell.ts pre-hydration strings, clickable bento cards, and 2-column hero strip
+    const ws = makeTempDir('evo-signoff-ws-');
+    const homeDir = makeTempDir('evo-signoff-home-');
+    runInit(ws, { targets: ['claude'], globalHomeDir: homeDir });
+    const html = renderUiClientHtml(buildUiSnapshot(ws), { token: 'tok-signoff', isExport: false });
+    const preHydrationHtml = html.slice(0, html.indexOf('<script>'));
+
+    for (const legacy of [
+      'Live SSE Server',
+      '>Topology<',
+      '>Gatekeeper<',
+      'Zero-leak AST* shielding',
+      'Prompt Tax Saved',
+      'Virtual Footprint',
+      '>Prompt Tax<',
+      'Workspace Pulse',
+    ]) {
+      assert.strictEqual(
+        preHydrationHtml.includes(legacy),
+        false,
+        `Pre-hydration HTML must not contain legacy label: ${legacy}`
+      );
+    }
+
+    assert.match(preHydrationHtml, /class="bento-card clickable"[^>]*id="bento-health"[^>]*role="button"/);
+    assert.match(preHydrationHtml, /class="bento-card clickable"[^>]*id="bento-budget"[^>]*role="button"/);
+    assert.match(preHydrationHtml, /<div class="bento-card" id="bento-savings">/);
+    assert.match(preHydrationHtml, /<div class="bento-card" id="bento-recall-7d">/);
+    assert.match(preHydrationHtml, /<div class="bento-card bento-treemap-card" id="bento-treemap-card">/);
+    assert.ok(preHydrationHtml.includes('grid-template-columns: repeat(2, minmax(0, 1fr));'), 'Hero strip grid must be 2-column');
+    const hdrIdx = preHydrationHtml.indexOf('class="hero-learned-hdr"');
+    const helpedIdx = preHydrationHtml.indexOf('id="hero-card-recently-helped"');
+    const gridIdx = preHydrationHtml.indexOf('class="hero-learned-grid"');
+    assert.ok(
+      hdrIdx !== -1 && helpedIdx > hdrIdx && helpedIdx < gridIdx,
+      '#hero-card-recently-helped must be compacted inside .hero-learned-hdr before .hero-learned-grid'
+    );
+
+    // 3. hooks.json resilient path discovery (repo root, 4 levels deep, global plugin fallback, unrelated empty dir)
+    const rootHooks = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'hooks.json'), 'utf8'));
+    const preCmd = String(rootHooks['evo-evolution-reminder'].PreInvocation[0].command);
+    const stopCmd = String(rootHooks['evo-evolution-reminder'].Stop[0].command);
+    assert.strictEqual(preCmd.includes('"'), false, 'hooks.json PreInvocation must be quote-free');
+    assert.strictEqual(stopCmd.includes('"'), false, 'hooks.json Stop must be quote-free');
+
+    const emptyHome = makeTempDir('evo-hook-empty-home-');
+    const emptyEnv = makeIsolatedEnv(emptyHome);
+    const payload = JSON.stringify({ conversationId: 'conv-signoff-depth' });
+
+    // (a) Repo root
+    for (const [ev, cmd, check] of [
+      ['PreInvocation', preCmd, (out: string) => assert.strictEqual(out.trim(), '{}')],
+      ['Stop', stopCmd, (out: string) => assert.strictEqual(JSON.parse(out.trim()).decision, 'allow')],
+    ] as const) {
+      const rRoot = runShell(cmd, REPO_ROOT, emptyEnv, payload);
+      assert.strictEqual(rRoot.status, 0, `hooks.json ${ev} failed at repo root: ${rRoot.stderr}`);
+      assert.strictEqual(rRoot.stderr, '', `hooks.json ${ev} must emit zero stderr at repo root`);
+      check(rRoot.stdout);
+    }
+
+    // (b) 4 levels deep inside workspace
+    const deepRoot = makeTempDir('evo-hook-deep-');
+    const deepSub = path.join(deepRoot, 'lvl1', 'lvl2', 'lvl3', 'lvl4');
+    fs.mkdirSync(deepSub, { recursive: true });
+    fs.mkdirSync(path.join(deepRoot, '.agents', 'scripts'), { recursive: true });
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'scripts', 'antigravity_hook.mjs'),
+      path.join(deepRoot, '.agents', 'scripts', 'antigravity_hook.mjs')
+    );
+    for (const [ev, cmd, check] of [
+      ['PreInvocation', preCmd, (out: string) => assert.strictEqual(out.trim(), '{}')],
+      ['Stop', stopCmd, (out: string) => assert.strictEqual(JSON.parse(out.trim()).decision, 'allow')],
+    ] as const) {
+      const rDeep = runShell(cmd, deepSub, emptyEnv, payload);
+      assert.strictEqual(rDeep.status, 0, `hooks.json ${ev} failed 4 levels deep: ${rDeep.stderr}`);
+      assert.strictEqual(rDeep.stderr, '', `hooks.json ${ev} must emit zero stderr 4 levels deep`);
+      check(rDeep.stdout);
+    }
+
+    // (c) Unrelated directory with global plugin fallback
+    const unrelatedDir = makeTempDir('evo-hook-unrelated-');
+    const pluginHome = makeTempDir('evo-hook-plugin-home-');
+    const pluginScriptsDir = path.join(pluginHome, '.gemini', 'config', 'plugins', 'evo-kernel', 'scripts');
+    fs.mkdirSync(pluginScriptsDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'scripts', 'antigravity_hook.mjs'),
+      path.join(pluginScriptsDir, 'antigravity_hook.mjs')
+    );
+    const pluginEnv = makeIsolatedEnv(pluginHome);
+    for (const [ev, cmd, check] of [
+      ['PreInvocation', preCmd, (out: string) => assert.strictEqual(out.trim(), '{}')],
+      ['Stop', stopCmd, (out: string) => assert.strictEqual(JSON.parse(out.trim()).decision, 'allow')],
+    ] as const) {
+      const rPlug = runShell(cmd, unrelatedDir, pluginEnv, payload);
+      assert.strictEqual(rPlug.status, 0, `hooks.json ${ev} failed via plugin fallback: ${rPlug.stderr}`);
+      assert.strictEqual(rPlug.stderr, '', `hooks.json ${ev} must emit zero stderr via plugin fallback`);
+      check(rPlug.stdout);
+    }
+
+    // (d) Unrelated directory with NO hook script anywhere -> silent exit 0
+    for (const [ev, cmd] of [
+      ['PreInvocation', preCmd],
+      ['Stop', stopCmd],
+    ] as const) {
+      const rMissing = runShell(cmd, unrelatedDir, emptyEnv, payload);
+      assert.strictEqual(rMissing.status, 0, `hooks.json ${ev} must exit 0 silently when not found: ${rMissing.stderr}`);
+      assert.strictEqual(rMissing.stderr, '', `hooks.json ${ev} must produce zero stderr when not found`);
+      assert.strictEqual(rMissing.stdout, '', `hooks.json ${ev} must exit silently when not found`);
+    }
+
+    // 4. .evo/config.json version matches package.json (0.5.0)
+    const pkgJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+    const evoConfig = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.evo', 'config.json'), 'utf8'));
+    assert.strictEqual(evoConfig.version, pkgJson.version, '.evo/config.json version must stay synced with package.json');
+
+    // 5. README.zh-CN.md & README.md terminology polish
+    const zhReadme = fs.readFileSync(path.join(REPO_ROOT, 'README.zh-CN.md'), 'utf8');
+    const enReadme = fs.readFileSync(path.join(REPO_ROOT, 'README.md'), 'utf8');
+    const zhQuickSlice = zhReadme.slice(0, zhReadme.indexOf('## 🔒'));
+    assert.strictEqual(zhQuickSlice.includes('全局个人画像'), false, 'README.zh-CN.md Quick Start must use 个人习惯 instead of 全局个人画像');
+    assert.strictEqual(zhReadme.includes('Personal Profile Studio'), false, 'README.zh-CN.md must not reference old Personal Profile Studio name');
+    assert.strictEqual(enReadme.includes('Personal Profile Studio'), false, 'README.md must not reference old Personal Profile Studio name');
+
+    // 6. mcp_config.json handles scripts/boot-mcp.mjs from nested subdirectories even when dist/ is absent
+    const mcpConfig = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'mcp_config.json'), 'utf8'));
+    const mcpArgs: string[] = mcpConfig.mcpServers['evo-kernel'].args;
+    assert.strictEqual(mcpArgs[0], '-e', 'mcp_config.json must keep args[0] === "-e" for plugin bootstrap guard');
+    const mockClone = makeTempDir('evo-mcp-clone-');
+    const nestedClone = path.join(mockClone, 'a', 'b', 'c');
+    fs.mkdirSync(nestedClone, { recursive: true });
+    fs.mkdirSync(path.join(mockClone, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(mockClone, 'src', 'cli'), { recursive: true });
+    fs.copyFileSync(path.join(REPO_ROOT, 'scripts', 'build.mjs'), path.join(mockClone, 'scripts', 'build.mjs'));
+    fs.copyFileSync(path.join(REPO_ROOT, 'scripts', 'boot-mcp.mjs'), path.join(mockClone, 'scripts', 'boot-mcp.mjs'));
+    fs.writeFileSync(
+      path.join(mockClone, 'src', 'cli', 'index.ts'),
+      'const m: string = process.argv[2] || ""; console.log(JSON.stringify({ booted: true, mode: m }));\n',
+      'utf8'
+    );
+    const mcpRes = spawnSync(process.execPath, mcpArgs, {
+      cwd: nestedClone,
+      env: emptyEnv,
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.strictEqual(mcpRes.status, 0, `mcp_config.json nested boot-mcp auto-build failed: ${mcpRes.stderr}`);
+    assert.deepStrictEqual(JSON.parse(mcpRes.stdout.trim()), { booted: true, mode: 'mcp' });
+  });
 });

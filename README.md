@@ -45,7 +45,7 @@ npx -y evo-kernel ui
 **Choosing the right `init` mode:**
 - `npx -y evo-kernel init --global` — Remember **your personal habits & workflows** across Claude Code, Codex, Cursor, Gemini, Windsurf, Cline, Roo, and OpenCode.
 - `npx -y evo-kernel init` — Add **project rules & code-verified lessons** to this repository (add `--stealth` to keep git clean).
-- `npx -y evo-kernel init --all` — Set up **both** this repository and your global personal profile in one command (preview anytime with `--dry-run`).
+- `npx -y evo-kernel init --all` — Set up **both** this repository and your personal habits & workflows in one command (preview anytime with `--dry-run`).
 
 ### 👀 See what it knows / Undo / Forget
 
@@ -90,7 +90,7 @@ git clone https://github.com/damonless/EvoKernel.git
 cd EvoKernel
 node ./scripts/build.mjs
 
-# Set up both project memory and global personal profile (preview first with --dry-run)
+# Set up both project memory and personal habits (preview first with --dry-run)
 node ./dist/cli/index.js init --all --dry-run
 node ./dist/cli/index.js init --targets auto --stealth
 
@@ -353,7 +353,7 @@ Propose a persistent cross-workspace habit or personal lesson directly from any 
 - **Tier 1 — Always-On Profile Card (`800`-token full-rendered budget)**: `always_on: true` preferences (`style | formatting | communication | workflow | requirement | knowledge`) compile into `profile-digest.md` (isolated from repo 1,500-token core invariants) and push cleanly between `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` markers across **8 desktop AI hosts**: `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`, `~/.codex/AGENTS.md`, `~/.codeium/windsurf/memories/global_rules.md` (with 6,000-char guard), `~/.cursor/rules/evo-user-profile.mdc`, `~/.cline/rules/evo-user-profile.md`, `~/.roo/rules/evo-user-profile.md`, and `~/.config/opencode/AGENTS.md`.
 - **Tier 2 — Live Task & Workflow Directory Menu (`250`-token cap)**: Set `always_on: false` with `trigger_cue` (alongside non-seed global skills) to render an on-demand directory menu beside the Profile Card so agents semantically call `evo_inspect(id, "L2")` when a matching task begins.
 - **Tier 3 — Global Personal Experience Memory (`memory_type: "personal"`)**: Store non-code cross-workspace lessons (`scope: "global"`, no AST symbol binding required, tagged `[PERSONAL]`) and recall via `evo_search(query, scope: "global")` with an expanded bilingual office/writing/workflow lexicon.
-- **Instant Activation & 1-Second Undo**: Explicit preferences & personal memories activate immediately (`approved`) with visible receipts and append-only `profile-history.jsonl`, supporting 1-click rollback via `evo profile undo` or the Workbench **Personal Profile Studio**.
+- **Instant Activation & 1-Second Undo**: Explicit preferences & personal memories activate immediately (`approved`) with plain `human_receipt` confirmations and append-only `profile-history.jsonl`, supporting 1-click rollback via `evo profile undo`, in-chat `evo_propose(undo: true)`, or the Workbench **Personal Profile** view.
 - **Deterministic Causal Outcome Attribution (`ERR_CONFOUNDED_CAUSATION`)**: Tracks `helped`, `hurt`, and `contested` recall outcomes in SQLite and blocks single-variable credit assignment when multiple capabilities fire in the same bug-fix loop unless Stage-3 **Topology Penetration Anchors** prove causation.
 
 </details>
@@ -447,7 +447,7 @@ EvoKernel features a zero-dependency test suite executed via native Node test ru
 node ./scripts/test.mjs
 ```
 
-**400 tests across 17 test suites pass via `node ./scripts/test.mjs` with 0 failures:**
+**402 tests across 17 test suites pass via `node ./scripts/test.mjs` with 0 failures:**
 
 <details>
 <summary><b>🔍 View All 17 Verified Test Suites (Click to expand)</b></summary>
@@ -466,7 +466,7 @@ node ./scripts/test.mjs
 | 10 | `dist/tests/lifecycle-guard-hooks.test.js` | Lifecycle Guard Hooks, Trigger Cues & Reference Integrity | 27 tests |
 | 11 | `dist/tests/mcp-proxy.test.js` | Downstream MCP Proxy Virtualization Suite | 11 tests |
 | 12 | `dist/tests/multi-harness.test.js` | Multi-Agent Harness Matrix & Cascaded Detection Suite | 15 tests |
-| 13 | `dist/tests/p0-p2-ux-acceptance.test.js` | P0–P2 UX & Reliability Overhaul Acceptance Suite | 9 tests |
+| 13 | `dist/tests/p0-p2-ux-acceptance.test.js` | P0–P2 UX & Reliability Overhaul Acceptance Suite | 11 tests |
 | 14 | `dist/tests/score-and-ui.test.js` | Score, EvoKernel Workbench UI & Control API, Warmup & Slash Commands Suite | 31 tests |
 | 15 | `dist/tests/surface-audit-and-hardening.test.js` | Multi-Harness Silent-Failure Audit Matrix & S0-S3 Hardening Suite | 69 tests |
 | 16 | `dist/tests/ux-hardening-and-zero-friction.test.js` | UX Hardening & Zero-Friction Suite (AC-01..AC-13) | 10 tests |

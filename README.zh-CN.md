@@ -45,7 +45,7 @@ npx -y evo-kernel ui
 **三种初始化模式怎么选：**
 - `npx -y evo-kernel init --global` — 记住**你的个人习惯与工作流**，自动同步到 Claude Code、Codex、Cursor、Gemini、Windsurf、Cline、Roo 和 OpenCode。
 - `npx -y evo-kernel init` — 给**当前项目仓库**启用规则护栏与代码校验避坑记忆（加 `--stealth` 可保持 Git 工作区零改动）。
-- `npx -y evo-kernel init --all` — 一次同时初始化**当前仓库 + 全局个人画像**（随时可加 `--dry-run` 先预览）。
+- `npx -y evo-kernel init --all` — 一次同时初始化**当前仓库 + 个人习惯**（随时可加 `--dry-run` 先预览）。
 
 ### 👀 随时查看 / 撤销 / 忘掉它记住的内容
 
@@ -90,7 +90,7 @@ git clone https://github.com/damonless/EvoKernel.git
 cd EvoKernel
 node ./scripts/build.mjs
 
-# 一次初始化仓库与全局个人画像（可先用 --dry-run 预览）
+# 一次初始化仓库与个人习惯（可先用 --dry-run 预览）
 node ./dist/cli/index.js init --all --dry-run
 node ./dist/cli/index.js init --targets auto --stealth
 
@@ -353,7 +353,7 @@ evo profile path             # 打印全局根目录、preferences 目录与 pro
 - **Tier 1 — 常驻个人画像卡片（`800`-Token 全渲染预算）**：`always_on: true` 的偏好（`style | formatting | communication | workflow | requirement | knowledge`）会编译为 `profile-digest.md`（与仓库 1,500-Token 核心不变式彻底隔离），并通过 `<!-- EVO:PROFILE:START -->...<!-- EVO:PROFILE:END -->` 标记精准推送至 **8 大桌面 AI 宿主**：`~/.claude/CLAUDE.md`、`~/.gemini/GEMINI.md`、`~/.codex/AGENTS.md`、`~/.codeium/windsurf/memories/global_rules.md`（内置 6,000 字符安全截断）、`~/.cursor/rules/evo-user-profile.mdc`、`~/.cline/rules/evo-user-profile.md`、`~/.roo/rules/evo-user-profile.md` 与 `~/.config/opencode/AGENTS.md`。
 - **Tier 2 — 动态任务与工作流目录菜单（`250`-Token 上限）**：将偏好设为 `always_on: false` 并填写 `trigger_cue`（连同非种子全局技能），即可在画像卡片旁生成按需目录菜单，智能体在匹配任务开始前即可语义化调用 `evo_inspect(id, "L2")` 加载完整工作流。
 - **Tier 3 — 全局非代码个人经验记忆（`memory_type: "personal"`）**：支持存储跨工作区非代码经验教训（`scope: "global"`，无需代码 AST 符号绑定，标记 `[PERSONAL]`），配合扩充的双语办公/写作/工作流词库通过 `evo_search(query, scope: "global")` 召回。
-- **即时生效与 1 秒撤销**：显式偏好与个人经验提交后立即生效（`approved`）并输出可见回执，同时写入只追加账本 `profile-history.jsonl`，支持通过 `evo profile undo` 或 Workbench **Personal Profile Studio** 一键回滚。
+- **即时生效与 1 秒撤销**：显式偏好与个人经验提交后立即生效（`approved`）并返回简明回执（`human_receipt`），同时写入只追加账本 `profile-history.jsonl`，支持通过 `evo profile undo`、对话内 `evo_propose(undo: true)` 或 Workbench **个人画像**视图一键回滚。
 - **防因果混淆门禁 (`ERR_CONFOUNDED_CAUSATION`)**：在 SQLite 中细粒度记录 `helped`、`hurt`、`contested` 成效账本；当单次排障周期内多条能力同时命中时自动阻断单一变量抢功，要求提供 Stage-3 **拓扑穿透锚点**证明真实因果。
 
 </details>
@@ -448,7 +448,7 @@ EvoKernel 配备了基于 Node 原生测试运行器（`node:test`）的零外�
 node ./scripts/test.mjs
 ```
 
-**400 项单元与集成测试、17 个测试套件通过 `node ./scripts/test.mjs` 验证（0 失败）：**
+**402 项单元与集成测试、17 个测试套件通过 `node ./scripts/test.mjs` 验证（0 失败）：**
 
 <details>
 <summary><b>🔍 查看全部 17 个验证测试套件清单（点击展开）</b></summary>
@@ -467,7 +467,7 @@ node ./scripts/test.mjs
 | 10 | `dist/tests/lifecycle-guard-hooks.test.js` | 门禁触发词、前置阻断与引用完整性测试套件 | 27 tests |
 | 11 | `dist/tests/mcp-proxy.test.js` | 下游 MCP 代理与动态虚拟化测试套件 | 11 tests |
 | 12 | `dist/tests/multi-harness.test.js` | 10 款智能体宿主多环境级联探测与安装测试套件 | 15 tests |
-| 13 | `dist/tests/p0-p2-ux-acceptance.test.js` | P0–P2 用户体验与可靠性全面改造验收测试套件 | 9 tests |
+| 13 | `dist/tests/p0-p2-ux-acceptance.test.js` | P0–P2 用户体验与可靠性全面改造验收测试套件 | 11 tests |
 | 14 | `dist/tests/score-and-ui.test.js` | 体检评分、EvoKernel Workbench 工作台与交互 API、热身与快捷指令套件 | 31 tests |
 | 15 | `dist/tests/surface-audit-and-hardening.test.js` | 多宿主静默失败表面审计矩阵与 S0-S3 全链路加固测试套件 | 69 tests |
 | 16 | `dist/tests/ux-hardening-and-zero-friction.test.js` | 零摩擦体验加固与静态快照安全回归套件 (AC-01..AC-13) | 10 tests |

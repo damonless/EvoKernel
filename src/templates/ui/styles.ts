@@ -501,6 +501,10 @@ export const UI_STYLES = `
       gap: 2px;
       transition: border-color var(--duration-micro) ease;
     }
+    .bento-card[role="button"],
+    .bento-card.clickable {
+      cursor: pointer;
+    }
     .bento-card[role="button"]:hover,
     .bento-card.clickable:hover {
       border-color: var(--border-focus);
@@ -2329,6 +2333,7 @@ export const UI_STYLES = `
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
       gap: 8px;
     }
     .hero-learned-title {
@@ -2336,9 +2341,35 @@ export const UI_STYLES = `
       font-weight: 600;
       color: var(--text-primary);
     }
+    .hero-helped-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 8px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      font-size: var(--text-xs);
+      color: var(--text-secondary);
+      max-width: 100%;
+    }
+    .hero-helped-badge-lbl {
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .hero-helped-badge-val {
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .hero-learned-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
     }
     .hero-learned-card {

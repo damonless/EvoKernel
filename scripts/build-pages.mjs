@@ -81,16 +81,16 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       kpi4Sub: 'Pure Node.js built-ins · 100% local SQLite',
       showcaseLabel: 'EvoKernel Workbench — Click to explore interactive sanitized snapshot (./demo/)',
       showcaseCta: 'Launch Interactive Demo →',
-      secPillars: 'Three Deterministic Pillars',
-      p1Tag: 'MEMORY · ANTI-DRIFT',
-      p1Title: 'AST-Verified* Cognitive Memory & Recall Receipts',
-      p1Desc: 'Root-cause fixes bind to live code symbols via lexical-structural skeleton hashes. Stale memories auto-demote when code changes, and active recalls emit a visible 1-line receipt (🛡️ EvoKernel Recall).',
-      p2Tag: 'GATEKEEPER · AST GROUNDING',
-      p2Title: '6-Stage Deterministic Gatekeeper & Conflict Guard',
-      p2Desc: 'Every candidate rule, skill, micro-tool, personal preference, or memory must pass static security, lexical de-symbolization, isolated --self-test rollback, hybrid BM25 + polarity conflict checks, 1,500-tok core / 800-tok profile / 250-tok directory budgets, and causal attribution.',
-      p3Tag: 'VIRTUALIZATION · 10 PROJECT / 8 PROFILE HOSTS',
-      p3Title: 'Fixed 5-Tool Meta-MCP (10 Project Hosts) & 8-Host Personal Profile Sync',
-      p3Desc: 'Folds sprawling third-party MCP schemas, monolithic CLAUDE.md files, and 3-tier personal habits/workflows/experiences behind evo_search, evo_inspect, evo_run, evo_propose, and evo_compact — supporting 10 project-memory hosts (incl. Copilot) and 8 desktop hosts for global personal-profile sync.',
+      secPillars: 'Three Core Pillars',
+      p1Tag: 'MEMORY · CODE-VERIFIED',
+      p1Title: 'Code-Verified Project Lessons & Silent Recall',
+      p1Desc: 'Project lessons link directly to live functions and files*. When code changes, outdated lessons flag automatically — and relevant rules or habits recall silently in the background without cluttering chat.',
+      p2Tag: 'SAFETY CHECKS · CONFLICT GUARD',
+      p2Title: '6-Stage Safety Gatekeeper & Instant Undo',
+      p2Desc: 'Every saved habit, rule, workflow, tool, or lesson passes static security, isolated --self-test checks, duplicate & conflict guards, and strict token budgets (1,500-tok core / 800-tok habits / 250-tok workflows) — with 1-second undo.',
+      p3Tag: 'ONE GATEWAY · 10 PROJECT / 8 HABIT HOSTS',
+      p3Title: 'Fixed 5-Tool MCP Gateway & Cross-Tool Habit Sync',
+      p3Desc: 'Folds sprawling MCP servers, bloated rule files, and your personal habits/workflows behind 5 fixed tools (evo_search, evo_inspect, evo_run, evo_propose, evo_compact) — syncing project memory across 10 AI tools (incl. Copilot) and personal habits across 8 desktop hosts.',
       secBench: '50-Turn Context-Tax Model (8 Common MCP Servers / 77 Tools, npm run benchmark)',
       thMetric: 'Metric',
       thRaw: 'Raw Multi-MCP + Monolithic CLAUDE.md',
@@ -102,7 +102,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       rowTotal: '50-Turn Cumulative Prompt Tokens',
       rowSonnet: '50-Turn API Cost (Claude Sonnet 4.5)',
       rowOpus: '50-Turn API Cost (Claude Opus 4.5)',
-      astNote: '* AST Terminology Note: "AST" denotes EvoKernel\\'s zero-dependency lexical-structural skeleton & call-anchor fingerprinting, immune to comments, formatting, and line-number drift without external compiler packages.',
+      astNote: '* Code-link verification uses EvoKernel\\'s zero-dependency lexical-structural fingerprinting — immune to comments, formatting, and line-number shifts without external compiler packages.',
       secTrust: 'Reversible by Design · Zero Outbound Telemetry',
       t1Title: 'Stealth or Team-Shared',
       t1Desc: 'Use --stealth to isolate trial files in .git/info/exclude with zero working-tree noise, or commit .evo/ so every teammate shares verified root-cause memories.',
@@ -136,16 +136,16 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       kpi4Sub: '纯 Node.js 原生内置模块 · 100% 本地 SQLite',
       showcaseLabel: 'EvoKernel Workbench 工作台实景预览 —— 点击体验脱敏交互演示 (./demo/)',
       showcaseCta: '打开在线交互演示 →',
-      secPillars: '三大确定性工程支柱',
-      p1Tag: '认知记忆 · 防漂移',
-      p1Title: 'AST 级防漂移*认知记忆与单行可见召回回执',
-      p1Desc: '每次排障根因通过词法-结构骨架哈希锚定真实代码符号；源码重构导致漂移时自动降级为 STALE，命中召回时在对话中输出单行可见回执（🛡️ EvoKernel Recall）。',
-      p2Tag: '确定性门禁 · 冲突拦截',
-      p2Title: '6 道确定性沙盒门禁与 AST 锚定',
-      p2Desc: '所有候选规则、技能、微工具、个人偏好与排障记忆均须通过静态安全审查、去符号化泛化、沙盒 --self-test 零污染回滚、混合 BM25 与极性冲突校验、1,500-tok 核心 / 800-tok 个人画像 / 250-tok 任务目录硬顶与因果归因校验。',
-      p3Tag: '网关虚拟化 · 10 项目 / 8 画像宿主',
-      p3Title: '恒定 5 元工具网关（10 大项目宿主）与 8 宿主个人画像同步',
-      p3Desc: '将臃肿的下游 MCP 工具、巨石规则与跨项目三层个人习惯/工作流/个人经验折叠至 evo_search、evo_inspect、evo_run、evo_propose、evo_compact 背后 —— 项目级记忆支持 10 款宿主（含 Copilot），全局个人画像同步覆盖 8 大桌面宿主。',
+      secPillars: '三大核心保障',
+      p1Tag: '项目记忆 · 自动防过期',
+      p1Title: '代码联动校验的项目经验与静默召回',
+      p1Desc: '项目避坑经验会直接关联真实代码位置*；源码改动时自动标出已过期条目，命中相关经验或习惯时在后台静默生效，不再用回执横幅刷屏对话正文。',
+      p2Tag: '安全校验 · 冲突拦截',
+      p2Title: '6 道安全门禁与 1 秒原子撤销',
+      p2Desc: '每条个人习惯、项目规则、工作流、工具与经验都须通过安全检查、沙盒 --self-test 自测、去重与冲突校验，以及严格 Token 预算（1,500 核心 / 800 常驻习惯 / 250 按需工作流），支持 1 秒撤销。',
+      p3Tag: '精简网关 · 10 项目 / 8 习惯宿主',
+      p3Title: '固定 5 工具网关与跨工具个人习惯同步',
+      p3Desc: '将臃肿的第三方 MCP、巨石规则文件与个人习惯/工作流统一收敛到 evo_search、evo_inspect、evo_run、evo_propose、evo_compact 背后 —— 项目记忆支持 10 款 AI 工具（含 Copilot），个人习惯自动同步至 8 大桌面宿主。',
       secBench: '50 轮工程会话基准推演（基于 8 个常见 MCP 服务 / 77 个工具，npm run benchmark）',
       thMetric: '核心指标',
       thRaw: '直连多 MCP + 巨石 CLAUDE.md',
@@ -157,7 +157,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       rowTotal: '50 轮累计输入 Tokens',
       rowSonnet: '50 轮账单成本 (Claude Sonnet 4.5)',
       rowOpus: '50 轮账单成本 (Claude Opus 4.5)',
-      astNote: '* AST 术语说明：“AST”指零外部依赖词法-结构骨架与调用链锚点指纹（Lexical-Structural Skeleton Fingerprinting），无需重型外部编译器即可对注释修改、格式化与行号偏移天然免疫。',
+      astNote: '* 代码联动校验采用 EvoKernel 零外部依赖的词法-结构指纹技术，无需重型外部编译器即可对注释修改、代码格式化与行号偏移天然免疫。',
       secTrust: '原生可逆设计 · 100% 本地零外发隐私保障',
       t1Title: '个人无痕试用或团队协同共享',
       t1Desc: '使用 --stealth 将试用配置隔离写入 .git/info/exclude 实现零 Git 干扰；或提交 .evo/ 目录让团队全员共享根因记忆。',
@@ -485,28 +485,28 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
           <a href="./demo/" class="showcase-bar-cta" data-i18n="showcaseCta">Launch Interactive Demo →</a>
         </div>
         <a href="./demo/" class="showcase-link" aria-label="Open Interactive EvoKernel Workbench Demo">
-          <img class="showcase-img" src="${showcaseImgSrc}" alt="EvoKernel Workbench — Capabilities, AST Memories &amp; 7-Day Recall" width="1280" height="760" loading="eager" />
+          <img class="showcase-img" src="${showcaseImgSrc}" alt="EvoKernel Workbench — Capabilities, Code-Linked Lessons &amp; 7-Day Recall" width="1280" height="760" loading="eager" />
         </a>
       </div>
     </div>
 
     <section id="pillars">
-      <h2 data-i18n="secPillars">Three Deterministic Pillars</h2>
+      <h2 data-i18n="secPillars">Three Core Pillars</h2>
       <div class="pillar-grid">
         <article class="card">
-          <span class="tag tag-mem" data-i18n="p1Tag">MEMORY · ANTI-DRIFT</span>
-          <h3 data-i18n="p1Title">AST-Verified* Cognitive Memory &amp; Recall Receipts</h3>
-          <p data-i18n="p1Desc">Root-cause fixes bind to live code symbols via lexical-structural skeleton hashes. Stale memories auto-demote when code changes, and active recalls emit a visible 1-line receipt (🛡️ EvoKernel Recall).</p>
+          <span class="tag tag-mem" data-i18n="p1Tag">MEMORY · CODE-VERIFIED</span>
+          <h3 data-i18n="p1Title">Code-Verified Project Lessons &amp; Silent Recall</h3>
+          <p data-i18n="p1Desc">Project lessons link directly to live functions and files*. When code changes, outdated lessons flag automatically — and relevant rules or habits recall silently in the background without cluttering chat.</p>
         </article>
         <article class="card">
-          <span class="tag tag-gk" data-i18n="p2Tag">GATEKEEPER · AST GROUNDING</span>
-          <h3 data-i18n="p2Title">6-Stage Deterministic Gatekeeper &amp; Conflict Guard</h3>
-          <p data-i18n="p2Desc">Every candidate rule, skill, micro-tool, personal preference, or memory must pass static security, lexical de-symbolization, isolated --self-test rollback, hybrid BM25 + polarity conflict checks, 1,500-tok core / 800-tok profile / 250-tok directory budgets, and causal attribution.</p>
+          <span class="tag tag-gk" data-i18n="p2Tag">SAFETY CHECKS · CONFLICT GUARD</span>
+          <h3 data-i18n="p2Title">6-Stage Safety Gatekeeper &amp; Instant Undo</h3>
+          <p data-i18n="p2Desc">Every saved habit, rule, workflow, tool, or lesson passes static security, isolated --self-test checks, duplicate &amp; conflict guards, and strict token budgets (1,500-tok core / 800-tok habits / 250-tok workflows) — with 1-second undo.</p>
         </article>
         <article class="card">
-          <span class="tag tag-mcp" data-i18n="p3Tag">VIRTUALIZATION · 10 PROJECT / 8 PROFILE HOSTS</span>
-          <h3 data-i18n="p3Title">Fixed 5-Tool Meta-MCP (10 Project Hosts) &amp; 8-Host Personal Profile Sync</h3>
-          <p data-i18n="p3Desc">Folds sprawling third-party MCP schemas, monolithic CLAUDE.md files, and 3-tier personal habits/workflows/experiences behind evo_search, evo_inspect, evo_run, evo_propose, and evo_compact — supporting 10 project-memory hosts (incl. Copilot) and 8 desktop hosts for global personal-profile sync.</p>
+          <span class="tag tag-mcp" data-i18n="p3Tag">ONE GATEWAY · 10 PROJECT / 8 HABIT HOSTS</span>
+          <h3 data-i18n="p3Title">Fixed 5-Tool MCP Gateway &amp; Cross-Tool Habit Sync</h3>
+          <p data-i18n="p3Desc">Folds sprawling MCP servers, bloated rule files, and your personal habits/workflows behind 5 fixed tools (evo_search, evo_inspect, evo_run, evo_propose, evo_compact) — syncing project memory across 10 AI tools (incl. Copilot) and personal habits across 8 desktop hosts.</p>
         </article>
       </div>
     </section>
@@ -563,7 +563,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
           </tbody>
         </table>
       </div>
-      <p class="footnote" data-i18n="astNote">* AST Terminology Note: "AST" denotes EvoKernel's zero-dependency lexical-structural skeleton &amp; call-anchor fingerprinting, immune to comments, formatting, and line-number drift without external compiler packages.</p>
+      <p class="footnote" data-i18n="astNote">* Code-link verification uses EvoKernel's zero-dependency lexical-structural fingerprinting — immune to comments, formatting, and line-number shifts without external compiler packages.</p>
     </section>
 
     <section id="trust">

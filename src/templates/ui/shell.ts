@@ -62,7 +62,7 @@ ${UI_STYLES}
     </div>
 
     <div class="topbar-right">
-      <div class="status-indicator-live" id="server-status-dot" title="${isExport ? 'Read-only static HTML snapshot' : 'Live SSE Server'}">
+      <div class="status-indicator-live" id="server-status-dot" title="${isExport ? 'Read-only static HTML snapshot' : 'LIVE'}">
         <span class="status-dot-pulse${isExport ? ' snapshot' : ''}" id="status-dot"></span>
         <span class="status-dot-label" id="server-status-text">${isExport ? 'STATIC SNAPSHOT' : 'LIVE'}</span>
       </div>
@@ -133,7 +133,7 @@ ${UI_STYLES}
                 <path d="M7.5 6.8L16.5 11M7.5 17.2L16.5 13"></path>
               </svg>
             </span>
-            <span class="nav-label" id="nav-label-topo">Topology</span>
+            <span class="nav-label" id="nav-label-topo">Code Map</span>
           </button>
           <button class="nav-item" data-view="hotspots" id="nav-btn-hotspots" type="button">
             <span class="nav-icon" aria-hidden="true">
@@ -151,7 +151,7 @@ ${UI_STYLES}
                 <path d="M9.5 12l1.8 1.8 3.5-3.6"></path>
               </svg>
             </span>
-            <span class="nav-label" id="nav-label-gk">Gatekeeper</span>
+            <span class="nav-label" id="nav-label-gk">Safety Log</span>
             <span class="nav-badge" id="badge-count-gk">0</span>
           </button>
         </nav>
@@ -162,18 +162,18 @@ ${UI_STYLES}
         <div class="rail-section-header" id="rail-hdr-telem">TELEMETRY</div>
 
         <!-- Card 1: Health Score -->
-        <div class="bento-card" id="bento-health" title="Click to toggle Health Diagnostics">
+        <div class="bento-card clickable" id="bento-health" role="button" tabindex="0" title="Click to toggle Health Diagnostics">
           <div class="bento-title" id="bento-title-health">Health Score</div>
           <div class="bento-metric-row">
             <span class="bento-metric-value" id="bento-health-val">--</span>
             <span class="bento-badge" id="bento-health-grade">Grade --</span>
           </div>
-          <div class="bento-subtext" id="bento-health-sub">Zero-leak AST* shielding · Click to diagnose</div>
+          <div class="bento-subtext" id="bento-health-sub">Code-verified · Click to inspect deductions</div>
         </div>
 
-        <!-- Card 2: Prompt Tax Saved -->
+        <!-- Card 2: Session Token Savings -->
         <div class="bento-card" id="bento-savings">
-          <div class="bento-title" id="bento-title-tax">Prompt Tax Saved</div>
+          <div class="bento-title" id="bento-title-tax">Session Token Savings</div>
           <div class="bento-metric-row">
             <span class="bento-metric-value text-emerald" id="bento-saved-pct">—</span>
           </div>
@@ -181,15 +181,15 @@ ${UI_STYLES}
         </div>
 
         <!-- Card 3: Core Rule Budget -->
-        <div class="bento-card" id="bento-budget" title="Click to filter & sort Core Rules by token footprint">
+        <div class="bento-card clickable" id="bento-budget" role="button" tabindex="0" title="Click to filter &amp; sort Core Rules by size">
           <div class="bento-title-row">
-            <span class="bento-title" id="bento-title-budget">Core Budget</span>
+            <span class="bento-title" id="bento-title-budget">Core Rule Budget</span>
             <span class="bento-counter" id="bento-budget-counter"><span id="bento-budget-cur">0</span> / 1500 tok</span>
           </div>
           <div class="progress-track">
             <div class="progress-bar" id="bento-budget-bar" style="width: 0%"></div>
           </div>
-          <div class="bento-subtext" id="bento-budget-status">Within safe limit</div>
+          <div class="bento-subtext" id="bento-budget-status">Within safe limit (click to filter)</div>
         </div>
 
         <!-- Card 4: 7-Day Recall (Visible at 769px-1024px & >1024px) -->
@@ -202,9 +202,9 @@ ${UI_STYLES}
           <div class="bento-subtext" id="bento-recall-sub">0 searches · 0 pitfalls avoided</div>
         </div>
 
-        <!-- Card 5: Virtual Footprint Treemap -->
+        <!-- Card 5: Saved Assets Treemap -->
         <div class="bento-card bento-treemap-card" id="bento-treemap-card">
-          <div class="bento-title" id="bento-title-treemap">Virtual Footprint</div>
+          <div class="bento-title" id="bento-title-treemap">Saved Assets</div>
           <div class="micro-treemap-container" id="micro-treemap"></div>
           <div class="micro-treemap-legend" id="micro-treemap-legend"></div>
         </div>
@@ -220,7 +220,7 @@ ${UI_STYLES}
 
       <!-- SSE Disconnect Banner -->
       <div class="sse-disconnect-banner" id="sse-disconnect-banner" style="display: none;" role="alert">
-        <span id="sse-disconnect-msg">Live update stream disconnected.</span>
+        <span id="sse-disconnect-msg">Live stream disconnected — snapshot paused.</span>
         <button type="button" class="btn-action" id="btn-sse-reconnect" style="padding: 2px 9px;">Reconnect</button>
       </div>
 
@@ -231,7 +231,7 @@ ${UI_STYLES}
           <span class="kpi-strip-val" id="kpi-strip-health-val">—</span>
         </button>
         <div class="kpi-strip-chip" id="kpi-chip-saved">
-          <span class="kpi-strip-lbl" id="kpi-strip-saved-lbl">Prompt Tax</span>
+          <span class="kpi-strip-lbl" id="kpi-strip-saved-lbl">Token Savings</span>
           <span class="kpi-strip-val text-emerald" id="kpi-strip-saved-val">—</span>
         </div>
         <button type="button" class="kpi-strip-chip" id="kpi-chip-budget">
@@ -260,8 +260,8 @@ ${renderProfileSectionHtml()}
               </svg>
             </span>
             <div>
-              <div style="font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); margin-bottom: 2px;" id="inspector-placeholder-title">Workspace Pulse</div>
-              <p class="placeholder-text" id="inspector-placeholder-sub">Select any Rule, Skill, Tool, or Memory to inspect details, or review live workspace health below.</p>
+              <div style="font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); margin-bottom: 2px;" id="inspector-placeholder-title">Inspector</div>
+              <p class="placeholder-text" id="inspector-placeholder-sub">Select any Rule, Skill, Tool, Memory, or Preference to view or edit details.</p>
             </div>
           </div>
           <div class="inspector-pulse-cards" id="inspector-pulse-cards"></div>
