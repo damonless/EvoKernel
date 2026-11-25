@@ -1295,7 +1295,7 @@ export function handleStop(
         `  ├─ ⚠️  Anti-Confounding Gate   : If multi-variable edits lack isolated causation, use kind: "memory" (or pass contrastive_evidence for rule/skill)\n` +
         `  └─ 🔧 Reusable Micro-Tool     : evo_propose(kind: "tool", ...) [--self-test verified]\n` +
         (preferenceHint ? `  ★ ${preferenceHint}\n` : '') +
-        `  Output receipt in response: 🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)`
+        `  Confirm concisely using the plain human_receipt returned by evo_propose (omit raw internal IDs).`
       );
     }
 

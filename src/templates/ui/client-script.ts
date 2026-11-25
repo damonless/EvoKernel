@@ -782,7 +782,8 @@ ${PROFILE_CLIENT_SCRIPT}
           '<span class="kbd-shortcut" style="flex-shrink:0;">' + esc(c.id) + '</span>';
 
         var actItem = {
-          execute: function() {
+          execute: function(ev) {
+            if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
             selectCapability(c.kind, c.item);
             closeCommandPalette();
           }
@@ -815,7 +816,8 @@ ${PROFILE_CLIENT_SCRIPT}
           '<span class="kbd-shortcut" style="flex-shrink:0;">f:' + h.fragilityScore + '</span>';
 
         var actItem = {
-          execute: function() {
+          execute: function(ev) {
+            if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
             callKernelAction('open-editor', { filePath: h.filePath, line: 1 }).then(function(res) {
               handleOpenEditorResult(res, h.filePath);
             });
@@ -914,7 +916,8 @@ ${PROFILE_CLIENT_SCRIPT}
           '<span class="kbd-shortcut" style="flex-shrink:0;">↵</span>';
 
         var actItem = {
-          execute: function() {
+          execute: function(ev) {
+            if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
             closeCommandPalette();
             gc.run();
           }

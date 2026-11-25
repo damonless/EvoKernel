@@ -375,6 +375,7 @@ export class McpProxyManager {
   private readonly connectionConfigKeys = new Map<string, string>();
   private readonly workspaceRoot: string;
   private serversConfig: Record<string, ExternalMcpServerConfig> = {};
+  private closed = false;
 
   constructor(workspaceRoot: string, serversConfig?: Record<string, ExternalMcpServerConfig>) {
     this.workspaceRoot = workspaceRoot;
@@ -442,11 +443,13 @@ export class McpProxyManager {
     try {
       return await this.probeServerTools(serverName, cfg);
     } catch (err) {
-      console.error(
-        `[EvoKernel Warning] Failed to discover tools from external MCP server '${serverName}': ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
+      if (!this.closed) {
+        console.error(
+          `[EvoKernel Warning] Failed to discover tools from external MCP server '${serverName}': ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
       return [];
     }
   }
@@ -475,11 +478,13 @@ export class McpProxyManager {
         discovered.push(...res.value.tools);
       } else {
         failedServers.push(serverName);
-        console.error(
-          `[EvoKernel Warning] Failed to discover tools from external MCP server '${serverName}': ${
-            res.reason instanceof Error ? res.reason.message : String(res.reason)
-          }`
-        );
+        if (!this.closed) {
+          console.error(
+            `[EvoKernel Warning] Failed to discover tools from external MCP server '${serverName}': ${
+              res.reason instanceof Error ? res.reason.message : String(res.reason)
+            }`
+          );
+        }
       }
     }
 
@@ -534,6 +539,7 @@ export class McpProxyManager {
   }
 
   public close(): void {
+    this.closed = true;
     for (const conn of this.connections.values()) {
       conn.close();
     }

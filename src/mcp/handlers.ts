@@ -1191,8 +1191,11 @@ export class EvoMcpDispatcher {
         const chosenRoot =
           this.clientRoots.length === 1
             ? this.clientRoots[0]
-            : this.clientRoots.find((r) => hasValidEvoStructure(path.join(r, '.evo'))) ||
-              this.clientRoots[0];
+            : this.clientRoots.find(
+                (r) =>
+                  hasValidEvoStructure(path.join(r, '.evo')) ||
+                  Boolean(findNearestEvoWorkspace(path.resolve(r)))
+              ) || this.clientRoots[0];
         candidate = path.resolve(chosenRoot);
         const nearestFromClient = findNearestEvoWorkspace(candidate);
         targetRoot = nearestFromClient || candidate;
@@ -1431,13 +1434,17 @@ export class EvoMcpDispatcher {
           } else if (needsSync && !hasCachedExternalTools) {
             const syncWork = this.ensureExternalToolsSynced(reqCtx).catch(() => {});
             const graceMs = 800;
-            let timedOut = false;
+            let graceTimer: NodeJS.Timeout | undefined;
             const raced = Promise.race([
               syncWork.then(() => false),
-              new Promise<boolean>((resolve) => setTimeout(() => resolve(true), graceMs)),
-            ]);
+              new Promise<boolean>((resolve) => {
+                graceTimer = setTimeout(() => resolve(true), graceMs);
+                graceTimer.unref?.();
+              }),
+            ]).finally(() => {
+              if (graceTimer) clearTimeout(graceTimer);
+            });
             result = raced.then((didTimeout) => {
-              timedOut = didTimeout;
               const freshCtx = this.bindActiveContext(name, effectiveArgs);
               if (boundCtx) {
                 this.releaseContextRef(boundCtx.wsCtx);
@@ -1446,7 +1453,7 @@ export class EvoMcpDispatcher {
               const res = asyncMode
                 ? this.handleSearchAsync(effectiveArgs, freshCtx)
                 : this.handleSearch(effectiveArgs, freshCtx);
-              if (timedOut) {
+              if (didTimeout) {
                 // Background sync continues populating cache without stalling search
                 void syncWork;
               }
@@ -2961,9 +2968,14 @@ export class EvoMcpDispatcher {
       supersededIds: string[];
       downgradedToOnDemand?: boolean;
       downgradedToScoped?: boolean;
+      downgradedToMemory?: boolean;
+      widenedScopeGlob?: string;
     } = { evictedIds: [], supersededIds: [] };
 
-    const finishPropose = (result: ReturnType<EvoGatekeeper['evaluateAndCommit']>) => {
+    const finishPropose = (
+      result: ReturnType<EvoGatekeeper['evaluateAndCommit']>,
+      committedPayload: ProposalPayload = payload
+    ) => {
       if (!result.passed) {
         return {
           isError: true,
@@ -2976,13 +2988,14 @@ export class EvoMcpDispatcher {
         };
       }
 
+      const effectiveKind: EvoKind = committedPayload.kind;
       const committedId = String(
-        (result.diagnostics as Record<string, unknown> | undefined)?.id || sanitizeId(payload.id || '')
+        (result.diagnostics as Record<string, unknown> | undefined)?.id || sanitizeId(committedPayload.id || '')
       );
       const supersededForSession = Array.from(
         new Set(
           [
-            ...(payload.supersedes_id ? [payload.supersedes_id] : []),
+            ...(committedPayload.supersedes_id ? [committedPayload.supersedes_id] : []),
             ...autoResolvedMeta.supersededIds,
           ].filter(Boolean)
         )
@@ -2990,26 +3003,26 @@ export class EvoMcpDispatcher {
       this.recordSessionProposal(
         storage.rootDir,
         committedId,
-        payload.kind,
+        effectiveKind,
         supersededForSession.length > 0 ? supersededForSession : undefined,
-        payload.enabled !== false,
+        committedPayload.enabled !== false,
         activeEpoch
       );
 
       const isGlobalRoot = isGlobalFallbackRoot(storage.rootDir);
       const isPersonalMemCommit =
-        payload.kind === 'memory' &&
+        effectiveKind === 'memory' &&
         (result.diagnostics as Record<string, unknown> | undefined)?.memory_type === 'personal';
 
       let syncWarnings: string[] = [];
-      if (payload.kind === 'rule' || payload.kind === 'tool' || payload.kind === 'skill') {
+      if (effectiveKind === 'rule' || effectiveKind === 'tool' || effectiveKind === 'skill') {
         if (!isGlobalRoot) {
           syncManagedRuleBlocks(storage.rootDir);
         }
-        if (payload.kind === 'rule' && Boolean(payload.core) && this.onCoreRulesChanged) {
+        if (effectiveKind === 'rule' && Boolean(committedPayload.core) && this.onCoreRulesChanged) {
           this.onCoreRulesChanged();
         }
-        if (isGlobalRoot && payload.kind === 'skill') {
+        if (isGlobalRoot && effectiveKind === 'skill') {
           const syncRes = syncGlobalUserProfile(storage.rootDir);
           syncWarnings = syncRes.warnings || [];
           result.diagnostics = {
@@ -3023,7 +3036,7 @@ export class EvoMcpDispatcher {
         }
       } else if (
         isGlobalRoot &&
-        (payload.kind === 'preference' || isPersonalMemCommit)
+        (effectiveKind === 'preference' || isPersonalMemCommit)
       ) {
         const syncRes = syncGlobalUserProfile(storage.rootDir);
         syncWarnings = syncRes.warnings || [];
@@ -3035,7 +3048,7 @@ export class EvoMcpDispatcher {
           menu_tokens: syncRes.menuTokens,
           ...(syncWarnings.length > 0 ? { profile_sync_warnings: syncWarnings } : {}),
         };
-      } else if (!isGlobalRoot && payload.kind === 'preference') {
+      } else if (!isGlobalRoot && effectiveKind === 'preference') {
         syncManagedRuleBlocks(storage.rootDir);
       }
 
@@ -3043,7 +3056,9 @@ export class EvoMcpDispatcher {
         autoResolvedMeta.evictedIds.length > 0 ||
         autoResolvedMeta.supersededIds.length > 0 ||
         autoResolvedMeta.downgradedToOnDemand ||
-        autoResolvedMeta.downgradedToScoped
+        autoResolvedMeta.downgradedToScoped ||
+        autoResolvedMeta.downgradedToMemory ||
+        autoResolvedMeta.widenedScopeGlob
       ) {
         result.diagnostics = {
           ...(result.diagnostics || {}),
@@ -3053,17 +3068,19 @@ export class EvoMcpDispatcher {
             ...(autoResolvedMeta.supersededIds.length > 0 ? { replaced_conflicts: autoResolvedMeta.supersededIds } : {}),
             ...(autoResolvedMeta.downgradedToOnDemand ? { saved_as_on_demand: true } : {}),
             ...(autoResolvedMeta.downgradedToScoped ? { saved_as_scoped_rule: true } : {}),
+            ...(autoResolvedMeta.downgradedToMemory ? { saved_as_memory: true } : {}),
+            ...(autoResolvedMeta.widenedScopeGlob ? { widened_scope_glob: autoResolvedMeta.widenedScopeGlob } : {}),
           },
         };
       }
 
-      const displayTitle = String(payload.title || payload.l0_summary || committedId).trim();
+      const displayTitle = String(committedPayload.title || committedPayload.l0_summary || committedId).trim();
       const textForLang = [
-        payload.content,
-        payload.title,
-        payload.l0_summary,
-        payload.symptom,
-        payload.solution,
+        committedPayload.content,
+        committedPayload.title,
+        committedPayload.l0_summary,
+        committedPayload.symptom,
+        committedPayload.solution,
       ]
         .filter(Boolean)
         .join(' ');
@@ -3071,7 +3088,7 @@ export class EvoMcpDispatcher {
       const effectiveAlwaysOn =
         (result.diagnostics as Record<string, unknown> | undefined)?.always_on !== undefined
           ? Boolean((result.diagnostics as Record<string, unknown>).always_on)
-          : payload.always_on !== false;
+          : committedPayload.always_on !== false;
       const kindHumanZh: Record<string, string> = {
         rule: '规则',
         skill: '工作流程',
@@ -3086,10 +3103,10 @@ export class EvoMcpDispatcher {
       };
 
       let human_receipt: string;
-      if (payload.kind === 'preference') {
+      if (effectiveKind === 'preference') {
         if (hasCjk) {
           human_receipt = !effectiveAlwaysOn
-            ? `已记住按需偏好「${displayTitle}」（触发：${payload.trigger_cue || '按需'}）。说「撤销」即可取消。`
+            ? `已记住按需偏好「${displayTitle}」（触发：${committedPayload.trigger_cue || '按需'}）。说「撤销」即可取消。`
             : `已记住偏好「${displayTitle}」，之后会自动生效。说「撤销」即可取消。`;
           if (autoResolvedMeta.evictedIds.length > 0) {
             human_receipt += ` 已自动将 ${autoResolvedMeta.evictedIds.length} 条低频偏好转为按需加载以腾出空间。`;
@@ -3110,12 +3127,22 @@ export class EvoMcpDispatcher {
         }
       } else {
         human_receipt = hasCjk
-          ? `已记住${kindHumanZh[payload.kind] || '记录'}「${displayTitle}」。说「撤销」即可取消。`
-          : `Saved ${kindHumanEn[payload.kind] || payload.kind} "${displayTitle}". Say 'undo' to revert.`;
+          ? `已记住${kindHumanZh[effectiveKind] || '记录'}「${displayTitle}」。说「撤销」即可取消。`
+          : `Saved ${kindHumanEn[effectiveKind] || effectiveKind} "${displayTitle}". Say 'undo' to revert.`;
         if (autoResolvedMeta.downgradedToScoped) {
           human_receipt += hasCjk
             ? '（核心预算已满，已自动存为按路径生效的局部规则。）'
             : ' (Core budget full; saved automatically as a path-scoped rule.)';
+        }
+        if (autoResolvedMeta.downgradedToMemory) {
+          human_receipt += hasCjk
+            ? '（单点规则已自动转为关联代码的排障经验。）'
+            : ' (Single-point rule auto-saved as a code-linked lesson.)';
+        }
+        if (autoResolvedMeta.widenedScopeGlob) {
+          human_receipt += hasCjk
+            ? `（已自动放宽路径范围为 ${autoResolvedMeta.widenedScopeGlob}。）`
+            : ` (Scope automatically widened to ${autoResolvedMeta.widenedScopeGlob}.)`;
         }
       }
       if (syncWarnings.length > 0) {
@@ -3129,7 +3156,7 @@ export class EvoMcpDispatcher {
           {
             type: 'text' as const,
             text: JSON.stringify(
-              { ...result, ...(payload.id ? { id: payload.id } : {}), human_receipt },
+              { ...result, ...(committedId ? { id: committedId } : {}), human_receipt },
               null,
               2
             ),
@@ -3143,32 +3170,109 @@ export class EvoMcpDispatcher {
     const ruleAutoResolve =
       payload.kind === 'rule' && (proposal as any).auto_resolve === true;
 
-    const runWithAutoResolve = async (isAsync: boolean): Promise<any> => {
-      const evalCommit = (p: ProposalPayload) =>
-        isAsync ? gatekeeper.evaluateAndCommitAsync(p) : Promise.resolve(gatekeeper.evaluateAndCommit(p));
+    const ensureTransferScenarios = (p: ProposalPayload, scopeGlob: string): string[] => {
+      const existing = Array.isArray(p.transfer_scenarios)
+        ? Array.from(new Set(p.transfer_scenarios.map((s) => String(s).trim()).filter((s) => s.length >= 8)))
+        : [];
+      if (existing.length >= 2) return existing;
+      const label = String(p.title || p.id || 'this rule').trim();
+      return [
+        ...existing,
+        `Applying '${label}' consistently across modules matching ${scopeGlob}`,
+        `Verifying new or refactored code paths under ${scopeGlob} against this invariant`,
+      ].slice(0, 2);
+    };
 
-      let currentPayload: ProposalPayload = { ...payload };
-      let res = await evalCommit(currentPayload);
-      if (res.passed) {
-        return finishPropose(res);
+    const widenLiteralScopeGlob = (rawGlob: string): string => {
+      const norm = rawGlob.replace(/\\/g, '/').trim().replace(/^\.\/+/, '');
+      const ext = path.posix.extname(norm);
+      const dir = path.posix.dirname(norm);
+      if (dir && dir !== '.') {
+        return ext ? `${dir}/**/*${ext}` : `${dir}/**/*`;
       }
+      return ext ? `**/*${ext}` : '**/*';
+    };
 
-      if (ruleAutoResolve && res.error_code === 'ERR_BUDGET_EXCEEDED' && currentPayload.core) {
-        currentPayload = {
-          ...currentPayload,
-          core: false,
-          scope_glob: currentPayload.scope_glob && currentPayload.scope_glob !== '*' ? currentPayload.scope_glob : '**/*',
-        };
+    const tryBuildRuleAutoDowngrade = (
+      current: ProposalPayload,
+      errCode?: string
+    ): ProposalPayload | null => {
+      if (!ruleAutoResolve || current.kind !== 'rule') return null;
+
+      // 1. Core rule budget full -> gracefully downgrade to scoped rule with valid transfer_scenarios
+      if (errCode === 'ERR_BUDGET_EXCEEDED' && current.core) {
+        const nextScope =
+          current.scope_glob && current.scope_glob !== '*' && /[*?[\]{}]/.test(current.scope_glob)
+            ? current.scope_glob
+            : '**/*';
         autoResolvedMeta.downgradedToScoped = true;
-        res = await evalCommit(currentPayload);
-        return finishPropose(res);
+        return {
+          ...current,
+          core: false,
+          scope_glob: nextScope,
+          transfer_scenarios: ensureTransferScenarios(current, nextScope),
+        };
       }
 
-      if (!prefAutoResolve) {
-        return finishPropose(res);
+      // 2. Single-point Gate 1.5 rejections -> downgrade to code-linked memory when target exists, or widen literal single-file scope_glob
+      const isSinglePointGate15 =
+        errCode === 'ERR_SCOPE_TOO_NARROW' ||
+        errCode === 'ERR_POINT_BUG_CASE_LOG' ||
+        errCode === 'ERR_RULE_CONTAINS_DOMAIN_NUMBERS' ||
+        errCode === 'ERR_RULE_COUPLED_TO_IDENTIFIERS';
+      if (!isSinglePointGate15) return null;
+
+      const rawTargets = Array.isArray(current.target_symbols)
+        ? current.target_symbols.map((s) => String(s).trim()).filter(Boolean)
+        : [];
+      const rawScope = String(current.scope_glob || '').trim();
+      const scopeIsLiteralFile = Boolean(rawScope && rawScope !== '**/*' && !/[*?[\]{}]/.test(rawScope));
+      const scopeFileExists =
+        scopeIsLiteralFile && fs.existsSync(path.resolve(storage.rootDir, rawScope));
+
+      const shouldDowngradeToMemory =
+        rawTargets.length > 0 ||
+        (scopeFileExists &&
+          (errCode === 'ERR_POINT_BUG_CASE_LOG' ||
+            errCode === 'ERR_RULE_CONTAINS_DOMAIN_NUMBERS' ||
+            errCode === 'ERR_RULE_COUPLED_TO_IDENTIFIERS'));
+
+      if (shouldDowngradeToMemory) {
+        const targets = rawTargets.length > 0 ? rawTargets : [rawScope];
+        const bodyText = String(current.content || current.l0_summary || current.title || '').trim();
+        const memId = sanitizeId(current.id || '') || `mem-${crypto.randomBytes(4).toString('hex')}`;
+        autoResolvedMeta.downgradedToMemory = true;
+        return {
+          kind: 'memory',
+          id: memId,
+          title: current.title || current.l0_summary || memId,
+          l0_summary: current.l0_summary || bodyText.slice(0, 130),
+          symptom: String(current.symptom || current.l0_summary || current.title || bodyText).trim(),
+          root_cause: String(current.root_cause || bodyText).trim(),
+          solution: String(current.solution || bodyText).trim(),
+          target_symbols: targets,
+          tags: current.tags,
+          origin: current.origin || 'session',
+          enabled: current.enabled,
+          review_status: current.review_status,
+        };
       }
 
-      // Loop-converge preference conflicts & profile budget overflow as ONE atomic undoable batch
+      if (errCode === 'ERR_SCOPE_TOO_NARROW' && scopeIsLiteralFile) {
+        const widened = widenLiteralScopeGlob(rawScope);
+        autoResolvedMeta.widenedScopeGlob = widened;
+        return {
+          ...current,
+          scope_glob: widened,
+          ...(current.core ? {} : { transfer_scenarios: ensureTransferScenarios(current, widened) }),
+        };
+      }
+
+      return null;
+    };
+
+    // Shared batch controller for preference auto-resolve (used identically by sync & async paths)
+    const createPrefAutoResolveSession = () => {
       const batchId = `auto-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
       const preBatchFileSnapshots = new Map<string, string | null>();
       const preBatchHistorySize = fs.existsSync(storage.profileHistoryPath)
@@ -3177,47 +3281,46 @@ export class EvoMcpDispatcher {
       const preBatchArchives = new Set(
         fs.existsSync(storage.archiveDir) ? fs.readdirSync(storage.archiveDir) : []
       );
+      let mutatedInBatch = false;
+
       const snapshotPrefOnce = (prefId: string) => {
         const cleanPrefId = sanitizeId(prefId);
         if (!cleanPrefId || preBatchFileSnapshots.has(cleanPrefId)) return;
         const p = path.join(storage.preferencesDir, `${cleanPrefId}.md`);
         preBatchFileSnapshots.set(cleanPrefId, fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null);
       };
-      const rollbackBatchMutations = () => {
-        for (const [prefId, content] of preBatchFileSnapshots.entries()) {
-          const p = path.join(storage.preferencesDir, `${prefId}.md`);
-          if (content === null) {
-            if (fs.existsSync(p)) {
-              try { fs.unlinkSync(p); } catch {}
-            }
-          } else {
-            fs.mkdirSync(path.dirname(p), { recursive: true });
-            fs.writeFileSync(p, content, 'utf8');
+
+      const archivePrefIntoBatch = (prefId: string, reasonText: string): boolean => {
+        const cleanPrefId = sanitizeId(prefId);
+        const pref = cleanPrefId ? storage.getPreference(cleanPrefId) : null;
+        if (!pref) return false;
+        snapshotPrefOnce(cleanPrefId);
+        const snapText = preBatchFileSnapshots.get(cleanPrefId) || undefined;
+        if (storage.archiveCapability(cleanPrefId, 'preference', reasonText)) {
+          mutatedInBatch = true;
+          autoResolvedMeta.batchId = batchId;
+          if (!autoResolvedMeta.supersededIds.includes(cleanPrefId)) {
+            autoResolvedMeta.supersededIds.push(cleanPrefId);
           }
+          storage.appendProfileHistory({
+            ts: new Date().toISOString(),
+            action: 'archive',
+            id: cleanPrefId,
+            kind: 'preference',
+            title: pref.title || cleanPrefId,
+            batch_id: batchId,
+            ...(snapText ? { previous_snapshot: snapText } : {}),
+            reason: 'Archived conflicting preference during auto_resolve',
+          });
+          return true;
         }
-        if (fs.existsSync(storage.archiveDir)) {
-          for (const f of fs.readdirSync(storage.archiveDir)) {
-            if (!preBatchArchives.has(f)) {
-              try { fs.rmSync(path.join(storage.archiveDir, f), { recursive: true, force: true }); } catch {}
-            }
-          }
-        }
-        if (preBatchHistorySize === -1) {
-          if (fs.existsSync(storage.profileHistoryPath)) {
-            try { fs.unlinkSync(storage.profileHistoryPath); } catch {}
-          }
-        } else if (fs.existsSync(storage.profileHistoryPath)) {
-          try {
-            fs.truncateSync(storage.profileHistoryPath, preBatchHistorySize);
-          } catch {}
-        }
-        storage.rebuildUserProfileDigest();
-        telemetry?.syncFromDisk();
+        return false;
       };
 
-      let mutatedInBatch = false;
-      const MAX_AUTO_RESOLVE_STEPS = 8;
-      for (let step = 0; step < MAX_AUTO_RESOLVE_STEPS && !res.passed; step++) {
+      const stepPayload = (
+        currentPayload: ProposalPayload,
+        res: ReturnType<EvoGatekeeper['evaluateAndCommit']>
+      ): ProposalPayload | null => {
         if (res.error_code === 'ERR_DUPLICATE_CAPABILITY') {
           const rawConflicts: string[] = Array.isArray((res as any).conflicting_ids)
             ? (res as any).conflicting_ids.map((x: unknown) => sanitizeId(String(x))).filter(Boolean)
@@ -3227,50 +3330,41 @@ export class EvoMcpDispatcher {
             rawConflicts.push(selfId);
           }
           const uniqueConflicts = Array.from(new Set(rawConflicts));
-          if (uniqueConflicts.length === 0) break;
+          if (uniqueConflicts.length === 0) return null;
 
-          // If multiple conflicting items exist, archive extra ones with batch_id and supersede the primary one
           const primaryConflict = uniqueConflicts[0];
           const extraConflicts = uniqueConflicts.slice(1);
-          for (const extraId of extraConflicts) {
-            const extraPref = storage.getPreference(extraId);
-            if (!extraPref) continue;
-            snapshotPrefOnce(extraId);
-            const snapText = preBatchFileSnapshots.get(extraId) || undefined;
-            if (storage.archiveCapability(extraId, 'preference', `Replaced during auto_resolve by ${selfId || 'new preference'}`)) {
-              mutatedInBatch = true;
-              autoResolvedMeta.batchId = batchId;
-              autoResolvedMeta.supersededIds.push(extraId);
-              storage.appendProfileHistory({
-                ts: new Date().toISOString(),
-                action: 'archive',
-                id: extraId,
-                kind: 'preference',
-                title: extraPref.title || extraId,
-                batch_id: batchId,
-                ...(snapText ? { previous_snapshot: snapText } : {}),
-                reason: `Archived conflicting preference during auto_resolve`,
-              });
+          const prevSup = currentPayload.supersedes_id ? sanitizeId(currentPayload.supersedes_id) : '';
+          let archivedAny = false;
+
+          // If a previous step already targeted a different supersedes_id, archive it into the batch to prevent ping-pong
+          if (prevSup && prevSup !== primaryConflict && prevSup !== selfId) {
+            if (archivePrefIntoBatch(prevSup, `Replaced during auto_resolve by ${selfId || 'new preference'}`)) {
+              archivedAny = true;
             }
           }
-          if (extraConflicts.length > 0) {
+          for (const extraId of extraConflicts) {
+            if (archivePrefIntoBatch(extraId, `Replaced during auto_resolve by ${selfId || 'new preference'}`)) {
+              archivedAny = true;
+            }
+          }
+          if (archivedAny) {
             telemetry?.syncFromDisk();
           }
 
-          if (currentPayload.supersedes_id === primaryConflict && extraConflicts.length === 0) {
-            // Already tried superseding primaryConflict and still failed; avoid infinite loop
-            break;
+          if (currentPayload.supersedes_id === primaryConflict && !archivedAny) {
+            return null;
           }
           snapshotPrefOnce(primaryConflict);
           autoResolvedMeta.batchId = batchId;
-          autoResolvedMeta.supersededIds.push(primaryConflict);
-          currentPayload = {
+          if (!autoResolvedMeta.supersededIds.includes(primaryConflict)) {
+            autoResolvedMeta.supersededIds.push(primaryConflict);
+          }
+          return {
             ...currentPayload,
             supersedes_id: primaryConflict,
             batch_id: batchId,
           };
-          res = await evalCommit(currentPayload);
-          continue;
         }
 
         if (res.error_code === 'ERR_PROFILE_BUDGET_EXCEEDED') {
@@ -3310,208 +3404,120 @@ export class EvoMcpDispatcher {
             mutatedInBatch = true;
             autoResolvedMeta.batchId = batchId;
             autoResolvedMeta.evictedIds.push(lowValId);
-            currentPayload = {
+            return {
               ...currentPayload,
               batch_id: batchId,
             };
-            res = await evalCommit(currentPayload);
-            continue;
           }
 
-          // No demotable candidates exist (e.g., single item exceeds atomic cap or budget completely full):
-          // Only gracefully demote the incoming item to on-demand if caller did NOT explicitly force always_on: true
-          // on an oversized atomic item, OR if we already freed everything possible and still need to fit.
           if (mutatedInBatch && currentPayload.always_on !== false) {
-            currentPayload = {
+            autoResolvedMeta.downgradedToOnDemand = true;
+            return {
               ...currentPayload,
               always_on: false,
               trigger_cue: currentPayload.trigger_cue || currentPayload.l0_summary || currentPayload.title,
               batch_id: batchId,
             };
-            autoResolvedMeta.downgradedToOnDemand = true;
-            res = await evalCommit(currentPayload);
-            continue;
           }
-          break;
+          return null;
         }
 
-        break;
-      }
+        return null;
+      };
 
-      if (!res.passed && mutatedInBatch) {
-        rollbackBatchMutations();
-      }
-      return finishPropose(res);
+      const rollbackIfMutated = () => {
+        if (!mutatedInBatch) return;
+        for (const [prefId, content] of preBatchFileSnapshots.entries()) {
+          const p = path.join(storage.preferencesDir, `${prefId}.md`);
+          if (content === null) {
+            if (fs.existsSync(p)) {
+              try { fs.unlinkSync(p); } catch {}
+            }
+          } else {
+            fs.mkdirSync(path.dirname(p), { recursive: true });
+            fs.writeFileSync(p, content, 'utf8');
+          }
+        }
+        if (fs.existsSync(storage.archiveDir)) {
+          for (const f of fs.readdirSync(storage.archiveDir)) {
+            if (!preBatchArchives.has(f)) {
+              try { fs.rmSync(path.join(storage.archiveDir, f), { recursive: true, force: true }); } catch {}
+            }
+          }
+        }
+        if (preBatchHistorySize === -1) {
+          if (fs.existsSync(storage.profileHistoryPath)) {
+            try { fs.unlinkSync(storage.profileHistoryPath); } catch {}
+          }
+        } else if (fs.existsSync(storage.profileHistoryPath)) {
+          try { fs.truncateSync(storage.profileHistoryPath, preBatchHistorySize); } catch {}
+        }
+        storage.rebuildUserProfileDigest();
+        telemetry?.syncFromDisk();
+      };
+
+      return { stepPayload, rollbackIfMutated };
     };
 
     if (asyncMode) {
-      return runWithAutoResolve(true);
-    }
-    // Preserve synchronous return contract for callers using handleToolCall (sync)
-    let syncResult: any;
-    const syncEvalCommit = (p: ProposalPayload) => gatekeeper.evaluateAndCommit(p);
-    let currentPayload: ProposalPayload = { ...payload };
-    let res = syncEvalCommit(currentPayload);
-    if (!res.passed) {
-      if (ruleAutoResolve && res.error_code === 'ERR_BUDGET_EXCEEDED' && currentPayload.core) {
-        currentPayload = {
-          ...currentPayload,
-          core: false,
-          scope_glob: currentPayload.scope_glob && currentPayload.scope_glob !== '*' ? currentPayload.scope_glob : '**/*',
-        };
-        autoResolvedMeta.downgradedToScoped = true;
-        res = syncEvalCommit(currentPayload);
-      } else if (prefAutoResolve) {
-        const batchId = `auto-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-        const preBatchFileSnapshots = new Map<string, string | null>();
-        const preBatchHistorySize = fs.existsSync(storage.profileHistoryPath)
-          ? fs.statSync(storage.profileHistoryPath).size
-          : -1;
-        const preBatchArchives = new Set(
-          fs.existsSync(storage.archiveDir) ? fs.readdirSync(storage.archiveDir) : []
-        );
-        const snapshotPrefOnce = (prefId: string) => {
-          const cleanPrefId = sanitizeId(prefId);
-          if (!cleanPrefId || preBatchFileSnapshots.has(cleanPrefId)) return;
-          const p = path.join(storage.preferencesDir, `${cleanPrefId}.md`);
-          preBatchFileSnapshots.set(cleanPrefId, fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null);
-        };
-        const rollbackBatchMutations = () => {
-          for (const [prefId, content] of preBatchFileSnapshots.entries()) {
-            const p = path.join(storage.preferencesDir, `${prefId}.md`);
-            if (content === null) {
-              if (fs.existsSync(p)) {
-                try { fs.unlinkSync(p); } catch {}
-              }
-            } else {
-              fs.mkdirSync(path.dirname(p), { recursive: true });
-              fs.writeFileSync(p, content, 'utf8');
-            }
-          }
-          if (fs.existsSync(storage.archiveDir)) {
-            for (const f of fs.readdirSync(storage.archiveDir)) {
-              if (!preBatchArchives.has(f)) {
-                try { fs.rmSync(path.join(storage.archiveDir, f), { recursive: true, force: true }); } catch {}
-              }
-            }
-          }
-          if (preBatchHistorySize === -1) {
-            if (fs.existsSync(storage.profileHistoryPath)) {
-              try { fs.unlinkSync(storage.profileHistoryPath); } catch {}
-            }
-          } else if (fs.existsSync(storage.profileHistoryPath)) {
-            try { fs.truncateSync(storage.profileHistoryPath, preBatchHistorySize); } catch {}
-          }
-          storage.rebuildUserProfileDigest();
-          telemetry?.syncFromDisk();
-        };
-
-        let mutatedInBatch = false;
-        for (let step = 0; step < 8 && !res.passed; step++) {
-          if (res.error_code === 'ERR_DUPLICATE_CAPABILITY') {
-            const rawConflicts: string[] = Array.isArray((res as any).conflicting_ids)
-              ? (res as any).conflicting_ids.map((x: unknown) => sanitizeId(String(x))).filter(Boolean)
-              : [];
-            const selfId = sanitizeId(currentPayload.id || '');
-            if (rawConflicts.length === 0 && selfId && storage.getPreference(selfId)) {
-              rawConflicts.push(selfId);
-            }
-            const uniqueConflicts = Array.from(new Set(rawConflicts));
-            if (uniqueConflicts.length === 0) break;
-            const primaryConflict = uniqueConflicts[0];
-            const extraConflicts = uniqueConflicts.slice(1);
-            for (const extraId of extraConflicts) {
-              const extraPref = storage.getPreference(extraId);
-              if (!extraPref) continue;
-              snapshotPrefOnce(extraId);
-              const snapText = preBatchFileSnapshots.get(extraId) || undefined;
-              if (storage.archiveCapability(extraId, 'preference', `Replaced during auto_resolve by ${selfId || 'new preference'}`)) {
-                mutatedInBatch = true;
-                autoResolvedMeta.batchId = batchId;
-                autoResolvedMeta.supersededIds.push(extraId);
-                storage.appendProfileHistory({
-                  ts: new Date().toISOString(),
-                  action: 'archive',
-                  id: extraId,
-                  kind: 'preference',
-                  title: extraPref.title || extraId,
-                  batch_id: batchId,
-                  ...(snapText ? { previous_snapshot: snapText } : {}),
-                  reason: `Archived conflicting preference during auto_resolve`,
-                });
-              }
-            }
-            if (extraConflicts.length > 0) telemetry?.syncFromDisk();
-            if (currentPayload.supersedes_id === primaryConflict && extraConflicts.length === 0) break;
-            snapshotPrefOnce(primaryConflict);
-            autoResolvedMeta.batchId = batchId;
-            autoResolvedMeta.supersededIds.push(primaryConflict);
-            currentPayload = { ...currentPayload, supersedes_id: primaryConflict, batch_id: batchId };
-            res = syncEvalCommit(currentPayload);
-            continue;
-          }
-          if (res.error_code === 'ERR_PROFILE_BUDGET_EXCEEDED') {
-            const candidates: Array<{ id: string }> = Array.isArray((res as any).low_value_candidates)
-              ? (res as any).low_value_candidates
-              : [];
-            const nextCandidate = candidates.find((c) => {
-              const cid = sanitizeId(c.id);
-              const p = cid ? storage.getPreference(cid) : null;
-              return Boolean(p && p.always_on !== false && cid !== sanitizeId(currentPayload.id || ''));
-            });
-            if (nextCandidate) {
-              const lowValId = sanitizeId(nextCandidate.id);
-              const lowPref = storage.getPreference(lowValId)!;
-              snapshotPrefOnce(lowValId);
-              const prevSnap = preBatchFileSnapshots.get(lowValId) || undefined;
-              const nowIso = new Date().toISOString();
-              storage.savePreference({
-                ...lowPref,
-                always_on: false,
-                trigger_cue: lowPref.trigger_cue || lowPref.l0_summary,
-                updated_at: nowIso,
-              });
-              storage.rebuildUserProfileDigest();
-              storage.appendProfileHistory({
-                ts: nowIso,
-                action: 'update',
-                id: lowValId,
-                kind: 'preference',
-                title: lowPref.title,
-                batch_id: batchId,
-                ...(prevSnap ? { previous_snapshot: prevSnap } : {}),
-                reason: 'Demoted to on-demand during auto_resolve budget eviction',
-              });
-              telemetry?.syncFromDisk();
-              mutatedInBatch = true;
-              autoResolvedMeta.batchId = batchId;
-              autoResolvedMeta.evictedIds.push(lowValId);
-              currentPayload = { ...currentPayload, batch_id: batchId };
-              res = syncEvalCommit(currentPayload);
-              continue;
-            }
-            if (mutatedInBatch && currentPayload.always_on !== false) {
-              currentPayload = {
-                ...currentPayload,
-                always_on: false,
-                trigger_cue: currentPayload.trigger_cue || currentPayload.l0_summary || currentPayload.title,
-                batch_id: batchId,
-              };
-              autoResolvedMeta.downgradedToOnDemand = true;
-              res = syncEvalCommit(currentPayload);
-              continue;
-            }
-            break;
-          }
-          break;
+      return (async () => {
+        let currentPayload: ProposalPayload = { ...payload };
+        let res = await gatekeeper.evaluateAndCommitAsync(currentPayload);
+        if (res.passed) {
+          return finishPropose(res, currentPayload);
         }
-        if (!res.passed && mutatedInBatch) {
-          rollbackBatchMutations();
+
+        if (ruleAutoResolve) {
+          for (let step = 0; step < 2 && !res.passed; step++) {
+            const nextRulePayload = tryBuildRuleAutoDowngrade(currentPayload, res.error_code);
+            if (!nextRulePayload) break;
+            currentPayload = nextRulePayload;
+            res = await gatekeeper.evaluateAndCommitAsync(currentPayload);
+          }
+          return finishPropose(res, currentPayload);
+        }
+
+        if (prefAutoResolve) {
+          const session = createPrefAutoResolveSession();
+          for (let step = 0; step < 8 && !res.passed; step++) {
+            const nextPayload = session.stepPayload(currentPayload, res);
+            if (!nextPayload) break;
+            currentPayload = nextPayload;
+            res = await gatekeeper.evaluateAndCommitAsync(currentPayload);
+          }
+          if (!res.passed) {
+            session.rollbackIfMutated();
+          }
+        }
+        return finishPropose(res, currentPayload);
+      })();
+    }
+
+    // Preserve synchronous return contract for callers using handleToolCall (sync)
+    let currentPayload: ProposalPayload = { ...payload };
+    let res = gatekeeper.evaluateAndCommit(currentPayload);
+    if (!res.passed) {
+      if (ruleAutoResolve) {
+        for (let step = 0; step < 2 && !res.passed; step++) {
+          const nextRulePayload = tryBuildRuleAutoDowngrade(currentPayload, res.error_code);
+          if (!nextRulePayload) break;
+          currentPayload = nextRulePayload;
+          res = gatekeeper.evaluateAndCommit(currentPayload);
+        }
+      } else if (prefAutoResolve) {
+        const session = createPrefAutoResolveSession();
+        for (let step = 0; step < 8 && !res.passed; step++) {
+          const nextPayload = session.stepPayload(currentPayload, res);
+          if (!nextPayload) break;
+          currentPayload = nextPayload;
+          res = gatekeeper.evaluateAndCommit(currentPayload);
+        }
+        if (!res.passed) {
+          session.rollbackIfMutated();
         }
       }
     }
-    syncResult = finishPropose(res);
-    return syncResult;
+    return finishPropose(res, currentPayload);
   }
 
   private proposeSchemaError(args: Record<string, unknown>) {

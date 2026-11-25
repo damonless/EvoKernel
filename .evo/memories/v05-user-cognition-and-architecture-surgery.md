@@ -2,14 +2,14 @@
 id: v05-user-cognition-and-architecture-surgery
 title: "v0.5 Architecture Surgery & 3-Tier Offline User Cognition Engine"
 l0_summary: "Unify profile-sync, workbench-actions, hook-engine, split UI, fix D1-D19, and add 3-tier offline user cognition with 1-click undo."
-created_commit: "a703e18"
+created_commit: "018ce78"
 created_branch: "main"
 target_symbols: ["src/core/profile-sync.ts#syncGlobalUserProfile","src/core/workbench-actions.ts#executeWorkbenchAction","src/core/hook-engine.ts#recordRecalledOutcomeUnified"]
-ast_fingerprints: {"src/core/profile-sync.ts#syncGlobalUserProfile":{"symbol":"src/core/profile-sync.ts#syncGlobalUserProfile","file_path":"src/core/profile-sync.ts","file":"src/core/profile-sync.ts","kind":"function","start_line":332,"end_line":503,"signature":"export function syncGlobalUserProfile(","ast_hash":"68fe5c51e2058dab"},"src/core/workbench-actions.ts#executeWorkbenchAction":{"symbol":"src/core/workbench-actions.ts#executeWorkbenchAction","file_path":"src/core/workbench-actions.ts","file":"src/core/workbench-actions.ts","kind":"function","start_line":359,"end_line":2499,"signature":"export async function executeWorkbenchAction(","ast_hash":"d1bebf9b937c6c9c"},"src/core/hook-engine.ts#recordRecalledOutcomeUnified":{"symbol":"src/core/hook-engine.ts#recordRecalledOutcomeUnified","file_path":"src/core/hook-engine.ts","file":"src/core/hook-engine.ts","kind":"function","start_line":243,"end_line":309,"signature":"export function recordRecalledOutcomeUnified(","ast_hash":"c5ac29931f0e5eac"}}
+ast_fingerprints: {"src/core/profile-sync.ts#syncGlobalUserProfile":{"symbol":"src/core/profile-sync.ts#syncGlobalUserProfile","file_path":"src/core/profile-sync.ts","file":"src/core/profile-sync.ts","kind":"function","start_line":332,"end_line":503,"signature":"export function syncGlobalUserProfile(","ast_hash":"68fe5c51e2058dab"},"src/core/workbench-actions.ts#executeWorkbenchAction":{"symbol":"src/core/workbench-actions.ts#executeWorkbenchAction","file_path":"src/core/workbench-actions.ts","file":"src/core/workbench-actions.ts","kind":"function","start_line":360,"end_line":2530,"signature":"export async function executeWorkbenchAction(","ast_hash":"de6e1fa31f0611d3"},"src/core/hook-engine.ts#recordRecalledOutcomeUnified":{"symbol":"src/core/hook-engine.ts#recordRecalledOutcomeUnified","file_path":"src/core/hook-engine.ts","file":"src/core/hook-engine.ts","kind":"function","start_line":243,"end_line":309,"signature":"export function recordRecalledOutcomeUnified(","ast_hash":"c5ac29931f0e5eac"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-23T20:22:23.852Z"
-updated_at: "2026-11-25T07:25:08.271Z"
+updated_at: "2026-11-25T08:02:31.572Z"
 ---
 
 ## Symptom

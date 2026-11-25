@@ -2250,8 +2250,13 @@ export const UI_STYLES = `
         font-size: var(--text-base);
       }
       .version-tag,
-      #export-menu-wrap {
+      #btn-export-html {
         display: none;
+      }
+      .export-popover {
+        position: fixed;
+        top: 54px;
+        right: 12px;
       }
       .status-indicator-live {
         display: inline-flex;

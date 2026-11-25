@@ -528,6 +528,7 @@ export const PROFILE_CLIENT_SCRIPT = `
                   l0_summary: it.l0_summary || it.title || it.id,
                   category: it.category || 'style',
                   always_on: nextAlwaysOn,
+                  trigger_cue: it.trigger_cue || undefined,
                   tags: Array.isArray(it.tags) ? it.tags : [],
                   content: it.content || it.l0_summary || it.title || it.id,
                   enabled: it.enabled !== false,
@@ -540,7 +541,7 @@ export const PROFILE_CLIENT_SCRIPT = `
                     showToast('success', d.profileModeUpdatedToast.replace('{id}', it.id), 8000, {
                       label: d.undoActionLabel,
                       run: function() {
-                        handleUndoProfileChange(it.id, null);
+                        handleUndoProfileChange(it.id, null, itemTier);
                       }
                     });
                     if (res.data && Array.isArray(res.data.warnings) && res.data.warnings.length > 0) {
@@ -653,14 +654,17 @@ export const PROFILE_CLIENT_SCRIPT = `
     }
   }
 
-  function handleUndoProfileChange(targetId, btnEl) {
+  function handleUndoProfileChange(targetId, btnEl, itemTier) {
     var dict = i18n[lang] || i18n.en;
     runWithButtonLock(btnEl, dict.savingLabel, function() {
-      return callKernelAction('undo-preference', { id: targetId || undefined, tier: 'GLOBAL' }).then(function(res) {
+      return callKernelAction('undo-preference', { id: targetId || undefined, tier: itemTier || 'GLOBAL' }).then(function(res) {
         if (res && res.ok) {
           if (res.snapshot) snapshot = res.snapshot;
           rerenderAllViews();
           showToast('success', dict.profileUndoneToast);
+          if (res.data && Array.isArray(res.data.warnings) && res.data.warnings.length > 0) {
+            showToast('warn', res.data.warnings[0], 6000);
+          }
         } else if (!res || !res.offlineExport) {
           showActionError(res, dict.profileUndoFailedToast);
         }

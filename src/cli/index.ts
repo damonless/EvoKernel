@@ -1865,11 +1865,10 @@ export function runCli(argv: string[]): void | Promise<void> {
   const isDryRun = args.includes('--dry-run');
   const isProjectProfile = cmd === 'profile' && args.includes('--project');
   const isReadOnlyDiagnostic =
+    isDryRun ||
     ['score', 'ui', 'doctor', 'audit', 'check', 'inspect', 'tree', 'stats', 'version', '--version', '-v'].includes(cmd) ||
-    (cmd === 'init' && isDryRun) ||
     (cmd === 'profile' &&
       (['list', 'show', 'path'].includes(profileSubcmd) ||
-        isDryRun ||
         ((profileSubcmd === 'import' || profileSubcmd === 'onboard') && !args.includes('--apply'))));
   const isIsolatedWithoutGlobalOverride =
     (Boolean(process.env.NODE_TEST_CONTEXT) || process.env.EVO_PROFILE_ISOLATED === '1') &&
@@ -2044,6 +2043,11 @@ export function runCli(argv: string[]): void | Promise<void> {
           logInit(
             `  ├─ Profile Sync    : ${globalDryRes.profileSync.totalTokens}/${globalDryRes.profileSync.maxTokens} tok (${globalDryRes.profileSync.updatedTargets.length > 0 ? globalDryRes.profileSync.updatedTargets.join(', ') : 'targets up-to-date'})`
           );
+          if (globalDryRes.profileSync.warnings && globalDryRes.profileSync.warnings.length > 0) {
+            for (const w of globalDryRes.profileSync.warnings) {
+              logInit(`  ├─ ⚠️  Warning      : ${w}`);
+            }
+          }
         }
         logInit(`  └─ Mode            : ${stealth ? 'Stealth (.git/info/exclude)' : 'Standard'}`);
         break;
@@ -2765,7 +2769,7 @@ export function runCli(argv: string[]): void | Promise<void> {
       if (action === 'remove') {
         const rawTargetId = positionalArgs[1] ? positionalArgs[1].trim() : '';
         if (!rawTargetId) {
-          const msg = 'Missing preference ID. Usage: evo profile remove <id> [--project] [--json]';
+          const msg = `Missing preference ID. Usage: ${cliPrefix} profile remove <id> [--project] [--json]`;
           if (isJson) {
             console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
           } else {
@@ -2868,6 +2872,7 @@ export function runCli(argv: string[]): void | Promise<void> {
                 removed: cleanId,
                 scope: isProject ? 'project' : 'global',
                 syncedTargets: syncRes?.updatedTargets || [],
+                ...(syncRes?.warnings?.length ? { warnings: syncRes.warnings } : {}),
                 ...(syncRes
                   ? { totalTokens: syncRes.totalTokens, maxTokens: syncRes.maxTokens }
                   : {}),
@@ -2883,6 +2888,11 @@ export function runCli(argv: string[]): void | Promise<void> {
             logProfile(
               `  ├─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : syncRes.targets.length === 0 ? `(0 AI hosts detected — run \`${cliPrefix} init --global\` to connect)` : '(already up-to-date)'}`
             );
+            if (syncRes.warnings.length > 0) {
+              for (const w of syncRes.warnings) {
+                logProfile(`  ├─ ⚠️  Warning    : ${w}`);
+              }
+            }
           }
           logProfile(`  └─ Undo          : ${cliPrefix} profile undo${isProject ? ' --project' : ''}`);
         }
@@ -2892,7 +2902,7 @@ export function runCli(argv: string[]): void | Promise<void> {
       if (action === 'import') {
         const fileArg = positionalArgs[1] ? positionalArgs[1].trim() : '';
         if (!fileArg) {
-          const msg = 'Missing markdown file path. Usage: evo profile import <filePath> [--apply] [--json]';
+          const msg = `Missing markdown file path. Usage: ${cliPrefix} profile import <filePath> [--apply] [--json]`;
           if (isJson) {
             console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
           } else {
@@ -2971,6 +2981,7 @@ export function runCli(argv: string[]): void | Promise<void> {
                 imported,
                 rejected,
                 syncedTargets: syncRes?.updatedTargets || [],
+                ...(syncRes?.warnings?.length ? { warnings: syncRes.warnings } : {}),
               },
               null,
               2
@@ -2989,6 +3000,11 @@ export function runCli(argv: string[]): void | Promise<void> {
             logProfile(
               `  └─ Host Targets : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
             );
+            if (syncRes.warnings.length > 0) {
+              for (const w of syncRes.warnings) {
+                logProfile(`  ⚠️  ${w}`);
+              }
+            }
           }
         }
         if (allRejected) {
@@ -3064,6 +3080,7 @@ export function runCli(argv: string[]): void | Promise<void> {
                   imported,
                   rejected,
                   syncedTargets: syncRes?.updatedTargets || [],
+                  ...(syncRes?.warnings?.length ? { warnings: syncRes.warnings } : {}),
                 },
                 null,
                 2
@@ -3076,6 +3093,11 @@ export function runCli(argv: string[]): void | Promise<void> {
               logProfile(
                 `  └─ Host Targets : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
               );
+              if (syncRes.warnings.length > 0) {
+                for (const w of syncRes.warnings) {
+                  logProfile(`  ⚠️  ${w}`);
+                }
+              }
             }
           }
           if (allRejected) {
@@ -3106,7 +3128,7 @@ export function runCli(argv: string[]): void | Promise<void> {
             for (const p of presetSummaries) {
               logProfile(`  ├─ ${p.id} (${p.count} prefs) — ${p.description}`);
             }
-            logProfile('  └─ Preview with: `evo profile onboard --preset <name>` (add `--apply` to save)');
+            logProfile(`  └─ Preview with: \`${cliPrefix} profile onboard --preset <name>\` (add \`--apply\` to save)`);
           }
           break;
         }
@@ -3327,6 +3349,7 @@ export function runCli(argv: string[]): void | Promise<void> {
                 undone: undoRes.undone,
                 message: undoRes.message,
                 syncedTargets: syncRes ? syncRes.updatedTargets : projectSynced || [],
+                ...(syncRes?.warnings?.length ? { warnings: syncRes.warnings } : {}),
                 ...(syncRes
                   ? {
                       totalTokens: syncRes.totalTokens,
@@ -3349,6 +3372,11 @@ export function runCli(argv: string[]): void | Promise<void> {
             logProfile(
               `  └─ Host Targets  : ${syncRes.updatedTargets.length > 0 ? syncRes.updatedTargets.join(', ') : '(already up-to-date)'}`
             );
+            if (syncRes.warnings.length > 0) {
+              for (const w of syncRes.warnings) {
+                logProfile(`  ⚠️  ${w}`);
+              }
+            }
           } else {
             logProfile(`  └─ Project Files : ${projectSynced && projectSynced.length > 0 ? projectSynced.join(', ') : '(already up-to-date)'}`);
           }

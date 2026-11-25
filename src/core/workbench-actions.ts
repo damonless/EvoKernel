@@ -71,6 +71,7 @@ export interface ProfileSyncResult {
   maxTokens: number;
   updatedTargets: string[];
   syncedHosts?: unknown;
+  warnings?: string[];
 }
 
 export interface WorkbenchActionHooks {
@@ -1675,19 +1676,27 @@ export async function executeWorkbenchAction(
             ? meta.review_status
             : existingSkill.review_status;
 
-        const skillTitle = String(
-          meta.title || meta.name || existingSkill.title || existingSkill.name || cleanId
-        ).trim();
-        const skillL0 = meta.l0_summary
-          ? String(meta.l0_summary).trim()
-          : meta.description
-            ? String(meta.description).trim()
-            : (existingSkill.l0_summary || existingSkill.description || cleanId).trim().slice(0, 140);
+        const skillTitle =
+          typeof params.title === 'string' && params.title.trim()
+            ? params.title.trim()
+            : String(meta.title || meta.name || existingSkill.title || existingSkill.name || cleanId).trim();
+        const skillName =
+          typeof params.title === 'string' && params.title.trim()
+            ? params.title.trim()
+            : String(meta.name || existingSkill.name || skillTitle || cleanId).trim();
+        const skillL0 =
+          typeof params.l0_summary === 'string' && params.l0_summary.trim()
+            ? params.l0_summary.trim()
+            : meta.l0_summary
+              ? String(meta.l0_summary).trim()
+              : meta.description
+                ? String(meta.description).trim()
+                : (existingSkill.l0_summary || existingSkill.description || cleanId).trim().slice(0, 140);
 
         payload = {
           kind: 'skill',
           id: cleanId,
-          name: String(meta.name || existingSkill.name || cleanId).trim(),
+          name: skillName,
           title: skillTitle,
           description: String(meta.description || skillL0).trim(),
           l0_summary: skillL0,
@@ -1797,16 +1806,29 @@ export async function executeWorkbenchAction(
 
         preserveMemoryAnchorOnEdit = sameTargetSymbols && Boolean(resolvedCreatedCommit);
 
+        const memTitle =
+          typeof params.title === 'string' && params.title.trim()
+            ? params.title.trim()
+            : meta.title
+              ? String(meta.title).trim()
+              : existingMem.title || cleanId;
+        const memL0 =
+          typeof params.l0_summary === 'string' && params.l0_summary.trim()
+            ? params.l0_summary.trim()
+            : meta.l0_summary
+              ? String(meta.l0_summary).trim()
+              : existingMem.l0_summary || cleanId;
+
         payload = {
           kind: 'memory',
           id: cleanId,
-          title: meta.title ? String(meta.title).trim() : existingMem.title || cleanId,
-          l0_summary: meta.l0_summary
-            ? String(meta.l0_summary).trim()
-            : existingMem.l0_summary || cleanId,
+          title: memTitle,
+          l0_summary: memL0,
           symptom,
           root_cause,
           solution,
+          ...(existingMem.memory_type ? { memory_type: existingMem.memory_type } : {}),
+          ...(resolved.isGlobal ? { scope: 'global' as const } : existingMem.scope ? { scope: existingMem.scope } : {}),
           target_symbols: nextTargetSymbols,
           tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
           origin: meta.origin ? String(meta.origin) : existingMem.origin || 'session',
@@ -1923,8 +1945,14 @@ export async function executeWorkbenchAction(
         payload = {
           kind: 'tool',
           id: cleanId,
-          title: tool.title || cleanId,
-          l0_summary: tool.l0_summary || (tool as any).description || 'Tool',
+          title:
+            typeof params.title === 'string' && params.title.trim()
+              ? params.title.trim()
+              : tool.title || cleanId,
+          l0_summary:
+            typeof params.l0_summary === 'string' && params.l0_summary.trim()
+              ? params.l0_summary.trim()
+              : tool.l0_summary || (tool as any).description || 'Tool',
           runtime: tool.runtime,
           script_code: effectiveRawContent,
           input_schema: tool.input_schema,
@@ -1970,9 +1998,10 @@ export async function executeWorkbenchAction(
       }
 
       const isGlobalTarget = resolved.isGlobal || isGlobalFallbackRoot(targetStorage.rootDir);
+      let updateSyncRes: ProfileSyncResult | undefined;
       if (rawKind === 'preference' || (rawKind === 'skill' && isGlobalTarget)) {
         if (isGlobalTarget) {
-          await invokeSyncGlobalUserProfile(targetStorage.rootDir, hooks);
+          updateSyncRes = await invokeSyncGlobalUserProfile(targetStorage.rootDir, hooks);
         } else {
           await invokeSyncRuleBlocks(ws, hooks);
         }
@@ -2014,6 +2043,7 @@ export async function executeWorkbenchAction(
             kind: rawKind,
             tier: resolved.isGlobal ? 'GLOBAL' : 'LOCAL',
             updated: true,
+            ...(updateSyncRes?.warnings?.length ? { warnings: updateSyncRes.warnings } : {}),
             snapshot,
           },
         },
@@ -2138,7 +2168,7 @@ export async function executeWorkbenchAction(
 
       const snapshot = buildSnapshotSafe(ws, hooks);
       hooks.notifyChange?.();
-      const receipt = `🧬 EvoKernel Evolution Receipt: [preference] ${cleanId} (${l0Summary})`;
+      const receipt = `Saved preference "${title}" (${cleanId}).`;
       return {
         status: 200,
         body: {
@@ -2234,6 +2264,7 @@ export async function executeWorkbenchAction(
           data: {
             undone: undoRes,
             syncedTargets: syncRes?.updatedTargets || [],
+            ...(syncRes?.warnings?.length ? { warnings: syncRes.warnings } : {}),
             snapshot,
           },
         },

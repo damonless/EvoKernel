@@ -2228,7 +2228,7 @@ Options:
   const hintText = buildPreferenceHint(activeSignals);
   const preferenceCue = hintText ? `；${hintText}` : '';
 
-  const ephemeralMessage = `[EvoKernel 提醒] ${reasons.join('；')}。确认后请调用 evo_propose 沉淀（偏好用 kind: "preference", content: "..." 无需 workspace/id/title；代码缺陷用 memory，规则用 rule/supersedes_id，脚本用 tool${preferenceCue}），并附 🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)。`;
+  const ephemeralMessage = `[EvoKernel 提醒] ${reasons.join('；')}。确认后请调用 evo_propose 沉淀（偏好用 kind: "preference", content: "..." 无需 workspace/id/title；代码缺陷用 memory，规则用 rule/supersedes_id，脚本用 tool${preferenceCue}），并用返回的简明 human_receipt 向用户确认。`;
 
   const stepPayload =
     process.env.EVO_HOOK_STEP_FORMAT === 'systemMessage'

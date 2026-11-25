@@ -2,14 +2,14 @@
 id: issue-34-fixes-and-route-b-profile-push
 title: "Issue #34 Hardening, Auditor SSOT & Route B Global Preference Push"
 l0_summary: "Fix Issue #34 (quote-free hooks, BOM, async MCP, SSOT auditor) and add Route B global preference push layer."
-created_commit: "a703e18"
+created_commit: "018ce78"
 created_branch: "main"
 target_symbols: ["src/cli/init.ts#syncGlobalUserProfile","src/cli/harness.ts#upsertAntigravityHooks","src/mcp/handlers.ts#EvoMcpDispatcher"]
-ast_fingerprints: {"src/cli/init.ts#syncGlobalUserProfile":{"symbol":"src/cli/init.ts#syncGlobalUserProfile","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":34,"end_line":39,"signature":"export function syncGlobalUserProfile(","ast_hash":"65bfd6ef98a09896"},"src/cli/harness.ts#upsertAntigravityHooks":{"symbol":"src/cli/harness.ts#upsertAntigravityHooks","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":2045,"end_line":2098,"signature":"export function upsertAntigravityHooks(ws: string): string[]","ast_hash":"24991f1c383a40d8"},"src/mcp/handlers.ts#EvoMcpDispatcher":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"class","start_line":360,"end_line":4019,"signature":"export class EvoMcpDispatcher","ast_hash":"29e132a0e7ee3b6b"}}
+ast_fingerprints: {"src/cli/init.ts#syncGlobalUserProfile":{"symbol":"src/cli/init.ts#syncGlobalUserProfile","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":34,"end_line":39,"signature":"export function syncGlobalUserProfile(","ast_hash":"65bfd6ef98a09896"},"src/cli/harness.ts#upsertAntigravityHooks":{"symbol":"src/cli/harness.ts#upsertAntigravityHooks","file_path":"src/cli/harness.ts","file":"src/cli/harness.ts","kind":"function","start_line":2045,"end_line":2098,"signature":"export function upsertAntigravityHooks(ws: string): string[]","ast_hash":"24991f1c383a40d8"},"src/mcp/handlers.ts#EvoMcpDispatcher":{"symbol":"src/mcp/handlers.ts#EvoMcpDispatcher","file_path":"src/mcp/handlers.ts","file":"src/mcp/handlers.ts","kind":"class","start_line":360,"end_line":4025,"signature":"export class EvoMcpDispatcher","ast_hash":"7b1a47dbc4e7430a"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-23T16:57:10.412Z"
-updated_at: "2026-11-25T07:25:07.225Z"
+updated_at: "2026-11-25T08:02:30.603Z"
 ---
 
 ## Symptom

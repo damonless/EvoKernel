@@ -10,7 +10,7 @@ import { EvoMcpDispatcher } from '../mcp/handlers.js';
 import { MCP_INSTRUCTIONS } from '../mcp/server.js';
 import { syncGlobalUserProfile } from '../core/profile-sync.js';
 import { parseMarkdownToPreferenceCandidates } from '../core/profile-import.js';
-import { getCanonicalToken, CANONICAL_SYNONYM_MAP } from '../core/lexicon.js';
+import { getCanonicalToken, CANONICAL_SYNONYM_MAP, CORE_SOFTWARE_SYNONYMS } from '../core/lexicon.js';
 import {
   detectConversationEvolutionSignals,
   buildPreferenceEvolutionHint,
@@ -407,6 +407,7 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
     const projStorage = new EvoStorage(ws);
     const updatedMem = projStorage.getMemory(createdMemId);
     assert.ok(updatedMem);
+    assert.strictEqual(updatedMem.title, 'Updated computeTotal lesson');
     assert.strictEqual(updatedMem.symptom, 'Updated symptom text without markdown headings');
     assert.strictEqual(updatedMem.root_cause, 'Updated cause text');
     assert.strictEqual(updatedMem.solution, 'Updated solution text');
@@ -415,6 +416,8 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
     projStorage.saveSkill({
       id: 'p08-test-skill',
       name: 'Original Skill',
+      title: 'Original Skill',
+      l0_summary: 'Original desc',
       description: 'Original desc',
       tags: ['test'],
       l1_contract: 'Old contract',
@@ -438,6 +441,8 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
     assert.strictEqual(updateSkillRes.status, 200);
     const updatedSkill = projStorage.getSkill('p08-test-skill');
     assert.ok(updatedSkill);
+    assert.strictEqual(updatedSkill.title, 'Renamed Skill');
+    assert.strictEqual(updatedSkill.name, 'Renamed Skill');
     assert.strictEqual(updatedSkill.l1_contract, 'New clean L1 trigger contract');
     assert.strictEqual(updatedSkill.l2_sop, 'Step 1: Verify inputs.\nStep 2: Run checks.');
 
@@ -553,8 +558,10 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
 
     // 5. Lexicon fix: 工作 -> work (NOT workbook); 工作簿 -> workbook
     const workCanonical = getCanonicalToken('工作');
-    const workSyns = CANONICAL_SYNONYM_MAP.get('工作') || [];
+    const workMapped = CANONICAL_SYNONYM_MAP.get('工作');
+    const workSyns = CORE_SOFTWARE_SYNONYMS['工作'] || [];
     assert.notStrictEqual(workCanonical, 'workbook', '工作 must NOT canonicalize to workbook');
+    assert.strictEqual(workMapped, 'work', '工作 must map to work in CANONICAL_SYNONYM_MAP');
     assert.strictEqual(workSyns.includes('workbook'), false, '工作 must NOT over-bind to workbook');
     assert.strictEqual(getCanonicalToken('工作簿'), 'workbook', '工作簿 must map to workbook');
 
@@ -603,6 +610,8 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
       'bootstrap',
       'memory',
       'tree',
+      'stats',
+      'hook',
       'ui',
       'profile',
       'check',
@@ -684,7 +693,6 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
         },
       },
       origin: 'evolved',
-      confidence: 'HIGH',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -812,5 +820,167 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
     assert.strictEqual(zhHabit.lang, 'zh');
     const zhHint = buildPreferenceEvolutionHint(zhHabit);
     assert.ok(/[\u4e00-\u9fff]/.test(zhHint), `Chinese habit must yield Chinese hint, got: ${zhHint}`);
+  });
+
+  // =========================================================================
+  // Regression Guard: Undo history poisoning, Rule auto-downgrade (Budget + Gate 1.5),
+  // Personal memory title edit, and Cmd+K Export stopPropagation / mobile popover
+  // =========================================================================
+  test('Regression: Sequential undo after archive, rule auto-downgrade (core budget & Gate 1.5), and personal memory edit', async () => {
+    const ws = makeTempDir('evo-reg-ws-');
+    const homeDir = makeTempDir('evo-reg-home-');
+    const globalDir = path.join(homeDir, '.evo', 'global');
+    process.env.EVO_GLOBAL_DIR = globalDir;
+    process.env.EVO_GLOBAL_PROFILE_TARGETS = path.join(homeDir, '.claude', 'CLAUDE.md');
+
+    runInit(ws, { targets: ['claude'], globalHomeDir: homeDir });
+    const srcFile = path.join(ws, 'src', 'auth.ts');
+    fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+    fs.writeFileSync(srcFile, 'export function verifyToken(t: string) { return t.length > 0; }\n', 'utf8');
+
+    const dispatcher = new EvoMcpDispatcher(ws);
+    try {
+      // 1. Sequential undo after archive must NOT poison profile-history.jsonl
+      const addA = dispatcher.handleToolCall('evo_propose', {
+        kind: 'preference',
+        id: 'reg-pref-a',
+        content: 'Always highlight breaking API changes first.',
+        workspace: ws,
+      });
+      assert.strictEqual(Boolean(addA.isError), false);
+
+      const gst = new EvoStorage(globalDir);
+      const snapA = gst.snapshotCapabilityForHistory('reg-pref-a', 'preference');
+      assert.ok(snapA?.snapshot);
+      assert.strictEqual(gst.archiveCapability('reg-pref-a', 'preference', 'test archive'), true);
+      gst.appendProfileHistory({
+        ts: new Date().toISOString(),
+        action: 'archive',
+        id: 'reg-pref-a',
+        kind: 'preference',
+        title: 'reg-pref-a',
+        previous_snapshot: snapA.snapshot,
+        reason: 'test archive',
+      });
+
+      const addB = dispatcher.handleToolCall('evo_propose', {
+        kind: 'preference',
+        id: 'reg-pref-b',
+        content: 'Always include concrete CLI examples in docs.',
+        workspace: ws,
+      });
+      assert.strictEqual(Boolean(addB.isError), false);
+
+      // Undo #1 reverts addB
+      const u1 = dispatcher.handleToolCall('evo_propose', { undo: true, scope: 'global', workspace: ws });
+      assert.strictEqual(Boolean(u1.isError), false, `Undo #1 failed: ${u1.content[0].text}`);
+      assert.strictEqual(gst.getPreference('reg-pref-b'), null);
+      assert.strictEqual(gst.getPreference('reg-pref-a'), null);
+
+      // Undo #2 MUST revert archive of reg-pref-a and restore it!
+      const u2 = dispatcher.handleToolCall('evo_propose', { undo: true, scope: 'global', workspace: ws });
+      assert.strictEqual(Boolean(u2.isError), false, `Undo #2 failed (history poisoned?): ${u2.content[0].text}`);
+      assert.ok(gst.getPreference('reg-pref-a'), 'Undo #2 must restore archived reg-pref-a');
+
+      // Undo #3 reverts original add of reg-pref-a
+      const u3 = dispatcher.handleToolCall('evo_propose', { undo: true, scope: 'global', workspace: ws });
+      assert.strictEqual(Boolean(u3.isError), false, `Undo #3 failed: ${u3.content[0].text}`);
+      assert.strictEqual(gst.getPreference('reg-pref-a'), null);
+
+      // 2. Rule auto-downgrade on core rule budget full (ERR_BUDGET_EXCEEDED -> scoped rule with valid transfer_scenarios)
+      const projSt = new EvoStorage(ws);
+      const cfg = projSt.getConfig();
+      cfg.maxCoreRuleTokens = 35;
+      projSt.saveConfig(cfg);
+
+      const coreDowngradeRes = await dispatcher.handleToolCallAsync('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'reg-core-budget-downgrade',
+        core: true,
+        auto_resolve: true,
+        content: 'Validate every incoming payload schema strictly before mutating state and emit structured error responses.',
+      });
+      assert.strictEqual(
+        Boolean(coreDowngradeRes.isError),
+        false,
+        `Core rule budget auto-downgrade must pass Gate 1.5: ${coreDowngradeRes.content[0].text}`
+      );
+      const coreDownJson = JSON.parse(coreDowngradeRes.content[0].text);
+      assert.strictEqual(coreDownJson.passed, true);
+      assert.strictEqual(coreDownJson.diagnostics?.auto_resolved?.saved_as_scoped_rule, true);
+      const savedScopedRule = projSt.getRule('reg-core-budget-downgrade');
+      assert.ok(savedScopedRule && savedScopedRule.core === false);
+
+      // 3. Rule auto-downgrade on single-point Gate 1.5 (ERR_SCOPE_TOO_NARROW -> widened subsystem glob)
+      const narrowWidenRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'reg-narrow-scope-widen',
+        scope_glob: 'src/auth.ts',
+        auto_resolve: true,
+        content: 'Always verify authentication tokens using constant-time comparison before granting access.',
+      });
+      assert.strictEqual(
+        Boolean(narrowWidenRes.isError),
+        false,
+        `Narrow scope auto-widen must succeed: ${narrowWidenRes.content[0].text}`
+      );
+      const widenedRule = projSt.getRule('reg-narrow-scope-widen');
+      assert.ok(widenedRule && widenedRule.scope_glob === 'src/**/*.ts', `Expected widened glob src/**/*.ts, got ${widenedRule?.scope_glob}`);
+
+      // 4. Rule auto-downgrade on point-bug Gate 1.5 with target_symbols -> code-linked memory
+      const pointBugDowngradeRes = dispatcher.handleToolCall('evo_propose', {
+        workspace: ws,
+        kind: 'rule',
+        id: 'reg-auth-crash',
+        scope_glob: 'src/auth.ts',
+        target_symbols: ['src/auth.ts#verifyToken'],
+        auto_resolve: true,
+        content: 'Empty token caused crash in auth verifier; guard empty strings first.',
+      });
+      assert.strictEqual(
+        Boolean(pointBugDowngradeRes.isError),
+        false,
+        `Point-bug Gate 1.5 auto-downgrade to memory must succeed: ${pointBugDowngradeRes.content[0].text}`
+      );
+      const pointBugJson = JSON.parse(pointBugDowngradeRes.content[0].text);
+      assert.strictEqual(pointBugJson.diagnostics?.auto_resolved?.saved_as_memory, true);
+      assert.ok(projSt.getMemory('reg-auth-crash'), 'Downgraded point-bug must be stored as a memory');
+
+      // 5. Structured update-content on global personal memory updates title AND preserves memory_type: 'personal'
+      const pmRes = dispatcher.handleToolCall('evo_propose', {
+        kind: 'memory',
+        memory_type: 'personal',
+        id: 'reg-personal-mem',
+        title: 'Old Personal Title',
+        symptom: 'Old symptom',
+        root_cause: 'Old root cause',
+        solution: 'Old solution',
+      });
+      assert.strictEqual(Boolean(pmRes.isError), false);
+      const editPmRes = await executeWorkbenchAction(
+        ws,
+        'update-content',
+        {
+          kind: 'memory',
+          id: 'reg-personal-mem',
+          tier: 'GLOBAL',
+          title: 'New Personal Title',
+          symptom: 'New symptom',
+          root_cause: 'New root cause',
+          solution: 'New solution',
+        },
+        { buildSnapshot: (w, o) => buildUiSnapshot(w, o), syncRuleBlocks: syncManagedRuleBlocks }
+      );
+      assert.strictEqual(editPmRes.status, 200, `Personal memory edit failed: ${JSON.stringify(editPmRes.body)}`);
+      const updatedPm = gst.getMemory('reg-personal-mem');
+      assert.ok(updatedPm);
+      assert.strictEqual(updatedPm.title, 'New Personal Title');
+      assert.strictEqual(updatedPm.memory_type, 'personal');
+      assert.strictEqual(updatedPm.solution, 'New solution');
+    } finally {
+      dispatcher.close();
+    }
   });
 });

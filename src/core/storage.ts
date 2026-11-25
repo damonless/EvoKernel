@@ -1434,6 +1434,7 @@ export class EvoStorage {
 
     const cleanTargetId = targetId ? sanitizeId(targetId) : undefined;
     const undoBalance = new Map<string, number>();
+    const seenActiveKeys = new Set<string>();
     const activeEntriesRev: ProfileHistoryEntry[] = [];
 
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -1449,12 +1450,18 @@ export class EvoStorage {
         undoBalance.set(key, pendingUndos - 1);
         continue;
       }
-      if (entry.action === 'add' && !cleanTargetId && !entry.batch_id) {
-        if (!this.isCapabilityActive(entryCleanId, entry.kind)) {
-          continue;
-        }
+      // Only skip an orphan `add` if no newer un-undone entry exists for this capability AND it is missing on disk.
+      if (
+        entry.action === 'add' &&
+        !cleanTargetId &&
+        !entry.batch_id &&
+        !seenActiveKeys.has(key) &&
+        !this.isCapabilityActive(entryCleanId, entry.kind)
+      ) {
+        continue;
       }
       if (entry.action === 'add' || entry.action === 'update' || entry.action === 'archive') {
+        seenActiveKeys.add(key);
         activeEntriesRev.push(entry);
       }
     }
@@ -1494,7 +1501,9 @@ export class EvoStorage {
 
     const cleanTargetId = targetId ? sanitizeId(targetId) : undefined;
     const undoBalance = new Map<string, number>();
+    const seenActiveKeys = new Set<string>();
     const activeEntriesRev: ProfileHistoryEntry[] = [];
+    const topOrphanAdds: ProfileHistoryEntry[] = [];
     const now = new Date().toISOString();
 
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -1510,22 +1519,35 @@ export class EvoStorage {
         undoBalance.set(key, pendingUndos - 1);
         continue;
       }
-      if (entry.action === 'add' && !cleanTargetId && !entry.batch_id) {
-        if (!this.isCapabilityActive(entryCleanId, entry.kind)) {
-          this.appendProfileHistory({
-            ts: now,
-            action: 'undo',
-            id: entryCleanId,
-            kind: entry.kind,
-            title: entry.title,
-            reason: `Reconciled missing ${entry.kind} '${entryCleanId}' during undo`,
-          });
-          continue;
+      if (
+        entry.action === 'add' &&
+        !cleanTargetId &&
+        !entry.batch_id &&
+        !seenActiveKeys.has(key) &&
+        !this.isCapabilityActive(entryCleanId, entry.kind)
+      ) {
+        if (activeEntriesRev.length === 0) {
+          topOrphanAdds.push(entry);
         }
+        continue;
       }
       if (entry.action === 'add' || entry.action === 'update' || entry.action === 'archive') {
+        seenActiveKeys.add(key);
         activeEntriesRev.push(entry);
       }
+    }
+
+    // Reconcile only top-of-stack orphan `add` entries (never buried entries behind a newer archive/update)
+    for (const orphan of topOrphanAdds) {
+      const orphanCleanId = sanitizeId(orphan.id) || orphan.id;
+      this.appendProfileHistory({
+        ts: now,
+        action: 'undo',
+        id: orphanCleanId,
+        kind: orphan.kind,
+        title: orphan.title,
+        reason: `Reconciled missing ${orphan.kind} '${orphanCleanId}' during undo`,
+      });
     }
 
     const candidate = cleanTargetId
