@@ -692,6 +692,8 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
           ast_hash: 'stale-hash-0000',
         },
       },
+      created_commit: 'uncommitted',
+      tags: ['test'],
       origin: 'evolved',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),

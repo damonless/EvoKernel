@@ -1828,7 +1828,7 @@ export async function executeWorkbenchAction(
           root_cause,
           solution,
           ...(existingMem.memory_type ? { memory_type: existingMem.memory_type } : {}),
-          ...(resolved.isGlobal ? { scope: 'global' as const } : existingMem.scope ? { scope: existingMem.scope } : {}),
+          ...(resolved.isGlobal ? { scope: 'global' as const } : {}),
           target_symbols: nextTargetSymbols,
           tags: Array.isArray(meta.tags) ? meta.tags.map(String) : existingMem.tags,
           origin: meta.origin ? String(meta.origin) : existingMem.origin || 'session',
