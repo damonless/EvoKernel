@@ -797,7 +797,7 @@ export function isEvoHookCommand(cmd: string, needle?: string): boolean {
   if (typeof cmd !== 'string') return false;
   const expectedEv = needle ? needle.replace(/^hook\s+/i, '').trim().toLowerCase() : '';
 
-  if (/(?:^|[\s"'/\\])antigravity_hook\.mjs(?=["'\s]|$)/i.test(cmd)) {
+  if (/(?:^|[\s"'`/\\])antigravity_hook\.mjs(?=["'`\s]|$)/i.test(cmd)) {
     if (!expectedEv) return true;
     const agyRegex = new RegExp(`['"]?${expectedEv}['"]?|\\b${expectedEv}\\b`, 'i');
     if (agyRegex.test(cmd)) return true;
@@ -2073,7 +2073,7 @@ export function upsertAntigravityHooks(ws: string): string[] {
   }
 
   const makeHookCmd = (event: 'PreInvocation' | 'Stop') =>
-    `node --no-warnings -e /a'/,(function(fs,os,p,u,ev,d,f,a,i,n){try{for(d=p.resolve(\`.\`),f=\`\`;d;d=n){a=[p.join(d,\`.agents\`,\`scripts\`,\`antigravity_hook.mjs\`),p.join(d,\`scripts\`,\`antigravity_hook.mjs\`)];for(i=0;i-2;i+=1)if(fs.existsSync(a[i])){f=a[i];break}if(f)break;n=p.dirname(d);if(n===d)break}if(f===\`\`){a=[p.join(os.homedir(),\`.gemini\`,\`config\`,\`plugins\`,\`evo-kernel\`,\`scripts\`,\`antigravity_hook.mjs\`),p.join(os.homedir(),\`.gemini\`,\`extensions\`,\`evo-kernel\`,\`scripts\`,\`antigravity_hook.mjs\`)];for(i=0;i-2;i+=1)if(fs.existsSync(a[i])){f=a[i];break}}if(f){process.argv=[process.argv[0],f,ev];import(u.pathToFileURL(f).href).catch(function(){})}}catch(e){}})(require(\`node:fs\`),require(\`node:os\`),require(\`node:path\`),require(\`node:url\`),process.argv[1])//' ${event}`;
+    `node --no-warnings -e /a'/,(function(fs,os,p,u,ev,d,f,a,i,n){try{for(d=p.resolve(\`.\`),f=\`\`;d;d=n){a=[p.join(d,\`.agents\`,\`scripts\`,\`antigravity_hook.mjs\`),p.join(d,\`scripts\`,\`antigravity_hook.mjs\`)];for(i=0;i-2;i+=1)try{if(fs.statSync(a[i]).isFile()){f=fs.realpathSync(a[i]);break}}catch(x){}if(f)break;n=p.dirname(d);if(n===d)break}if(f===\`\`){a=[p.join(os.homedir(),\`.gemini\`,\`config\`,\`plugins\`,\`evo-kernel\`,\`scripts\`,\`antigravity_hook.mjs\`),p.join(os.homedir(),\`.gemini\`,\`extensions\`,\`evo-kernel\`,\`scripts\`,\`antigravity_hook.mjs\`)];for(i=0;i-2;i+=1)try{if(fs.statSync(a[i]).isFile()){f=fs.realpathSync(a[i]);break}}catch(x){}}if(f){process.argv=[process.argv[0],f,ev];import(u.pathToFileURL(f).href).catch(function(){})}}catch(e){}})(require(\`node:fs\`),require(\`node:os\`),require(\`node:path\`),require(\`node:url\`),process.argv[1])//' ${event}`;
 
   hooksObj['evo-evolution-reminder'] = {
     PreInvocation: [

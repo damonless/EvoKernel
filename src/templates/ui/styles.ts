@@ -1217,7 +1217,7 @@ export const UI_STYLES = `
       font-size: var(--text-sm);
     }
 
-    /* Personal Profile & Workflows Studio */
+    /* Personal Profile View */
     .profile-header-row {
       display: flex;
       justify-content: space-between;
@@ -2352,6 +2352,8 @@ export const UI_STYLES = `
       font-size: var(--text-xs);
       color: var(--text-secondary);
       max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
     }
     .hero-helped-badge-lbl {
       font-weight: 600;
@@ -2359,10 +2361,12 @@ export const UI_STYLES = `
       text-transform: uppercase;
       letter-spacing: 0.04em;
       white-space: nowrap;
+      flex-shrink: 0;
     }
     .hero-helped-badge-val {
       color: var(--text-secondary);
       font-family: var(--font-mono);
+      min-width: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;

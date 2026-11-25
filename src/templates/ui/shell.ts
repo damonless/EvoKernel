@@ -240,7 +240,7 @@ ${UI_STYLES}
         </button>
         <div class="kpi-strip-chip" id="kpi-chip-recall">
           <span class="kpi-strip-lbl" id="kpi-strip-recall-lbl">7d Recall</span>
-          <span class="kpi-strip-val" id="kpi-strip-recall-val">0 hits · 0 adopted</span>
+          <span class="kpi-strip-val" id="kpi-strip-recall-val">0 searches · 0 adopted</span>
         </div>
       </div>
 

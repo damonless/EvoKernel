@@ -76,7 +76,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       kpi2Val: '100%',
       kpi2Sub: 'Byte-stable KV prompt cache (5 fixed meta-tools)',
       kpi3Val: '6 Gates',
-      kpi3Sub: 'Static security, sandbox dry-run, BM25 & anti-confounding',
+      kpi3Sub: 'Static security, sandbox self-test, conflict & budget guards',
       kpi4Val: '0 Deps',
       kpi4Sub: 'Pure Node.js built-ins · 100% local SQLite',
       showcaseLabel: 'EvoKernel Workbench — Click to explore interactive sanitized snapshot (./demo/)',
@@ -131,7 +131,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
       kpi2Val: '100%',
       kpi2Sub: 'KV 缓存字节级稳定（恒定暴露 5 个元工具）',
       kpi3Val: '6 道门禁',
-      kpi3Sub: '静态安全、沙盒自测回滚、BM25 查重与防因果混淆',
+      kpi3Sub: '静态安全、沙盒自测回滚、冲突拦截与预算保护',
       kpi4Val: '0 外部依赖',
       kpi4Sub: '纯 Node.js 原生内置模块 · 100% 本地 SQLite',
       showcaseLabel: 'EvoKernel Workbench 工作台实景预览 —— 点击体验脱敏交互演示 (./demo/)',
@@ -180,6 +180,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
     currentLang = lang === 'zh' ? 'zh' : 'en';
     document.documentElement.lang = currentLang === 'zh' ? 'zh-CN' : 'en';
     var d = dict[currentLang];
+    document.title = 'EvoKernel — ' + d.heroTitle;
     var nodes = document.querySelectorAll('[data-i18n]');
     for (var i = 0; i < nodes.length; i++) {
       var key = nodes[i].getAttribute('data-i18n');
@@ -471,7 +472,7 @@ function renderLandingHtml(benchPayload, showcaseImgSrc = './assets/workbench-sh
         </div>
         <div class="kpi-card">
           <div class="kpi-val" data-i18n="kpi3Val">6 Gates</div>
-          <div class="kpi-sub" data-i18n="kpi3Sub">Static security, sandbox dry-run, BM25 &amp; anti-confounding</div>
+          <div class="kpi-sub" data-i18n="kpi3Sub">Static security, sandbox self-test, conflict &amp; budget guards</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-val" data-i18n="kpi4Val">0 Deps</div>

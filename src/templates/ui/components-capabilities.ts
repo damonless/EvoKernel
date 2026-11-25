@@ -7,7 +7,7 @@ export function renderCapabilitiesViewsHtml(): string {
             <span class="hero-learned-title" id="hero-learned-title">What EvoKernel Has Learned</span>
             <div class="hero-helped-badge" id="hero-card-recently-helped">
               <span class="hero-helped-badge-lbl" id="hero-recently-helped-lbl">Recently Helped</span>
-              <span class="hero-helped-badge-val" id="hero-recently-helped-list"></span>
+              <span class="hero-helped-badge-val" id="hero-recently-helped-list">0 pitfalls avoided · 0 adopted · 0 searches (7d)</span>
             </div>
           </div>
           <div class="hero-learned-grid">
@@ -39,14 +39,14 @@ export function renderCapabilitiesViewsHtml(): string {
               <button type="button" class="filter-pill" data-status="pending" id="pill-status-pending">Pending</button>
               <button type="button" class="filter-pill" data-status="active">Active</button>
               <button type="button" class="filter-pill" data-status="verified">Verified</button>
-              <button type="button" class="filter-pill" data-status="stale">Stale</button>
+              <button type="button" class="filter-pill" data-status="stale">Outdated</button>
               <button type="button" class="filter-pill" data-status="core">Core</button>
               <button type="button" class="filter-pill" data-status="scoped">Scoped</button>
               <button type="button" class="filter-pill" data-status="paused">Paused</button>
               <button type="button" class="filter-pill" data-status="archived" id="pill-status-archived">Archived</button>
             </div>
-            <button type="button" class="btn-action" id="btn-batch-approve-pending" style="display:none;color:var(--status-ok);border-color:var(--status-ok-border);padding:3px 9px;font-size:var(--text-sm);">Approve All</button>
-            <button type="button" class="btn-action" id="btn-batch-pause-stale" style="display:none;color:var(--status-warn);border-color:var(--status-warn-border);padding:3px 9px;font-size:var(--text-sm);">Pause All Stale</button>
+            <button type="button" class="btn-action" id="btn-batch-approve-pending" style="display:none;color:var(--status-ok);border-color:var(--status-ok-border);padding:3px 9px;font-size:var(--text-sm);">Approve All Pending</button>
+            <button type="button" class="btn-action" id="btn-batch-pause-stale" style="display:none;color:var(--status-warn);border-color:var(--status-warn-border);padding:3px 9px;font-size:var(--text-sm);">Pause Outdated Items</button>
             <div class="search-box" id="cap-search">
               <input type="text" id="caps-search-input" class="search-input" placeholder="Filter capabilities (id, title, symbol, file)..." autocomplete="off" />
             </div>
@@ -63,7 +63,7 @@ export function renderCapabilitiesViewsHtml(): string {
                 <th id="th-cap-type">Type</th>
                 <th id="th-cap-title">ID &amp; Title</th>
                 <th id="th-cap-scope">Scope / Status</th>
-                <th id="th-cap-attr">Attribution</th>
+                <th id="th-cap-attr">Status &amp; Usage</th>
                 <th id="th-cap-actions">Actions</th>
               </tr>
             </thead>
@@ -107,7 +107,7 @@ export function renderCapabilitiesViewsHtml(): string {
               <p class="view-subtitle" id="hotspots-view-sub">Frequently fixed files and whether they have saved project lessons</p>
             </div>
             <div class="hotspots-header-controls">
-              <input type="text" id="mem-search" class="search-input" placeholder="Filter hotspots or bound memories..." autocomplete="off" />
+              <input type="text" id="mem-search" class="search-input" placeholder="Filter hotspots or memory ID..." autocomplete="off" />
               <div class="hotspots-kpi-badge" id="hotspots-summary-kpi">0 / 0 Protected</div>
             </div>
           </div>
@@ -420,10 +420,12 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     var helpedList = el('hero-recently-helped-list');
     if (helpedList) {
       var w7 = getWindow7dStats();
-      helpedList.textContent = dict.heroHelpedSummary
+      var helpedText = dict.heroHelpedSummary
         .replace('{pitfalls}', String(w7.pitfallsAvoided))
         .replace('{adopted}', String(w7.helped))
         .replace('{searches}', String(w7.searches));
+      helpedList.textContent = helpedText;
+      helpedList.title = helpedText;
     }
   }
 

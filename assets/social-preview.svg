@@ -27,14 +27,14 @@
   <!-- Left Hero Copy -->
   <rect x="64" y="64" width="94" height="36" rx="18" fill="rgba(16,185,129,0.15)" stroke="#34d399" stroke-width="1.5"/>
   <circle cx="80" cy="82" r="4" fill="#34d399"/>
-  <text x="111" y="87" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">v0.4.0</text>
+  <text x="111" y="87" text-anchor="middle" fill="#34d399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">v0.5.0</text>
 
   <rect x="168" y="64" width="310" height="36" rx="18" fill="#0c243c" stroke="#38bdf8" stroke-width="1.5"/>
   <text x="323" y="87" text-anchor="middle" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" font-weight="700">CONTEXT OS FOR CODING AGENTS</text>
 
   <text x="64" y="168" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="68" font-weight="900">🧬 EvoKernel</text>
   <text x="64" y="222" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="28" font-weight="700">Stop Repeating the Same Bug Across Sessions</text>
-  <text x="64" y="260" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="23" font-weight="500">AST Cognitive Memory, Recall Receipts &amp; 6-Stage Gatekeeper</text>
+  <text x="64" y="260" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="23" font-weight="500">Code-Verified Memory, Silent Recall &amp; 6-Stage Gatekeeper</text>
 
   <!-- 3 Metric Pills -->
   <g transform="translate(64, 304)">

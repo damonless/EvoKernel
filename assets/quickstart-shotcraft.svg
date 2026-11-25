@@ -309,7 +309,7 @@
             <circle cx="28" cy="28" r="10" fill="#10b981"/>
             <text x="28" y="32" class="mono" font-size="12" font-weight="900" fill="#ffffff" text-anchor="middle">✓</text>
             <text x="50" y="32" class="sans" font-size="14" font-weight="800" fill="#ffffff">MCP Handshake &amp; AST Memory Guard: <tspan fill="#34d399">ACTIVE (5/5 Tools · Saved 88.7%)</tspan></text>
-            <text x="50" y="54" class="mono" font-size="11" fill="#cbd5e1">Session-Start Prefix: 27,150 → 3,066 tok/turn · Visible 🛡️ EvoKernel Recall Receipts</text>
+            <text x="50" y="54" class="mono" font-size="11" fill="#cbd5e1">Session-Start Prefix: 27,150 → 3,197 tok/turn · Silent Background Recall &amp; 1s Undo</text>
             <text x="50" y="72" class="mono" font-size="10.5" fill="#94a3b8">Strict SHA-256 CSP active · Zero external dependencies · 100% local SQLite</text>
           </g>
 

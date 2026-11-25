@@ -3,19 +3,19 @@ export function renderProfileSectionHtml(): string {
         <div class="view-header">
           <div class="profile-header-row">
             <div>
-              <h1 id="profile-view-title" class="view-title">Personal Profile &amp; Workflows Studio</h1>
-              <p id="profile-view-sub" class="view-subtitle">Cross-workspace preferences, Always-On Profile Card, Task Directory Menu, and host synchronization</p>
+              <h1 id="profile-view-title" class="view-title">Personal Profile</h1>
+              <p id="profile-view-sub" class="view-subtitle">Your habits and workflows synced across projects and AI tools</p>
             </div>
             <div class="profile-header-actions">
-              <button type="button" id="btn-profile-add" class="btn-action" style="border-color:var(--border-focus);color:var(--text-primary);">+ Add Preference</button>
+              <button type="button" id="btn-profile-add" class="btn-action" style="border-color:var(--border-focus);color:var(--text-primary);">+ Add Habit</button>
               <button type="button" id="btn-profile-import" class="btn-action">Import Markdown</button>
-              <button type="button" id="btn-profile-sync" class="btn-action" style="color:var(--status-ok);border-color:var(--status-ok-border);">Sync Hosts</button>
+              <button type="button" id="btn-profile-sync" class="btn-action" style="color:var(--status-ok);border-color:var(--status-ok-border);">Sync AI Tools</button>
             </div>
           </div>
         </div>
 
         <div class="profile-studio-body">
-          <!-- 3-Column Bento: Always-On Profile Card, Task Directory Menu, Desktop Host Sync -->
+          <!-- 3-Column Bento: Always-On Profile Card, On-Demand Directory, Connected AI Tools -->
           <div class="profile-bento-grid">
             <div class="profile-bento-card">
               <div class="profile-card-hdr">
@@ -25,12 +25,12 @@ export function renderProfileSectionHtml(): string {
               <div class="progress-track">
                 <div id="profile-card-bar" class="progress-bar" style="width: 0%;"></div>
               </div>
-              <pre id="profile-card-preview" class="profile-preview-pre">No active Always-On preferences yet.</pre>
+              <pre id="profile-card-preview" class="profile-preview-pre">No active Always-On habits yet.</pre>
             </div>
 
             <div class="profile-bento-card">
               <div class="profile-card-hdr">
-                <span id="profile-menu-title">Task Directory Menu</span>
+                <span id="profile-menu-title">On-Demand Directory</span>
                 <span id="profile-menu-tokens" class="mono-dim">0 / 250 tok</span>
               </div>
               <div class="progress-track">
@@ -41,7 +41,7 @@ export function renderProfileSectionHtml(): string {
 
             <div class="profile-bento-card">
               <div class="profile-card-hdr">
-                <span id="profile-hosts-title">Desktop Host Sync Status</span>
+                <span id="profile-hosts-title">Connected AI Tools</span>
                 <span id="profile-hosts-count" class="mono-dim">0</span>
               </div>
               <div id="profile-host-badges" class="profile-host-badges"></div>
@@ -59,10 +59,10 @@ export function renderProfileSectionHtml(): string {
           <!-- Inline Create / Edit Preference Drawer -->
           <div id="profile-editor-panel" class="profile-panel-drawer">
             <div class="profile-card-hdr">
-              <span id="profile-editor-heading">Create Personal Preference</span>
+              <span id="profile-editor-heading">Add Personal Habit</span>
             </div>
             <div class="profile-field">
-              <label id="lbl-profile-content" for="profile-inp-content" class="profile-field-label">Preference Instruction</label>
+              <label id="lbl-profile-content" for="profile-inp-content" class="profile-field-label">Habit or Instruction</label>
               <textarea id="profile-inp-content" class="profile-textarea" placeholder="Write the reusable cross-workspace instruction..."></textarea>
             </div>
             <details id="profile-more-options" class="profile-more-options">
@@ -84,7 +84,7 @@ export function renderProfileSectionHtml(): string {
                   </select>
                 </div>
                 <div class="profile-field">
-                  <label id="lbl-profile-l0" for="profile-inp-l0" class="profile-field-label">L0 Summary (&lt;=140 chars)</label>
+                  <label id="lbl-profile-l0" for="profile-inp-l0" class="profile-field-label">One-Line Summary (&lt;=140 chars)</label>
                   <input id="profile-inp-l0" type="text" class="profile-input" placeholder="1-line summary shown in Always-On card or Directory Menu" />
                 </div>
                 <div class="profile-field">
@@ -137,15 +137,15 @@ export function renderProfileSectionHtml(): string {
                 <button type="button" class="filter-pill active" data-profile-filter="all">All</button>
                 <button type="button" class="filter-pill" data-profile-filter="always-on">Always-On</button>
                 <button type="button" class="filter-pill" data-profile-filter="on-demand">On-Demand</button>
-                <button type="button" class="filter-pill" data-profile-filter="memories">Personal Memories</button>
+                <button type="button" class="filter-pill" data-profile-filter="memories">Personal Lessons</button>
                 <button type="button" class="filter-pill" data-profile-filter="paused">Paused</button>
                 <button type="button" class="filter-pill" data-profile-filter="archived">Archived</button>
               </div>
-              <input id="profile-search-input" type="text" class="search-input" style="max-width: 260px;" placeholder="Filter preferences or workflows..." autocomplete="off" />
+              <input id="profile-search-input" type="text" class="search-input" style="max-width: 260px;" placeholder="Filter habits or workflows..." autocomplete="off" />
               <span id="profile-count-label" class="view-count-badge">0 items</span>
             </div>
             <div id="profile-items-list"></div>
-            <div id="profile-empty-state" class="empty-state" style="display: none;">No personal preferences or workflows match this filter yet.</div>
+            <div id="profile-empty-state" class="empty-state" style="display: none;">No personal habits or workflows match this filter yet.</div>
           </div>
         </div>
       </section>`;

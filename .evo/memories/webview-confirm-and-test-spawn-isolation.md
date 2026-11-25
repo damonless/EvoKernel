@@ -2,14 +2,14 @@
 id: webview-confirm-and-test-spawn-isolation
 title: "When building Workbench UI & lifecycle actions -> Avoid confirm(), naive plural stripping, and raw file overwrite -> Use Undo Toast, singularKind(), and frontmatter-preserving saves"
 l0_summary: "Webview & Workbench actions -> confirm(), 'memorie' typo, and frontmatter wipe -> use Undo Toast, singularKind, and frontmatter merge"
-created_commit: "6a6a48b"
+created_commit: "eb1dafc"
 created_branch: "main"
 target_symbols: ["src/templates/ui-client.ts#renderUiClientHtml","src/cli/ui.ts#isTestEnvironment","src/core/storage.ts#EvoStorage"]
-ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui/shell.ts","file":"src/templates/ui/shell.ts","kind":"function","start_line":12,"end_line":301,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"6fc30f532ab2135b"},"src/cli/ui.ts#isTestEnvironment":{"symbol":"src/cli/ui.ts#isTestEnvironment","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1227,"end_line":1229,"signature":"export function isTestEnvironment(): boolean","ast_hash":"5a23e9bafcc83a59"},"src/core/storage.ts#EvoStorage":{"symbol":"src/core/storage.ts#EvoStorage","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"class","start_line":386,"end_line":2500,"signature":"export class EvoStorage","ast_hash":"a337ee42e051c81e"}}
+ast_fingerprints: {"src/templates/ui-client.ts#renderUiClientHtml":{"symbol":"src/templates/ui-client.ts#renderUiClientHtml","file_path":"src/templates/ui/shell.ts","file":"src/templates/ui/shell.ts","kind":"function","start_line":12,"end_line":301,"signature":"export function renderUiClientHtml(snapshot: any, options: UiRenderOptions = {}): string","ast_hash":"0f374cbbc1e86b11"},"src/cli/ui.ts#isTestEnvironment":{"symbol":"src/cli/ui.ts#isTestEnvironment","file_path":"src/cli/ui.ts","file":"src/cli/ui.ts","kind":"function","start_line":1227,"end_line":1229,"signature":"export function isTestEnvironment(): boolean","ast_hash":"5a23e9bafcc83a59"},"src/core/storage.ts#EvoStorage":{"symbol":"src/core/storage.ts#EvoStorage","file_path":"src/core/storage.ts","file":"src/core/storage.ts","kind":"class","start_line":386,"end_line":2500,"signature":"export class EvoStorage","ast_hash":"a337ee42e051c81e"}}
 tags: ["webview","ui","governance","test-isolation","csp","flexbox"]
 origin: "evolved"
 created_at: "2026-11-06T05:56:44.178Z"
-updated_at: "2026-11-25T08:32:21.762Z"
+updated_at: "2026-11-25T08:58:32.706Z"
 ---
 
 ## Symptom

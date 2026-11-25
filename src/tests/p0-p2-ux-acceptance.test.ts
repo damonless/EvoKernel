@@ -23,6 +23,7 @@ import { executeWorkbenchAction } from '../core/workbench-actions.js';
 import { handleWebviewAction } from '../ide/vscode-extension.js';
 import { COMMAND_VALID_FLAGS } from '../cli/index.js';
 import { runInit, runInitGlobal, syncManagedRuleBlocks } from '../cli/init.js';
+import { isEvoHookCommand } from '../cli/harness.js';
 import { refreshMemories } from '../core/memory/freshness-verifier.js';
 
 const REPO_ROOT = process.cwd();
@@ -1020,6 +1021,8 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
       'AST-Verified* Cognitive Memory &amp; Recall Receipts',
       '词法-结构骨架哈希锚定',
       '全局个人画像',
+      'anti-confounding',
+      '防因果混淆',
     ]) {
       assert.strictEqual(
         buildPagesSrc.includes(banned),
@@ -1030,7 +1033,7 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
     assert.ok(buildPagesSrc.includes('Silent Recall'), 'build-pages.mjs EN copy must reflect Silent Recall');
     assert.ok(buildPagesSrc.includes('静默召回'), 'build-pages.mjs ZH copy must reflect Silent Recall');
 
-    // 2. shell.ts pre-hydration strings, clickable bento cards, and 2-column hero strip
+    // 2. shell.ts, components-capabilities.ts & components-profile.ts pre-hydration strings, clickable bento cards, and 2-column hero strip
     const ws = makeTempDir('evo-signoff-ws-');
     const homeDir = makeTempDir('evo-signoff-home-');
     runInit(ws, { targets: ['claude'], globalHomeDir: homeDir });
@@ -1046,6 +1049,24 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
       'Virtual Footprint',
       '>Prompt Tax<',
       'Workspace Pulse',
+      '>Attribution<',
+      '>Stale<',
+      '>Approve All<',
+      'Pause All Stale',
+      'bound memories',
+      '0 hits · 0 adopted',
+      'Workflows Studio',
+      'Add Preference',
+      'Sync Hosts',
+      'Always-On preferences yet',
+      'Task Directory Menu',
+      'Desktop Host Sync Status',
+      'Create Personal Preference',
+      'Preference Instruction',
+      'L0 Summary',
+      'Personal Memories',
+      'Filter preferences or workflows',
+      'No personal preferences or workflows',
     ]) {
       assert.strictEqual(
         preHydrationHtml.includes(legacy),
@@ -1060,6 +1081,7 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
     assert.match(preHydrationHtml, /<div class="bento-card" id="bento-recall-7d">/);
     assert.match(preHydrationHtml, /<div class="bento-card bento-treemap-card" id="bento-treemap-card">/);
     assert.ok(preHydrationHtml.includes('grid-template-columns: repeat(2, minmax(0, 1fr));'), 'Hero strip grid must be 2-column');
+    assert.ok(preHydrationHtml.includes('0 pitfalls avoided · 0 adopted · 0 searches (7d)'), '#hero-recently-helped-list must have pre-hydration default summary');
     const hdrIdx = preHydrationHtml.indexOf('class="hero-learned-hdr"');
     const helpedIdx = preHydrationHtml.indexOf('id="hero-card-recently-helped"');
     const gridIdx = preHydrationHtml.indexOf('class="hero-learned-grid"');
@@ -1068,12 +1090,16 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
       '#hero-card-recently-helped must be compacted inside .hero-learned-hdr before .hero-learned-grid'
     );
 
-    // 3. hooks.json resilient path discovery (repo root, 4 levels deep, global plugin fallback, unrelated empty dir)
+    // 3. hooks.json resilient path discovery (repo root, 4 levels deep, symlink/junction, dir collision, global plugin fallback, unrelated empty dir)
     const rootHooks = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'hooks.json'), 'utf8'));
     const preCmd = String(rootHooks['evo-evolution-reminder'].PreInvocation[0].command);
     const stopCmd = String(rootHooks['evo-evolution-reminder'].Stop[0].command);
     assert.strictEqual(preCmd.includes('"'), false, 'hooks.json PreInvocation must be quote-free');
     assert.strictEqual(stopCmd.includes('"'), false, 'hooks.json Stop must be quote-free');
+    assert.strictEqual(isEvoHookCommand(preCmd), true, 'isEvoHookCommand must recognize quote-free PreInvocation command');
+    assert.strictEqual(isEvoHookCommand(preCmd, 'pre-tool'), true, 'isEvoHookCommand(pre-tool) must match PreInvocation command');
+    assert.strictEqual(isEvoHookCommand(stopCmd), true, 'isEvoHookCommand must recognize quote-free Stop command');
+    assert.strictEqual(isEvoHookCommand(stopCmd, 'stop'), true, 'isEvoHookCommand(stop) must match Stop command');
 
     const emptyHome = makeTempDir('evo-hook-empty-home-');
     const emptyEnv = makeIsolatedEnv(emptyHome);
@@ -1140,6 +1166,39 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
       assert.strictEqual(rMissing.stdout, '', `hooks.json ${ev} must exit silently when not found`);
     }
 
+    // (e) Symlink / junction workspace must still execute main() (realpath parity in hooks.json & antigravity_hook.mjs)
+    const symParent = makeTempDir('evo-hook-sym-');
+    const realWs = path.join(symParent, 'real-ws');
+    const linkWs = path.join(symParent, 'linked-ws');
+    fs.mkdirSync(path.join(realWs, 'scripts'), { recursive: true });
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'scripts', 'antigravity_hook.mjs'),
+      path.join(realWs, 'scripts', 'antigravity_hook.mjs')
+    );
+    fs.symlinkSync(realWs, linkWs, process.platform === 'win32' ? 'junction' : 'dir');
+    for (const [ev, cmd, check] of [
+      ['PreInvocation', preCmd, (out: string) => assert.strictEqual(out.trim(), '{}')],
+      ['Stop', stopCmd, (out: string) => assert.strictEqual(JSON.parse(out.trim()).decision, 'allow')],
+    ] as const) {
+      const rSym = runShell(cmd, linkWs, emptyEnv, payload);
+      assert.strictEqual(rSym.status, 0, `hooks.json ${ev} failed in symlinked workspace: ${rSym.stderr}`);
+      assert.strictEqual(rSym.stderr, '', `hooks.json ${ev} must emit zero stderr in symlinked workspace`);
+      check(rSym.stdout);
+    }
+
+    // (f) Directory named antigravity_hook.mjs must be skipped in favor of valid fallback file
+    const dirCollisionWs = makeTempDir('evo-hook-dircoll-');
+    fs.mkdirSync(path.join(dirCollisionWs, 'scripts', 'antigravity_hook.mjs'), { recursive: true });
+    fs.mkdirSync(path.join(dirCollisionWs, '.agents', 'scripts'), { recursive: true });
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'scripts', 'antigravity_hook.mjs'),
+      path.join(dirCollisionWs, '.agents', 'scripts', 'antigravity_hook.mjs')
+    );
+    const rDirColl = runShell(preCmd, dirCollisionWs, emptyEnv, payload);
+    assert.strictEqual(rDirColl.status, 0, `hooks.json failed on dir collision: ${rDirColl.stderr}`);
+    assert.strictEqual(rDirColl.stderr, '', 'hooks.json must emit zero stderr on dir collision');
+    assert.strictEqual(rDirColl.stdout.trim(), '{}');
+
     // 4. .evo/config.json version matches package.json (0.5.0)
     const pkgJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
     const evoConfig = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.evo', 'config.json'), 'utf8'));
@@ -1153,7 +1212,7 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
     assert.strictEqual(zhReadme.includes('Personal Profile Studio'), false, 'README.zh-CN.md must not reference old Personal Profile Studio name');
     assert.strictEqual(enReadme.includes('Personal Profile Studio'), false, 'README.md must not reference old Personal Profile Studio name');
 
-    // 6. mcp_config.json handles scripts/boot-mcp.mjs from nested subdirectories even when dist/ is absent
+    // 6. mcp_config.json handles scripts/boot-mcp.mjs (and dist-only fallback) from nested subdirectories even when dist/ is absent
     const mcpConfig = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'mcp_config.json'), 'utf8'));
     const mcpArgs: string[] = mcpConfig.mcpServers['evo-kernel'].args;
     assert.strictEqual(mcpArgs[0], '-e', 'mcp_config.json must keep args[0] === "-e" for plugin bootstrap guard');
@@ -1177,5 +1236,24 @@ describe('P0–P2 UX & Reliability Overhaul Acceptance Suite', () => {
     });
     assert.strictEqual(mcpRes.status, 0, `mcp_config.json nested boot-mcp auto-build failed: ${mcpRes.stderr}`);
     assert.deepStrictEqual(JSON.parse(mcpRes.stdout.trim()), { booted: true, mode: 'mcp' });
+
+    // (b) Nested dist-only layout (no scripts/boot-mcp.mjs) must also walk ancestors cleanly
+    const distOnlyRoot = makeTempDir('evo-mcp-distonly-');
+    const distOnlyNested = path.join(distOnlyRoot, 'x', 'y');
+    fs.mkdirSync(distOnlyNested, { recursive: true });
+    fs.mkdirSync(path.join(distOnlyRoot, 'dist', 'cli'), { recursive: true });
+    fs.writeFileSync(
+      path.join(distOnlyRoot, 'dist', 'cli', 'index.js'),
+      'console.log(JSON.stringify({ distOnly: true, mode: process.argv[2] || "" }));\n',
+      'utf8'
+    );
+    const mcpDistRes = spawnSync(process.execPath, mcpArgs, {
+      cwd: distOnlyNested,
+      env: emptyEnv,
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.strictEqual(mcpDistRes.status, 0, `mcp_config.json nested dist-only fallback failed: ${mcpDistRes.stderr}`);
+    assert.deepStrictEqual(JSON.parse(mcpDistRes.stdout.trim()), { distOnly: true, mode: 'mcp' });
   });
 });

@@ -2242,10 +2242,19 @@ Options:
   );
 }
 
+function resolveCanonicalScriptPath(p) {
+  const resolved = path.resolve(p);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 const isDirectRun =
   Boolean(process.argv[1]) &&
-  path.resolve(process.argv[1]).toLowerCase() ===
-    path.resolve(import.meta.filename).toLowerCase();
+  resolveCanonicalScriptPath(process.argv[1]).toLowerCase() ===
+    resolveCanonicalScriptPath(import.meta.filename).toLowerCase();
 
 if (isDirectRun) {
   main().catch(() => {
