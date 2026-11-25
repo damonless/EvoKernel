@@ -33,6 +33,7 @@ const testFiles = [
   path.join(rootDir, 'dist', 'tests', 'v05-user-cognition-and-defects.test.js'),
   path.join(rootDir, 'dist', 'tests', 'issue-35-security-and-regression.test.js'),
   path.join(rootDir, 'dist', 'tests', 'ux-hardening-and-zero-friction.test.js'),
+  path.join(rootDir, 'dist', 'tests', 'p0-p2-ux-acceptance.test.js'),
 ].filter((f) => fs.existsSync(f));
 
 const testArgs = [

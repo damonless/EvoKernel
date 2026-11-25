@@ -25,6 +25,9 @@ export interface ProfileTargetResult {
   host: string;
   path: string;
   status: 'updated' | 'unchanged' | 'removed' | 'skipped';
+  reason?: string;
+  warning?: string;
+  truncated?: boolean;
 }
 
 export interface ProfileSyncOptions {
@@ -41,6 +44,7 @@ export interface ProfileSyncResult {
   maxMenuTokens?: number;
   updatedTargets: string[];
   targets: ProfileTargetResult[];
+  warnings: string[];
 }
 
 export interface ProfileCleanResult {
@@ -351,6 +355,7 @@ export function syncGlobalUserProfile(
   const discoveredTargets = discoverGlobalProfileTargets(resolvedGlobalRoot, options);
   const updatedTargets: string[] = [];
   const targets: ProfileTargetResult[] = [];
+  const warnings: string[] = [];
 
   for (const target of discoveredTargets) {
     const targetPath = target.path;
@@ -364,16 +369,29 @@ export function syncGlobalUserProfile(
     if (existed) {
       try {
         if (!fs.statSync(targetPath).isFile()) {
-          targets.push({ host: target.host, path: targetPath, status: 'skipped' });
+          targets.push({ host: target.host, path: targetPath, status: 'skipped', reason: 'not_a_file' });
           continue;
         }
       } catch {
-        targets.push({ host: target.host, path: targetPath, status: 'skipped' });
+        targets.push({ host: target.host, path: targetPath, status: 'skipped', reason: 'stat_failed' });
         continue;
       }
     }
 
     const existing = existed ? fs.readFileSync(targetPath, 'utf8') : '';
+    const markerState = findPairedProfileMarkers(existing);
+    if (existed && markerState.status === 'malformed') {
+      const warnMsg = `Skipped ${target.host} (${targetPath}): malformed <!-- EVO:PROFILE:START/END --> markers found. Repair or remove broken markers and re-run profile sync.`;
+      warnings.push(warnMsg);
+      targets.push({
+        host: target.host,
+        path: targetPath,
+        status: 'skipped',
+        reason: 'malformed_markers',
+        warning: warnMsg,
+      });
+      continue;
+    }
 
     if (!profileBlock) {
       if (!existed) {
@@ -409,9 +427,31 @@ export function syncGlobalUserProfile(
     }
 
     const effectiveBlock = computeEffectiveProfileBlockForTarget(target, profileBlock, existing);
+    const windsurfTarget = isWindsurfTarget(target.host, targetPath);
     if (!effectiveBlock) {
-      targets.push({ host: target.host, path: targetPath, status: 'skipped' });
+      const warnMsg = windsurfTarget
+        ? `Skipped ${target.host} (${targetPath}): existing file already fills Windsurf's ${WINDSURF_PROFILE_MAX_CHARS}-char limit; profile block could not fit.`
+        : `Skipped ${target.host} (${targetPath}): computed profile block was empty.`;
+      if (windsurfTarget) warnings.push(warnMsg);
+      targets.push({
+        host: target.host,
+        path: targetPath,
+        status: 'skipped',
+        reason: windsurfTarget ? 'windsurf_limit_exceeded' : 'empty_block',
+        ...(windsurfTarget ? { truncated: true, warning: warnMsg } : {}),
+      });
       continue;
+    }
+
+    const wasTruncated =
+      windsurfTarget &&
+      (effectiveBlock.includes('...(truncated to fit') ||
+        effectiveBlock.trim().length < profileBlock.trim().length);
+    const truncWarn = wasTruncated
+      ? `Truncated profile synced to ${target.host} (${targetPath}) to fit Windsurf's ${WINDSURF_PROFILE_MAX_CHARS}-char limit. Consider moving less-used items to On-Demand.`
+      : undefined;
+    if (truncWarn) {
+      warnings.push(truncWarn);
     }
 
     let next: string;
@@ -434,9 +474,19 @@ export function syncGlobalUserProfile(
         fs.writeFileSync(targetPath, next, 'utf8');
       }
       updatedTargets.push(targetPath);
-      targets.push({ host: target.host, path: targetPath, status: 'updated' });
+      targets.push({
+        host: target.host,
+        path: targetPath,
+        status: 'updated',
+        ...(wasTruncated ? { truncated: true, warning: truncWarn } : {}),
+      });
     } else {
-      targets.push({ host: target.host, path: targetPath, status: 'unchanged' });
+      targets.push({
+        host: target.host,
+        path: targetPath,
+        status: 'unchanged',
+        ...(wasTruncated ? { truncated: true, warning: truncWarn } : {}),
+      });
     }
   }
 
@@ -448,6 +498,7 @@ export function syncGlobalUserProfile(
     maxMenuTokens,
     updatedTargets,
     targets,
+    warnings,
   };
 }
 

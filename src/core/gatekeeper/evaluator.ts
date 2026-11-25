@@ -2116,6 +2116,17 @@ export class EvoGatekeeper {
           ? { superseded_after_correction: true }
           : undefined;
 
+      const prevSelfRuleSnap = existing
+        ? this.storage.snapshotCapabilityForHistory(cleanId, 'rule')
+        : null;
+      const sanitizedSupersedesRuleForSnap = rawProposal.supersedes_id
+        ? sanitizeId(rawProposal.supersedes_id)
+        : '';
+      const prevSupRuleSnap =
+        sanitizedSupersedesRuleForSnap && sanitizedSupersedesRuleForSnap !== cleanId
+          ? this.storage.snapshotCapabilityForHistory(sanitizedSupersedesRuleForSnap, 'rule')
+          : null;
+
       if (existing) {
         this.storage.archiveCapability(
           cleanId,
@@ -2180,6 +2191,28 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('pending_evolution', 'false');
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
+      const prevRuleSnapText = prevSelfRuleSnap?.snapshot || prevSupRuleSnap?.snapshot;
+      this.storage.appendProfileHistory({
+        ts: now,
+        action: existing || resolvedSupersedesId ? 'update' : 'add',
+        id: cleanId,
+        kind: 'rule',
+        title: ruleObj.title,
+        ...(rawProposal.batch_id ? { batch_id: rawProposal.batch_id } : {}),
+        ...(prevRuleSnapText ? { previous_snapshot: prevRuleSnapText } : {}),
+        ...(prevSelfRuleSnap?.wasCore !== undefined ? { was_core: prevSelfRuleSnap.wasCore } : {}),
+        ...(resolvedSupersedesId ? { superseded_id: resolvedSupersedesId, superseded_kind: 'rule' as const } : {}),
+        ...(prevSupRuleSnap?.snapshot ? { superseded_snapshot: prevSupRuleSnap.snapshot } : {}),
+        ...(prevSupRuleSnap?.wasCore !== undefined ? { superseded_was_core: prevSupRuleSnap.wasCore } : {}),
+        ...(prevSelfRuleSnap?.snapshot && resolvedSupersedesId
+          ? { self_previous_snapshot: prevSelfRuleSnap.snapshot }
+          : {}),
+        reason: resolvedSupersedesId
+          ? `Superseded ${resolvedSupersedesId}`
+          : existing
+            ? 'Updated rule'
+            : 'Added rule',
+      });
 
       const commitDiagnostics: Record<string, unknown> = {
         id: cleanId,
@@ -2233,6 +2266,17 @@ export class EvoGatekeeper {
         this.telemetry.getSessionFlag('had_command_error') === 'true'
           ? { superseded_after_correction: true }
           : undefined;
+
+      const prevSelfSkillSnap = existing
+        ? this.storage.snapshotCapabilityForHistory(cleanId, 'skill')
+        : null;
+      const sanitizedSupSkillSnap = rawProposal.supersedes_id
+        ? sanitizeId(rawProposal.supersedes_id)
+        : '';
+      const prevSupSkillSnap =
+        sanitizedSupSkillSnap && sanitizedSupSkillSnap !== cleanId
+          ? this.storage.snapshotCapabilityForHistory(sanitizedSupSkillSnap, 'skill')
+          : null;
 
       if (existing) {
         this.storage.archiveCapability(
@@ -2301,6 +2345,29 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('pending_evolution', 'false');
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
+      this.storage.appendProfileHistory({
+        ts: now,
+        action: existing || resolvedSupersedesId ? 'update' : 'add',
+        id: cleanId,
+        kind: 'skill',
+        title: skillObj.title,
+        ...(rawProposal.batch_id ? { batch_id: rawProposal.batch_id } : {}),
+        ...(prevSelfSkillSnap?.files
+          ? { previous_files: prevSelfSkillSnap.files }
+          : prevSupSkillSnap?.files
+            ? { previous_files: prevSupSkillSnap.files }
+            : {}),
+        ...(resolvedSupersedesId ? { superseded_id: resolvedSupersedesId, superseded_kind: 'skill' as const } : {}),
+        ...(prevSupSkillSnap?.files ? { superseded_files: prevSupSkillSnap.files } : {}),
+        ...(prevSelfSkillSnap?.files && resolvedSupersedesId
+          ? { self_previous_files: prevSelfSkillSnap.files }
+          : {}),
+        reason: resolvedSupersedesId
+          ? `Superseded ${resolvedSupersedesId}`
+          : existing
+            ? 'Updated skill'
+            : 'Added skill',
+      });
 
       return done({
         passed: true,
@@ -2335,6 +2402,17 @@ export class EvoGatekeeper {
         this.telemetry.getSessionFlag('had_command_error') === 'true'
           ? { superseded_after_correction: true }
           : undefined;
+
+      const prevSelfToolSnap = existing
+        ? this.storage.snapshotCapabilityForHistory(cleanId, 'tool')
+        : null;
+      const sanitizedSupToolSnap = rawProposal.supersedes_id
+        ? sanitizeId(rawProposal.supersedes_id)
+        : '';
+      const prevSupToolSnap =
+        sanitizedSupToolSnap && sanitizedSupToolSnap !== cleanId
+          ? this.storage.snapshotCapabilityForHistory(sanitizedSupToolSnap, 'tool')
+          : null;
 
       if (existing) {
         this.storage.archiveCapability(
@@ -2392,6 +2470,29 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('pending_evolution', 'false');
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
+      this.storage.appendProfileHistory({
+        ts: now,
+        action: existing || resolvedSupersedesId ? 'update' : 'add',
+        id: cleanId,
+        kind: 'tool',
+        title: manifest.title,
+        ...(rawProposal.batch_id ? { batch_id: rawProposal.batch_id } : {}),
+        ...(prevSelfToolSnap?.files
+          ? { previous_files: prevSelfToolSnap.files }
+          : prevSupToolSnap?.files
+            ? { previous_files: prevSupToolSnap.files }
+            : {}),
+        ...(resolvedSupersedesId ? { superseded_id: resolvedSupersedesId, superseded_kind: 'tool' as const } : {}),
+        ...(prevSupToolSnap?.files ? { superseded_files: prevSupToolSnap.files } : {}),
+        ...(prevSelfToolSnap?.files && resolvedSupersedesId
+          ? { self_previous_files: prevSelfToolSnap.files }
+          : {}),
+        reason: resolvedSupersedesId
+          ? `Superseded ${resolvedSupersedesId}`
+          : existing
+            ? 'Updated tool'
+            : 'Added tool',
+      });
 
       return done({
         passed: true,
@@ -2468,22 +2569,20 @@ export class EvoGatekeeper {
       const sanitizedSupMemId = rawProposal.supersedes_id ? sanitizeId(rawProposal.supersedes_id) : '';
       const crossSupMemId =
         sanitizedSupMemId && sanitizedSupMemId !== cleanId ? sanitizedSupMemId : '';
-      if (isPersonal) {
-        if (existing) {
-          const prevSelfPath = path.join(this.storage.memoriesDir, `${cleanId}.md`);
-          if (fs.existsSync(prevSelfPath)) {
-            try {
-              prevSelfMemSnapshot = fs.readFileSync(prevSelfPath, 'utf8');
-            } catch {}
-          }
+      if (existing) {
+        const prevSelfPath = path.join(this.storage.memoriesDir, `${cleanId}.md`);
+        if (fs.existsSync(prevSelfPath)) {
+          try {
+            prevSelfMemSnapshot = fs.readFileSync(prevSelfPath, 'utf8');
+          } catch {}
         }
-        if (crossSupMemId) {
-          const prevSupPath = path.join(this.storage.memoriesDir, `${crossSupMemId}.md`);
-          if (fs.existsSync(prevSupPath)) {
-            try {
-              supersededMemSnapshot = fs.readFileSync(prevSupPath, 'utf8');
-            } catch {}
-          }
+      }
+      if (crossSupMemId) {
+        const prevSupPath = path.join(this.storage.memoriesDir, `${crossSupMemId}.md`);
+        if (fs.existsSync(prevSupPath)) {
+          try {
+            supersededMemSnapshot = fs.readFileSync(prevSupPath, 'utf8');
+          } catch {}
         }
       }
 
@@ -2553,26 +2652,28 @@ export class EvoGatekeeper {
       this.telemetry.setSessionFlag('last_crystallized_id', cleanId);
       this.telemetry.setSessionFlag('dirty_crystallized_id', '');
 
+      const prevMemSnapshot = prevSelfMemSnapshot || supersededMemSnapshot;
+      this.storage.appendProfileHistory({
+        ts: now,
+        action: existing || resolvedSupersedesId ? 'update' : 'add',
+        id: cleanId,
+        kind: 'memory',
+        title: memoryObj.title,
+        ...(rawProposal.batch_id ? { batch_id: rawProposal.batch_id } : {}),
+        ...(prevMemSnapshot ? { previous_snapshot: prevMemSnapshot } : {}),
+        ...(resolvedSupersedesId ? { superseded_id: resolvedSupersedesId } : {}),
+        ...(supersededMemSnapshot ? { superseded_snapshot: supersededMemSnapshot } : {}),
+        ...(prevSelfMemSnapshot && resolvedSupersedesId
+          ? { self_previous_snapshot: prevSelfMemSnapshot }
+          : {}),
+        reason: resolvedSupersedesId
+          ? `Superseded ${resolvedSupersedesId}`
+          : existing
+            ? (isPersonal ? 'Updated personal memory' : 'Updated memory')
+            : (isPersonal ? 'Added personal memory' : 'Added memory'),
+      });
+
       if (isPersonal) {
-        const prevMemSnapshot = prevSelfMemSnapshot || supersededMemSnapshot;
-        this.storage.appendProfileHistory({
-          ts: now,
-          action: existing || resolvedSupersedesId ? 'update' : 'add',
-          id: cleanId,
-          kind: 'memory',
-          title: memoryObj.title,
-          ...(prevMemSnapshot ? { previous_snapshot: prevMemSnapshot } : {}),
-          ...(resolvedSupersedesId ? { superseded_id: resolvedSupersedesId } : {}),
-          ...(supersededMemSnapshot ? { superseded_snapshot: supersededMemSnapshot } : {}),
-          ...(prevSelfMemSnapshot && resolvedSupersedesId
-            ? { self_previous_snapshot: prevSelfMemSnapshot }
-            : {}),
-          reason: resolvedSupersedesId
-            ? `Superseded ${resolvedSupersedesId}`
-            : existing
-              ? 'Updated personal memory'
-              : 'Added personal memory',
-        });
         return done({
           passed: true,
           message: `Personal Experience Memory '${cleanId}' passed Gatekeeper checks and is crystallized at .evo/memories/${cleanId}.md (0 core budget tokens used).`,
@@ -2785,6 +2886,7 @@ export class EvoGatekeeper {
         id: cleanId,
         kind: 'preference',
         title: prefObj.title,
+        ...(rawProposal.batch_id ? { batch_id: rawProposal.batch_id } : {}),
         ...(prevPrefSnapshot ? { previous_snapshot: prevPrefSnapshot } : {}),
         ...(resolvedSupersedesId ? { superseded_id: resolvedSupersedesId } : {}),
         ...(supersededPrefSnapshot ? { superseded_snapshot: supersededPrefSnapshot } : {}),

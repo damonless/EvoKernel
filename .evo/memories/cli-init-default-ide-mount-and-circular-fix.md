@@ -2,14 +2,14 @@
 id: cli-init-default-ide-mount-and-circular-fix
 title: "Fix CLI evo init default IDE mounting and circular self-reference in mountIdeExtensions"
 l0_summary: "Fixes CLI evo init default IDE mounting and eliminates circular reference in mountIdeExtensions."
-created_commit: "d7477e5"
+created_commit: "a703e18"
 created_branch: "main"
 target_symbols: ["src/cli/index.ts#runCli","src/cli/init.ts#mountIdeExtensions","src/cli/init.ts#runInit"]
-ast_fingerprints: {"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1484,"end_line":4067,"signature":"export function runCli(argv: string[]): void | Promise<void>","ast_hash":"a48b760c30bc6e6e"},"src/cli/init.ts#mountIdeExtensions":{"symbol":"src/cli/init.ts#mountIdeExtensions","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":2023,"end_line":2080,"signature":"export function mountIdeExtensions(","ast_hash":"1b01a7f67947a0b3"},"src/cli/init.ts#runInit":{"symbol":"src/cli/init.ts#runInit","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":1471,"end_line":1689,"signature":"export function runInit(","ast_hash":"55681fc2cca9991b"}}
+ast_fingerprints: {"src/cli/index.ts#runCli":{"symbol":"src/cli/index.ts#runCli","file_path":"src/cli/index.ts","file":"src/cli/index.ts","kind":"function","start_line":1615,"end_line":4433,"signature":"export function runCli(argv: string[]): void | Promise<void>","ast_hash":"6ade6e572c576f6f"},"src/cli/init.ts#mountIdeExtensions":{"symbol":"src/cli/init.ts#mountIdeExtensions","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":2040,"end_line":2097,"signature":"export function mountIdeExtensions(","ast_hash":"1b01a7f67947a0b3"},"src/cli/init.ts#runInit":{"symbol":"src/cli/init.ts#runInit","file_path":"src/cli/init.ts","file":"src/cli/init.ts","kind":"function","start_line":1472,"end_line":1706,"signature":"export function runInit(","ast_hash":"bd0e17ffe4952e9a"}}
 tags: []
 origin: "evolved"
 created_at: "2026-11-05T08:24:47.225Z"
-updated_at: "2026-11-24T18:20:44.231Z"
+updated_at: "2026-11-25T07:25:06.321Z"
 ---
 
 ## Symptom

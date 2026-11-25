@@ -4,18 +4,19 @@
 - **Zero Runtime Dependencies**: Strict zero-npm-dependency invariant. Pure Node.js built-ins (`node:http`, `node:fs`, `node:path`, `node:child_process`, `node:crypto`, `node:url`) + ES2022.
 - **Presentation Layer (`src/templates/ui-client.ts` -> `src/templates/ui/`)**: Originally a monolithic generator for EvoKernel Workbench 2.0, now modularized behind the `src/templates/ui-client.ts` barrel facade into `src/templates/ui/{shell,styles,i18n,components-capabilities,components-profile,client-script}.ts`.
   - Visual system: Zinc dark tokens (`--bg-canvas: #09090b`, `--text-primary: #fafafa`, `--border-subtle: #27272a`), `cult-ui` Bento 1px inset highlights, `motion-primitives` spring transitions (`cubic-bezier(0.22, 1, 0.36, 1)`).
-  - 3-column layout: Left navigation rail (220px) with telemetry Bento; Center Stage (flex 1) with 4 views (Capabilities Data Table, Orthogonal Card Topology with focus dimming, Git Hotspots, Gatekeeper Audit Stream); Right Structured Inspector (380px) with action toolbar, AST anchors, markdown preview/editor, sandbox terminal; `Cmd/Ctrl+K` Command Palette.
-  - CSP compliance: Strict script SHA-256 hash, zero inline `on*=` handlers.
-- **Backend & Control Layer (`src/cli/ui.ts`)**:
-  - `POST /api/action` endpoint handling 6 core actions: `open-editor`, `verify-memory`, `run-tool-test`, `archive-item`, `toggle-rule-tier`, `update-content`.
+  - 3-column layout: Left navigation rail (220px) with telemetry Bento; Center Stage (flex 1) with **5 views** (Capabilities, Personal Profile, Code Map with focus dimming, Git Hotspots with inline Add Lesson drawer, Safety Check Log with clickable entries); Right Structured Inspector (380px) with locked action toolbar, code anchors, structured per-kind inline editor, sandbox terminal; `Cmd/Ctrl+K` Command Palette.
+  - CSP compliance: Strict script SHA-256 hash, zero inline `on*=` handlers, zero native `confirm()`.
+- **Backend & Control Layer (`src/cli/ui.ts`, `src/core/workbench-actions.ts`)**:
+  - `POST /api/action` endpoint unified via `executeWorkbenchAction` handling **15 core actions**: `open-editor`, `verify-memory`, `rebind-memory-ast`, `run-tool-test`, `archive-item`, `restore-item`, `approve-item`, `toggle-enabled`, `toggle-rule-tier`, `update-content`, `create-preference`, `create-memory`, `undo-preference`, `sync-profile`, `import-profile-markdown`, plus `export-html` in IDE Webview.
   - Security boundaries: 127.0.0.1 binding, Host validation, Sec-Fetch-Site 403 block, X-Evo-UI-Token authentication, `isSubpathOf` directory traversal guard, 1500-token core rule budget limit, 800-token Always-On Profile Card & 250-token Task Directory Menu caps, 5000ms sandbox timeout.
-  - 3-Tier Personal Cognition & Profile Studio (`src/core/profile-sync.ts`, `src/templates/ui/components-profile.ts`): Cross-workspace preferences (`style | formatting | communication | workflow | requirement | knowledge`), Tier 2 On-Demand Task Directory Menu, Tier 3 global `memory_type: "personal"` memories, and 1-click undo (`profile-history.jsonl` / `evo profile undo`).
+  - Live watchers in BOTH Web (`src/cli/ui.ts`) and VS Code Webview (`src/ide/vscode-extension.ts`): project `.evo/`, global `~/.evo/global/.evo/`, `.git/HEAD`, and memory-linked source files.
+  - 3-Tier Personal Cognition & Profile Studio (`src/core/profile-sync.ts`, `src/templates/ui/components-profile.ts`): Cross-workspace preferences (`style | formatting | communication | workflow | requirement | knowledge`), Tier 2 On-Demand Task Directory Menu, Tier 3 global `memory_type: "personal"` memories, and atomic `batch_id` 1-click undo (`profile-history.jsonl` / `evo profile undo` / `evo_propose(undo: true)`).
   - Native micro-window launcher: Edge/Chrome `--app` chromeless window with system browser fallback.
 - **IDE Extension & Integration Layer (`src/ide/vscode-extension.ts`, `src/cli/init.ts`)**:
-  - Zero-dependency VS Code / Cursor / Windsurf / Antigravity extension entry point with WebviewPanel and bidirectional messaging bridge.
+  - Zero-dependency VS Code / Cursor / Windsurf / Antigravity extension entry point with WebviewPanel (`IDE Sync` status, `ViewColumn.Beside` code jump, anonymize/full HTML export) and bidirectional messaging bridge.
   - Auto-mount during `evo init` / `evo ui --install-ide` into `~/.vscode/extensions`, `~/.cursor/extensions`, etc.
-- **Quality & Verification Layer (`src/tests/score-and-ui.test.ts`, `benchmarks/context-tax-benchmark.mjs`)**:
-  - Modernized Test 5 for Workbench 2.0 layout & tokens; new unit tests for all 6 action types and security perimeters; Windows ESM `pathToFileURL` fix.
+- **Quality & Verification Layer (`src/tests/`, `benchmarks/context-tax-benchmark.mjs`)**:
+  - 17 native `node:test` suites (400+ tests) covering Gatekeeper, AST memory, Multi-Harness, MCP proxy, Profile Sync, Workbench UI/Actions/Security, and P0–P2 UX & Reliability acceptance criteria.
 
 ## v0.5 Architecture & Personal Profile Studio (Slim Dual-Core + 3-Tier Offline User Cognition)
 - **Dual-Core Separation**:
@@ -61,7 +62,7 @@
 | 28 | Dual-Mode Webview Bridge | Seamless message bridging between VS Code `postMessage` and HTTP API | M2 | Issue #21 §2.2 |
 | 29 | Modernized Test Suite (Test 5) | Update `src/tests/score-and-ui.test.ts` to assert Workbench 2.0 DOM IDs and tokens | M4 | Issue #21 §5.5 |
 | 30 | Comprehensive Action API Tests | Unit tests in `score-and-ui.test.ts` for all 6 actions and security bounds | M4 | Issue #21 §5.5 |
-| 31 | Full Baseline Regression Pass | 100% pass across all 11 test suites (274+ tests) via `node ./scripts/test.mjs` | M4 | R3 & AC |
+| 31 | Full Baseline Regression Pass | 100% pass across all 17 test suites (400 tests) via `node ./scripts/test.mjs` | M4 | R3 & AC |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |

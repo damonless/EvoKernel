@@ -105,6 +105,7 @@ export interface InitResult {
   linkedSharedEvoDir?: string;
   warmupReport?: any;
   ideMounts?: IdeMountDetail[];
+  warnings?: string[];
 }
 
 export interface InitOptions {
@@ -1626,6 +1627,7 @@ export function runInit(
 
   const stealthExcluded = ensureGitInfoExclude(workspaceRoot, excludeCandidates);
 
+  const initWarnings: string[] = [];
   let warmupReport: any = undefined;
   if (opts.warmup) {
     try {
@@ -1636,7 +1638,10 @@ export function runInit(
         bootSummary,
         scoreReport,
       };
-    } catch {}
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      initWarnings.push(`Warmup failed (skipped): ${msg}`);
+    }
   }
 
   const shouldMountIde = Boolean((opts.installIde || (opts.ide && opts.ide.length > 0)) && !opts.noIde);
@@ -1650,7 +1655,15 @@ export function runInit(
         forceCopy: opts.forceCopy,
       });
       ideMounts = mountRes.mounts;
-    } catch {}
+      for (const m of mountRes.mounts) {
+        if (m.status === 'failed') {
+          initWarnings.push(`IDE extension mount failed for ${m.name}: ${m.error || 'unknown error'}`);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      initWarnings.push(`IDE extension mounting failed: ${msg}`);
+    }
   }
 
   if (!process.env.NODE_TEST_CONTEXT && !process.env.EVO_PROFILE_ISOLATED) {
@@ -1665,9 +1678,12 @@ export function runInit(
         fs.existsSync(globalPrefsDir) &&
         fs.readdirSync(globalPrefsDir).some((f) => f.endsWith('.md'))
       ) {
-        syncGlobalUserProfile(globalRoot, {
+        const profileSyncRes = syncGlobalUserProfile(globalRoot, {
           ...(opts.globalHomeDir ? { homeDir: opts.globalHomeDir } : {}),
         });
+        if (profileSyncRes.warnings.length > 0) {
+          initWarnings.push(...profileSyncRes.warnings);
+        }
       }
     } catch {
       // Ignore global profile sync errors during workspace init
@@ -1685,6 +1701,7 @@ export function runInit(
     linkedSharedEvoDir,
     warmupReport,
     ideMounts,
+    ...(initWarnings.length > 0 ? { warnings: initWarnings } : {}),
   };
 }
 
@@ -2362,10 +2379,10 @@ export function runUninstall(
       fs.rmSync(localEvo, { recursive: true, force: true });
       purgedPaths.push('.evo/');
     }
-    if (options?.global && effectiveHomeDir) {
+    if (options?.global && (process.env.EVO_GLOBAL_DIR || effectiveHomeDir)) {
       const globalEvo = process.env.EVO_GLOBAL_DIR
         ? path.resolve(process.env.EVO_GLOBAL_DIR)
-        : path.join(effectiveHomeDir, '.evo', 'global');
+        : path.join(effectiveHomeDir!, '.evo', 'global');
       if (fs.existsSync(globalEvo)) {
         fs.rmSync(globalEvo, { recursive: true, force: true });
         purgedPaths.push(globalEvo);

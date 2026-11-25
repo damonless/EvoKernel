@@ -173,12 +173,19 @@ export interface ProfileHistoryEntry {
   ts: string;
   action: 'add' | 'update' | 'archive' | 'undo';
   id: string;
-  kind: 'preference' | 'memory';
+  kind: EvoKind;
   title: string;
+  batch_id?: string;
   previous_snapshot?: string;
+  previous_files?: Record<string, string>;
+  was_core?: boolean;
   superseded_id?: string;
+  superseded_kind?: EvoKind;
   superseded_snapshot?: string;
+  superseded_files?: Record<string, string>;
+  superseded_was_core?: boolean;
   self_previous_snapshot?: string;
+  self_previous_files?: Record<string, string>;
   reason?: string;
 }
 
@@ -307,6 +314,8 @@ export interface ProposalPayload {
   scope?: 'project' | 'global';
   category?: PreferenceCategory;
   always_on?: boolean;
+  auto_resolve?: boolean;
+  batch_id?: string;
 }
 
 export interface TelemetryRecord {

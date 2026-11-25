@@ -88,10 +88,10 @@ export function renderProfileSectionHtml(): string {
                   <input id="profile-inp-l0" type="text" class="profile-input" placeholder="1-line summary shown in Always-On card or Directory Menu" />
                 </div>
                 <div class="profile-field">
-                  <label id="lbl-profile-mode" for="profile-inp-always-on" class="profile-field-label">Injection Mode</label>
+                  <label id="lbl-profile-mode" for="profile-inp-always-on" class="profile-field-label">When It Applies</label>
                   <select id="profile-inp-always-on" class="profile-select">
-                    <option value="true">ALWAYS-ON</option>
-                    <option value="false">ON-DEMAND</option>
+                    <option value="true">Always-On</option>
+                    <option value="false">On-Demand</option>
                   </select>
                 </div>
                 <div class="profile-field">
@@ -101,7 +101,7 @@ export function renderProfileSectionHtml(): string {
               </div>
             </details>
             <div class="profile-header-actions">
-              <button type="button" id="btn-profile-save" class="btn-action" style="color:var(--status-ok);border-color:var(--status-ok-border);">Save via Gatekeeper</button>
+              <button type="button" id="btn-profile-save" class="btn-action" style="color:var(--status-ok);border-color:var(--status-ok-border);">Save</button>
               <button type="button" id="btn-profile-cancel" class="btn-action">Cancel</button>
             </div>
           </div>
@@ -111,13 +111,14 @@ export function renderProfileSectionHtml(): string {
             <div class="profile-card-hdr">
               <span id="profile-import-title">Import Markdown Rules (CLAUDE.md / GEMINI.md)</span>
             </div>
-            <p id="profile-import-sub" class="view-subtitle">Extracts bullet rules and sections (skipping managed blocks) through the Gatekeeper.</p>
+            <p id="profile-import-sub" class="view-subtitle">Extracts bullet rules and sections (skipping EvoKernel managed blocks) automatically.</p>
             <div class="profile-form-grid">
               <div class="profile-field">
-                <label id="lbl-profile-import-mode" for="profile-import-always-on" class="profile-field-label">Injection Mode</label>
+                <label id="lbl-profile-import-mode" for="profile-import-always-on" class="profile-field-label">When It Applies</label>
                 <select id="profile-import-always-on" class="profile-select">
-                  <option value="true">ALWAYS-ON</option>
-                  <option value="false">ON-DEMAND</option>
+                  <option value="auto" selected>Auto-detect per rule</option>
+                  <option value="always-on">Always-On</option>
+                  <option value="on-demand">On-Demand</option>
                 </select>
               </div>
             </div>
@@ -306,17 +307,16 @@ export const PROFILE_CLIENT_SCRIPT = `
       }
     }
 
-    // 4. Recent Changes + 1-Click Undo
+    // 4. Recent Changes + 1-Click Undo (hide when empty)
     var historyList = Array.isArray(up.history) ? up.history : [];
+    var historyBar = el('profile-history-bar');
+    if (historyBar) {
+      historyBar.style.display = historyList.length > 0 ? 'flex' : 'none';
+    }
     var historyEl = el('profile-history-list');
     if (historyEl) {
       historyEl.innerHTML = '';
-      if (historyList.length === 0) {
-        var noHist = document.createElement('span');
-        noHist.className = 'mono-dim';
-        noHist.textContent = dict.profileNoHistory;
-        historyEl.appendChild(noHist);
-      } else {
+      if (historyList.length > 0) {
         historyList.slice(0, 8).forEach(function(entry) {
           var undoId = entry.id || entry.preference_id || entry.target_id || '';
           var chip = document.createElement('div');
@@ -533,12 +533,21 @@ export const PROFILE_CLIENT_SCRIPT = `
                   enabled: it.enabled !== false,
                   review_status: it.review_status || 'approved'
                 }).then(function(res) {
+                  var d = i18n[lang] || i18n.en;
                   if (res && res.ok) {
                     if (res.snapshot) snapshot = res.snapshot;
                     rerenderAllViews();
-                    showToast('success', dict.profileModeUpdatedToast.replace('{id}', it.id));
+                    showToast('success', d.profileModeUpdatedToast.replace('{id}', it.id), 8000, {
+                      label: d.undoActionLabel,
+                      run: function() {
+                        handleUndoProfileChange(it.id, null);
+                      }
+                    });
+                    if (res.data && Array.isArray(res.data.warnings) && res.data.warnings.length > 0) {
+                      showToast('warn', res.data.warnings[0], 6000);
+                    }
                   } else if (!res || !res.offlineExport) {
-                    showActionError(res, dict.profileCreateFailedToast, { id: it.id, tier: itemTier, item: it });
+                    showActionError(res, d.profileCreateFailedToast, { id: it.id, tier: itemTier, item: it });
                   }
                 });
               });
@@ -562,34 +571,42 @@ export const PROFILE_CLIENT_SCRIPT = `
           pauseBtn.textContent = it.enabled === false ? dict.resumeItem : dict.pauseItem;
           pauseBtn.addEventListener('click', function(ev) {
             ev.stopPropagation();
+            var nextEnabled = it.enabled === false;
             runWithButtonLock(pauseBtn, dict.savingLabel, function() {
               return callKernelAction('toggle-enabled', {
                 kind: r.rawKind,
                 id: it.id,
                 tier: itemTier,
-                enabled: it.enabled === false
+                enabled: nextEnabled
               }).then(function(res) {
+                var d = i18n[lang] || i18n.en;
                 if (res && res.ok) {
                   if (res.snapshot) snapshot = res.snapshot;
                   rerenderAllViews();
+                  var pMsg = (nextEnabled ? d.resumedToast : d.pausedToast).replace('{id}', it.id);
+                  if (!nextEnabled) {
+                    showToast('success', pMsg, 8000, {
+                      label: d.undoActionLabel,
+                      run: function() {
+                        callKernelAction('toggle-enabled', { kind: r.rawKind, id: it.id, tier: itemTier, enabled: true }).then(function(r2) {
+                          if (r2 && r2.ok) {
+                            if (r2.snapshot) snapshot = r2.snapshot;
+                            rerenderAllViews();
+                            showToast('success', (i18n[lang] || i18n.en).resumedToast.replace('{id}', it.id));
+                          }
+                        });
+                      }
+                    });
+                  } else {
+                    showToast('success', pMsg);
+                  }
                 } else if (!res || !res.offlineExport) {
-                  showActionError(res, dict.errToggleFailed, { id: it.id, tier: itemTier, item: it });
+                  showActionError(res, d.errToggleFailed, { id: it.id, tier: itemTier, item: it });
                 }
               });
             });
           });
           actions.appendChild(pauseBtn);
-
-          var archBtn = document.createElement('button');
-          archBtn.type = 'button';
-          archBtn.className = 'btn-action';
-          archBtn.style.color = 'var(--status-danger)';
-          archBtn.textContent = dict.archive;
-          archBtn.addEventListener('click', function(ev) {
-            ev.stopPropagation();
-            archiveAndOfferUndo(r.kind, it.id, itemTier);
-          });
-          actions.appendChild(archBtn);
         }
         row.appendChild(actions);
       }
@@ -624,7 +641,16 @@ export const PROFILE_CLIENT_SCRIPT = `
     if (el('profile-inp-always-on')) el('profile-inp-always-on').value = item && item.always_on === false ? 'false' : 'true';
     if (el('profile-inp-tags')) el('profile-inp-tags').value = item && Array.isArray(item.tags) ? item.tags.join(', ') : '';
     if (el('profile-inp-content')) el('profile-inp-content').value = item ? (item.content || '') : '';
+    var moreDetails = el('profile-more-options');
+    if (moreDetails) moreDetails.open = Boolean(item);
     panel.classList.add('open');
+    if (typeof panel.scrollIntoView === 'function') {
+      try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+    }
+    var inpContent = el('profile-inp-content');
+    if (inpContent && typeof inpContent.focus === 'function') {
+      try { inpContent.focus(); } catch (e) {}
+    }
   }
 
   function handleUndoProfileChange(targetId, btnEl) {
@@ -703,6 +729,9 @@ export const PROFILE_CLIENT_SCRIPT = `
               rerenderAllViews();
               var createdId = (res.data && res.data.id) ? res.data.id : (title || 'preference');
               showToast('success', dict.profileCreatedToast.replace('{id}', createdId));
+              if (res.data && Array.isArray(res.data.warnings) && res.data.warnings.length > 0) {
+                showToast('warn', res.data.warnings[0], 6000);
+              }
             } else if (!res || !res.offlineExport) {
               showActionError(res, dict.profileCreateFailedToast, {
                 id: editingProfilePrefId || undefined,
@@ -738,13 +767,16 @@ export const PROFILE_CLIENT_SCRIPT = `
       importRunBtn.addEventListener('click', function() {
         var dict = i18n[lang] || i18n.en;
         var md = el('profile-import-textarea') ? el('profile-import-textarea').value : '';
-        var alwaysOn = el('profile-import-always-on') ? el('profile-import-always-on').value !== 'false' : true;
+        var modeSelVal = el('profile-import-always-on') ? el('profile-import-always-on').value : 'auto';
+        var importPayload = {
+          markdown: md,
+          mode: modeSelVal,
+          tier: 'GLOBAL'
+        };
+        if (modeSelVal === 'always-on') importPayload.always_on = true;
+        else if (modeSelVal === 'on-demand') importPayload.always_on = false;
         runWithButtonLock(importRunBtn, dict.savingLabel, function() {
-          return callKernelAction('import-profile-markdown', {
-            markdown: md,
-            always_on: alwaysOn,
-            tier: 'GLOBAL'
-          }).then(function(res) {
+          return callKernelAction('import-profile-markdown', importPayload).then(function(res) {
             if (res && res.ok) {
               if (res.snapshot) snapshot = res.snapshot;
               var d = res.data || {};
@@ -761,6 +793,9 @@ export const PROFILE_CLIENT_SCRIPT = `
               }
               rerenderAllViews();
               showToast('success', msg);
+              if (Array.isArray(d.warnings) && d.warnings.length > 0) {
+                showToast('warn', d.warnings[0], 6000);
+              }
             } else if (!res || !res.offlineExport) {
               showActionError(res, dict.profileImportFailedToast);
             }
@@ -780,6 +815,9 @@ export const PROFILE_CLIENT_SCRIPT = `
               rerenderAllViews();
               var targets = (res.data && Array.isArray(res.data.updatedTargets)) ? res.data.updatedTargets.length : 0;
               showToast('success', dict.profileSyncedToast.replace('{n}', String(targets)));
+              if (res.data && Array.isArray(res.data.warnings) && res.data.warnings.length > 0) {
+                showToast('warn', res.data.warnings[0], 6000);
+              }
             } else if (!res || !res.offlineExport) {
               showActionError(res, dict.profileSyncFailedToast);
             }

@@ -1362,7 +1362,7 @@ export function runAudit(workspaceRoot: string, options: AuditOptions = {}): Aud
 
 export function renderAuditReport(
   report: AuditReport,
-  options?: { color?: boolean; ascii?: boolean }
+  options?: { color?: boolean; ascii?: boolean; verbose?: boolean }
 ): string {
   const lines: string[] = [];
   lines.push('╭──────────────────────────────────────────────────────────────────────────╮');
@@ -1377,10 +1377,22 @@ export function renderAuditReport(
   if (report.files.length === 0) {
     lines.push('│   └── (no rule or skill files found)');
   } else {
-    for (const f of report.files) {
-      const badge = f.overBudget ? '⚠️ OVER_BUDGET' : '✅ HEALTHY';
+    const overBudgetFiles = report.files.filter((f) => f.overBudget);
+    const healthyFiles = report.files.filter((f) => !f.overBudget);
+    for (const f of overBudgetFiles) {
       lines.push(
-        `│   ├── [${f.scope.toUpperCase()}:${f.kind.toUpperCase()}] ${f.displayPath} — ${f.tokens}/${f.budgetLimit} tokens (${badge})`
+        `│   ├── [${f.scope.toUpperCase()}:${f.kind.toUpperCase()}] ${f.displayPath} — ${f.tokens}/${f.budgetLimit} tokens (⚠️ OVER_BUDGET)`
+      );
+    }
+    if (options?.verbose) {
+      for (const f of healthyFiles) {
+        lines.push(
+          `│   ├── [${f.scope.toUpperCase()}:${f.kind.toUpperCase()}] ${f.displayPath} — ${f.tokens}/${f.budgetLimit} tokens (✅ HEALTHY)`
+        );
+      }
+    } else if (healthyFiles.length > 0) {
+      lines.push(
+        `│   └── ✅ ${healthyFiles.length} healthy file(s) within budget (pass --verbose to list all)`
       );
     }
   }

@@ -1345,9 +1345,144 @@ export class EvoStorage {
     return entries.reverse().slice(0, safeLimit);
   }
 
+  public isCapabilityActive(id: string, kind: EvoKind): boolean {
+    const cleanId = sanitizeId(id);
+    if (!cleanId) return false;
+    switch (kind) {
+      case 'preference':
+        return Boolean(this.getPreference(cleanId));
+      case 'memory':
+        return Boolean(this.getMemory(cleanId));
+      case 'rule':
+        return Boolean(this.getRule(cleanId));
+      case 'skill':
+        return Boolean(this.getSkill(cleanId));
+      case 'tool':
+        return Boolean(this.getTool(cleanId));
+    }
+  }
+
+  public snapshotCapabilityForHistory(
+    id: string,
+    kind: EvoKind
+  ): {
+    snapshot?: string;
+    files?: Record<string, string>;
+    wasCore?: boolean;
+    title?: string;
+  } | null {
+    const cleanId = sanitizeId(id);
+    if (!cleanId) return null;
+    if (kind === 'preference') {
+      const item = this.getPreference(cleanId);
+      const p = path.join(this.preferencesDir, `${cleanId}.md`);
+      if (!item || !fs.existsSync(p)) return null;
+      return { snapshot: fs.readFileSync(p, 'utf8'), title: item.title };
+    }
+    if (kind === 'memory') {
+      const item = this.getMemory(cleanId);
+      const p = path.join(this.memoriesDir, `${cleanId}.md`);
+      if (!item || !fs.existsSync(p)) return null;
+      return { snapshot: fs.readFileSync(p, 'utf8'), title: item.title };
+    }
+    if (kind === 'rule') {
+      const item = this.getRule(cleanId);
+      if (!item) return null;
+      const corePath = path.join(this.rulesDir, `${cleanId}.md`);
+      const scopedPath = path.join(this.rulesDir, 'scoped', `${cleanId}.md`);
+      const filePath = item.core
+        ? (fs.existsSync(corePath) ? corePath : scopedPath)
+        : (fs.existsSync(scopedPath) ? scopedPath : corePath);
+      if (!fs.existsSync(filePath)) return null;
+      return {
+        snapshot: fs.readFileSync(filePath, 'utf8'),
+        wasCore: item.core,
+        title: item.title,
+      };
+    }
+    if (kind === 'skill' || kind === 'tool') {
+      const baseDir = kind === 'skill' ? path.join(this.skillsDir, cleanId) : path.join(this.toolsDir, cleanId);
+      if (!fs.existsSync(baseDir) || !fs.statSync(baseDir).isDirectory()) return null;
+      const item = kind === 'skill' ? this.getSkill(cleanId) : this.getTool(cleanId);
+      const files: Record<string, string> = {};
+      const walk = (dir: string) => {
+        for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, ent.name);
+          const rel = path.relative(baseDir, full).replace(/\\/g, '/');
+          if (ent.isDirectory()) {
+            walk(full);
+          } else if (ent.isFile()) {
+            files[rel] = fs.readFileSync(full).toString('base64');
+          }
+        }
+      };
+      walk(baseDir);
+      return { files, title: item?.title || cleanId };
+    }
+    return null;
+  }
+
+  public previewUndoCandidate(targetId?: string): {
+    candidate?: ProfileHistoryEntry;
+    batchEntries: ProfileHistoryEntry[];
+  } {
+    if (targetId !== undefined && targetId !== '' && !sanitizeId(targetId)) {
+      return { batchEntries: [] };
+    }
+    const entries = this.readAllProfileHistoryChronological();
+    if (entries.length === 0) return { batchEntries: [] };
+
+    const cleanTargetId = targetId ? sanitizeId(targetId) : undefined;
+    const undoBalance = new Map<string, number>();
+    const activeEntriesRev: ProfileHistoryEntry[] = [];
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      const entryCleanId = sanitizeId(entry.id) || entry.id;
+      const key = `${entry.kind}:${entryCleanId}`;
+      if (entry.action === 'undo') {
+        undoBalance.set(key, (undoBalance.get(key) || 0) + 1);
+        continue;
+      }
+      const pendingUndos = undoBalance.get(key) || 0;
+      if (pendingUndos > 0) {
+        undoBalance.set(key, pendingUndos - 1);
+        continue;
+      }
+      if (entry.action === 'add' && !cleanTargetId && !entry.batch_id) {
+        if (!this.isCapabilityActive(entryCleanId, entry.kind)) {
+          continue;
+        }
+      }
+      if (entry.action === 'add' || entry.action === 'update' || entry.action === 'archive') {
+        activeEntriesRev.push(entry);
+      }
+    }
+
+    const candidate = cleanTargetId
+      ? activeEntriesRev.find((e) => (sanitizeId(e.id) || e.id) === cleanTargetId)
+      : activeEntriesRev[0];
+
+    if (!candidate) {
+      return { batchEntries: [] };
+    }
+
+    if (candidate.batch_id) {
+      const batchEntries = activeEntriesRev.filter((e) => e.batch_id === candidate.batch_id);
+      return { candidate, batchEntries: batchEntries.length > 0 ? batchEntries : [candidate] };
+    }
+
+    return { candidate, batchEntries: [candidate] };
+  }
+
   public undoLastProfileChange(
     targetId?: string
-  ): { ok: boolean; undone?: ProfileHistoryEntry; message: string } {
+  ): {
+    ok: boolean;
+    undone?: ProfileHistoryEntry;
+    undoneBatch?: ProfileHistoryEntry[];
+    message: string;
+  } {
     if (targetId !== undefined && targetId !== '' && !sanitizeId(targetId)) {
       return { ok: false, message: 'Invalid target ID' };
     }
@@ -1359,18 +1494,15 @@ export class EvoStorage {
 
     const cleanTargetId = targetId ? sanitizeId(targetId) : undefined;
     const undoBalance = new Map<string, number>();
-    let candidate: ProfileHistoryEntry | undefined;
+    const activeEntriesRev: ProfileHistoryEntry[] = [];
     const now = new Date().toISOString();
 
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       const entryCleanId = sanitizeId(entry.id) || entry.id;
-      const key = `${entry.kind}:${sanitizeId(entry.id)}`;
+      const key = `${entry.kind}:${entryCleanId}`;
       if (entry.action === 'undo') {
         undoBalance.set(key, (undoBalance.get(key) || 0) + 1);
-        continue;
-      }
-      if (cleanTargetId && sanitizeId(entry.id) !== cleanTargetId) {
         continue;
       }
       const pendingUndos = undoBalance.get(key) || 0;
@@ -1378,12 +1510,8 @@ export class EvoStorage {
         undoBalance.set(key, pendingUndos - 1);
         continue;
       }
-      if (entry.action === 'add' && !cleanTargetId) {
-        const isActiveOnDisk =
-          entry.kind === 'preference'
-            ? Boolean(this.getPreference(entryCleanId))
-            : Boolean(this.getMemory(entryCleanId));
-        if (!isActiveOnDisk) {
+      if (entry.action === 'add' && !cleanTargetId && !entry.batch_id) {
+        if (!this.isCapabilityActive(entryCleanId, entry.kind)) {
           this.appendProfileHistory({
             ts: now,
             action: 'undo',
@@ -1396,10 +1524,13 @@ export class EvoStorage {
         }
       }
       if (entry.action === 'add' || entry.action === 'update' || entry.action === 'archive') {
-        candidate = entry;
-        break;
+        activeEntriesRev.push(entry);
       }
     }
+
+    const candidate = cleanTargetId
+      ? activeEntriesRev.find((e) => (sanitizeId(e.id) || e.id) === cleanTargetId)
+      : activeEntriesRev[0];
 
     if (!candidate) {
       return {
@@ -1410,7 +1541,9 @@ export class EvoStorage {
       };
     }
 
-    const cleanId = sanitizeId(candidate.id) || candidate.id;
+    const batchEntries: ProfileHistoryEntry[] = candidate.batch_id
+      ? activeEntriesRev.filter((e) => e.batch_id === candidate.batch_id)
+      : [candidate];
 
     const parsePreferenceSnapshotForBudget = (
       snapshotRaw: string,
@@ -1443,183 +1576,382 @@ export class EvoStorage {
       };
     };
 
-    if (candidate.action === 'add') {
-      const removed = this.archiveCapability(
-        cleanId,
-        candidate.kind,
-        `Undid add via profile history (${candidate.ts})`
-      );
-      if (!removed) {
-        if (candidate.kind === 'preference') {
-          this.rebuildUserProfileDigest();
+    const parseRuleSnapshotForBudget = (
+      snapshotRaw: string,
+      targetRuleId: string,
+      wasCoreHint?: boolean
+    ): { id: string; tokens: number } | null => {
+      const { meta, body } = parseFrontmatter(snapshotRaw);
+      const isCore =
+        meta.core !== undefined
+          ? meta.core === true || meta.core === 'true'
+          : Boolean(wasCoreHint);
+      const enabled = meta.enabled === false || meta.enabled === 'false' ? false : true;
+      if (!isCore || !enabled) return null;
+      const l0 = String(meta.l0_summary || targetRuleId);
+      const content = body.trim();
+      const tokens = Number(meta.tokens || estimateTokens(`- **[${targetRuleId}]**: ${l0}\n${content}`) || 40);
+      return { id: targetRuleId, tokens };
+    };
+
+    // Pre-validate combined projected budgets across the ENTIRE batch (prevents partial undo or spurious intermediate overflow)
+    const cfg = this.getConfig();
+    const maxProfileBudget = cfg.maxGlobalProfileTokens ?? 800;
+    const maxCoreBudget = cfg.maxCoreRuleTokens ?? 1500;
+    const { preferences: currentAlwaysOnPrefs } = this.getProfileTokenUsage();
+    const projectedPrefs = new Map<string, EvoPreference>(
+      currentAlwaysOnPrefs.map((p) => [p.id, p])
+    );
+    const { rules: currentCoreRules } = this.getCoreRulesTokenUsage();
+    const projectedCoreRules = new Map<string, number>(
+      currentCoreRules.map((r) => [r.id, r.tokens])
+    );
+    let touchesPreferences = false;
+    let touchesRules = false;
+
+    for (const entry of batchEntries) {
+      const cId = sanitizeId(entry.id) || entry.id;
+      const supId = entry.superseded_id ? sanitizeId(entry.superseded_id) : '';
+      const supKind = entry.superseded_kind || entry.kind;
+      const hasCrossSup = Boolean(supId && supId !== cId);
+
+      if (entry.kind === 'preference' || supKind === 'preference') touchesPreferences = true;
+      if (entry.kind === 'rule' || supKind === 'rule') touchesRules = true;
+
+      if (entry.action === 'add') {
+        if (entry.kind === 'preference') projectedPrefs.delete(cId);
+        if (entry.kind === 'rule') projectedCoreRules.delete(cId);
+      } else if (entry.action === 'update' || entry.action === 'archive') {
+        if (hasCrossSup) {
+          if (entry.kind === 'preference') {
+            if (entry.self_previous_snapshot?.trim()) {
+              const p = parsePreferenceSnapshotForBudget(entry.self_previous_snapshot, cId);
+              if (p) projectedPrefs.set(cId, p);
+              else projectedPrefs.delete(cId);
+            } else {
+              projectedPrefs.delete(cId);
+            }
+          } else if (entry.kind === 'rule') {
+            if (entry.self_previous_snapshot?.trim()) {
+              const r = parseRuleSnapshotForBudget(entry.self_previous_snapshot, cId, entry.was_core);
+              if (r) projectedCoreRules.set(cId, r.tokens);
+              else projectedCoreRules.delete(cId);
+            } else {
+              projectedCoreRules.delete(cId);
+            }
+          }
+          const supSnap =
+            typeof entry.superseded_snapshot === 'string' && entry.superseded_snapshot.trim()
+              ? entry.superseded_snapshot
+              : entry.previous_snapshot;
+          if (supSnap?.trim()) {
+            if (supKind === 'preference') {
+              const p = parsePreferenceSnapshotForBudget(supSnap, supId);
+              if (p) projectedPrefs.set(supId, p);
+              else projectedPrefs.delete(supId);
+            } else if (supKind === 'rule') {
+              const r = parseRuleSnapshotForBudget(supSnap, supId, entry.superseded_was_core);
+              if (r) projectedCoreRules.set(supId, r.tokens);
+              else projectedCoreRules.delete(supId);
+            }
+          }
+        } else if (typeof entry.previous_snapshot === 'string' && entry.previous_snapshot.trim()) {
+          if (entry.kind === 'preference') {
+            const p = parsePreferenceSnapshotForBudget(entry.previous_snapshot, cId);
+            if (p) projectedPrefs.set(cId, p);
+            else projectedPrefs.delete(cId);
+          } else if (entry.kind === 'rule') {
+            const r = parseRuleSnapshotForBudget(entry.previous_snapshot, cId, entry.was_core);
+            if (r) projectedCoreRules.set(cId, r.tokens);
+            else projectedCoreRules.delete(cId);
+          }
         }
-        return {
-          ok: false,
-          message: `Could not undo add for '${cleanId}': capability is no longer active.`,
-        };
       }
-      this.appendProfileHistory({
-        ts: now,
-        action: 'undo',
-        id: cleanId,
-        kind: candidate.kind,
-        title: candidate.title,
-        reason: `Undid add of ${cleanId}`,
-      });
-      return {
-        ok: true,
-        undone: candidate,
-        message: `Undid addition of ${candidate.kind} '${cleanId}'.`,
-      };
     }
 
-    if (
-      (candidate.action === 'update' || candidate.action === 'archive') &&
-      typeof candidate.previous_snapshot === 'string' &&
-      candidate.previous_snapshot.trim().length > 0
-    ) {
+    if (touchesPreferences) {
+      const projectedDigest = formatUserProfileDigestForPreferences(Array.from(projectedPrefs.values()));
+      const projectedTokens = projectedDigest
+        ? estimateTokens(renderUserProfileBlock(projectedDigest, ''))
+        : 0;
+      if (projectedTokens > maxProfileBudget) {
+        const cleanId = sanitizeId(candidate.id) || candidate.id;
+        return {
+          ok: false,
+          message: `ERR_PROFILE_BUDGET_EXCEEDED: Undoing ${candidate.action} for preference "${cleanId}" (${projectedTokens}/${maxProfileBudget} tokens) would exceed maxGlobalProfileTokens.`,
+        };
+      }
+    }
+    if (touchesRules) {
+      const projectedCoreTokens = Array.from(projectedCoreRules.values()).reduce((a, b) => a + b, 0);
+      if (projectedCoreTokens > maxCoreBudget) {
+        const cleanId = sanitizeId(candidate.id) || candidate.id;
+        return {
+          ok: false,
+          message: `ERR_BUDGET_EXCEEDED: Undoing ${candidate.action} for rule "${cleanId}" (${projectedCoreTokens}/${maxCoreBudget} tokens) would exceed maxCoreRuleTokens.`,
+        };
+      }
+    }
+
+    // Helper: write a single-file or multi-file snapshot for any EvoKind
+    const writeSnapshotForKind = (
+      targetIdStr: string,
+      targetKind: EvoKind,
+      snapshotText?: string,
+      filesMap?: Record<string, string>,
+      wasCoreHint?: boolean
+    ): boolean => {
+      const tid = sanitizeId(targetIdStr) || targetIdStr;
       this.ensureInitialized();
-      const targetDir = candidate.kind === 'preference' ? this.preferencesDir : this.memoriesDir;
-      const cleanSupersededId = candidate.superseded_id ? sanitizeId(candidate.superseded_id) : '';
+      if (targetKind === 'preference' && snapshotText?.trim()) {
+        fs.mkdirSync(this.preferencesDir, { recursive: true });
+        fs.writeFileSync(path.join(this.preferencesDir, `${tid}.md`), snapshotText, 'utf8');
+        return true;
+      }
+      if (targetKind === 'memory' && snapshotText?.trim()) {
+        fs.mkdirSync(this.memoriesDir, { recursive: true });
+        fs.writeFileSync(path.join(this.memoriesDir, `${tid}.md`), snapshotText, 'utf8');
+        return true;
+      }
+      if (targetKind === 'rule' && snapshotText?.trim()) {
+        const { meta } = parseFrontmatter(snapshotText);
+        const isCore =
+          meta.core !== undefined
+            ? meta.core === true || meta.core === 'true'
+            : Boolean(wasCoreHint);
+        const corePath = path.join(this.rulesDir, `${tid}.md`);
+        const scopedPath = path.join(this.rulesDir, 'scoped', `${tid}.md`);
+        if (isCore) {
+          fs.mkdirSync(this.rulesDir, { recursive: true });
+          fs.writeFileSync(corePath, snapshotText, 'utf8');
+          if (fs.existsSync(scopedPath)) fs.unlinkSync(scopedPath);
+        } else {
+          fs.mkdirSync(path.join(this.rulesDir, 'scoped'), { recursive: true });
+          fs.writeFileSync(scopedPath, snapshotText, 'utf8');
+          if (fs.existsSync(corePath)) fs.unlinkSync(corePath);
+        }
+        return true;
+      }
+      if ((targetKind === 'skill' || targetKind === 'tool') && filesMap && Object.keys(filesMap).length > 0) {
+        const baseDir = targetKind === 'skill' ? path.join(this.skillsDir, tid) : path.join(this.toolsDir, tid);
+        fs.rmSync(baseDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 });
+        fs.mkdirSync(baseDir, { recursive: true });
+        const resolvedBase = path.resolve(baseDir);
+        for (const [relPath, b64] of Object.entries(filesMap)) {
+          const cleanRel = relPath.replace(/^[/\\]+/, '');
+          const destPath = path.resolve(resolvedBase, cleanRel);
+          if (!destPath.startsWith(resolvedBase + path.sep)) continue;
+          fs.mkdirSync(path.dirname(destPath), { recursive: true });
+          fs.writeFileSync(destPath, Buffer.from(b64, 'base64'));
+        }
+        return true;
+      }
+      if (targetKind === 'skill' && snapshotText?.trim()) {
+        const skillDir = path.join(this.skillsDir, tid);
+        fs.mkdirSync(skillDir, { recursive: true });
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), snapshotText, 'utf8');
+        return true;
+      }
+      return false;
+    };
+
+    // Capture full pre-undo disk state for atomic rollback if any step fails
+    const rollbackTargets: Array<{
+      id: string;
+      kind: EvoKind;
+      prev: ReturnType<EvoStorage['snapshotCapabilityForHistory']>;
+    }> = [];
+    const seenRollbackKeys = new Set<string>();
+    const capturePreUndo = (tid: string, tkind: EvoKind) => {
+      const k = `${tkind}:${tid}`;
+      if (seenRollbackKeys.has(k)) return;
+      seenRollbackKeys.add(k);
+      rollbackTargets.push({ id: tid, kind: tkind, prev: this.snapshotCapabilityForHistory(tid, tkind) });
+    };
+    for (const entry of batchEntries) {
+      const cId = sanitizeId(entry.id) || entry.id;
+      capturePreUndo(cId, entry.kind);
+      if (entry.superseded_id) {
+        const sId = sanitizeId(entry.superseded_id) || entry.superseded_id;
+        capturePreUndo(sId, entry.superseded_kind || entry.kind);
+      }
+    }
+    const archiveBefore = new Set(
+      fs.existsSync(this.archiveDir) ? fs.readdirSync(this.archiveDir) : []
+    );
+    const revertDiskOnFailure = () => {
+      for (const t of rollbackTargets) {
+        if (!t.prev) {
+          this.deleteCapability(t.id, t.kind);
+        } else {
+          writeSnapshotForKind(t.id, t.kind, t.prev.snapshot, t.prev.files, t.prev.wasCore);
+        }
+      }
+      if (fs.existsSync(this.archiveDir)) {
+        for (const f of fs.readdirSync(this.archiveDir)) {
+          if (!archiveBefore.has(f)) {
+            try {
+              fs.rmSync(path.join(this.archiveDir, f), { recursive: true, force: true });
+            } catch {}
+          }
+        }
+      }
+      if (touchesPreferences) this.rebuildUserProfileDigest();
+      if (touchesRules) this.rebuildCoreInvariantsDigest();
+    };
+
+    // Execute every rollback in the batch (already reverse chronological)
+    const undoneRecords: ProfileHistoryEntry[] = [];
+    let primaryMessage = '';
+
+    for (const entry of batchEntries) {
+      const cleanId = sanitizeId(entry.id) || entry.id;
+      const cleanSupersededId = entry.superseded_id ? sanitizeId(entry.superseded_id) : '';
+      const supersededKind = entry.superseded_kind || entry.kind;
       const hasCrossSupersede = Boolean(cleanSupersededId && cleanSupersededId !== cleanId);
 
-      if (hasCrossSupersede) {
-        const supersededSnapshot =
-          typeof candidate.superseded_snapshot === 'string' && candidate.superseded_snapshot.trim()
-            ? candidate.superseded_snapshot
-            : candidate.previous_snapshot;
-        const hasSelfPrev = Boolean(
-          candidate.self_previous_snapshot && candidate.self_previous_snapshot.trim()
+      if (entry.action === 'add') {
+        const removed = this.archiveCapability(
+          cleanId,
+          entry.kind,
+          `Undid add via history (${entry.ts})`
         );
-        if (candidate.kind === 'preference') {
-          const parsedSuperseded = parsePreferenceSnapshotForBudget(
-            supersededSnapshot,
-            cleanSupersededId
-          );
-          const parsedSelfPrev = hasSelfPrev
-            ? parsePreferenceSnapshotForBudget(candidate.self_previous_snapshot!, cleanId)
-            : null;
-          const cfg = this.getConfig();
-          const maxProfileBudget = cfg.maxGlobalProfileTokens ?? 800;
-          const { preferences: existingPrefs } = this.getProfileTokenUsage();
-          const excluded = new Set([cleanId, cleanSupersededId]);
-          const remaining = existingPrefs.filter((p) => !excluded.has(p.id));
-          const projectedDigest = formatUserProfileDigestForPreferences([
-            ...remaining,
-            ...(parsedSuperseded ? [parsedSuperseded] : []),
-            ...(parsedSelfPrev ? [parsedSelfPrev] : []),
-          ]);
-          const projectedTokens = projectedDigest
-            ? estimateTokens(renderUserProfileBlock(projectedDigest, ''))
-            : 0;
-          if (projectedTokens > maxProfileBudget) {
+        if (!removed) {
+          if (batchEntries.length === 1) {
+            if (touchesPreferences) this.rebuildUserProfileDigest();
+            if (touchesRules) this.rebuildCoreInvariantsDigest();
             return {
               ok: false,
-              message: `ERR_PROFILE_BUDGET_EXCEEDED: Undoing ${candidate.action} for preference "${cleanId}" and restoring "${cleanSupersededId}" (${projectedTokens}/${maxProfileBudget} tokens) would exceed maxGlobalProfileTokens.`,
+              message: `Could not undo add for '${cleanId}': capability is no longer active.`,
+            };
+          }
+          // In a multi-step batch, an item might already have been replaced/removed by a later step in the same batch; continue safely
+        }
+        undoneRecords.push(entry);
+        if (!primaryMessage) {
+          primaryMessage = `Undid addition of ${entry.kind} '${cleanId}'.`;
+        }
+        continue;
+      }
+
+      if (entry.action === 'update' || entry.action === 'archive') {
+        if (hasCrossSupersede) {
+          const supersededSnapshot =
+            typeof entry.superseded_snapshot === 'string' && entry.superseded_snapshot.trim()
+              ? entry.superseded_snapshot
+              : entry.previous_snapshot;
+          const hasSelfPrev = Boolean(
+            (entry.self_previous_snapshot && entry.self_previous_snapshot.trim()) ||
+              (entry.self_previous_files && Object.keys(entry.self_previous_files).length > 0)
+          );
+          if (hasSelfPrev) {
+            writeSnapshotForKind(
+              cleanId,
+              entry.kind,
+              entry.self_previous_snapshot,
+              entry.self_previous_files,
+              entry.was_core
+            );
+          } else {
+            this.archiveCapability(
+              cleanId,
+              entry.kind,
+              `Undid supersede of '${cleanSupersededId}' via history (${entry.ts})`
+            );
+          }
+          const restoredSup = writeSnapshotForKind(
+            cleanSupersededId,
+            supersededKind,
+            supersededSnapshot,
+            entry.superseded_files,
+            entry.superseded_was_core
+          );
+          if (!restoredSup) {
+            try {
+              this.restoreCapability(cleanSupersededId, supersededKind);
+            } catch (err: any) {
+              revertDiskOnFailure();
+              return {
+                ok: false,
+                message: err instanceof Error ? err.message : String(err),
+              };
+            }
+          }
+          undoneRecords.push(entry);
+          if (!primaryMessage) {
+            primaryMessage = `Restored superseded ${supersededKind} '${cleanSupersededId}' and reverted '${cleanId}'.`;
+          }
+          continue;
+        }
+
+        const wroteSnap = writeSnapshotForKind(
+          cleanId,
+          entry.kind,
+          entry.previous_snapshot,
+          entry.previous_files,
+          entry.was_core
+        );
+        if (wroteSnap) {
+          undoneRecords.push(entry);
+          if (!primaryMessage) {
+            primaryMessage = `Restored previous snapshot of ${entry.kind} '${cleanId}' (undid ${entry.action}).`;
+          }
+          continue;
+        }
+
+        if (entry.action === 'archive') {
+          try {
+            const restored = this.restoreCapability(cleanId, entry.kind);
+            if (restored) {
+              undoneRecords.push(entry);
+              if (!primaryMessage) {
+                primaryMessage = `Restored archived ${entry.kind} '${cleanId}'.`;
+              }
+              continue;
+            }
+          } catch (err: any) {
+            revertDiskOnFailure();
+            return {
+              ok: false,
+              message: err instanceof Error ? err.message : String(err),
             };
           }
         }
-        if (hasSelfPrev) {
-          fs.writeFileSync(
-            path.join(targetDir, `${cleanId}.md`),
-            candidate.self_previous_snapshot!,
-            'utf8'
-          );
-        } else {
-          this.archiveCapability(
-            cleanId,
-            candidate.kind,
-            `Undid supersede of '${cleanSupersededId}' via profile history (${candidate.ts})`
-          );
-        }
-        fs.writeFileSync(path.join(targetDir, `${cleanSupersededId}.md`), supersededSnapshot, 'utf8');
-        if (candidate.kind === 'preference') {
-          this.rebuildUserProfileDigest();
-        }
-        this.appendProfileHistory({
-          ts: now,
-          action: 'undo',
-          id: cleanId,
-          kind: candidate.kind,
-          title: candidate.title,
-          reason: `Undid ${candidate.action} of ${cleanId} and restored ${cleanSupersededId}`,
-        });
+
+        revertDiskOnFailure();
         return {
-          ok: true,
-          undone: candidate,
-          message: `Restored superseded ${candidate.kind} '${cleanSupersededId}' and reverted '${cleanId}'.`,
+          ok: false,
+          message: `Cannot undo ${entry.action} for '${cleanId}': missing previous snapshot.`,
         };
       }
+    }
 
-      if (candidate.kind === 'preference') {
-        const parsedPrev = parsePreferenceSnapshotForBudget(candidate.previous_snapshot, cleanId);
-        if (parsedPrev) {
-          const cfg = this.getConfig();
-          const maxProfileBudget = cfg.maxGlobalProfileTokens ?? 800;
-          const { preferences: existingPrefs } = this.getProfileTokenUsage();
-          const remaining = existingPrefs.filter((p) => p.id !== cleanId);
-          const projectedDigest = formatUserProfileDigestForPreferences([...remaining, parsedPrev]);
-          const projectedTokens = projectedDigest
-            ? estimateTokens(renderUserProfileBlock(projectedDigest, ''))
-            : 0;
-          if (projectedTokens > maxProfileBudget) {
-            return {
-              ok: false,
-              message: `ERR_PROFILE_BUDGET_EXCEEDED: Undoing ${candidate.action} for preference "${cleanId}" (${projectedTokens}/${maxProfileBudget} tokens) would exceed maxGlobalProfileTokens.`,
-            };
-          }
-        }
-      }
+    if (touchesPreferences) this.rebuildUserProfileDigest();
+    if (touchesRules) this.rebuildCoreInvariantsDigest();
 
-      const targetPath = path.join(targetDir, `${cleanId}.md`);
-      fs.writeFileSync(targetPath, candidate.previous_snapshot, 'utf8');
-      if (candidate.kind === 'preference') {
-        this.rebuildUserProfileDigest();
-      }
+    for (const undone of undoneRecords) {
+      const cleanId = sanitizeId(undone.id) || undone.id;
       this.appendProfileHistory({
         ts: now,
         action: 'undo',
         id: cleanId,
-        kind: candidate.kind,
-        title: candidate.title,
-        reason: `Undid ${candidate.action} of ${cleanId}`,
+        kind: undone.kind,
+        title: undone.title,
+        ...(undone.batch_id ? { batch_id: undone.batch_id } : {}),
+        reason: `Undid ${undone.action} of ${cleanId}${undone.batch_id ? ` (batch ${undone.batch_id})` : ''}`,
       });
-      return {
-        ok: true,
-        undone: candidate,
-        message: `Restored previous snapshot of ${candidate.kind} '${cleanId}' (undid ${candidate.action}).`,
-      };
     }
 
-    if (candidate.action === 'archive') {
-      try {
-        const restored = this.restoreCapability(cleanId, candidate.kind);
-        if (restored) {
-          this.appendProfileHistory({
-            ts: now,
-            action: 'undo',
-            id: cleanId,
-            kind: candidate.kind,
-            title: candidate.title,
-            reason: `Undid archive of ${cleanId}`,
-          });
-          return {
-            ok: true,
-            undone: candidate,
-            message: `Restored archived ${candidate.kind} '${cleanId}'.`,
-          };
-        }
-      } catch (err: any) {
-        return {
-          ok: false,
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
-    }
+    const finalMessage =
+      undoneRecords.length > 1
+        ? `Atomically reverted ${undoneRecords.length} changes (${undoneRecords.map((e) => e.id).join(', ')}).`
+        : primaryMessage;
 
     return {
-      ok: false,
-      message: `Cannot undo ${candidate.action} for '${cleanId}': missing previous snapshot.`,
+      ok: true,
+      undone: candidate,
+      ...(undoneRecords.length > 1 ? { undoneBatch: undoneRecords } : {}),
+      message: finalMessage,
     };
   }
 

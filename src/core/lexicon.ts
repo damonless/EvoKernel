@@ -3,7 +3,8 @@ import * as path from 'node:path';
 
 export const CORE_SOFTWARE_SYNONYMS: Record<string, string[]> = {
   表格: ['excel', 'xlsx', 'xls', 'spreadsheet', 'table', 'markdown'],
-  工作: ['workbook', 'excel', 'xlsx', 'workflow'],
+  工作簿: ['workbook', 'excel', 'xlsx', 'spreadsheet'],
+  工作: ['work', 'workflow', 'task', 'job'],
   报告: ['report', 'docx', 'word', 'sop', 'qa', 'weekly', 'summary'],
   文档: ['document', 'docx', 'word', 'report', 'sop', 'markdown'],
   提交: ['commit', 'git', 'message', 'format', 'log'],
@@ -162,8 +163,10 @@ export const BASE_CANONICAL_MAP = new Map<string, string>([
   ['net', 'network'],
   ['git', 'git'],
   ['branch', 'git'],
-  ['工作', 'workbook'],
+  ['工作簿', 'workbook'],
   ['workbook', 'workbook'],
+  ['工作', 'work'],
+  ['work', 'work'],
   ['写作', 'writing'],
   ['writing', 'writing'],
   ['draft', 'writing'],

@@ -3,14 +3,14 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "node scripts/antigravity_hook.mjs PreInvocation || node .agents/scripts/antigravity_hook.mjs PreInvocation",
+        "command": "node scripts/antigravity_hook.mjs PreInvocation || node .agents/scripts/antigravity_hook.mjs PreInvocation || node ../.agents/scripts/antigravity_hook.mjs PreInvocation || node ../scripts/antigravity_hook.mjs PreInvocation || node ../../.agents/scripts/antigravity_hook.mjs PreInvocation",
         "timeout": 5
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "node scripts/antigravity_hook.mjs Stop || node .agents/scripts/antigravity_hook.mjs Stop",
+        "command": "node scripts/antigravity_hook.mjs Stop || node .agents/scripts/antigravity_hook.mjs Stop || node ../.agents/scripts/antigravity_hook.mjs Stop || node ../scripts/antigravity_hook.mjs Stop || node ../../.agents/scripts/antigravity_hook.mjs Stop",
         "timeout": 5
       }
     ]

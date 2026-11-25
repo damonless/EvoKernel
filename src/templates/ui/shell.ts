@@ -74,9 +74,22 @@ ${UI_STYLES}
         </span>
         <span id="lang-label" class="sr-only">EN</span>
       </button>
-      <button class="topbar-btn" id="btn-export-html" type="button" title="Export Standalone HTML"${isExport ? ' style="display:none;"' : ''}>
-        <span id="btn-export-label">Export</span>
-      </button>
+      <div class="export-menu-wrap" id="export-menu-wrap"${isExport ? ' style="display:none;"' : ''}>
+        <button class="topbar-btn" id="btn-export-html" type="button" title="Export Standalone HTML" aria-haspopup="menu" aria-expanded="false"${isExport ? ' style="display:none;"' : ''}>
+          <span id="btn-export-label">Export</span>
+        </button>
+        <div class="export-popover" id="export-popover" role="menu" style="display:none;">
+          <div class="export-popover-hdr" id="export-popover-title">Export HTML Snapshot</div>
+          <button type="button" class="export-opt-btn" id="btn-export-anon" role="menuitem">
+            <span class="export-opt-title" id="export-anon-title">Shareable (Anonymized)</span>
+            <span class="export-opt-desc" id="export-anon-desc">Hides local paths &amp; private details</span>
+          </button>
+          <button type="button" class="export-opt-btn" id="btn-export-full" role="menuitem">
+            <span class="export-opt-title" id="export-full-title">Full Local Copy</span>
+            <span class="export-opt-desc" id="export-full-desc">Includes full local paths for personal backup</span>
+          </button>
+        </div>
+      </div>
     </div>
   </header>
 

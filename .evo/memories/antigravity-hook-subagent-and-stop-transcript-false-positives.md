@@ -8,9 +8,8 @@ target_symbols: ["scripts/antigravity_hook.mjs#analyzeTranscriptSteps","src/cli/
 ast_fingerprints: {"scripts/antigravity_hook.mjs#analyzeTranscriptSteps":{"symbol":"scripts/antigravity_hook.mjs#analyzeTranscriptSteps","file_path":"scripts/antigravity_hook.mjs","file":"scripts/antigravity_hook.mjs","kind":"function","start_line":1370,"end_line":1711,"signature":"function analyzeTranscriptSteps(steps, convState)","ast_hash":"78f1a8e52b929245"},"src/cli/hook.ts#readTranscriptTail":{"symbol":"src/cli/hook.ts#readTranscriptTail","file_path":"src/cli/hook.ts","file":"src/cli/hook.ts","kind":"function","start_line":179,"end_line":245,"signature":"export function readTranscriptTail(transcriptPath: unknown): string","ast_hash":"e5a85a09917e20ff"}}
 tags: []
 origin: "evolved"
-review_status: "pending"
 created_at: "2026-11-24T18:20:22.779Z"
-updated_at: "2026-11-24T18:20:22.779Z"
+updated_at: "2026-11-25T00:31:00.900Z"
 ---
 
 ## Symptom

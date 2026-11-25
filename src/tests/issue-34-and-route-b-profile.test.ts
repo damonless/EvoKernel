@@ -600,6 +600,7 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
           l0_summary: l0,
           category: i % 2 === 0 ? 'formatting' : 'communication',
           always_on: true,
+          auto_resolve: false,
           content: `${topic} specification: ${uniqueWords}`,
           workspace: projectWs,
         });
@@ -1280,6 +1281,7 @@ describe('Issue #34 Hardening & Route B Cross-Workspace Personal Profile Suite',
         l0_summary: 'Always use markdown tables for comparisons',
         category: 'formatting',
         always_on: true,
+        auto_resolve: false,
         content: 'Use tables whenever comparing metrics.',
       });
       assert.strictEqual(yesTablesConflict.isError, true);

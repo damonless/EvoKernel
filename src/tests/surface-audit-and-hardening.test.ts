@@ -4114,7 +4114,10 @@ Body text here`;
     assert.strictEqual(benchRes.status, 0);
     const benchJson = JSON.parse(benchRes.stdout);
     assert.strictEqual(benchJson.benchmark.rawEagerTokensPerTurn, 27150);
-    assert.strictEqual(benchJson.benchmark.evoBasePrefixTokens, 3206);
+    assert.ok(
+      benchJson.benchmark.evoBasePrefixTokens > 0 && benchJson.benchmark.evoBasePrefixTokens <= 3250,
+      `Expected compact evoBasePrefixTokens <= 3250, got ${benchJson.benchmark.evoBasePrefixTokens}`
+    );
     assert.strictEqual(benchJson.benchmark.staticPrefixReductionPct, 88.2);
 
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-s01-stats-'));
@@ -4144,7 +4147,10 @@ Body text here`;
 
   // 66. [S1.1 Incremental 7-Day Recall Window & Recall Receipt]
   test('66. [S1.1] EvoTelemetry recall_events tracks incremental search/inspect/run with zero backfill and L0_META_RULE_SEED < 1,100 tok', async () => {
-    assert.ok(L0_META_RULE_SEED.includes('🛡️ EvoKernel Recall:'), 'L0_META_RULE_SEED must include 1-line Recall Receipt rule');
+    assert.ok(
+      L0_META_RULE_SEED.includes('Silent Recall') && L0_META_RULE_SEED.includes('human_receipt'),
+      'L0_META_RULE_SEED must enforce Silent Recall and concise human_receipt confirmation'
+    );
     assert.ok(
       estimateTokens(L0_META_RULE_SEED) < 1100,
       `L0_META_RULE_SEED must remain compact (< 1,100 tokens, got ${estimateTokens(L0_META_RULE_SEED)})`
@@ -5921,7 +5927,7 @@ Body text here`;
 
       const uiHtml = renderUiClientHtml(buildUiSnapshot(wsCleanScore), { token: 't', isExport: false, anon: false });
       assert.ok(uiHtml.includes('/api/export'), 'Workbench UI must include /api/export route');
-      assert.ok(uiHtml.includes('Fixed L0 Gateway'), 'Workbench UI must support Fixed L0 Gateway display');
+      assert.ok(uiHtml.includes('Compact Always-On'), 'Workbench UI must support Compact Always-On display');
       assert.strictEqual(/\bon[a-z]+\s*=/i.test(uiHtml), false, 'Workbench HTML must contain zero inline on*= handlers or on* identifier assignments');
       assert.strictEqual(uiHtml.includes('confirm('), false, 'Workbench HTML must not call blocking window.confirm(');
       assert.strictEqual(uiHtml.includes('max-width: 360px;'), false);

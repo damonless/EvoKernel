@@ -233,6 +233,22 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
   }
 
   function rerenderAllViews() {
+    var scrollTargets = [
+      el('center-stage'),
+      document.querySelector('#view-' + currentView + ' .table-scroll-container'),
+      document.querySelector('#view-profile .profile-studio-body'),
+      el('gatekeeper-timeline'),
+      el('right-inspector'),
+      el('inspector-detail')
+    ];
+    var savedScrolls = scrollTargets.map(function(node) {
+      return node ? node.scrollTop : 0;
+    });
+    var prevActive = document.activeElement;
+    var prevFocusId = (prevActive && prevActive.id) ? prevActive.id : '';
+    var prevRowId = (prevActive && prevActive.getAttribute) ? (prevActive.getAttribute('data-id') || '') : '';
+    var prevRowKind = (prevActive && prevActive.getAttribute) ? (prevActive.getAttribute('data-kind') || '') : '';
+
     renderTelemetry();
     renderCapabilitiesTable();
     renderProfileStudio();
@@ -258,8 +274,23 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
         if (typeof showInspectorBgUpdateBanner === 'function') {
           showInspectorBgUpdateBanner();
         }
-      } else {
+      } else if (inspectorMode !== 'edit') {
         renderInspector();
+      }
+    }
+
+    scrollTargets.forEach(function(node, idx) {
+      if (node) node.scrollTop = savedScrolls[idx];
+    });
+    if (inspectorMode !== 'edit' && document.activeElement === document.body) {
+      var restoredFocus = null;
+      if (prevFocusId) {
+        restoredFocus = el(prevFocusId);
+      } else if (prevRowId && prevRowKind) {
+        restoredFocus = document.querySelector('tr.row-interactive[data-kind="' + prevRowKind + '"][data-id="' + prevRowId.replace(/"/g, '') + '"]');
+      }
+      if (restoredFocus && typeof restoredFocus.focus === 'function') {
+        try { restoredFocus.focus({ preventScroll: true }); } catch (e) {}
       }
     }
   }
@@ -306,6 +337,7 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
       'rebind-memory-ast': dict.actRebindMemory,
       'open-editor': dict.actOpenEditor,
       'create-preference': dict.actCreatePreference,
+      'create-memory': dict.actCreateMemory,
       'sync-profile': dict.actSyncProfile,
       'import-profile-markdown': dict.actImportProfile,
       'undo-preference': dict.actUndoPreference
@@ -318,7 +350,7 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
     var code = res && res.code ? String(res.code) : '';
     var rawErr = res && res.error ? String(res.error) : '';
     var details = (res && res.details) || {};
-    if (code === 'ERR_PROFILE_BUDGET_EXCEEDED') {
+    if (code === 'ERR_PROFILE_BUDGET_EXCEEDED' || code === 'ERR_MENU_BUDGET_EXCEEDED') {
       var maxP = details.maxTokens || (snapshot.userProfile && snapshot.userProfile.maxTokens) || 800;
       return dict.errProfileBudgetFriendly.replace('{max}', String(maxP));
     }
@@ -327,8 +359,38 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
       var maxC = details.maxTokens || getMaxCoreRuleTokens();
       return dict.errCoreBudgetFriendly.replace('{cur}', String(curC)).replace('{max}', String(maxC));
     }
-    if (code === 'ERR_DUPLICATE_CAPABILITY') {
+    if (code === 'ERR_DUPLICATE_CAPABILITY' || code === 'ERR_PREFERENCE_CONFLICT') {
       return dict.errDuplicateFriendly;
+    }
+    if (code === 'ERR_SECURITY_VIOLATION') {
+      return dict.errSecurityFriendly;
+    }
+    if (
+      code === 'ERR_RULE_CONTAINS_DOMAIN_NUMBERS' ||
+      code === 'ERR_RULE_COUPLED_TO_IDENTIFIERS' ||
+      code === 'ERR_POINT_BUG_CASE_LOG' ||
+      code === 'ERR_SCOPE_TOO_NARROW' ||
+      code === 'ERR_INSUFFICIENT_TRANSFER_SCENARIOS'
+    ) {
+      return dict.errDesymbolFriendly;
+    }
+    if (code === 'ERR_SYNTAX_CHECK' || code === 'ERR_SANDBOX_SELF_TEST') {
+      return dict.errSelfTestFriendly;
+    }
+    if (code === 'ERR_SYMBOL_NOT_FOUND') {
+      return dict.errAstGroundingFriendly;
+    }
+    if (code === 'ERR_SCOPED_BUCKET_FULL') {
+      return dict.errScopedBucketFriendly;
+    }
+    if (code === 'ERR_CONFOUNDED_CAUSATION') {
+      return dict.errConfoundedFriendly;
+    }
+    if (code === 'ERR_INVALID_SCHEMA') {
+      return dict.errSchemaFriendly;
+    }
+    if (code === 'ERR_MISSING_AST_SYMBOL') {
+      return dict.errMissingAstSymbolFriendly;
     }
     if (code === 'NOT_FOUND' || /^Not Found:/i.test(rawErr)) {
       return dict.errNotFoundFriendly;
@@ -570,7 +632,7 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
     var dict = i18n[lang] || i18n.en;
     var archivePayload = { kind: sKind, id: itemId };
     if (itemTier) archivePayload.tier = itemTier;
-    callKernelAction('archive-item', archivePayload).then(function(res) {
+    return callKernelAction('archive-item', archivePayload).then(function(res) {
       if (res.ok) {
         if (res.snapshot) snapshot = res.snapshot;
         if (selectedCapability && selectedCapability.item && selectedCapability.item.id === itemId) {
@@ -587,7 +649,7 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
               if (rRes.ok) {
                 if (rRes.snapshot) snapshot = rRes.snapshot;
                 rerenderAllViews();
-                showToast('success', (lang === 'zh' ? '已恢复 ' : 'Restored ') + itemId);
+                showToast('success', (i18n[lang] || i18n.en).restoredToast.replace('{id}', itemId));
               } else if (!rRes.offlineExport) {
                 showActionError(rRes, dict.errRestoreFailed);
               }
@@ -597,6 +659,7 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
       } else if (!res.offlineExport) {
         showActionError(res, dict.errArchiveFailed);
       }
+      return res;
     });
   }
 
@@ -604,6 +667,12 @@ export function renderClientScript(snapshot: any, options: ClientScriptRenderOpt
   // VIEW SWITCHER & NAVIGATION
   // ==========================================
   function switchView(viewName) {
+    if (viewName !== currentView && inspectorMode === 'edit' && editorDirty && typeof confirmDiscardDraft === 'function') {
+      confirmDiscardDraft(function() {
+        switchView(viewName);
+      });
+      return;
+    }
     currentView = viewName;
     var btnList = document.querySelectorAll('.nav-item');
     var targetBtn = null;
@@ -759,9 +828,10 @@ ${PROFILE_CLIENT_SCRIPT}
       });
     }
 
-    // Group 3: Global Actions
-    var globalCmds = [
-      {
+    // Group 3: Global Actions (filter live-only commands out of static read-only HTML exports)
+    var globalCmds = [];
+    if (!isExport || vscodeApi) {
+      globalCmds.push({
         title: dict.cmdVerifyTitle,
         sub: dict.cmdVerifySub,
         run: function() {
@@ -770,13 +840,22 @@ ${PROFILE_CLIENT_SCRIPT}
             if (res.ok && res.snapshot) {
               snapshot = res.snapshot;
               rerenderAllViews();
-              showToast('success', lang === 'zh' ? '已完成全部 AST 记忆校验' : 'Verified AST memories');
+              showToast('success', lang === 'zh' ? '已完成全部代码链接校验' : 'Verified all linked code');
             } else if (!res.offlineExport) {
-              showToast('error', res.error || dict.errVerifyFailed);
+              showActionError(res, dict.errVerifyFailed);
             }
           });
         }
-      },
+      });
+      globalCmds.push({
+        title: dict.cmdExportTitle,
+        sub: dict.cmdExportSub,
+        run: function() {
+          openExportPopover();
+        }
+      });
+    }
+    globalCmds = globalCmds.concat([
       {
         title: dict.cmdSwitchCapsTitle,
         sub: dict.cmdSwitchCapsSub,
@@ -811,7 +890,7 @@ ${PROFILE_CLIENT_SCRIPT}
           applyI18n();
         }
       }
-    ];
+    ]);
 
     var filteredCmds = globalCmds.filter(function(gc) {
       return !q || gc.title.toLowerCase().indexOf(q) !== -1 || gc.sub.toLowerCase().indexOf(q) !== -1;
@@ -885,6 +964,11 @@ ${PROFILE_CLIENT_SCRIPT}
     updateServerStatusUi(sseOffline);
     if (el('btn-export-label')) el('btn-export-label').textContent = dict.exportBtn;
     if (el('btn-export-html')) el('btn-export-html').title = dict.exportBtnTitle;
+    if (el('export-popover-title')) el('export-popover-title').textContent = dict.exportChoiceTitle;
+    if (el('export-anon-title')) el('export-anon-title').textContent = dict.exportAnonOpt;
+    if (el('export-anon-desc')) el('export-anon-desc').textContent = dict.exportAnonDesc;
+    if (el('export-full-title')) el('export-full-title').textContent = dict.exportFullOpt;
+    if (el('export-full-desc')) el('export-full-desc').textContent = dict.exportFullDesc;
 
     if (el('sse-disconnect-msg')) el('sse-disconnect-msg').textContent = dict.sseDisconnectedMsg;
     if (el('btn-sse-reconnect')) el('btn-sse-reconnect').textContent = dict.sseReconnectBtn;
@@ -962,14 +1046,20 @@ ${PROFILE_CLIENT_SCRIPT}
         if (catOpts[o.value]) o.textContent = catOpts[o.value];
       });
     }
-    ['profile-inp-always-on', 'profile-import-always-on'].forEach(function(selId) {
-      var modeSel = el(selId);
-      if (modeSel) {
-        modeSel.querySelectorAll('option').forEach(function(o) {
-          o.textContent = o.value === 'false' ? dict.profileModeOnDemand : dict.profileModeAlwaysOn;
-        });
-      }
-    });
+    var inpModeSel = el('profile-inp-always-on');
+    if (inpModeSel) {
+      inpModeSel.querySelectorAll('option').forEach(function(o) {
+        o.textContent = o.value === 'false' ? dict.profileModeOnDemand : dict.profileModeAlwaysOn;
+      });
+    }
+    var importModeSel = el('profile-import-always-on');
+    if (importModeSel) {
+      importModeSel.querySelectorAll('option').forEach(function(o) {
+        if (o.value === 'auto') o.textContent = dict.profileImportModeAuto;
+        else if (o.value === 'on-demand' || o.value === 'false') o.textContent = dict.profileModeOnDemand;
+        else o.textContent = dict.profileModeAlwaysOn;
+      });
+    }
     if (el('btn-profile-save')) el('btn-profile-save').textContent = dict.profileCreateSubmit;
     if (el('btn-profile-cancel')) el('btn-profile-cancel').textContent = dict.cancel;
     if (el('profile-import-title')) el('profile-import-title').textContent = dict.profileImportTitle;
@@ -1084,7 +1174,10 @@ ${PROFILE_CLIENT_SCRIPT}
     renderHotspotsTable();
     renderGatekeeperStream();
     if (currentView === 'topology') renderCardTopology();
-    if (selectedCapability) renderInspector();
+    // P0.7: Preserve dirty inline editor drafts when toggling interface language
+    if (selectedCapability && !(inspectorMode === 'edit' && editorDirty)) {
+      renderInspector();
+    }
     if (cmdPaletteOpen && el('cmd-palette-input')) {
       updateCommandPaletteResults(el('cmd-palette-input').value);
     }
@@ -1106,9 +1199,16 @@ ${PROFILE_CLIENT_SCRIPT}
 
   // 1.5 Left Rail & Top Strip Interactive KPI Cards (Health Diagnostics & Core Budget)
   function toggleHealthDiagnostics() {
-    healthDiagExpanded = !healthDiagExpanded;
-    switchView('capabilities');
-    renderHealthDiagnosticsBanner();
+    var runToggle = function() {
+      healthDiagExpanded = !healthDiagExpanded;
+      switchView('capabilities');
+      renderHealthDiagnosticsBanner();
+    };
+    if (currentView !== 'capabilities' && inspectorMode === 'edit' && editorDirty && typeof confirmDiscardDraft === 'function') {
+      confirmDiscardDraft(runToggle);
+      return;
+    }
+    runToggle();
   }
 
   var bentoHealth = el('bento-health');
@@ -1343,12 +1443,25 @@ ${PROFILE_CLIENT_SCRIPT}
       var dict = i18n[lang] || i18n.en;
       runWithButtonLock(btnBatchPauseStale, dict.savingLabel, function() {
         return callKernelAction('toggle-enabled', { items: staleList, enabled: false }).then(function(res) {
+          var d = i18n[lang] || i18n.en;
           if (res && res.ok) {
             if (res.snapshot) snapshot = res.snapshot;
             rerenderAllViews();
-            showToast('success', (lang === 'zh' ? '已搁置 ' : 'Paused ') + staleList.length + (lang === 'zh' ? ' 条失效记忆' : ' stale memories'));
+            var pausedItemsCopy = staleList.slice();
+            showToast('success', d.batchPausedToast.replace('{n}', String(pausedItemsCopy.length)), 8000, {
+              label: d.undoActionLabel,
+              run: function() {
+                callKernelAction('toggle-enabled', { items: pausedItemsCopy, enabled: true }).then(function(r2) {
+                  if (r2 && r2.ok) {
+                    if (r2.snapshot) snapshot = r2.snapshot;
+                    rerenderAllViews();
+                    showToast('success', (i18n[lang] || i18n.en).profileUndoneToast);
+                  }
+                });
+              }
+            });
           } else if (!res || !res.offlineExport) {
-            showActionError(res, dict.errToggleFailed);
+            showActionError(res, d.errToggleFailed);
           }
         });
       });
@@ -1418,23 +1531,56 @@ ${PROFILE_CLIENT_SCRIPT}
         closeCommandPalette();
         return;
       }
+      var expPopEsc = el('export-popover');
+      if (expPopEsc && expPopEsc.style.display !== 'none') {
+        e.preventDefault();
+        closeExportPopover();
+        return;
+      }
+      var approveBarEsc = el('batch-approve-confirm-bar');
+      if (approveBarEsc && approveBarEsc.style.display !== 'none') {
+        e.preventDefault();
+        approveBarEsc.style.display = 'none';
+        approveBarEsc.innerHTML = '';
+        return;
+      }
+      var hsDrawerEsc = el('hotspot-mem-drawer');
+      if (hsDrawerEsc && hsDrawerEsc.classList.contains('open')) {
+        e.preventDefault();
+        hsDrawerEsc.classList.remove('open');
+        hsDrawerEsc.innerHTML = '';
+        return;
+      }
       var activeElForEsc = document.activeElement;
-      if (activeElForEsc && (activeElForEsc.tagName === 'TEXTAREA' || activeElForEsc.tagName === 'INPUT')) {
+      if (activeElForEsc && (activeElForEsc.tagName === 'TEXTAREA' || activeElForEsc.tagName === 'INPUT' || activeElForEsc.tagName === 'SELECT')) {
         if (typeof activeElForEsc.blur === 'function') activeElForEsc.blur();
+        return;
+      }
+      var profEdEsc = el('profile-editor-panel');
+      if (profEdEsc && profEdEsc.classList.contains('open')) {
+        e.preventDefault();
+        profEdEsc.classList.remove('open');
+        editingProfilePrefId = null;
+        return;
+      }
+      var profImpEsc = el('profile-import-panel');
+      if (profImpEsc && profImpEsc.classList.contains('open')) {
+        e.preventDefault();
+        profImpEsc.classList.remove('open');
         return;
       }
       if (inspectorMode === 'edit' && editorDirty && typeof confirmDiscardDraft === 'function') {
         e.preventDefault();
         confirmDiscardDraft(function() {
-          var inspEl2 = el('right-inspector');
-          if (inspEl2) inspEl2.classList.remove('open');
-          if (selectedCapability) {
-            selectedCapability = null;
-            inspectorMode = 'preview';
-            renderInspector();
-            renderCapabilitiesTable();
-          }
+          inspectorMode = 'preview';
+          renderInspector();
         });
+        return;
+      }
+      if (inspectorMode === 'edit') {
+        e.preventDefault();
+        inspectorMode = 'preview';
+        renderInspector();
         return;
       }
       var inspEl = el('right-inspector');
@@ -1499,36 +1645,100 @@ ${PROFILE_CLIENT_SCRIPT}
     });
   }
 
+  function closeExportPopover() {
+    var pop = el('export-popover');
+    var trigger = el('btn-export-html');
+    if (pop) pop.style.display = 'none';
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  }
+
+  function openExportPopover() {
+    var dict = i18n[lang] || i18n.en;
+    if (isExport && !vscodeApi) {
+      showToast('info', dict.exportViewingToast);
+      return;
+    }
+    var pop = el('export-popover');
+    var trigger = el('btn-export-html');
+    if (pop) {
+      pop.style.display = 'flex';
+      if (trigger) trigger.setAttribute('aria-expanded', 'true');
+    } else {
+      triggerHtmlExport(true);
+    }
+  }
+
+  function triggerHtmlExport(exportAnonFlag) {
+    closeExportPopover();
+    var dict = i18n[lang] || i18n.en;
+    if (isExport && !vscodeApi) {
+      showToast('info', dict.exportViewingToast);
+      return;
+    }
+    if (vscodeApi) {
+      callKernelAction('export-html', { anon: Boolean(exportAnonFlag) }).then(function(res) {
+        if (res.ok) {
+          if (res.data && res.data.cancelled) return;
+          var outPathVal = (res.data && res.data.path) || (res.result && res.result.path) || '';
+          showToast('success', (lang === 'zh' ? '已导出独立 HTML 快照' : 'Exported standalone HTML') + (outPathVal ? ': ' + outPathVal : ''));
+        } else if (res.error && res.error !== 'Export cancelled') {
+          showToast('error', res.error || dict.exportFailedToast);
+        }
+      });
+      return;
+    }
+    if (token) {
+      var dlUrl = '/api/export?token=' + encodeURIComponent(token) + '&anon=' + (exportAnonFlag ? '1' : '0');
+      var fileName = 'evo-workbench-' + (exportAnonFlag ? 'shareable-' : 'full-') + new Date().toISOString().slice(0, 10) + '.html';
+      fetch(dlUrl)
+        .then(function(resp) {
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          return resp.text();
+        })
+        .then(function(htmlText) {
+          var blob = new Blob([htmlText], { type: 'text/html;charset=utf-8' });
+          var blobUrl = URL.createObjectURL(blob);
+          var dlLink = document.createElement('a');
+          dlLink.href = blobUrl;
+          dlLink.download = fileName;
+          document.body.appendChild(dlLink);
+          dlLink.click();
+          document.body.removeChild(dlLink);
+          setTimeout(function() { try { URL.revokeObjectURL(blobUrl); } catch (e) {} }, 2000);
+          showToast('success', lang === 'zh' ? '已导出离线 HTML 快照' : 'Downloaded standalone HTML snapshot');
+        })
+        .catch(function(err) {
+          var curDict = i18n[lang] || i18n.en;
+          showToast('error', curDict.exportFailedToast + (err && err.message ? (': ' + err.message) : ''));
+        });
+      return;
+    }
+    showToast('info', dict.exportCliHintToast);
+  }
+
   var btnExport = el('btn-export-html');
   if (btnExport) {
-    btnExport.addEventListener('click', function() {
-      var dict = i18n[lang] || i18n.en;
-      if (isExport && !vscodeApi) {
-        showToast('info', dict.exportViewingToast);
-      } else if (vscodeApi) {
-        callKernelAction('export-html', {}).then(function(res) {
-          if (res.ok) {
-            if (res.data && res.data.cancelled) return;
-            var outPathVal = (res.data && res.data.path) || (res.result && res.result.path) || '';
-            showToast('success', (lang === 'zh' ? '已导出独立 HTML 报告' : 'Exported standalone HTML') + (outPathVal ? ': ' + outPathVal : ''));
-          } else if (res.error && res.error !== 'Export cancelled') {
-            showToast('error', res.error);
-          }
-        });
-      } else if (token) {
-        var dlUrl = '/api/export?token=' + encodeURIComponent(token);
-        var dlLink = document.createElement('a');
-        dlLink.href = dlUrl;
-        dlLink.download = 'evo-workbench-' + new Date().toISOString().slice(0, 10) + '.html';
-        document.body.appendChild(dlLink);
-        dlLink.click();
-        document.body.removeChild(dlLink);
-        showToast('success', lang === 'zh' ? '正在导出独立 HTML 报告...' : 'Downloading standalone HTML report...');
-      } else {
-        showToast('info', dict.exportCliHintToast);
-      }
+    btnExport.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var pop = el('export-popover');
+      if (pop && pop.style.display !== 'none') closeExportPopover();
+      else openExportPopover();
     });
   }
+  var btnExportAnon = el('btn-export-anon');
+  if (btnExportAnon) {
+    btnExportAnon.addEventListener('click', function() { triggerHtmlExport(true); });
+  }
+  var btnExportFull = el('btn-export-full');
+  if (btnExportFull) {
+    btnExportFull.addEventListener('click', function() { triggerHtmlExport(false); });
+  }
+  document.addEventListener('click', function(e) {
+    var wrap = el('export-menu-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+      closeExportPopover();
+    }
+  });
 
   // 7. Live SSE Server Updates, Auto-Reconnect & Static Snapshot Badge (S2.5)
   function refreshSnapshotFromServer() {
@@ -1553,7 +1763,16 @@ ${PROFILE_CLIENT_SCRIPT}
     var label = el('server-status-text');
     var statusWrap = el('server-status-dot');
     var sseBanner = el('sse-disconnect-banner');
-    if (isExport && !vscodeApi) {
+    if (vscodeApi) {
+      if (dot) {
+        dot.classList.remove('offline', 'reconnecting', 'snapshot');
+      }
+      if (label) label.textContent = dict.serverIdeSync;
+      if (statusWrap) statusWrap.title = dict.serverIdeSyncTitle;
+      if (sseBanner) sseBanner.style.display = 'none';
+      return;
+    }
+    if (isExport) {
       if (dot) {
         dot.classList.remove('offline', 'reconnecting');
         dot.classList.add('snapshot');

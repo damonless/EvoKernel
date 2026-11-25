@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { buildUiSnapshot, exportUiHtml } from '../cli/ui.js';
 import type { UiSnapshot } from '../cli/ui.js';
 import { renderUiClientHtml } from '../templates/ui-client.js';
-import { findNearestEvoWorkspace, hasValidEvoStructure } from '../core/storage.js';
+import { findNearestEvoWorkspace, hasValidEvoStructure, resolveGlobalFallbackDir } from '../core/storage.js';
 import { isRealSubpathOf } from '../core/memory.js';
 import { syncManagedRuleBlocks } from '../cli/init.js';
 import { executeWorkbenchAction } from '../core/workbench-actions.js';
@@ -366,7 +366,7 @@ export async function handleWebviewAction(
         await vscode.window.showTextDocument(doc, {
           selection,
           preview: false,
-          viewColumn: vscode?.ViewColumn?.One ?? 1,
+          viewColumn: vscode?.ViewColumn?.Beside ?? -2,
         });
 
         return { opened: targetPath, line, editor: 'vscode-api', launched: true };
@@ -400,10 +400,17 @@ export async function handleWebviewAction(
           outPath = path.join(targetWs, defaultExportFilename);
         }
         const exportAnon = exportParams?.anon === false ? false : true;
-        exportUiHtml(targetWs, outPath, { anon: exportAnon });
+        try {
+          exportUiHtml(targetWs, outPath, { anon: exportAnon });
+        } catch (exportErr: any) {
+          return {
+            status: 500,
+            body: { ok: false, error: `Export failed: ${exportErr?.message || 'unable to write file'}` },
+          };
+        }
         return {
           status: 200,
-          body: { ok: true, data: { path: outPath, exportedPath: outPath } },
+          body: { ok: true, data: { path: outPath, exportedPath: outPath, anon: exportAnon } },
         };
       },
     });
@@ -487,6 +494,25 @@ export async function activate(
         activePanelWatchers.push(w);
       } catch {}
     }
+    const globalRoot = path.resolve(resolveGlobalFallbackDir());
+    const globalEvoDir = path.join(globalRoot, '.evo');
+    if (globalRoot !== path.resolve(wsRoot) && fs.existsSync(globalEvoDir)) {
+      try {
+        const gw = fs.watch(globalEvoDir, { recursive: true }, (_e, f) => {
+          if (!f) {
+            scheduleSnapshotPush();
+            return;
+          }
+          const norm = String(f).replace(/\\/g, '/');
+          if (norm.startsWith('.cache') || norm.includes('telemetry.db')) {
+            return;
+          }
+          scheduleSnapshotPush();
+        });
+        gw.on('error', () => {});
+        activePanelWatchers.push(gw);
+      } catch {}
+    }
     const gitHead = path.join(wsRoot, '.git', 'HEAD');
     if (fs.existsSync(gitHead)) {
       try {
@@ -495,6 +521,26 @@ export async function activate(
         activePanelWatchers.push(w);
       } catch {}
     }
+    try {
+      const snap = buildUiSnapshot(wsRoot);
+      const watchedFiles = new Set<string>();
+      for (const m of snap.memories || []) {
+        for (const d of Object.values(m.ast_fingerprints || {}) as any[]) {
+          const rel = d?.file_path || d?.file;
+          if (rel) {
+            const full = path.resolve(wsRoot, rel);
+            if (fs.existsSync(full) && !watchedFiles.has(full)) {
+              watchedFiles.add(full);
+              try {
+                const fw = fs.watch(full, () => scheduleSnapshotPush());
+                fw.on('error', () => {});
+                activePanelWatchers.push(fw);
+              } catch {}
+            }
+          }
+        }
+      }
+    } catch {}
   };
 
   const syncResolvedWorkspace = (

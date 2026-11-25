@@ -377,7 +377,14 @@ export function parseMarkdownToPreferenceCandidates(
       }
     }
 
-    // Optional [on-demand] / (trigger: ...) markers
+    // Optional [always-on] / [on-demand] / (trigger: ...) markers
+    let explicitAlwaysOn = false;
+    const alwaysOnPrefix = text.match(/^\[always-on\]\s*(.+)$/i);
+    if (alwaysOnPrefix) {
+      explicitAlwaysOn = true;
+      alwaysOn = true;
+      text = alwaysOnPrefix[1].trim();
+    }
     const onDemandPrefix = text.match(/^\[on-demand\]\s*(.+)$/i);
     if (onDemandPrefix) {
       alwaysOn = false;
@@ -392,6 +399,15 @@ export function parseMarkdownToPreferenceCandidates(
 
     const cleanBody = text.replace(/\s+/g, ' ').trim();
     if (!cleanBody || cleanBody.length < 4) continue;
+
+    // Match chat & CLI `profile add` behavior: infer situational on-demand rules when no explicit marker was given
+    if (!explicitAlwaysOn && alwaysOn && !triggerCue) {
+      const situational = inferSituationalOnDemand(cleanBody);
+      if (!situational.alwaysOn) {
+        alwaysOn = false;
+        triggerCue = situational.triggerCue;
+      }
+    }
 
     const dedupKey = cleanBody.toLowerCase();
     if (seenNormalizedContent.has(dedupKey)) {

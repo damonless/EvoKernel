@@ -10,7 +10,7 @@ import type {
   SymbolFingerprint,
   TopologyAnchor,
 } from '../types.js';
-import { EvoStorage, sanitizeId } from '../storage.js';
+import { EvoStorage, hasValidEvoStructure, sanitizeId } from '../storage.js';
 import { EvoTelemetry } from '../telemetry.js';
 import type { GitHeadSnapshot } from './git-utils.js';
 import {
@@ -2530,19 +2530,27 @@ export function extractSymbolsFromGitCommit(
 
 export function refreshMemories(
   workspaceRoot: string,
-  targetIds?: string[]
+  targetIdsOrOptions?: string[] | { dryRun?: boolean },
+  options?: { dryRun?: boolean }
 ): {
   refreshed: string[];
   skippedMissing: Array<{ id: string; missingSymbols: string[] }>;
   unchanged: string[];
 } {
+  const targetIds = Array.isArray(targetIdsOrOptions) ? targetIdsOrOptions : undefined;
+  const resolvedOptions = Array.isArray(targetIdsOrOptions)
+    ? options
+    : (targetIdsOrOptions || options);
+  const dryRun = Boolean(resolvedOptions?.dryRun);
   const root = path.resolve(workspaceRoot);
   const storage = new EvoStorage(root);
-  storage.ensureInitialized();
+  if (!dryRun) {
+    storage.ensureInitialized();
+  }
   const currentCommit = resolveCurrentGitCommit(root);
   const currentBranch = resolveCurrentGitBranch(root);
 
-  let memories = storage.listMemories();
+  let memories = hasValidEvoStructure(storage.evoDir) ? storage.listMemories() : [];
   if (targetIds && targetIds.length > 0) {
     const filterSet = new Set(targetIds);
     memories = memories.filter((m) => filterSet.has(m.id));
@@ -2561,10 +2569,12 @@ export function refreshMemories(
 
       if (memory.memory_type === 'personal') {
         if (hasSelfRefSupersedes || Object.keys(memory.ast_fingerprints || {}).length > 0) {
-          if (hasSelfRefSupersedes) memory.supersedes_id = undefined;
-          memory.ast_fingerprints = {};
-          memory.updated_at = new Date().toISOString();
-          storage.saveMemory(memory);
+          if (!dryRun) {
+            if (hasSelfRefSupersedes) memory.supersedes_id = undefined;
+            memory.ast_fingerprints = {};
+            memory.updated_at = new Date().toISOString();
+            storage.saveMemory(memory);
+          }
           refreshed.push(memory.id);
         } else {
           unchanged.push(memory.id);
@@ -2659,23 +2669,25 @@ export function refreshMemories(
       }
 
       if (differs) {
-        if (hasSelfRefSupersedes) {
-          memory.supersedes_id = undefined;
+        if (!dryRun) {
+          if (hasSelfRefSupersedes) {
+            memory.supersedes_id = undefined;
+          }
+          memory.ast_fingerprints = newFingerprints;
+          memory.created_commit = currentCommit;
+          if (currentBranch) {
+            memory.created_branch = currentBranch;
+          }
+          memory.updated_at = new Date().toISOString();
+          storage.saveMemory(memory);
         }
-        memory.ast_fingerprints = newFingerprints;
-        memory.created_commit = currentCommit;
-        if (currentBranch) {
-          memory.created_branch = currentBranch;
-        }
-        memory.updated_at = new Date().toISOString();
-        storage.saveMemory(memory);
         refreshed.push(memory.id);
       } else {
         unchanged.push(memory.id);
       }
     }
 
-    if (refreshed.length > 0) {
+    if (!dryRun && refreshed.length > 0) {
       clearMemoryVerificationCache();
       telemetry = new EvoTelemetry(storage);
       telemetry.syncFromDisk();

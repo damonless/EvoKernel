@@ -733,6 +733,7 @@ describe('EvoKernel v0.5 User Cognition & Defect Regression Suite (100% Hermetic
         l0_summary: '结构化指标必须使用 Markdown 表格排版',
         category: 'formatting',
         always_on: true,
+        auto_resolve: false,
         content: '必须使用 Markdown 表格输出结构化信息。',
       });
       assert.strictEqual(conflictRes.isError, true);

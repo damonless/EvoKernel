@@ -6,9 +6,9 @@ import { EvoMcpDispatcher, META_MCP_TOOLS } from './handlers.js';
 
 export const MCP_INSTRUCTIONS =
   'EvoKernel Meta-Rules (Project & Cross-Workspace Personal Cognition):\n' +
-  '1. Search before act: Call evo_search(query, workspace) before reading/editing unfamiliar files or debugging errors; in non-code/blank/writing chats, call evo_search(query, scope: "global") without workspace to recall personal habits, workflows, and experiences.\n' +
+  '1. Search before act: Call evo_search(query, workspace) before reading/editing unfamiliar files or debugging errors; in non-code/blank/writing chats, call evo_search(query, scope: "global") without workspace to recall personal habits, workflows, and experiences. Apply recalled rules/habits silently without noisy per-turn banners.\n' +
   '2. Progressive inspect: On rule/skill/memory/preference hit (including Task Directory cues), call evo_inspect(id, "L2") to load full SOP/anchors before proceeding.\n' +
-  '3. Mandatory crystallization & Undo: After verifying a fix, diagnosing a root cause, or receiving user style/workflow/requirement corrections, call evo_propose(...) — for preferences, evo_propose(kind: "preference", content: "...") auto-infers id/title/category and returns human_receipt; call evo_propose(undo: true) to revert in chat. Emit receipt: `🧬 EvoKernel Evolution Receipt: [<kind>] <id> (<summary>)`.';
+  '3. Mandatory crystallization & Undo: After verifying a fix, diagnosing a root cause, or receiving user style/workflow/requirement corrections, call evo_propose(...) — it auto-infers id/title/summary, auto-resolves preference conflicts/budget atomically, and returns a plain `human_receipt` to relay concisely. Call evo_propose(undo: true) to revert any change in chat.';
 
 function parseUriToPath(uriStr: string): string | null {
   try {

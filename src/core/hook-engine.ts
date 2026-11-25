@@ -7,17 +7,29 @@ import type { CapabilityOutcome, RecalledCapabilityEntry } from './types.js';
 
 export { EvoStorage, EvoTelemetry };
 
+// Strip fenced code blocks, inline code, SQL/HTML/CSS/JSON table/format mentions so code discussions
+// do not false-trigger global personal style preference capture.
+function stripCodeContextForStyleDetection(raw: string): string {
+  return String(raw || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`\n]+`/g, ' ')
+    .replace(/\b(?:sql|mysql|postgres|sqlite|dynamodb|html|css|dom|react|vue|tailwind|prettier|eslint|json|csv|xlsx|alter|create|drop|select|join)\s+(?:tables?|format(?:ting)?|layout|concise)\b/gi, ' ')
+    .replace(/\b(?:database|db|hash|lookup|routing|pivot|symbol|virtual|data)\s+tables?\b/gi, ' ')
+    .replace(/\b(?:date|time|string|number|json|yaml|xml|file|log|url|iso)\s+format(?:ting)?\b/gi, ' ')
+    .replace(/(?:数据库|数据|哈希|路由|查询|渲染|前端|页面|组件|SQL|HTML|CSS|Excel)[^\n。！？；;,.]{0,8}(?:表格|排版|格式)/gi, ' ');
+}
+
 export const BILINGUAL_STYLE_REGEX =
-  /(?:太啰嗦|稍微精简|精简|大白话|不要(?:用)?表格|不美观|排版|格式不对|格式有误|语言风格|文风|太详细|吃力|费劲|concise|too verbose|plain language|no tables|bullet points)/i;
+  /(?:太啰嗦|稍微精简|精简(?:一点|一些|回复|回答|输出)|大白话|不要(?:用)?表格|别用表格|不用表格|回复[^\n。]{0,10}(?:排版|格式|太详细|精简)|不美观|(?:回复|回答|输出)[^\n。]{0,6}(?:格式不对|格式有误)|语言风格|文风|太详细|读起来(?:吃力|费劲)|看(?:起来)?(?:吃力|费劲)|(?:be|more|keep(?:\s+it)?)\s+concise\b|(?:reply|answer|respond|write)\s+concisely\b|too\s+verbose\b|plain\s+language\b|(?:no|never\s+use|don't\s+use|do\s+not\s+use|avoid(?:\s+using)?)\s+(?:markdown\s+)?tables?\b|(?:use|prefer|reply\s+with)\s+bullet\s+points?\b)/i;
 
 export const BILINGUAL_WORKFLOW_REQUIREMENT_REGEX =
-  /(?:以后都按这个流程|记住我的要求|每次写周报|汇报标准|以后都这样|from now on|remember my requirement|always follow this workflow|report format|my standard)/i;
+  /(?:以后都按这个流程|记住我的要求|每次写周报|汇报标准|以后都这样|from now on|remember my requirement|always follow this workflow|my report format|my standard)/i;
 
 export const BILINGUAL_PERSONAL_EXPERIENCE_REGEX =
   /(?:记住这个经验|个人经验|我的经验|个人笔记|踩过的坑|教训|以后记住|记下来|个人备忘|personal experience|remember this lesson|lesson learned|my note|personal note|note to self|keep this in mind|personal memory|remember for future)/i;
 
 export const CORRECTION_REGEX =
-  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|精简|大白话|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|格式不对|格式有误|排版|语言风格|文风|以后都这样|不要(?:用)?表格|以后都按这个流程|记住我的要求|每次写周报|汇报标准|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|in fact[\s,]|concise|too verbose|plain language|no tables|bullet points|from now on|remember my requirement|always follow this workflow|report format|my standard)/i;
+  /(?:不对|错了|还是有|乱码|漏了|为什么(?:把|会|没|要|不|是)|怎么会|难道不是|不就是|不是吗|这么理解对吗|@\[Quote\]|已经确认|实测.*(?:发现|却是|不对|不行)|实际.*(?:显示|追不上|掉|不对|不行|却是)|但(?:实验室|实际|现场)|(?:分析|前面的)?推断是否合理|重新核实|怎么回事|我不是说了|不一致|重新检查|没改对|不生效|回退|不要把|只有一半|显示不全|稍微精简|精简一些|精简(?:一点|回复|回答)|大白话|太详细|太啰嗦|吃力|费劲|不美观|不要冲突|不要重复|重写|重新整理|调整一下|换一种|(?:回复|输出|文档)?格式不对|(?:回复|输出|文档)?格式有误|语言风格|文风|以后都这样|不要(?:用)?表格|别用表格|以后都按这个流程|记住我的要求|每次写周报|汇报标准|you broke|still broken|that's wrong|incorrect|regression|why would|isn't it|shouldn't it|confirmed that|in fact[\s,]|(?:be|more|keep(?:\s+it)?)\s+concise\b|(?:reply|answer|respond|write)\s+concisely\b|too\s+verbose\b|plain\s+language\b|(?:no|never\s+use|don't\s+use|do\s+not\s+use|avoid(?:\s+using)?)\s+(?:markdown\s+)?tables?\b|(?:use|prefer|reply\s+with)\s+bullet\s+points?\b|from now on|remember my requirement|always follow this workflow|my report format|my standard)/i;
 
 export interface ConversationEvolutionSignals {
   hasCorrection: boolean;
@@ -27,6 +39,7 @@ export interface ConversationEvolutionSignals {
   shouldRemindPreference: boolean;
   shouldRemindGlobalMemory: boolean;
   matchedTriggers: string[];
+  lang?: 'zh' | 'en';
 }
 
 export function detectConversationEvolutionSignals(text: string): ConversationEvolutionSignals {
@@ -39,14 +52,17 @@ export function detectConversationEvolutionSignals(text: string): ConversationEv
       shouldRemindPreference: false,
       shouldRemindGlobalMemory: false,
       matchedTriggers: [],
+      lang: 'en',
     };
   }
 
-  const hasStyleCorrection = BILINGUAL_STYLE_REGEX.test(text);
-  const hasWorkflowRequirement = BILINGUAL_WORKFLOW_REQUIREMENT_REGEX.test(text);
-  const hasPersonalExperience = BILINGUAL_PERSONAL_EXPERIENCE_REGEX.test(text);
+  const proseOnly = stripCodeContextForStyleDetection(text);
+  const hasCjk = /[\u4e00-\u9fff]/.test(proseOnly || text);
+  const hasStyleCorrection = BILINGUAL_STYLE_REGEX.test(proseOnly);
+  const hasWorkflowRequirement = BILINGUAL_WORKFLOW_REQUIREMENT_REGEX.test(proseOnly);
+  const hasPersonalExperience = BILINGUAL_PERSONAL_EXPERIENCE_REGEX.test(proseOnly);
   const hasCorrection =
-    CORRECTION_REGEX.test(text) || hasStyleCorrection || hasWorkflowRequirement;
+    CORRECTION_REGEX.test(proseOnly) || hasStyleCorrection || hasWorkflowRequirement;
 
   const matchedTriggers: string[] = [];
   if (hasCorrection) matchedTriggers.push('correction');
@@ -62,6 +78,7 @@ export function detectConversationEvolutionSignals(text: string): ConversationEv
     shouldRemindPreference: hasStyleCorrection || hasWorkflowRequirement,
     shouldRemindGlobalMemory: hasPersonalExperience,
     matchedTriggers,
+    lang: hasCjk ? 'zh' : 'en',
   };
 }
 
@@ -69,6 +86,7 @@ export function buildPreferenceEvolutionHint(
   signals: ConversationEvolutionSignals | null | undefined
 ): string {
   if (!signals) return '';
+  const isZh = signals.lang !== 'en';
   const parts: string[] = [];
   if (
     signals.hasStyleCorrection ||
@@ -76,15 +94,19 @@ export function buildPreferenceEvolutionHint(
     signals.shouldRemindPreference
   ) {
     parts.push(
-      '若涉及跨项目通用的个人表达/排版/格式偏好或工作流标准，请调用 evo_propose(kind: "preference", scope: "global") 沉淀至全局 Profile Card'
+      isZh
+        ? '若涉及跨项目通用的个人表达、排版或工作流习惯，请调用 evo_propose(kind: "preference", scope: "global") 记住偏好'
+        : 'If this reflects a reusable personal style, formatting, or workflow preference, call evo_propose(kind: "preference", scope: "global") to remember it'
     );
   }
   if (signals.hasPersonalExperience || signals.shouldRemindGlobalMemory) {
     parts.push(
-      '若涉及跨项目个人经验/备忘，请调用 evo_propose(kind: "memory", scope: "global") 沉淀至全局个人记忆'
+      isZh
+        ? '若涉及跨项目个人经验或备忘，请调用 evo_propose(kind: "memory", scope: "global") 记录'
+        : 'If this is a cross-workspace personal lesson or note, call evo_propose(kind: "memory", scope: "global") to save it'
     );
   }
-  return parts.join('；');
+  return parts.join(isZh ? '；' : '; ');
 }
 
 export function matchesScopeGlob(filePath: string, scopeGlob: string): boolean {

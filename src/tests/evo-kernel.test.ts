@@ -1541,7 +1541,7 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
 
       assert.equal(linkRes.linkedSharedEvoDir, path.join(masterClone, '.evo'));
       const agentsText = fs.readFileSync(path.join(siblingClone, 'AGENTS.md'), 'utf8');
-      assert.match(agentsText, /🧬 EvoKernel Evolution Receipt/);
+      assert.match(agentsText, /human_receipt|Plain Confirmation & Undo/);
 
       const siblingStorage = new EvoStorage(siblingClone);
       assert.equal(siblingStorage.rootDir, path.resolve(siblingClone));
@@ -4086,21 +4086,25 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
       const dispatcher = new EvoMcpDispatcher(ws);
 
       // Call 1 & 2: callsSinceLastPropose < 3, no reminder
-      const res1 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      const res1 = dispatcher.handleToolCall('evo_search', { workspace: ws, query: 'test rule' });
       assert.doesNotMatch(res1.content[0].text, /Uncommitted edits detected/);
 
-      const res2 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      const res2 = dispatcher.handleToolCall('evo_search', { workspace: ws, query: 'test rule' });
       assert.doesNotMatch(res2.content[0].text, /Uncommitted edits detected/);
 
       // Now introduce an uncommitted modification to a source file
       fs.writeFileSync(path.join(ws, 'dirty_source.ts'), 'export const dirty = 1;\n', 'utf8');
 
-      // Call 3: callsSinceLastPropose reaches 3 with dirty tree -> appends reminder
-      const res3 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      // evo_inspect must stay clean (P1.2: no dirty-tree nagging on read-inspect calls)
+      const inspectClean = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      assert.doesNotMatch(inspectClean.content[0].text, /Uncommitted edits detected/);
+
+      // Call 3 on evo_search: callsSinceLastPropose >= 3 with dirty tree -> appends reminder once
+      const res3 = dispatcher.handleToolCall('evo_search', { workspace: ws, query: 'test rule' });
       assert.match(res3.content[0].text, /💡 Uncommitted edits detected/);
 
-      // Call 4: dirty tree has not changed (watermark matches) -> reminder suppressed
-      const res4 = dispatcher.handleToolCall('evo_inspect', { workspace: ws, id: 'test-rule-mcp', tier: 'L1' });
+      // Call 4 on evo_search: dirty tree has not changed (watermark matches) -> reminder suppressed
+      const res4 = dispatcher.handleToolCall('evo_search', { workspace: ws, query: 'test rule' });
       assert.doesNotMatch(res4.content[0].text, /💡 Uncommitted edits detected/);
 
       // Now propose capability -> resets callsSinceLastPropose to 0
@@ -5129,20 +5133,20 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         id: 'pv-derating-headroom',
         tier: 'L2',
       });
-      assert.match(
+      assert.doesNotMatch(
         inspectAfterPropose.content[0].text,
-        /🔄 Anti-Poisoning Guard: Earlier in this session you crystallized \[.*pv-derating-headroom.*\]/,
-        'Subsequent evo_inspect in the same session must include the Anti-Poisoning Guard reminder'
+        /🔄 Anti-Poisoning Guard/,
+        'P1.2: evo_inspect stays clean without repetitive Anti-Poisoning Guard nagging (handled on evo_search)'
       );
 
       const runAfterPropose = await dispatcher.handleToolCall('evo_run', {
         workspace: ws,
         tool_id: 'xlsx-style-cloner',
       });
-      assert.match(
+      assert.doesNotMatch(
         runAfterPropose.content[0].text,
-        /🔄 Anti-Poisoning Guard: Earlier in this session you crystallized \[.*pv-derating-headroom.*\]/,
-        'Subsequent evo_run in the same session must include the Anti-Poisoning Guard reminder'
+        /🔄 Anti-Poisoning Guard/,
+        'P1.2: evo_run stays clean without repetitive Anti-Poisoning Guard nagging'
       );
 
       // Superseding pv-derating-headroom with a new ID replaces the old ID in sessionProposedIds
@@ -5158,17 +5162,16 @@ describe('EvoKernel Deterministic Self-Evolution Suite', () => {
         target_symbols: ['src/mppt.c#sDeratingChargeCurr'],
       });
       assert.equal(Boolean(supersedeNewIdRes.isError), false, supersedeNewIdRes.content[0]?.text);
-      const inspectAfterSupersede = dispatcher.handleToolCall('evo_inspect', {
+      const searchAfterSupersede = dispatcher.handleToolCall('evo_search', {
         workspace: ws,
-        id: 'pv-derating-headroom-v2',
-        tier: 'L2',
+        query: 'sDeratingChargeCurr PV power overshoot',
       });
       assert.match(
-        inspectAfterSupersede.content[0].text,
+        searchAfterSupersede.content[0].text,
         /🔄 Anti-Poisoning Guard: Earlier in this session you crystallized \[.*pv-derating-headroom-v2.*\]/
       );
       assert.doesNotMatch(
-        inspectAfterSupersede.content[0].text,
+        searchAfterSupersede.content[0].text,
         /Earlier in this session you crystallized \[[^\]]*\bpv-derating-headroom\b(?!-v2)/,
         'Superseded old ID must be removed from sessionProposedIds'
       );

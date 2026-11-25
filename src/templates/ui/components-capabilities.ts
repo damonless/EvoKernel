@@ -76,26 +76,26 @@ export function renderCapabilitiesViewsHtml(): string {
         </div>
       </section>
 
-      <!-- View 2: Orthogonal Round-Rect Card Topology -->
+      <!-- View 2: Capability & Code Map -->
       <section class="view-panel" id="view-topology">
         <div class="view-header" id="topo-view-header">
           <div class="topo-header-row">
             <div>
-              <h2 class="view-title" id="topo-view-title">Orthogonal Capability &amp; AST* Topology</h2>
-              <p class="view-subtitle" id="topo-view-sub">Rules &amp; Skills &rarr; Cognitive Memories &rarr; Source Files &amp; Callers</p>
+              <h2 class="view-title" id="topo-view-title">Capability &amp; Code Map</h2>
+              <p class="view-subtitle" id="topo-view-sub">Rules &amp; Workflows &rarr; Project Lessons &rarr; Linked Source Files</p>
             </div>
             <div class="topo-legend" id="topo-legend">
               <span class="legend-item"><span class="dot dot-ok"></span> Verified</span>
-              <span class="legend-item"><span class="dot dot-warn"></span> Branch / Contested</span>
-              <span class="legend-item"><span class="dot dot-danger"></span> Stale / Drift</span>
-              <span class="legend-hint">Hover or click node for focus dimming</span>
+              <span class="legend-item"><span class="dot dot-warn"></span> Other Branch</span>
+              <span class="legend-item"><span class="dot dot-danger"></span> Outdated</span>
+              <span class="legend-hint">Hover or click a card to focus related links</span>
             </div>
           </div>
         </div>
         <div class="topo-scroll-container" id="topo-container">
           <svg id="topology-svg" class="topology-svg" xmlns="http://www.w3.org/2000/svg"></svg>
         </div>
-        <div class="ast-footnote" id="topo-ast-footnote">* AST refers to EvoKernel's zero-dependency lexical-structural symbol &amp; body-hash fingerprint.</div>
+        <div class="ast-footnote" id="topo-ast-footnote">* Code links automatically check whether the referenced functions have changed.</div>
       </section>
 
       <!-- View 3: Git Fragile Hotspots View -->
@@ -103,8 +103,8 @@ export function renderCapabilitiesViewsHtml(): string {
         <div class="view-header" id="hotspots-view-header">
           <div class="hotspots-header-row">
             <div>
-              <h2 class="view-title" id="hotspots-view-title">Fragile Git Hotspots &amp; AST* Shielding Matrix</h2>
-              <p class="view-subtitle" id="hotspots-view-sub">High-churn files tracked by bug-fix commits and shielded by cognitive memories</p>
+              <h2 class="view-title" id="hotspots-view-title">Fragile Files &amp; Lesson Coverage</h2>
+              <p class="view-subtitle" id="hotspots-view-sub">Frequently fixed files and whether they have saved project lessons</p>
             </div>
             <div class="hotspots-header-controls">
               <input type="text" id="mem-search" class="search-input" placeholder="Filter hotspots or bound memories..." autocomplete="off" />
@@ -112,6 +112,7 @@ export function renderCapabilitiesViewsHtml(): string {
             </div>
           </div>
         </div>
+        <div id="hotspot-mem-drawer" class="hotspot-mem-drawer"></div>
         <div class="table-scroll-container">
           <table class="data-table" id="hotspots-table">
             <thead>
@@ -119,7 +120,7 @@ export function renderCapabilitiesViewsHtml(): string {
                 <th id="th-hs-path">Source File Path</th>
                 <th id="th-hs-frag">Fragility Score</th>
                 <th id="th-hs-commits">Fix Commits</th>
-                <th id="th-hs-mems">Bound AST* Shielding Memories</th>
+                <th id="th-hs-mems">Linked Project Lessons</th>
                 <th id="th-hs-status">Status</th>
                 <th id="th-hs-action">Action</th>
               </tr>
@@ -127,23 +128,23 @@ export function renderCapabilitiesViewsHtml(): string {
             <tbody id="hotspots-table-body"></tbody>
           </table>
           <div id="hotspots-empty-state" class="empty-state" style="display: none;">
-            No git commit hotspots detected. Repository history is clean.
+            No fragile hotspots detected. Repository history looks steady.
           </div>
         </div>
       </section>
 
-      <!-- View 4: Gatekeeper Audit Stream -->
+      <!-- View 4: Safety Check Log -->
       <section class="view-panel" id="view-gatekeeper">
         <div class="view-header" id="gk-view-header">
           <div class="gk-header-row">
             <div>
-              <h2 class="view-title" id="gk-view-title">Deterministic Gatekeeper Audit Stream</h2>
-              <p class="view-subtitle" id="gk-view-sub">Proposal audit timeline: Static Security, Sandbox --self-test exit(0), AST* Grounding, BM25/Budget Quota</p>
+              <h2 class="view-title" id="gk-view-title">Safety Check Log</h2>
+              <p class="view-subtitle" id="gk-view-sub">History of saved and blocked changes (security, self-test, code links, and token limits)</p>
             </div>
             <div class="pill-group" id="gk-filter-pills">
               <button type="button" class="filter-pill active" data-filter="all">All Events</button>
               <button type="button" class="filter-pill" data-filter="pass">Passed</button>
-              <button type="button" class="filter-pill" data-filter="fail">Rejected</button>
+              <button type="button" class="filter-pill" data-filter="fail">Blocked</button>
             </div>
           </div>
         </div>
@@ -208,8 +209,8 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       var beforeCompact = formatCompactTok(savings.beforeTokens || 0);
       var afterCompact = formatCompactTok(savings.afterTokens || 0);
       if (isFixedGateway) {
-        savedHeadline = lang === 'zh' ? '固定 L0 网关' : 'Fixed L0 Gateway';
-        savedTransition = afterCompact + ' tok (KV-shielded)';
+        savedHeadline = dict.compactAlwaysOnHeadline;
+        savedTransition = dict.compactAlwaysOnDetail.replace('{tok}', afterCompact);
         savedCombined = savedHeadline + ' · ' + afterCompact + ' tok';
       } else {
         var pct = Math.max(0, savings.savingsPercent || 0);
@@ -336,14 +337,21 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     var habitForm = el('hero-habit-form');
     if (habitForm) habitForm.style.display = isExport ? 'none' : 'flex';
 
-    // 1. About You: top 3 active global preferences
+    // 1. About You: newest 3 active global preferences + "+N more · View all"
     var aboutList = el('hero-about-you-list');
     if (aboutList) {
       aboutList.innerHTML = '';
       var upPrefs = (snapshot.userProfile && Array.isArray(snapshot.userProfile.preferences))
         ? snapshot.userProfile.preferences
         : (snapshot.preferences || []);
-      var activeHabits = upPrefs.filter(function(p) { return p && p.enabled !== false; }).slice(0, 3);
+      var activeHabits = upPrefs
+        .filter(function(p) { return p && p.enabled !== false; })
+        .slice()
+        .sort(function(a, b) {
+          var tb = Date.parse(b.updated_at || b.created_at || '') || 0;
+          var ta = Date.parse(a.updated_at || a.created_at || '') || 0;
+          return tb - ta;
+        });
       if (activeHabits.length === 0) {
         var emptyH = document.createElement('div');
         emptyH.className = 'hero-card-item';
@@ -351,7 +359,7 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         emptyH.textContent = dict.heroNoHabitsYet;
         aboutList.appendChild(emptyH);
       } else {
-        activeHabits.forEach(function(p) {
+        activeHabits.slice(0, 3).forEach(function(p) {
           var btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'hero-card-item-btn';
@@ -360,6 +368,16 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
           btn.addEventListener('click', function() { selectCapability('preferences', p); });
           aboutList.appendChild(btn);
         });
+        if (activeHabits.length > 3) {
+          var moreBtn = document.createElement('button');
+          moreBtn.type = 'button';
+          moreBtn.className = 'hero-more-btn';
+          moreBtn.textContent = dict.heroViewAllMore.replace('{n}', String(activeHabits.length - 3));
+          moreBtn.addEventListener('click', function() {
+            switchView('profile');
+          });
+          aboutList.appendChild(moreBtn);
+        }
       }
     }
 
@@ -430,23 +448,13 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     var pulseBody = el('inspector-pulse-cards');
     if (!pulseBody) return;
 
-    var healthStr = overall !== null ? (overall + ' / 100 (' + dict.gradePrefix + grade + ')') : '—';
     var memRatioStr = verifiedMems + ' / ' + activeMems.length;
 
     pulseBody.innerHTML =
       '<div class="pulse-card" id="pulse-card">' +
         '<div class="pulse-card-hdr">' + esc(dict.pulseCardTitle) + '</div>' +
-        '<div class="pulse-stat-row"><span>' + esc(dict.healthTitle) + '</span><strong class="mono-val">' + esc(healthStr) + '</strong></div>' +
         '<div class="pulse-stat-row"><span>' + esc(dict.pulseActiveCaps) + '</span><strong class="mono-val">' + activeTotal + ' (' + ruleCount + 'R · ' + skillCount + 'S · ' + toolCount + 'T · ' + memoryCount + 'M)</strong></div>' +
         '<div class="pulse-stat-row"><span>' + esc(dict.pulseVerifiedMems) + '</span><strong class="mono-val text-emerald">' + esc(memRatioStr) + '</strong></div>' +
-      '</div>' +
-      '<div class="pulse-card" id="recall-7d-card">' +
-        '<div class="pulse-card-hdr">' + esc(dict.recallCardTitle) + '</div>' +
-        '<div class="pulse-stat-row"><span>' + esc(dict.recallSearches) + '</span><strong class="mono-val">' + w7.searches + '</strong></div>' +
-        '<div class="pulse-stat-row"><span>' + esc(dict.recallInspected) + '</span><strong class="mono-val">' + w7.inspected + '</strong></div>' +
-        '<div class="pulse-stat-row"><span>' + esc(dict.recallToolsRun) + '</span><strong class="mono-val">' + w7.toolsExecuted + '</strong></div>' +
-        '<div class="pulse-stat-row"><span>' + esc(dict.recallAdopted) + '</span><strong class="mono-val text-emerald">' + w7.helped + '</strong></div>' +
-        '<div class="pulse-stat-row"><span>' + esc(dict.recallPitfalls) + '</span><strong class="mono-val">' + w7.pitfallsAvoided + '</strong></div>' +
       '</div>' +
       '<div class="pulse-card" id="shortcuts-card">' +
         '<div class="pulse-card-hdr">' + esc(dict.shortcutsCardTitle) + '</div>' +
@@ -609,6 +617,30 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         }
       });
     });
+    // Also surface pending preferences & personal memories so Needs Attention stays 100% consistent with Pending (N)
+    var seenPendingPref = {};
+    var addPendingPref = function(p, defaultTier) {
+      if (!p || !p.id || p.enabled === false || p.review_status !== 'pending') return;
+      var t = p.tier || defaultTier;
+      var pk = 'preferences:' + t + ':' + p.id;
+      if (seenPendingPref[pk]) return;
+      seenPendingPref[pk] = true;
+      attentionItems.push({ kind: 'preferences', item: p, reason: dict.attentionReasonPending, tone: 'warn' });
+    };
+    (snapshot.preferences || []).forEach(function(p) { addPendingPref(p, 'LOCAL'); });
+    if (snapshot.userProfile && Array.isArray(snapshot.userProfile.preferences)) {
+      snapshot.userProfile.preferences.forEach(function(p) { addPendingPref(p, 'GLOBAL'); });
+    }
+    if (snapshot.userProfile && Array.isArray(snapshot.userProfile.personalMemories)) {
+      snapshot.userProfile.personalMemories.forEach(function(pm) {
+        if (!pm || !pm.id || pm.enabled === false || pm.review_status !== 'pending') return;
+        var mk = 'memories:' + pm.id;
+        if (!seenIds[mk]) {
+          seenIds[mk] = true;
+          attentionItems.push({ kind: 'memories', item: pm, reason: dict.attentionReasonPending, tone: 'warn' });
+        }
+      });
+    }
 
     if (attentionItems.length === 0) {
       panel.style.display = 'none';
@@ -697,32 +729,38 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
   }
 
   function applyQuickFilter(kindVal, statusVal, sortByTokens) {
-    switchView('capabilities');
-    activeCapsKind = kindVal || 'all';
-    activeCapsStatus = statusVal || 'all';
-    capsSortByTokens = Boolean(sortByTokens);
-    var kp = el('caps-kind-pills');
-    if (kp) {
-      kp.querySelectorAll('.filter-pill').forEach(function(p) {
-        p.classList.toggle('active', (p.getAttribute('data-kind') || 'all') === activeCapsKind);
-      });
+    var runFilter = function() {
+      switchView('capabilities');
+      activeCapsKind = kindVal || 'all';
+      activeCapsStatus = statusVal || 'all';
+      capsSortByTokens = Boolean(sortByTokens);
+      var kp = el('caps-kind-pills');
+      if (kp) {
+        kp.querySelectorAll('.filter-pill').forEach(function(p) {
+          p.classList.toggle('active', (p.getAttribute('data-kind') || 'all') === activeCapsKind);
+        });
+      }
+      var sp = el('caps-status-pills');
+      if (sp) {
+        sp.querySelectorAll('.filter-pill').forEach(function(p) {
+          p.classList.toggle('active', (p.getAttribute('data-status') || 'all') === activeCapsStatus);
+        });
+      }
+      renderCapabilitiesTable();
+    };
+    if (inspectorMode === 'edit' && editorDirty && typeof confirmDiscardDraft === 'function') {
+      confirmDiscardDraft(runFilter);
+      return;
     }
-    var sp = el('caps-status-pills');
-    if (sp) {
-      sp.querySelectorAll('.filter-pill').forEach(function(p) {
-        p.classList.toggle('active', (p.getAttribute('data-status') || 'all') === activeCapsStatus);
-      });
-    }
-    renderCapabilitiesTable();
+    runFilter();
   }
 
   function formatMemoryStatusLabel(st) {
     var dict = i18n[lang] || i18n.en;
-    if (lang !== 'zh') return st;
     if (st === 'VERIFIED') return dict.statusVerified;
     if (st === 'STALE') return dict.statusStale;
-    if (st === 'ORPHANED') return dict.attentionReasonOrphaned;
-    if (st === 'OTHER_BRANCH') return dict.legendContested;
+    if (st === 'ORPHANED') return dict.statusOrphaned || dict.attentionReasonOrphaned;
+    if (st === 'OTHER_BRANCH') return dict.statusOtherBranch || dict.legendContested;
     return st;
   }
 
@@ -736,7 +774,15 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     tbody.innerHTML = '';
 
     var pendingCount = countPendingCapabilities();
-    var archivedCount = (snapshot.archived || []).length;
+    var allArchived = (snapshot.archived || []).slice();
+    if (snapshot.userProfile && Array.isArray(snapshot.userProfile.archivedPreferences)) {
+      snapshot.userProfile.archivedPreferences.forEach(function(ap) {
+        if (!ap || !ap.id) return;
+        var dup = allArchived.some(function(x) { return x && x.id === ap.id && (x.kind === 'preference' || x.kind === 'preferences'); });
+        if (!dup) allArchived.push(Object.assign({ kind: 'preference', tier: ap.tier || 'GLOBAL' }, ap));
+      });
+    }
+    var archivedCount = allArchived.length;
     var staleList = [];
     (snapshot.memories || []).forEach(function(m) {
       if (m.enabled !== false && m.freshness && m.freshness.overall_status === 'STALE') {
@@ -746,11 +792,24 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
 
     var pillPending = el('pill-status-pending');
     if (pillPending) {
+      pillPending.style.display = (pendingCount > 0 || activeCapsStatus === 'pending') ? '' : 'none';
       pillPending.innerHTML = ICONS.bell + ' <span>' + esc(dict.statusPending + (pendingCount > 0 ? ' (' + pendingCount + ')' : '')) + '</span>';
     }
     var pillArchived = el('pill-status-archived');
     if (pillArchived) {
+      pillArchived.style.display = (archivedCount > 0 || activeCapsStatus === 'archived') ? '' : 'none';
       pillArchived.innerHTML = ICONS.trash + ' <span>' + esc(dict.statusArchived + (archivedCount > 0 ? ' (' + archivedCount + ')' : '')) + '</span>';
+    }
+    var spWrap = el('caps-status-pills');
+    if (spWrap) {
+      spWrap.querySelectorAll('.filter-pill').forEach(function(pill) {
+        var stAttr = pill.getAttribute('data-status') || 'all';
+        if (stAttr === 'core' || stAttr === 'scoped') {
+          pill.style.display = (activeCapsKind === 'all' || activeCapsKind === 'rules') ? '' : 'none';
+        } else if (stAttr === 'verified' || stAttr === 'stale') {
+          pill.style.display = (activeCapsKind === 'all' || activeCapsKind === 'memories') ? '' : 'none';
+        }
+      });
     }
 
     var btnApproveAll = el('btn-batch-approve-pending');
@@ -773,8 +832,8 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     var rows = [];
 
     if (activeCapsStatus === 'archived') {
-      (snapshot.archived || []).forEach(function(arc) {
-        var kPlural = arc.kind === 'memory' ? 'memories' : (arc.kind + 's');
+      allArchived.forEach(function(arc) {
+        var kPlural = arc.kind === 'memory' ? 'memories' : (arc.kind === 'preference' || arc.kind === 'preferences' ? 'preferences' : (arc.kind + 's'));
         if (activeCapsKind !== 'all' && activeCapsKind !== kPlural) return;
         if (q) {
           var sArc = [arc.id || '', arc.title || '', arc.l0_summary || ''].join(' ').toLowerCase();
@@ -784,9 +843,51 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       });
     } else {
       var kinds = ['rules', 'skills', 'tools', 'memories'];
+      if (activeCapsStatus === 'pending' || activeCapsKind === 'preferences') {
+        kinds.push('preferences');
+      }
       kinds.forEach(function(k) {
         if (activeCapsKind !== 'all' && activeCapsKind !== k) return;
-        var list = snapshot[k] || [];
+        var list = [];
+        if (k === 'preferences') {
+          var seenP = {};
+          (snapshot.preferences || []).forEach(function(p) {
+            if (!p || !p.id) return;
+            var pt = p.tier || 'LOCAL';
+            var pk = pt + ':' + p.id;
+            if (!seenP[pk]) {
+              seenP[pk] = true;
+              list.push(Object.assign({ tier: pt }, p));
+            }
+          });
+          if (snapshot.userProfile && Array.isArray(snapshot.userProfile.preferences)) {
+            snapshot.userProfile.preferences.forEach(function(p) {
+              if (!p || !p.id) return;
+              var pt = p.tier || 'GLOBAL';
+              var pk = pt + ':' + p.id;
+              if (!seenP[pk]) {
+                seenP[pk] = true;
+                list.push(Object.assign({ tier: pt }, p));
+              }
+            });
+          }
+        } else if (k === 'memories') {
+          var seenM = {};
+          (snapshot.memories || []).forEach(function(m) {
+            if (!m || !m.id) return;
+            seenM[m.id] = true;
+            list.push(m);
+          });
+          if (snapshot.userProfile && Array.isArray(snapshot.userProfile.personalMemories)) {
+            snapshot.userProfile.personalMemories.forEach(function(pm) {
+              if (!pm || !pm.id || seenM[pm.id]) return;
+              seenM[pm.id] = true;
+              list.push(Object.assign({ tier: pm.tier || 'GLOBAL' }, pm));
+            });
+          }
+        } else {
+          list = snapshot[k] || [];
+        }
         list.forEach(function(item) {
           var isCore = (k === 'rules') ? Boolean(item.core) : false;
           var isEnabled = item.enabled !== false;
@@ -887,7 +988,9 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       } else if (k === 'tools') {
         statusCol = '<span class="badge-status">' + esc(dict.tierSandbox) + ' (' + esc(it.runtime || 'node') + ')</span>';
       } else if (k === 'preferences') {
-        statusCol = '<span class="badge-status">PREFERENCE</span>';
+        var prefModeLbl = it.always_on !== false ? dict.profileModeAlwaysOn : dict.profileModeOnDemand;
+        var prefTierLbl = it.tier === 'LOCAL' ? dict.tierLocal : dict.tierGlobal;
+        statusCol = '<span class="badge-status">' + esc(prefModeLbl) + ' · ' + esc(prefTierLbl) + '</span>';
       } else {
         statusCol = '<span class="badge-status">' + esc(dict.tierSkillSop) + '</span>';
       }
@@ -919,7 +1022,6 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         actionCol = '<div class="row-actions-wrap">' +
           (isPending ? '<button type="button" class="btn-action row-approve-btn" style="border-color:var(--status-ok-border);color:var(--status-ok);" title="' + esc(dict.approve) + '">' + esc(dict.approve) + '</button>' : '') +
           '<button type="button" class="btn-action row-toggle-btn" title="' + esc(isEnabled ? dict.pauseItem : dict.resumeItem) + '">' + (isEnabled ? (ICONS.pause + '<span>' + esc(dict.pauseItem) + '</span>') : esc(dict.resumeItem)) + '</button>' +
-          '<button type="button" class="btn-action btn-danger row-archive-btn" title="' + esc(dict.archive) + '" aria-label="' + esc(dict.archive) + '">' + ICONS.trash + '</button>' +
         '</div>';
       }
 
@@ -980,20 +1082,28 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
                 if (res.snapshot) snapshot = res.snapshot;
                 else it.enabled = nextEnabled;
                 rerenderAllViews();
-                showToast('success', (nextEnabled ? (lang === 'zh' ? '已启用 ' : 'Enabled ') : (lang === 'zh' ? '已搁置 ' : 'Paused ')) + it.id);
+                var toggleMsg = (nextEnabled ? d.resumedToast : d.pausedToast).replace('{id}', it.id);
+                if (!nextEnabled) {
+                  showToast('success', toggleMsg, 8000, {
+                    label: d.undoActionLabel,
+                    run: function() {
+                      callKernelAction('toggle-enabled', { kind: singularKind(k), id: it.id, enabled: true, tier: it.tier }).then(function(r2) {
+                        if (r2 && r2.ok) {
+                          if (r2.snapshot) snapshot = r2.snapshot;
+                          rerenderAllViews();
+                          showToast('success', (i18n[lang] || i18n.en).resumedToast.replace('{id}', it.id));
+                        }
+                      });
+                    }
+                  });
+                } else {
+                  showToast('success', toggleMsg);
+                }
               } else if (!res.offlineExport) {
                 showActionError(res, d.errToggleFailed, { kind: singularKind(k), id: it.id, tier: it.tier, item: it });
               }
             });
           });
-        });
-      }
-
-      var archiveBtn = tr.querySelector('.row-archive-btn');
-      if (archiveBtn) {
-        archiveBtn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          archiveAndOfferUndo(k, it.id, it.tier);
         });
       }
 
@@ -1008,7 +1118,7 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
               if (res.ok) {
                 if (res.snapshot) snapshot = res.snapshot;
                 rerenderAllViews();
-                showToast('success', (lang === 'zh' ? '已从回收站恢复 ' : 'Restored ') + it.id);
+                showToast('success', d.restoredToast.replace('{id}', it.id));
               } else if (!res.offlineExport) {
                 showActionError(res, d.errRestoreFailed);
               }
@@ -1535,6 +1645,22 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       var tdAction = document.createElement('td');
       tdAction.style.textAlign = 'right';
       if (!isExport) {
+        var hsActWrap = document.createElement('div');
+        hsActWrap.className = 'row-actions-wrap';
+        var addMemBtn = document.createElement('button');
+        addMemBtn.type = 'button';
+        addMemBtn.className = 'btn-action';
+        if (h.unprotected) {
+          addMemBtn.style.color = 'var(--status-ok)';
+          addMemBtn.style.borderColor = 'var(--status-ok-border)';
+        }
+        addMemBtn.textContent = dict.hotspotAddMemory;
+        addMemBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          openHotspotMemoryDrawer(h.filePath);
+        });
+        hsActWrap.appendChild(addMemBtn);
+
         var openBtn = document.createElement('button');
         openBtn.type = 'button';
         openBtn.className = 'btn-action';
@@ -1545,7 +1671,8 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
             handleOpenEditorResult(res, h.filePath);
           });
         });
-        tdAction.appendChild(openBtn);
+        hsActWrap.appendChild(openBtn);
+        tdAction.appendChild(hsActWrap);
       }
 
       tr.appendChild(tdPath);
@@ -1574,6 +1701,104 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
 
       tbody.appendChild(tr);
     });
+  }
+
+  function openHotspotMemoryDrawer(filePath) {
+    var drawer = el('hotspot-mem-drawer');
+    if (!drawer || isExport) return;
+    var dict = i18n[lang] || i18n.en;
+    drawer.innerHTML =
+      '<div class="profile-card-hdr">' +
+        '<span>' + esc(dict.hotspotMemDrawerTitle.replace('{path}', filePath)) + '</span>' +
+        '<button type="button" class="btn-action" id="btn-hs-mem-close" style="padding:1px 7px;font-size:var(--text-xs);">✕</button>' +
+      '</div>' +
+      '<div class="editor-fields-stack">' +
+        '<div class="editor-field-group">' +
+          '<label class="editor-field-label" for="hs-mem-title">' + esc(dict.fieldTitleLabel) + '</label>' +
+          '<input type="text" id="hs-mem-title" class="editor-input" placeholder="' + esc(dict.hotspotMemTitlePlaceholder) + '" />' +
+        '</div>' +
+        '<div class="editor-field-group">' +
+          '<label class="editor-field-label" for="hs-mem-symptom">' + esc(dict.symptomLabel) + '</label>' +
+          '<textarea id="hs-mem-symptom" class="editor-textarea-sm" placeholder="' + esc(dict.hotspotMemSymptomPlaceholder) + '"></textarea>' +
+        '</div>' +
+        '<div class="editor-field-group">' +
+          '<label class="editor-field-label" for="hs-mem-cause">' + esc(dict.rootCauseLabel) + '</label>' +
+          '<textarea id="hs-mem-cause" class="editor-textarea-sm" placeholder="' + esc(dict.hotspotMemRootCausePlaceholder) + '"></textarea>' +
+        '</div>' +
+        '<div class="editor-field-group">' +
+          '<label class="editor-field-label" for="hs-mem-solution">' + esc(dict.solutionLabel) + '</label>' +
+          '<textarea id="hs-mem-solution" class="editor-textarea-sm" placeholder="' + esc(dict.hotspotMemSolutionPlaceholder) + '"></textarea>' +
+        '</div>' +
+      '</div>' +
+      '<div class="profile-header-actions">' +
+        '<button type="button" class="btn-action btn-primary" id="btn-hs-mem-save">' + esc(dict.saveChanges) + '</button>' +
+        '<button type="button" class="btn-action" id="btn-hs-mem-cancel">' + esc(dict.cancel) + '</button>' +
+      '</div>';
+    drawer.classList.add('open');
+    if (typeof drawer.scrollIntoView === 'function') {
+      try { drawer.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+    }
+    var closeDrawer = function() {
+      drawer.classList.remove('open');
+      drawer.innerHTML = '';
+    };
+    var btnX = drawer.querySelector('#btn-hs-mem-close');
+    var btnCancel = drawer.querySelector('#btn-hs-mem-cancel');
+    if (btnX) btnX.addEventListener('click', closeDrawer);
+    if (btnCancel) btnCancel.addEventListener('click', closeDrawer);
+
+    var btnSave = drawer.querySelector('#btn-hs-mem-save');
+    if (btnSave) {
+      btnSave.addEventListener('click', function() {
+        var curDict = i18n[lang] || i18n.en;
+        var titleVal = (drawer.querySelector('#hs-mem-title') || {}).value || '';
+        var symptomVal = (drawer.querySelector('#hs-mem-symptom') || {}).value || '';
+        var causeVal = (drawer.querySelector('#hs-mem-cause') || {}).value || '';
+        var solutionVal = (drawer.querySelector('#hs-mem-solution') || {}).value || '';
+        runWithButtonLock(btnSave, curDict.savingLabel, function() {
+          return callKernelAction('create-memory', {
+            filePath: filePath,
+            title: titleVal.trim(),
+            symptom: symptomVal.trim(),
+            root_cause: causeVal.trim(),
+            solution: solutionVal.trim()
+          }).then(function(res) {
+            if (res && res.ok) {
+              if (res.snapshot) snapshot = res.snapshot;
+              closeDrawer();
+              rerenderAllViews();
+              showToast('success', curDict.hotspotMemCreatedToast.replace('{path}', filePath));
+            } else if (!res || !res.offlineExport) {
+              showActionError(res, curDict.hotspotMemFailedToast);
+            }
+          });
+        });
+      });
+    }
+  }
+
+  function findCapabilityForEvent(kindRaw, targetId) {
+    if (!targetId) return null;
+    var sKind = singularKind(kindRaw || '');
+    var kPlural = sKind === 'memory' ? 'memories' : (sKind + 's');
+    var searchList = function(k) {
+      var list = (snapshot[k] || []).slice();
+      if (k === 'preferences' && snapshot.userProfile && Array.isArray(snapshot.userProfile.preferences)) {
+        list = list.concat(snapshot.userProfile.preferences);
+      } else if (k === 'memories' && snapshot.userProfile && Array.isArray(snapshot.userProfile.personalMemories)) {
+        list = list.concat(snapshot.userProfile.personalMemories);
+      }
+      var hit = list.find(function(x) { return x && x.id === targetId; });
+      return hit ? { kind: k, item: hit } : null;
+    };
+    var direct = searchList(kPlural);
+    if (direct) return direct;
+    var allKinds = ['rules', 'skills', 'tools', 'memories', 'preferences'];
+    for (var i = 0; i < allKinds.length; i++) {
+      var found = searchList(allKinds[i]);
+      if (found) return found;
+    }
+    return null;
   }
 
   function renderGatekeeperStream() {
@@ -1611,7 +1836,12 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
 
     filteredEvents.forEach(function(ev) {
       var card = document.createElement('div');
-      card.className = 'gk-event-card';
+      var linkedCap = findCapabilityForEvent(ev.kind, ev.target_id);
+      card.className = 'gk-event-card' + (linkedCap ? ' clickable' : '');
+      if (linkedCap) {
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+      }
 
       var dotCls = ev.passed ? 'dot-ok' : 'dot-danger';
       var timeStr = esc((ev.timestamp || '').replace('T', ' ').slice(0, 19));
@@ -1634,6 +1864,17 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       }
 
       card.innerHTML = topHtml + diagHtml;
+      if (linkedCap) {
+        card.addEventListener('click', function() {
+          selectCapability(linkedCap.kind, linkedCap.item);
+        });
+        card.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            selectCapability(linkedCap.kind, linkedCap.item);
+          }
+        });
+      }
       boxEl.appendChild(card);
     });
   }
@@ -1646,8 +1887,8 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       return;
     }
     var detail = el('inspector-detail');
-    var txtInput = el('inspector-editor-input');
-    if (!detail || !txtInput) return;
+    var anchor = el('inspector-editor-fields') || el('inspector-editor-input');
+    if (!detail || !anchor) return;
     var bar = document.createElement('div');
     bar.id = 'editor-bg-update-banner';
     bar.className = 'inline-info-bar';
@@ -1657,7 +1898,7 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         '<button type="button" class="btn-action" id="btn-bg-keep-edits">' + esc(dict.editorKeepMyEdits) + '</button>' +
         '<button type="button" class="btn-action btn-primary" id="btn-bg-load-latest">' + esc(dict.editorLoadLatest) + '</button>' +
       '</div>';
-    txtInput.parentNode.insertBefore(bar, txtInput);
+    anchor.parentNode.insertBefore(bar, anchor);
     bar.querySelector('#btn-bg-keep-edits').addEventListener('click', function() {
       editorPendingBgUpdate = false;
       bar.style.display = 'none';
@@ -1678,8 +1919,8 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     var bar = el('editor-discard-confirm-bar');
     if (!bar) {
       var detail = el('inspector-detail');
-      var txtInput = el('inspector-editor-input');
-      if (!detail || !txtInput) {
+      var anchor = el('inspector-editor-fields') || el('inspector-editor-input');
+      if (!detail || !anchor) {
         editorDirty = false;
         editorPendingBgUpdate = false;
         if (typeof discardCb === 'function') discardCb();
@@ -1688,7 +1929,7 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       bar = document.createElement('div');
       bar.id = 'editor-discard-confirm-bar';
       bar.className = 'inline-confirm-bar';
-      txtInput.parentNode.insertBefore(bar, txtInput);
+      anchor.parentNode.insertBefore(bar, anchor);
     }
     bar.style.display = 'flex';
     bar.innerHTML =
@@ -1699,7 +1940,7 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       '</div>';
     bar.querySelector('#btn-draft-keep').addEventListener('click', function() {
       bar.style.display = 'none';
-      var ti = el('inspector-editor-input');
+      var ti = el('inspector-editor-input') || el('editor-field-symptom') || el('editor-field-l1') || el('editor-field-title');
       if (ti && typeof ti.focus === 'function') ti.focus();
     });
     bar.querySelector('#btn-draft-discard').addEventListener('click', function() {
@@ -1829,21 +2070,29 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       btnRestore.style.borderColor = 'var(--status-ok-border)';
       btnRestore.textContent = dict.restore;
       btnRestore.addEventListener('click', function() {
-        callKernelAction('restore-item', { kind: singularKind(kind), id: item.id, tier: itemTier }).then(function(res) {
-          if (res.ok) {
-            if (res.snapshot) snapshot = res.snapshot;
-            var restored = (snapshot[kind] || []).find(function(x) { return x.id === item.id; });
-            if (restored) {
-              selectedCapability = { kind: kind, item: restored };
-            } else {
-              selectedCapability = null;
+        var curDict = i18n[lang] || i18n.en;
+        runWithButtonLock(btnRestore, curDict.savingLabel, function() {
+          return callKernelAction('restore-item', { kind: singularKind(kind), id: item.id, tier: itemTier }).then(function(res) {
+            var d = i18n[lang] || i18n.en;
+            if (res.ok) {
+              if (res.snapshot) snapshot = res.snapshot;
+              var listPool = (snapshot[kind] || []).slice();
+              if (kind === 'preferences' && snapshot.userProfile && Array.isArray(snapshot.userProfile.preferences)) {
+                listPool = listPool.concat(snapshot.userProfile.preferences);
+              }
+              var restored = listPool.find(function(x) { return x && x.id === item.id; });
+              if (restored) {
+                selectedCapability = { kind: kind, item: restored };
+              } else {
+                selectedCapability = null;
+              }
+              rerenderAllViews();
+              if (!selectedCapability) renderInspector();
+              showToast('success', d.restoredToast.replace('{id}', item.id));
+            } else if (!res.offlineExport) {
+              showActionError(res, d.errRestoreFailed);
             }
-            rerenderAllViews();
-            if (!selectedCapability) renderInspector();
-            showToast('success', (lang === 'zh' ? '已从回收站恢复 ' : 'Restored ') + item.id);
-          } else if (!res.offlineExport) {
-            showToast('error', res.error || dict.errRestoreFailed);
-          }
+          });
         });
       });
       toolbar.appendChild(btnRestore);
@@ -1856,15 +2105,19 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         btnApprove.style.borderColor = 'var(--status-ok-border)';
         btnApprove.textContent = dict.approve;
         btnApprove.addEventListener('click', function() {
-          callKernelAction('approve-item', { kind: singularKind(kind), id: item.id, tier: itemTier }).then(function(res) {
-            if (res.ok) {
-              item.review_status = 'approved';
-              if (res.snapshot) snapshot = res.snapshot;
-              rerenderAllViews();
-              showToast('success', (lang === 'zh' ? '已确认 ' : 'Approved ') + item.id);
-            } else if (!res.offlineExport) {
-              showToast('error', res.error || dict.errApproveFailed);
-            }
+          var curDict = i18n[lang] || i18n.en;
+          runWithButtonLock(btnApprove, curDict.savingLabel, function() {
+            return callKernelAction('approve-item', { kind: singularKind(kind), id: item.id, tier: itemTier }).then(function(res) {
+              var d = i18n[lang] || i18n.en;
+              if (res.ok) {
+                item.review_status = 'approved';
+                if (res.snapshot) snapshot = res.snapshot;
+                rerenderAllViews();
+                showToast('success', (lang === 'zh' ? '已确认 ' : 'Approved ') + item.id);
+              } else if (!res.offlineExport) {
+                showActionError(res, d.errApproveFailed);
+              }
+            });
           });
         });
         toolbar.appendChild(btnApprove);
@@ -1876,15 +2129,35 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       btnPause.innerHTML = isPaused ? esc(dict.resumeItem) : (ICONS.pause + '<span>' + esc(dict.pauseItem) + '</span>');
       btnPause.addEventListener('click', function() {
         var nextEnabled = isPaused ? true : false;
-        callKernelAction('toggle-enabled', { kind: singularKind(kind), id: item.id, enabled: nextEnabled, tier: itemTier }).then(function(res) {
-          if (res.ok) {
-            item.enabled = nextEnabled;
-            if (res.snapshot) snapshot = res.snapshot;
-            rerenderAllViews();
-            showToast('success', (nextEnabled ? (lang === 'zh' ? '已启用 ' : 'Enabled ') : (lang === 'zh' ? '已搁置 ' : 'Paused ')) + item.id);
-          } else if (!res.offlineExport) {
-            showToast('error', res.error || dict.errToggleFailed);
-          }
+        var curDict = i18n[lang] || i18n.en;
+        runWithButtonLock(btnPause, curDict.savingLabel, function() {
+          return callKernelAction('toggle-enabled', { kind: singularKind(kind), id: item.id, enabled: nextEnabled, tier: itemTier }).then(function(res) {
+            var d = i18n[lang] || i18n.en;
+            if (res.ok) {
+              item.enabled = nextEnabled;
+              if (res.snapshot) snapshot = res.snapshot;
+              rerenderAllViews();
+              var pMsg = (nextEnabled ? d.resumedToast : d.pausedToast).replace('{id}', item.id);
+              if (!nextEnabled) {
+                showToast('success', pMsg, 8000, {
+                  label: d.undoActionLabel,
+                  run: function() {
+                    callKernelAction('toggle-enabled', { kind: singularKind(kind), id: item.id, enabled: true, tier: itemTier }).then(function(r2) {
+                      if (r2 && r2.ok) {
+                        if (r2.snapshot) snapshot = r2.snapshot;
+                        rerenderAllViews();
+                        showToast('success', (i18n[lang] || i18n.en).resumedToast.replace('{id}', item.id));
+                      }
+                    });
+                  }
+                });
+              } else {
+                showToast('success', pMsg);
+              }
+            } else if (!res.offlineExport) {
+              showActionError(res, d.errToggleFailed, { kind: singularKind(kind), id: item.id, tier: itemTier, item: item });
+            }
+          });
         });
       });
       toolbar.appendChild(btnPause);
@@ -1954,16 +2227,18 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         btnVerify.className = 'btn-action';
         btnVerify.textContent = dict.verifyAst;
         btnVerify.addEventListener('click', function() {
-          btnVerify.textContent = dict.verifyingAst;
-          callKernelAction('verify-memory', { id: item.id, tier: itemTier }).then(function(res) {
-            btnVerify.textContent = dict.verifyAst;
-            if (res.ok && res.snapshot) {
-              snapshot = res.snapshot;
-              rerenderAllViews();
-              showToast('success', lang === 'zh' ? 'AST 源码锚点校验完成' : 'AST verification complete');
-            } else if (!res.offlineExport) {
-              showToast('error', res.error || dict.errVerifyFailed);
-            }
+          var curDict = i18n[lang] || i18n.en;
+          runWithButtonLock(btnVerify, curDict.verifyingAst, function() {
+            return callKernelAction('verify-memory', { id: item.id, tier: itemTier }).then(function(res) {
+              var d = i18n[lang] || i18n.en;
+              if (res.ok && res.snapshot) {
+                snapshot = res.snapshot;
+                rerenderAllViews();
+                showToast('success', lang === 'zh' ? '代码链接校验完成' : 'Code link verification complete');
+              } else if (!res.offlineExport) {
+                showActionError(res, d.errVerifyFailed);
+              }
+            });
           });
         });
         toolbar.appendChild(btnVerify);
@@ -1975,24 +2250,39 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         btnToggleCore.className = 'btn-action';
         btnToggleCore.textContent = item.core ? dict.demoteScoped : dict.promoteCore;
         btnToggleCore.addEventListener('click', function() {
-          callKernelAction('toggle-rule-tier', { id: item.id, core: !item.core, tier: itemTier }).then(function(res) {
-            if (res.ok) {
-              if (res.snapshot) {
-                snapshot = res.snapshot;
-              } else {
-                item.core = !item.core;
+          var prevCore = Boolean(item.core);
+          var nextCore = !prevCore;
+          var curDict = i18n[lang] || i18n.en;
+          runWithButtonLock(btnToggleCore, curDict.savingLabel, function() {
+            return callKernelAction('toggle-rule-tier', { id: item.id, core: nextCore, tier: itemTier }).then(function(res) {
+              var d = i18n[lang] || i18n.en;
+              if (res.ok) {
+                if (res.snapshot) {
+                  snapshot = res.snapshot;
+                } else {
+                  item.core = nextCore;
+                }
+                rerenderAllViews();
+                var tokNow = (res.data && res.data.tokenUsage !== undefined) ? res.data.tokenUsage : (res.tokenUsage || 0);
+                var movedMsg = nextCore
+                  ? d.ruleMovedCoreToast.replace('{tok}', String(tokNow)).replace('{max}', String(getMaxCoreRuleTokens()))
+                  : d.ruleMovedScopedToast;
+                showToast('success', movedMsg, 8000, {
+                  label: d.undoActionLabel,
+                  run: function() {
+                    callKernelAction('toggle-rule-tier', { id: item.id, core: prevCore, tier: itemTier }).then(function(r2) {
+                      if (r2 && r2.ok) {
+                        if (r2.snapshot) snapshot = r2.snapshot;
+                        rerenderAllViews();
+                        showToast('success', (i18n[lang] || i18n.en).profileUndoneToast);
+                      }
+                    });
+                  }
+                });
+              } else if (!res.offlineExport) {
+                showActionError(res, d.errToggleTierFailed);
               }
-              rerenderAllViews();
-              var tokNow = (res.data && res.data.tokenUsage !== undefined) ? res.data.tokenUsage : (res.tokenUsage || 0);
-              showToast(
-                'success',
-                selectedCapability.item.core
-                  ? dict.ruleMovedCoreToast.replace('{tok}', String(tokNow)).replace('{max}', String(getMaxCoreRuleTokens()))
-                  : dict.ruleMovedScopedToast
-              );
-            } else if (!res.offlineExport) {
-              showActionError(res, dict.errToggleTierFailed);
-            }
+            });
           });
         });
         toolbar.appendChild(btnToggleCore);
@@ -2005,20 +2295,45 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         btnToggleMode.textContent = item.always_on !== false ? dict.profileToggleToOnDemand : dict.profileToggleToAlwaysOn;
         btnToggleMode.addEventListener('click', function() {
           var nextAlwaysOn = item.always_on === false;
-          callKernelAction('update-content', {
-            kind: 'preference',
-            id: item.id,
-            tier: itemTier || 'GLOBAL',
-            always_on: nextAlwaysOn,
-            content: item.content || item.l0_summary || item.title
-          }).then(function(res) {
-            if (res.ok) {
-              if (res.snapshot) snapshot = res.snapshot;
-              rerenderAllViews();
-              showToast('success', dict.profileModeUpdatedToast.replace('{id}', item.id));
-            } else if (!res.offlineExport) {
-              showToast('error', res.error || dict.errSaveFailed);
-            }
+          var curDict = i18n[lang] || i18n.en;
+          runWithButtonLock(btnToggleMode, curDict.savingLabel, function() {
+            return callKernelAction('create-preference', {
+              id: item.id,
+              supersedes_id: item.id,
+              tier: itemTier || 'GLOBAL',
+              title: item.title || item.id,
+              l0_summary: item.l0_summary || item.title || item.id,
+              category: item.category || 'style',
+              always_on: nextAlwaysOn,
+              trigger_cue: item.trigger_cue || undefined,
+              tags: Array.isArray(item.tags) ? item.tags : [],
+              content: item.content || item.l0_summary || item.title || item.id,
+              enabled: item.enabled !== false,
+              review_status: item.review_status || 'approved'
+            }).then(function(res) {
+              var d = i18n[lang] || i18n.en;
+              if (res.ok) {
+                if (res.snapshot) snapshot = res.snapshot;
+                rerenderAllViews();
+                showToast('success', d.profileModeUpdatedToast.replace('{id}', item.id), 8000, {
+                  label: d.undoActionLabel,
+                  run: function() {
+                    callKernelAction('undo-preference', { id: item.id, tier: itemTier || 'GLOBAL' }).then(function(r2) {
+                      if (r2 && r2.ok) {
+                        if (r2.snapshot) snapshot = r2.snapshot;
+                        rerenderAllViews();
+                        showToast('success', (i18n[lang] || i18n.en).profileUndoneToast);
+                      }
+                    });
+                  }
+                });
+                if (res.data && Array.isArray(res.data.warnings) && res.data.warnings.length > 0) {
+                  showToast('warn', res.data.warnings[0], 6000);
+                }
+              } else if (!res.offlineExport) {
+                showActionError(res, d.errSaveFailed, { id: item.id, tier: itemTier || 'GLOBAL', item: item });
+              }
+            });
           });
         });
         toolbar.appendChild(btnToggleMode);
@@ -2030,7 +2345,10 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         btnRunTest.className = 'btn-action';
         btnRunTest.textContent = dict.runSelfTest;
         btnRunTest.addEventListener('click', function() {
-          runToolSelfTest(item.id);
+          var curDict = i18n[lang] || i18n.en;
+          runWithButtonLock(btnRunTest, curDict.runningBadge, function() {
+            return runToolSelfTest(item.id);
+          });
         });
         toolbar.appendChild(btnRunTest);
       }
@@ -2054,10 +2372,13 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
 
       var btnArchive = document.createElement('button');
       btnArchive.type = 'button';
-      btnArchive.className = 'btn-action btn-danger';
+      btnArchive.className = 'btn-action btn-danger inspector-toolbar-danger-sep';
       btnArchive.innerHTML = ICONS.trash + '<span>' + esc(dict.archive) + '</span>';
       btnArchive.addEventListener('click', function() {
-        archiveAndOfferUndo(kind, item.id, itemTier);
+        var curDict = i18n[lang] || i18n.en;
+        runWithButtonLock(btnArchive, curDict.savingLabel, function() {
+          return archiveAndOfferUndo(kind, item.id, itemTier);
+        });
       });
       toolbar.appendChild(btnArchive);
     }
@@ -2093,16 +2414,18 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       var btnRebind = staleBanner.querySelector('#btn-rebind-ast');
       if (btnRebind) {
         btnRebind.addEventListener('click', function() {
-          btnRebind.textContent = dict.rebindingAst;
-          callKernelAction('rebind-memory-ast', { id: item.id, tier: itemTier }).then(function(res) {
-            btnRebind.innerHTML = ICONS.refresh + '<span>' + esc(dict.rebindAst) + '</span>';
-            if (res.ok && res.snapshot) {
-              snapshot = res.snapshot;
-              rerenderAllViews();
-              showToast('success', lang === 'zh' ? '已重新锚定当前分支源码' : 'AST re-bound to current branch');
-            } else if (!res.offlineExport) {
-              showToast('error', res.error || dict.errRebindFailed);
-            }
+          var curDict = i18n[lang] || i18n.en;
+          runWithButtonLock(btnRebind, curDict.rebindingAst, function() {
+            return callKernelAction('rebind-memory-ast', { id: item.id, tier: itemTier }).then(function(res) {
+              var d = i18n[lang] || i18n.en;
+              if (res.ok && res.snapshot) {
+                snapshot = res.snapshot;
+                rerenderAllViews();
+                showToast('success', lang === 'zh' ? '已更新为当前代码链接' : 'Code links updated to current branch');
+              } else if (!res.offlineExport) {
+                showActionError(res, d.errRebindFailed);
+              }
+            });
           });
         });
       }
@@ -2115,7 +2438,10 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
       var btnStaleArchive = staleBanner.querySelector('#btn-stale-archive');
       if (btnStaleArchive) {
         btnStaleArchive.addEventListener('click', function() {
-          archiveAndOfferUndo(kind, item.id, itemTier);
+          var curDict = i18n[lang] || i18n.en;
+          runWithButtonLock(btnStaleArchive, curDict.savingLabel, function() {
+            return archiveAndOfferUndo(kind, item.id, itemTier);
+          });
         });
       }
     }
@@ -2172,11 +2498,104 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     bodySection.className = 'inspector-section';
 
     if (!isExport && inspectorMode === 'edit') {
+      var fieldsHtml = '';
+      if (kind === 'memories') {
+        fieldsHtml =
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-title">' + esc(dict.fieldTitleLabel) + '</label>' +
+            '<input type="text" class="editor-input" id="editor-field-title" />' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-symptom">' + esc(dict.symptomLabel) + '</label>' +
+            '<textarea class="editor-textarea-sm" id="editor-field-symptom"></textarea>' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-root-cause">' + esc(dict.rootCauseLabel) + '</label>' +
+            '<textarea class="editor-textarea-sm" id="editor-field-root-cause"></textarea>' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-solution">' + esc(dict.solutionLabel) + '</label>' +
+            '<textarea class="editor-textarea-sm" id="editor-field-solution"></textarea>' +
+          '</div>';
+      } else if (kind === 'skills') {
+        fieldsHtml =
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-title">' + esc(dict.fieldTitleLabel) + '</label>' +
+            '<input type="text" class="editor-input" id="editor-field-title" />' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-l1">' + esc(dict.l1ContractLabel) + '</label>' +
+            '<textarea class="editor-textarea-sm" id="editor-field-l1"></textarea>' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-l2">' + esc(dict.l2SopLabel) + '</label>' +
+            '<textarea class="editor-textarea" id="editor-field-l2" style="height:220px;"></textarea>' +
+          '</div>';
+      } else if (kind === 'preferences') {
+        fieldsHtml =
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-title">' + esc(dict.fieldTitleLabel) + '</label>' +
+            '<input type="text" class="editor-input" id="editor-field-title" />' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-l0">' + esc(dict.fieldSummaryLabel) + '</label>' +
+            '<input type="text" class="editor-input" id="editor-field-l0" />' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-category">' + esc(dict.fieldCategoryLabel) + '</label>' +
+            '<select class="editor-select" id="editor-field-category">' +
+              '<option value="style">' + esc(dict.catStyle) + '</option>' +
+              '<option value="formatting">' + esc(dict.catFormatting) + '</option>' +
+              '<option value="communication">' + esc(dict.catCommunication) + '</option>' +
+              '<option value="workflow">' + esc(dict.catWorkflow) + '</option>' +
+              '<option value="requirement">' + esc(dict.catRequirement) + '</option>' +
+              '<option value="knowledge">' + esc(dict.catKnowledge) + '</option>' +
+            '</select>' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-always-on">' + esc(dict.fieldWhenAppliesLabel) + '</label>' +
+            '<select class="editor-select" id="editor-field-always-on">' +
+              '<option value="true">' + esc(dict.profileModeAlwaysOn) + '</option>' +
+              '<option value="false">' + esc(dict.profileModeOnDemand) + '</option>' +
+            '</select>' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-trigger">' + esc(dict.fieldTriggerCueLabel) + '</label>' +
+            '<input type="text" class="editor-input" id="editor-field-trigger" />' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="inspector-editor-input">' + esc(dict.bodyLabel) + '</label>' +
+            '<textarea class="editor-textarea-sm" id="inspector-editor-input"></textarea>' +
+          '</div>';
+      } else if (kind === 'rules') {
+        fieldsHtml =
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-title">' + esc(dict.fieldTitleLabel) + '</label>' +
+            '<input type="text" class="editor-input" id="editor-field-title" />' +
+          '</div>' +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="editor-field-l0">' + esc(dict.fieldSummaryLabel) + '</label>' +
+            '<input type="text" class="editor-input" id="editor-field-l0" />' +
+          '</div>' +
+          (!item.core
+            ? ('<div class="editor-field-group">' +
+                '<label class="editor-field-label" for="editor-field-scope">' + esc(dict.fieldScopeGlobLabel) + '</label>' +
+                '<input type="text" class="editor-input" id="editor-field-scope" />' +
+              '</div>')
+            : '') +
+          '<div class="editor-field-group">' +
+            '<label class="editor-field-label" for="inspector-editor-input">' + esc(dict.bodyLabel) + '</label>' +
+            '<textarea class="editor-textarea" id="inspector-editor-input" style="height:220px;"></textarea>' +
+          '</div>';
+      } else {
+        fieldsHtml = '<textarea class="editor-textarea" id="inspector-editor-input"></textarea>';
+      }
+
       bodySection.innerHTML =
         '<div class="inspector-section-title"><span>' + esc(dict.inlineEditorTitle) + '</span></div>' +
         '<div id="editor-bg-update-banner" class="inline-info-bar" style="display:none;"></div>' +
         '<div id="editor-discard-confirm-bar" class="inline-confirm-bar" style="display:none;"></div>' +
-        '<textarea class="editor-textarea" id="inspector-editor-input"></textarea>' +
+        '<div class="editor-fields-stack" id="inspector-editor-fields">' + fieldsHtml + '</div>' +
         '<div class="editor-footer">' +
           '<span id="editor-token-est">~0 ' + esc(dict.tokensEstSuffix) + '</span>' +
           '<div style="display:flex;gap:6px;">' +
@@ -2186,39 +2605,109 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
         '</div>';
       bodyEl.appendChild(bodySection);
 
-      var txtInput = bodySection.querySelector('#inspector-editor-input');
-      var rawText = kind === 'tools'
-        ? (item.script_code || '')
-        : (item.content ||
-          (item.l1_contract ? ('## L1 Contract\\n' + item.l1_contract + '\\n\\n## L2 SOP\\n' + item.l2_sop) :
-          (item.symptom ? ('## Symptom\\n' + item.symptom + '\\n\\n## Root Cause\\n' + item.root_cause + '\\n\\n## Solution\\n' + item.solution) :
-          '')));
-      txtInput.value = rawText;
-      editorOriginalText = rawText;
+      var qField = function(sel) { return bodySection.querySelector(sel); };
+      if (kind === 'memories') {
+        if (qField('#editor-field-title')) qField('#editor-field-title').value = item.title || '';
+        if (qField('#editor-field-symptom')) qField('#editor-field-symptom').value = item.symptom || '';
+        if (qField('#editor-field-root-cause')) qField('#editor-field-root-cause').value = item.root_cause || '';
+        if (qField('#editor-field-solution')) qField('#editor-field-solution').value = item.solution || '';
+      } else if (kind === 'skills') {
+        if (qField('#editor-field-title')) qField('#editor-field-title').value = item.name || item.title || '';
+        if (qField('#editor-field-l1')) qField('#editor-field-l1').value = item.l1_contract || '';
+        if (qField('#editor-field-l2')) qField('#editor-field-l2').value = item.l2_sop || '';
+      } else if (kind === 'preferences') {
+        if (qField('#editor-field-title')) qField('#editor-field-title').value = item.title || '';
+        if (qField('#editor-field-l0')) qField('#editor-field-l0').value = item.l0_summary || '';
+        if (qField('#editor-field-category')) qField('#editor-field-category').value = item.category || 'style';
+        if (qField('#editor-field-always-on')) qField('#editor-field-always-on').value = item.always_on === false ? 'false' : 'true';
+        if (qField('#editor-field-trigger')) qField('#editor-field-trigger').value = item.trigger_cue || '';
+        if (qField('#inspector-editor-input')) qField('#inspector-editor-input').value = item.content || '';
+      } else if (kind === 'rules') {
+        if (qField('#editor-field-title')) qField('#editor-field-title').value = item.title || '';
+        if (qField('#editor-field-l0')) qField('#editor-field-l0').value = item.l0_summary || '';
+        if (qField('#editor-field-scope')) qField('#editor-field-scope').value = item.scope_glob || '*';
+        if (qField('#inspector-editor-input')) qField('#inspector-editor-input').value = item.content || '';
+      } else {
+        if (qField('#inspector-editor-input')) qField('#inspector-editor-input').value = item.script_code || '';
+      }
+
+      function readDraftSnapshot() {
+        if (kind === 'memories') {
+          return {
+            title: (qField('#editor-field-title') || {}).value || '',
+            symptom: (qField('#editor-field-symptom') || {}).value || '',
+            root_cause: (qField('#editor-field-root-cause') || {}).value || '',
+            solution: (qField('#editor-field-solution') || {}).value || ''
+          };
+        }
+        if (kind === 'skills') {
+          return {
+            title: (qField('#editor-field-title') || {}).value || '',
+            l1_contract: (qField('#editor-field-l1') || {}).value || '',
+            l2_sop: (qField('#editor-field-l2') || {}).value || ''
+          };
+        }
+        if (kind === 'preferences') {
+          return {
+            title: (qField('#editor-field-title') || {}).value || '',
+            l0_summary: (qField('#editor-field-l0') || {}).value || '',
+            category: (qField('#editor-field-category') || {}).value || 'style',
+            always_on: ((qField('#editor-field-always-on') || {}).value || 'true') !== 'false',
+            trigger_cue: (qField('#editor-field-trigger') || {}).value || '',
+            content: (qField('#inspector-editor-input') || {}).value || ''
+          };
+        }
+        if (kind === 'rules') {
+          return {
+            title: (qField('#editor-field-title') || {}).value || '',
+            l0_summary: (qField('#editor-field-l0') || {}).value || '',
+            scope_glob: qField('#editor-field-scope') ? qField('#editor-field-scope').value : (item.scope_glob || '*'),
+            content: (qField('#inspector-editor-input') || {}).value || ''
+          };
+        }
+        return {
+          script_code: (qField('#inspector-editor-input') || {}).value || ''
+        };
+      }
+
+      editorOriginalText = JSON.stringify(readDraftSnapshot());
       editorDirty = false;
       editorPendingBgUpdate = false;
 
       var tokenEstEl = bodySection.querySelector('#editor-token-est');
       function updateTokenEstimate() {
-        if (tokenEstEl) tokenEstEl.textContent = '~' + Math.ceil(txtInput.value.length / 4) + ' ' + dict.tokensEstSuffix;
+        var draftObj = readDraftSnapshot();
+        var totalChars = Object.keys(draftObj).reduce(function(sum, kName) {
+          return sum + String(draftObj[kName] === undefined ? '' : draftObj[kName]).length;
+        }, 0);
+        if (tokenEstEl) tokenEstEl.textContent = '~' + Math.ceil(totalChars / 4) + ' ' + dict.tokensEstSuffix;
       }
       updateTokenEstimate();
-      txtInput.addEventListener('input', function() {
-        editorDirty = (txtInput.value !== editorOriginalText);
-        updateTokenEstimate();
+
+      bodySection.querySelectorAll('#inspector-editor-fields input, #inspector-editor-fields textarea, #inspector-editor-fields select').forEach(function(fld) {
+        var markDirty = function() {
+          editorDirty = (JSON.stringify(readDraftSnapshot()) !== editorOriginalText);
+          updateTokenEstimate();
+        };
+        fld.addEventListener('input', markDirty);
+        fld.addEventListener('change', markDirty);
       });
 
-      txtInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Tab') {
-          e.preventDefault();
-          var start = this.selectionStart;
-          var end = this.selectionEnd;
-          this.value = this.value.substring(0, start) + '  ' + this.value.substring(end);
-          this.selectionStart = this.selectionEnd = start + 2;
-          editorDirty = (this.value !== editorOriginalText);
-          updateTokenEstimate();
-        }
-      });
+      // Only intercept Tab for 2-space indentation inside code editors (tools), keeping standard Tab focus navigation on prose fields
+      var codeTxt = kind === 'tools' ? qField('#inspector-editor-input') : null;
+      if (codeTxt) {
+        codeTxt.addEventListener('keydown', function(e) {
+          if (e.key === 'Tab') {
+            e.preventDefault();
+            var start = this.selectionStart;
+            var end = this.selectionEnd;
+            this.value = this.value.substring(0, start) + '  ' + this.value.substring(end);
+            this.selectionStart = this.selectionEnd = start + 2;
+            editorDirty = (JSON.stringify(readDraftSnapshot()) !== editorOriginalText);
+            updateTokenEstimate();
+          }
+        });
+      }
 
       bodySection.querySelector('#btn-editor-cancel').addEventListener('click', function() {
         confirmDiscardDraft(function() {
@@ -2229,20 +2718,43 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
 
       var btnSave = bodySection.querySelector('#btn-editor-save');
       btnSave.addEventListener('click', function() {
-        var nextBody = txtInput.value;
+        var draft = readDraftSnapshot();
         var curDict = i18n[lang] || i18n.en;
         runWithButtonLock(btnSave, curDict.savingLabel, function() {
-          return callKernelAction('update-content', { kind: singularKind(kind), id: item.id, content: nextBody, tier: itemTier }).then(function(res) {
+          var savePromise;
+          if (kind === 'preferences') {
+            savePromise = callKernelAction('create-preference', {
+              id: item.id,
+              supersedes_id: item.id,
+              tier: itemTier || 'GLOBAL',
+              title: draft.title.trim() || item.title || item.id,
+              l0_summary: draft.l0_summary.trim() || draft.content.trim().slice(0, 120) || item.l0_summary || item.title || item.id,
+              category: draft.category || 'style',
+              always_on: draft.always_on,
+              trigger_cue: draft.trigger_cue.trim() || undefined,
+              tags: Array.isArray(item.tags) ? item.tags : [],
+              content: draft.content,
+              enabled: item.enabled !== false,
+              review_status: item.review_status || 'approved'
+            });
+          } else {
+            var updatePayload = Object.assign({ kind: singularKind(kind), id: item.id, tier: itemTier }, draft);
+            if (kind === 'tools') {
+              updatePayload.content = draft.script_code;
+            }
+            savePromise = callKernelAction('update-content', updatePayload);
+          }
+          return savePromise.then(function(res) {
             if (res.ok) {
               editorDirty = false;
               editorOriginalText = '';
               editorPendingBgUpdate = false;
               showToast('success', (lang === 'zh' ? '已保存变更：' : 'Changes saved to ') + item.id);
+              if (res.data && Array.isArray(res.data.warnings) && res.data.warnings.length > 0) {
+                showToast('warn', res.data.warnings[0], 6000);
+              }
               if (res.snapshot) {
                 snapshot = res.snapshot;
-              } else {
-                if (kind === 'tools') item.script_code = nextBody;
-                else item.content = nextBody;
               }
               inspectorMode = 'preview';
               rerenderAllViews();
@@ -2320,7 +2832,7 @@ export const CAPABILITIES_CLIENT_SCRIPT = `
     if (termBadge) termBadge.textContent = dict.runningBadge;
     if (termScreen) termScreen.textContent = '$ evo run ' + toolId + ' --self-test\\n' + dict.sandboxExecutingMsg;
 
-    callKernelAction('run-tool-test', { id: toolId }).then(function(res) {
+    return callKernelAction('run-tool-test', { id: toolId }).then(function(res) {
       var curDict = i18n[lang] || i18n.en;
       if (!termScreen || !termBadge) return;
       if (res.ok && res.result) {

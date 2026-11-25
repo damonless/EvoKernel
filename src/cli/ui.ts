@@ -1699,6 +1699,19 @@ export async function startUiServer(
       w.on('error', () => {}); watchers.push(w);
     } catch {}
   }
+  const globalRoot = path.resolve(resolveGlobalFallbackDir());
+  const globalEvoDir = path.join(globalRoot, '.evo');
+  if (globalRoot !== path.resolve(ws) && fs.existsSync(globalEvoDir)) {
+    try {
+      const w = fs.watch(globalEvoDir, { recursive: true }, (_e, f) => {
+        if (!f) return notifyChange();
+        const norm = String(f).replace(/\\/g, '/');
+        if (norm.startsWith('.cache') || norm.includes('telemetry.db')) return;
+        notifyChange();
+      });
+      w.on('error', () => {}); watchers.push(w);
+    } catch {}
+  }
   const gitHead = path.join(ws, '.git', 'HEAD');
   if (fs.existsSync(gitHead)) {
     try { const w = fs.watch(gitHead, () => notifyChange()); w.on('error', () => {}); watchers.push(w); } catch {}

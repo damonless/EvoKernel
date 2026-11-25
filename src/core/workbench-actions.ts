@@ -1462,7 +1462,21 @@ export async function executeWorkbenchAction(
           }
           telem.syncFromDisk(true);
         } else {
-          targetStorage.saveRule({ ...rule, core: targetCore, updated_at: new Date().toISOString() });
+          const prevSnap = targetStorage.snapshotCapabilityForHistory(cleanId, 'rule');
+          const nowIso = new Date().toISOString();
+          targetStorage.saveRule({ ...rule, core: targetCore, updated_at: nowIso });
+          if (prevSnap?.snapshot) {
+            targetStorage.appendProfileHistory({
+              ts: nowIso,
+              action: 'update',
+              id: cleanId,
+              kind: 'rule',
+              title: rule.title || cleanId,
+              previous_snapshot: prevSnap.snapshot,
+              was_core: prevSnap.wasCore,
+              reason: targetCore ? 'Promoted to Core in Workbench' : 'Demoted to Scoped in Workbench',
+            });
+          }
           telem.syncFromDisk(true);
         }
       } finally {
@@ -1492,6 +1506,15 @@ export async function executeWorkbenchAction(
       const rawKind = typeof params.kind === 'string' ? params.kind.trim().toLowerCase() : '';
       const rawId = typeof params.id === 'string' ? params.id.trim() : '';
       const rawContent = typeof params.content === 'string' ? params.content : '';
+      const hasStructuredSkillFields =
+        rawKind === 'skill' &&
+        (typeof params.l1_contract === 'string' || typeof params.l2_sop === 'string');
+      const hasStructuredMemoryFields =
+        rawKind === 'memory' &&
+        (typeof params.symptom === 'string' ||
+          typeof params.root_cause === 'string' ||
+          typeof params.solution === 'string');
+      const hasStructuredToolField = rawKind === 'tool' && typeof params.script_code === 'string';
 
       if (!['rule', 'skill', 'tool', 'memory', 'preference'].includes(rawKind)) {
         return { status: 400, body: { ok: false, error: `Bad Request: Invalid kind "${rawKind}"` } };
@@ -1499,7 +1522,12 @@ export async function executeWorkbenchAction(
       if (!rawId) {
         return { status: 400, body: { ok: false, error: 'Bad Request: Missing item id' } };
       }
-      if (!rawContent.trim()) {
+      if (
+        !rawContent.trim() &&
+        !hasStructuredSkillFields &&
+        !hasStructuredMemoryFields &&
+        !hasStructuredToolField
+      ) {
         return { status: 400, body: { ok: false, error: 'Bad Request: Missing or empty content' } };
       }
 
@@ -1510,11 +1538,12 @@ export async function executeWorkbenchAction(
       const resolved = resolveTargetStorage(ws, rawKind as EvoKind, params, cleanId, 'active');
       const targetStorage = resolved.storage;
 
-      const hasFrontmatter = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.test(rawContent.trimStart());
+      const effectiveRawContent = hasStructuredToolField ? String(params.script_code) : rawContent;
+      const hasFrontmatter = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.test(effectiveRawContent.trimStart());
       const { meta, body } =
         rawKind !== 'tool' && hasFrontmatter
-          ? parseFrontmatter(rawContent.trimStart())
-          : { meta: {} as Record<string, unknown>, body: rawContent.trim() };
+          ? parseFrontmatter(effectiveRawContent.trimStart())
+          : { meta: {} as Record<string, unknown>, body: effectiveRawContent.trim() };
 
       let payload: ProposalPayload;
       let preservedEnabled: boolean | undefined;
@@ -1568,9 +1597,22 @@ export async function executeWorkbenchAction(
         payload = {
           kind: 'rule',
           id: cleanId,
-          title: meta.title ? String(meta.title).trim() : existingRule.title,
-          l0_summary: meta.l0_summary ? String(meta.l0_summary).trim() : existingRule.l0_summary,
-          scope_glob: scopeGlob,
+          title:
+            typeof params.title === 'string' && params.title.trim()
+              ? params.title.trim()
+              : meta.title
+                ? String(meta.title).trim()
+                : existingRule.title,
+          l0_summary:
+            typeof params.l0_summary === 'string' && params.l0_summary.trim()
+              ? params.l0_summary.trim()
+              : meta.l0_summary
+                ? String(meta.l0_summary).trim()
+                : existingRule.l0_summary,
+          scope_glob:
+            typeof params.scope_glob === 'string' && params.scope_glob.trim()
+              ? params.scope_glob.trim()
+              : scopeGlob,
           core: isCore,
           priority:
             meta.priority !== undefined && Number.isFinite(Number(meta.priority))
@@ -1603,11 +1645,24 @@ export async function executeWorkbenchAction(
         }
 
         const trimmedBody = body.trim();
-        const parsedSec = parseSkillSectionsFromMarkdown(trimmedBody);
-        const l1_contract = parsedSec.l1 || existingSkill.l1_contract || 'Standard skill contract';
-        const l2_sop =
-          parsedSec.l2 ||
-          (!parsedSec.hasL1Header && trimmedBody ? trimmedBody : existingSkill.l2_sop || '');
+        let l1_contract: string;
+        let l2_sop: string;
+        if (hasStructuredSkillFields) {
+          l1_contract =
+            typeof params.l1_contract === 'string' && params.l1_contract.trim()
+              ? params.l1_contract.trim()
+              : existingSkill.l1_contract || 'Standard skill contract';
+          l2_sop =
+            typeof params.l2_sop === 'string' && params.l2_sop.trim()
+              ? params.l2_sop.trim()
+              : existingSkill.l2_sop || '';
+        } else {
+          const parsedSec = parseSkillSectionsFromMarkdown(trimmedBody);
+          l1_contract = parsedSec.l1 || existingSkill.l1_contract || 'Standard skill contract';
+          l2_sop =
+            parsedSec.l2 ||
+            (!parsedSec.hasL1Header && trimmedBody ? trimmedBody : existingSkill.l2_sop || '');
+        }
 
         preservedEnabled =
           meta.enabled !== undefined
@@ -1669,23 +1724,41 @@ export async function executeWorkbenchAction(
         }
 
         const trimmedBody = body.trim();
-        const symptomMatch = trimmedBody.match(/## Symptom\s+([\s\S]*?)(?=## Root Cause|$)/i);
-        const rootCauseMatch = trimmedBody.match(/## Root Cause\s+([\s\S]*?)(?=## Solution|$)/i);
-        const solutionMatch = trimmedBody.match(/## Solution\s+([\s\S]*)$/i);
-        const symptom =
-          symptomMatch && symptomMatch[1].trim()
-            ? symptomMatch[1].trim()
-            : !rootCauseMatch && !solutionMatch && trimmedBody
-              ? trimmedBody
+        let symptom: string;
+        let root_cause: string;
+        let solution: string;
+        if (hasStructuredMemoryFields) {
+          symptom =
+            typeof params.symptom === 'string' && params.symptom.trim()
+              ? params.symptom.trim()
               : existingMem.symptom || 'Observed symptom';
-        const root_cause =
-          rootCauseMatch && rootCauseMatch[1].trim()
-            ? rootCauseMatch[1].trim()
-            : existingMem.root_cause || 'Diagnosed root cause';
-        const solution =
-          solutionMatch && solutionMatch[1].trim()
-            ? solutionMatch[1].trim()
-            : existingMem.solution || 'Verified solution';
+          root_cause =
+            typeof params.root_cause === 'string' && params.root_cause.trim()
+              ? params.root_cause.trim()
+              : existingMem.root_cause || 'Diagnosed root cause';
+          solution =
+            typeof params.solution === 'string' && params.solution.trim()
+              ? params.solution.trim()
+              : existingMem.solution || 'Verified solution';
+        } else {
+          const symptomMatch = trimmedBody.match(/## Symptom\s+([\s\S]*?)(?=## Root Cause|$)/i);
+          const rootCauseMatch = trimmedBody.match(/## Root Cause\s+([\s\S]*?)(?=## Solution|$)/i);
+          const solutionMatch = trimmedBody.match(/## Solution\s+([\s\S]*)$/i);
+          symptom =
+            symptomMatch && symptomMatch[1].trim()
+              ? symptomMatch[1].trim()
+              : !rootCauseMatch && !solutionMatch && trimmedBody
+                ? trimmedBody
+                : existingMem.symptom || 'Observed symptom';
+          root_cause =
+            rootCauseMatch && rootCauseMatch[1].trim()
+              ? rootCauseMatch[1].trim()
+              : existingMem.root_cause || 'Diagnosed root cause';
+          solution =
+            solutionMatch && solutionMatch[1].trim()
+              ? solutionMatch[1].trim()
+              : existingMem.solution || 'Verified solution';
+        }
 
         preservedEnabled =
           meta.enabled !== undefined
@@ -1806,6 +1879,13 @@ export async function executeWorkbenchAction(
               ? String(meta.l0_summary).trim()
               : existingPref.l0_summary || body.replace(/\s+/g, ' ').trim().slice(0, 130);
 
+        const prefTriggerCue =
+          typeof params.trigger_cue === 'string'
+            ? params.trigger_cue.trim()
+            : typeof meta.trigger_cue === 'string'
+              ? meta.trigger_cue.trim()
+              : existingPref.trigger_cue;
+
         payload = {
           kind: 'preference',
           id: cleanId,
@@ -1813,6 +1893,7 @@ export async function executeWorkbenchAction(
           l0_summary: prefL0,
           category,
           always_on: alwaysOn,
+          ...(prefTriggerCue ? { trigger_cue: prefTriggerCue } : {}),
           scope: resolved.isGlobal ? 'global' : 'project',
           content: body.trim(),
           tags: Array.isArray(params.tags)
@@ -1845,7 +1926,7 @@ export async function executeWorkbenchAction(
           title: tool.title || cleanId,
           l0_summary: tool.l0_summary || (tool as any).description || 'Tool',
           runtime: tool.runtime,
-          script_code: rawContent,
+          script_code: effectiveRawContent,
           input_schema: tool.input_schema,
           self_test_args: tool.self_test_args,
           timeout_ms: tool.timeout_ms,
@@ -2068,6 +2149,7 @@ export async function executeWorkbenchAction(
             id: cleanId,
             scope: resolved.isGlobal ? 'global' : 'project',
             syncedTargets: syncRes?.updatedTargets || [],
+            ...(syncRes?.warnings?.length ? { warnings: syncRes.warnings } : {}),
             receipt,
             snapshot,
           },
@@ -2199,7 +2281,11 @@ export async function executeWorkbenchAction(
         rawCat && PREFERENCE_CATEGORIES.includes(rawCat as PreferenceCategory)
           ? (rawCat as PreferenceCategory)
           : undefined;
-      const hasExplicitAlwaysOnFalse = params.always_on === false || params.always_on === 'false';
+      const rawMode = typeof params.mode === 'string' ? params.mode.trim().toLowerCase() : '';
+      const hasExplicitAlwaysOnFalse =
+        rawMode === 'on-demand' || params.always_on === false || params.always_on === 'false';
+      const hasExplicitAlwaysOnTrue =
+        rawMode === 'always-on' || (rawMode === '' && (params.always_on === true || params.always_on === 'true'));
       const dryRun = Boolean(params.dryRun);
 
       const candidates = parseMarkdownToPreferenceCandidates(
@@ -2222,7 +2308,7 @@ export async function executeWorkbenchAction(
         targetStorage.ensureInitialized();
       }
 
-      const imported: Array<{ id: string; title: string; category: PreferenceCategory }> = [];
+      const imported: Array<{ id: string; title: string; category: PreferenceCategory; always_on: boolean }> = [];
       const rejected: Array<{
         id: string;
         title: string;
@@ -2237,7 +2323,11 @@ export async function executeWorkbenchAction(
         const gatekeeper = new EvoGatekeeper(targetStorage, telem);
         for (const cand of candidates) {
           const candCategory = explicitCategory || cand.category;
-          const candAlwaysOn = hasExplicitAlwaysOnFalse ? false : cand.always_on;
+          const candAlwaysOn = hasExplicitAlwaysOnFalse
+            ? false
+            : hasExplicitAlwaysOnTrue
+              ? true
+              : cand.always_on;
           const payload: ProposalPayload = {
             kind: 'preference',
             id: cand.id,
@@ -2257,7 +2347,7 @@ export async function executeWorkbenchAction(
             dryRun,
           });
           if (gateRes.passed) {
-            imported.push({ id: cand.id, title: cand.title, category: candCategory });
+            imported.push({ id: cand.id, title: cand.title, category: candCategory, always_on: candAlwaysOn });
           } else {
             rejected.push({
               id: cand.id,
@@ -2299,8 +2389,93 @@ export async function executeWorkbenchAction(
             imported,
             rejected,
             syncedTargets: syncRes?.updatedTargets || [],
+            ...(syncRes?.warnings?.length ? { warnings: syncRes.warnings } : {}),
             snapshot,
           },
+        },
+      };
+    }
+
+    case 'create-memory': {
+      const targetFile = typeof params.filePath === 'string' ? params.filePath.trim() : '';
+      const symptom = typeof params.symptom === 'string' ? params.symptom.trim() : '';
+      const rootCause = typeof params.root_cause === 'string' ? params.root_cause.trim() : '';
+      const solution = typeof params.solution === 'string' ? params.solution.trim() : '';
+      if (!symptom || !solution) {
+        return {
+          status: 400,
+          body: { ok: false, error: 'Bad Request: Symptom and solution are required to record a lesson.' },
+        };
+      }
+      const rawTitle =
+        typeof params.title === 'string' && params.title.trim()
+          ? params.title.trim()
+          : symptom.slice(0, 72);
+      const rawL0 =
+        typeof params.l0_summary === 'string' && params.l0_summary.trim()
+          ? params.l0_summary.trim()
+          : `${rawTitle}: ${solution}`.slice(0, 130);
+      const rawTargets = Array.isArray(params.target_symbols)
+        ? params.target_symbols.map((s: unknown) => String(s).trim()).filter(Boolean)
+        : targetFile
+          ? [targetFile]
+          : [];
+      const rawId = typeof params.id === 'string' && params.id.trim() ? sanitizeId(params.id.trim()) : '';
+      const cleanId =
+        rawId && rawId.length >= 3
+          ? rawId
+          : `mem-${crypto.createHash('sha256').update(`${targetFile}\0${rawTitle}\0${symptom}`).digest('hex').slice(0, 8)}`;
+
+      localStorage.ensureInitialized();
+      const telem = new EvoTelemetry(localStorage);
+      let gateRes;
+      try {
+        const gatekeeper = new EvoGatekeeper(localStorage, telem);
+        gateRes = await gatekeeper.evaluateAndCommitAsync(
+          {
+            kind: 'memory',
+            id: cleanId,
+            title: rawTitle,
+            l0_summary: rawL0,
+            symptom,
+            root_cause: rootCause || symptom,
+            solution,
+            target_symbols: rawTargets,
+            ...(rawTargets.length === 0 ? { memory_type: 'personal' as const } : {}),
+            origin: 'workbench',
+            enabled: true,
+            review_status: 'approved',
+          },
+          { bypassConfoundedCheck: true }
+        );
+        if (gateRes.passed) {
+          telem.syncFromDisk(true);
+        }
+      } finally {
+        telem.close();
+      }
+      if (!gateRes.passed) {
+        const snapshot = buildSnapshotSafe(ws, hooks);
+        return {
+          status: 400,
+          body: {
+            ok: false,
+            code: gateRes.error_code,
+            gate_failed: gateRes.gate_failed,
+            error: gateRes.message || 'Gatekeeper rejected memory creation',
+            snapshot,
+          },
+        };
+      }
+      const snapshot = buildSnapshotSafe(ws, hooks);
+      hooks.notifyChange?.();
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          action: 'create-memory',
+          snapshot,
+          data: { id: cleanId, snapshot },
         },
       };
     }

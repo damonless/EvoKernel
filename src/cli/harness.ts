@@ -2073,7 +2073,7 @@ export function upsertAntigravityHooks(ws: string): string[] {
   }
 
   const makeHookCmd = (event: 'PreInvocation' | 'Stop') =>
-    `node scripts/antigravity_hook.mjs ${event} || node .agents/scripts/antigravity_hook.mjs ${event}`;
+    `node .agents/scripts/antigravity_hook.mjs ${event} || node scripts/antigravity_hook.mjs ${event} || node ../.agents/scripts/antigravity_hook.mjs ${event} || node ../scripts/antigravity_hook.mjs ${event} || node ../../.agents/scripts/antigravity_hook.mjs ${event}`;
 
   hooksObj['evo-evolution-reminder'] = {
     PreInvocation: [
@@ -2383,4 +2383,31 @@ export function parseHarnessTargets(
   }
 
   return detectCascadedTargets(workspaceRoot, env, homeDir);
+}
+
+export function validateHarnessTargetsList(rawTargets: string): {
+  valid: boolean;
+  unknownTokens: string[];
+  validTargets: string[];
+} {
+  const validTargets = [...Object.keys(ALL_HARNESS_ADAPTERS), 'auto', 'all'];
+  const tokens = rawTargets
+    .split(/[\s,]+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length === 0) {
+    return { valid: false, unknownTokens: ['(empty)'], validTargets };
+  }
+  const unknownTokens: string[] = [];
+  for (const token of tokens) {
+    if (token === 'auto' || token === 'all') continue;
+    if (!normalizeTargetToken(token)) {
+      unknownTokens.push(token);
+    }
+  }
+  return {
+    valid: unknownTokens.length === 0,
+    unknownTokens,
+    validTargets,
+  };
 }

@@ -1,4 +1,5 @@
 import * as child_process from 'node:child_process';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -247,15 +248,15 @@ export const META_MCP_TOOLS = [
         },
         undo: {
           type: 'boolean',
-          description: '[preference] Undo the latest global profile preference change in chat.',
+          description: 'Undo the latest change (scope-aware; atomically reverts multi-step batches).',
         },
         undo_id: {
           type: 'string',
-          description: '[preference] Optional specific preference ID to undo when undo=true.',
+          description: 'Optional specific capability/preference ID to undo when undo=true.',
         },
         auto_resolve: {
           type: 'boolean',
-          description: '[preference] Automatically resolve duplicate conflicts (via supersedes_id) or profile budget overflow (demoting lowest-value candidate) on retry.',
+          description: 'Auto-resolve duplicate/polarity conflicts and budget overflow atomically (default: true for preferences).',
         },
         workspace: WORKSPACE_PARAM_SCHEMA,
       },
@@ -1057,12 +1058,67 @@ export class EvoMcpDispatcher {
     return fallbacks;
   }
 
+  private resolveProjectRootForScopeCheck(args: Record<string, unknown>): string | null {
+    const rawWs = args.workspace ?? args.workspace_path;
+    let candidate = '';
+    if (typeof rawWs === 'string' && rawWs.trim()) {
+      const trimmed = rawWs.trim();
+      candidate = path.isAbsolute(trimmed)
+        ? path.resolve(trimmed)
+        : path.resolve(this.clientRoots[0] || this.defaultRoot, trimmed);
+    } else if (this.clientRoots.length === 1) {
+      candidate = path.resolve(this.clientRoots[0]);
+    } else if (this.clientRoots.length > 1) {
+      const rootWithEvo = this.clientRoots.find((r) => hasValidEvoStructure(path.join(r, '.evo')));
+      candidate = path.resolve(rootWithEvo || this.clientRoots[0]);
+    } else {
+      candidate = path.resolve(this.defaultRoot);
+    }
+    if (!candidate || isGlobalFallbackRoot(candidate) || isHostGlobalConfigDir(candidate) || isPluginOrExtensionInstallDir(candidate)) {
+      return null;
+    }
+    const nearest = findNearestEvoWorkspace(candidate);
+    if (nearest && !isGlobalFallbackRoot(nearest)) {
+      return nearest;
+    }
+    return hasValidEvoStructure(path.join(candidate, '.evo')) ? candidate : null;
+  }
+
   private isGlobalWriteRoute(toolName: string, args: Record<string, unknown>): boolean {
     if (toolName !== 'evo_propose' && toolName !== 'evo_compact') return false;
     const topScope = typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : '';
     if (topScope === 'global') return true;
     if (toolName === 'evo_propose') {
-      if (args.undo === true) return true;
+      if (args.undo === true) {
+        if (topScope === 'project') return false;
+        const undoId =
+          typeof args.undo_id === 'string' && args.undo_id.trim()
+            ? args.undo_id.trim()
+            : undefined;
+        const explicitWsProvided =
+          typeof (args.workspace ?? args.workspace_path) === 'string' &&
+          String(args.workspace ?? args.workspace_path).trim().length > 0;
+        const projectRoot = this.resolveProjectRootForScopeCheck(args);
+        const globalRoot = resolveGlobalFallbackDir();
+        const projCand = projectRoot
+          ? new EvoStorage(projectRoot).previewUndoCandidate(undoId).candidate
+          : undefined;
+        const globCand = hasValidEvoStructure(path.join(globalRoot, '.evo'))
+          ? new EvoStorage(globalRoot).previewUndoCandidate(undoId).candidate
+          : undefined;
+
+        if (projCand && !globCand) return false;
+        if (globCand && !projCand) return true;
+        if (projCand && globCand) {
+          const projTs = Date.parse(projCand.ts) || 0;
+          const globTs = Date.parse(globCand.ts) || 0;
+          if (projTs !== globTs) {
+            return globTs > projTs;
+          }
+          return !explicitWsProvided;
+        }
+        return !explicitWsProvided || !projectRoot;
+      }
       const kind = typeof args.kind === 'string' ? args.kind.trim().toLowerCase() : '';
       const memType = typeof args.memory_type === 'string' ? args.memory_type.trim().toLowerCase() : '';
       return (kind === 'preference' || (kind === 'memory' && memType === 'personal')) && topScope !== 'project';
@@ -1128,6 +1184,19 @@ export class EvoMcpDispatcher {
       candidate = targetRoot;
       hasLocalEvo = hasValidEvoStructure(path.join(targetRoot, '.evo'));
     } else if (typeof rawWs !== 'string' || !rawWs.trim()) {
+      if (
+        (toolName === 'evo_search' || toolName === 'evo_inspect' || toolName === 'evo_run') &&
+        this.clientRoots.length > 0
+      ) {
+        const chosenRoot =
+          this.clientRoots.length === 1
+            ? this.clientRoots[0]
+            : this.clientRoots.find((r) => hasValidEvoStructure(path.join(r, '.evo'))) ||
+              this.clientRoots[0];
+        candidate = path.resolve(chosenRoot);
+        const nearestFromClient = findNearestEvoWorkspace(candidate);
+        targetRoot = nearestFromClient || candidate;
+      }
       hasLocalEvo = hasValidEvoStructure(path.join(targetRoot, '.evo'));
     }
 
@@ -1284,6 +1353,11 @@ export class EvoMcpDispatcher {
     ) {
       if (this.clientRoots.length === 1) {
         effectiveArgs = { ...args, workspace: this.clientRoots[0] };
+      } else if (name === 'evo_propose' && args.undo === true) {
+        const resolvedProj = this.resolveProjectRootForScopeCheck(args);
+        if (resolvedProj) {
+          effectiveArgs = { ...args, workspace: resolvedProj };
+        }
       } else {
         return {
           isError: true,
@@ -1323,15 +1397,27 @@ export class EvoMcpDispatcher {
     try {
       const reqCtx = this.bindActiveContext(name, effectiveArgs);
       boundCtx = reqCtx;
+      const isExtInspectTarget =
+        name === 'evo_inspect' &&
+        typeof effectiveArgs.id === 'string' &&
+        effectiveArgs.id.trim().startsWith('ext__');
+      const syncContexts = [reqCtx.wsCtx, ...this.getGlobalFallbackContexts(reqCtx)].filter((c) =>
+        this.needsExternalToolsSync(c)
+      );
       const needsSync =
-        (name === 'evo_search' || name === 'evo_inspect') &&
-        (this.needsExternalToolsSync(reqCtx.wsCtx) ||
-          this.getGlobalFallbackContexts(reqCtx).some((g) => this.needsExternalToolsSync(g)));
+        (name === 'evo_search' || isExtInspectTarget) && syncContexts.length > 0;
+      const hasCachedExternalTools = syncContexts.some(
+        (c) => hasValidEvoStructure(c.storage.evoDir) && c.storage.listExternalTools().length > 0
+      );
+      const hasEnabledExternalServers = syncContexts.some((c) =>
+        Object.values(c.storage.getConfig().externalServers || {}).some((s) => s && !s.disabled)
+      );
 
       let result: any;
       switch (name) {
         case 'evo_search':
-          if (needsSync) {
+          if (needsSync && !hasEnabledExternalServers) {
+            // Zero enabled downstream servers: purge stale cached external tools synchronously (0 subprocesses)
             result = this.ensureExternalToolsSynced(reqCtx).then(() => {
               const freshCtx = this.bindActiveContext(name, effectiveArgs);
               if (boundCtx) {
@@ -1342,7 +1428,35 @@ export class EvoMcpDispatcher {
                 ? this.handleSearchAsync(effectiveArgs, freshCtx)
                 : this.handleSearch(effectiveArgs, freshCtx);
             });
+          } else if (needsSync && !hasCachedExternalTools) {
+            const syncWork = this.ensureExternalToolsSynced(reqCtx).catch(() => {});
+            const graceMs = 800;
+            let timedOut = false;
+            const raced = Promise.race([
+              syncWork.then(() => false),
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(true), graceMs)),
+            ]);
+            result = raced.then((didTimeout) => {
+              timedOut = didTimeout;
+              const freshCtx = this.bindActiveContext(name, effectiveArgs);
+              if (boundCtx) {
+                this.releaseContextRef(boundCtx.wsCtx);
+              }
+              boundCtx = freshCtx;
+              const res = asyncMode
+                ? this.handleSearchAsync(effectiveArgs, freshCtx)
+                : this.handleSearch(effectiveArgs, freshCtx);
+              if (timedOut) {
+                // Background sync continues populating cache without stalling search
+                void syncWork;
+              }
+              return res;
+            });
           } else {
+            if (needsSync && hasCachedExternalTools) {
+              // Cache-first non-blocking refresh in background
+              void this.ensureExternalToolsSynced(reqCtx).catch(() => {});
+            }
             result = asyncMode
               ? this.handleSearchAsync(effectiveArgs, reqCtx)
               : this.handleSearch(effectiveArgs, reqCtx);
@@ -1507,7 +1621,8 @@ export class EvoMcpDispatcher {
     targetCtx: WorkspaceContext,
     hasLocalEvo: boolean,
     localTelemetry: EvoTelemetry | undefined,
-    mergedHits: SearchHit[]
+    mergedHits: SearchHit[],
+    dirtyReminder = ''
   ) {
     const highRelevanceHits = mergedHits.filter((h) => !h.low_overlap);
     const effectiveMergedHits =
@@ -1634,8 +1749,8 @@ export class EvoMcpDispatcher {
     );
     const footerDirective =
       topGuardrailIds.length > 0
-        ? `Action Required: Call evo_inspect(id, "L2", workspace) on matched guardrails/SOPs [${topGuardrailIds.join(', ')}] to load full checklists (never rely on L0 summaries alone), or evo_run(tool_id, args) to execute a TOOL.${toolFooter}${antiPoisonReminder}`
-        : `Tip: Call evo_inspect(id, "L1"|"L2", workspace) for details/topology anchors or evo_run(tool_id, args) to execute a TOOL.${toolFooter}${antiPoisonReminder}`;
+        ? `Action Required: Call evo_inspect(id, "L2", workspace) on matched guardrails/SOPs [${topGuardrailIds.join(', ')}] to load full checklists (never rely on L0 summaries alone), or evo_run(tool_id, args) to execute a TOOL.${toolFooter}${antiPoisonReminder}${dirtyReminder}`
+        : `Tip: Call evo_inspect(id, "L1"|"L2", workspace) for details/topology anchors or evo_run(tool_id, args) to execute a TOOL.${toolFooter}${antiPoisonReminder}${dirtyReminder}`;
 
     return {
       content: [
@@ -1709,6 +1824,9 @@ export class EvoMcpDispatcher {
       }
     }
 
+    const dirtyReminder = hasLocalEvo
+      ? this.checkDirtyTreeReminder(reqCtx.wsCtx.storage.rootDir, localTelemetry, reqCtx.wsCtx)
+      : '';
     return this.finalizeSearchResponse(
       query,
       kind,
@@ -1717,7 +1835,8 @@ export class EvoMcpDispatcher {
       targetCtx,
       hasLocalEvo,
       localTelemetry,
-      mergedHits
+      mergedHits,
+      dirtyReminder
     );
   }
 
@@ -1784,6 +1903,9 @@ export class EvoMcpDispatcher {
       }
     }
 
+    const dirtyReminder = hasLocalEvo
+      ? await this.checkDirtyTreeReminderAsync(reqCtx.wsCtx.storage.rootDir, localTelemetry, reqCtx.wsCtx)
+      : '';
     return this.finalizeSearchResponse(
       query,
       kind,
@@ -1792,7 +1914,8 @@ export class EvoMcpDispatcher {
       targetCtx,
       hasLocalEvo,
       localTelemetry,
-      mergedHits
+      mergedHits,
+      dirtyReminder
     );
   }
 
@@ -1833,22 +1956,7 @@ export class EvoMcpDispatcher {
       const pausedBanner = isPaused
         ? '> [!WARNING] **[PAUSED — enabled: false]**: This capability is currently paused in EvoKernel Workbench. Inspect only; do not rely on it as active policy.\n\n'
         : '';
-      const antiPoisonReminder = this.getSessionAntiPoisonReminder(
-        storage.rootDir,
-        storage,
-        telemetry,
-        'all',
-        hasLocal
-      );
-      if (asyncMode) {
-        return this.checkDirtyTreeReminderAsync(storage.rootDir, telemetry, reqCtx.wsCtx).then(
-          (reminder) => ({
-            content: [{ type: 'text' as const, text: pausedBanner + bodyText + reminder + antiPoisonReminder }],
-          })
-        );
-      }
-      const reminder = this.checkDirtyTreeReminder(storage.rootDir, telemetry, reqCtx.wsCtx);
-      return { content: [{ type: 'text' as const, text: pausedBanner + bodyText + reminder + antiPoisonReminder }] };
+      return { content: [{ type: 'text' as const, text: pausedBanner + bodyText }] };
     };
 
     const parsedExt = parseExternalToolId(rawId);
@@ -2514,24 +2622,12 @@ export class EvoMcpDispatcher {
           const schemaHint = res.isError
             ? this.formatInputSchemaHint(cachedExtTool?.inputSchema)
             : '';
-          const reminder = await this.checkDirtyTreeReminderAsync(
-            reqCtx.requestWorkspaceDir || initialCtx.storage.rootDir,
-            localTelemetry,
-            reqCtx.wsCtx
-          );
-          const antiPoisonReminder = this.getSessionAntiPoisonReminder(
-            initialCtx.storage.rootDir,
-            initialCtx.storage,
-            localTelemetry,
-            'all',
-            hasLocal
-          );
           return {
             isError: res.isError,
             content: [
               {
                 type: 'text' as const,
-                text: `${header}\n\n${formattedText}${schemaHint}${reminder}${antiPoisonReminder}`,
+                text: `${header}\n\n${formattedText}${schemaHint}`,
               },
             ],
           };
@@ -2639,14 +2735,6 @@ export class EvoMcpDispatcher {
         // Ignore telemetry error if DB was closed concurrently
       }
 
-      const reminder = await this.checkDirtyTreeReminderAsync(execCwd, localTel, reqCtx.wsCtx);
-      const antiPoisonReminder = this.getSessionAntiPoisonReminder(
-        boundStorage.rootDir,
-        boundStorage,
-        localTel,
-        'all',
-        hasLocal
-      );
       const schemaHint = !success ? this.formatInputSchemaHint(targetTool.input_schema) : '';
       const output = [
         `[evo_run: ${targetTool.id} (${targetTool.runtime}) | exit=${res.exitCode} | ${res.durationMs}ms]`,
@@ -2658,7 +2746,7 @@ export class EvoMcpDispatcher {
 
       return {
         isError: !success,
-        content: [{ type: 'text' as const, text: output + schemaHint + reminder + antiPoisonReminder }],
+        content: [{ type: 'text' as const, text: output + schemaHint }],
       };
     };
 
@@ -2683,15 +2771,44 @@ export class EvoMcpDispatcher {
         typeof (proposal as any).undo_id === 'string' && (proposal as any).undo_id.trim()
           ? (proposal as any).undo_id.trim()
           : undefined;
+      const isGlobalRoot = isGlobalFallbackRoot(storage.rootDir);
       const res = storage.undoLastProfileChange(undoId);
       if (res.ok) {
-        const syncRes = syncGlobalUserProfile(storage.rootDir);
+        const telemetry = reqCtx.wsCtx.telemetry || reqCtx.telemetry;
+        telemetry?.syncFromDisk(true);
+        const syncRes = isGlobalRoot ? syncGlobalUserProfile(storage.rootDir) : undefined;
+        const syncedProjectFiles = !isGlobalRoot ? syncManagedRuleBlocks(storage.rootDir) : [];
+        const batchCount = res.undoneBatch ? res.undoneBatch.length : 1;
         const label = res.undone?.title || res.undone?.id || undoId || '';
+        const kindLabelZh: Record<string, string> = {
+          preference: '偏好',
+          memory: '经验记录',
+          rule: '规则',
+          skill: '工作流程',
+          tool: '工具',
+        };
+        const kindLabelEn: Record<string, string> = {
+          preference: 'preference',
+          memory: 'memory',
+          rule: 'rule',
+          skill: 'workflow',
+          tool: 'tool',
+        };
+        const uKind = res.undone?.kind || 'preference';
         const hasCjk = /[\u4e00-\u9fff]/.test(`${label} ${res.message}`);
-        const human_receipt = hasCjk
-          ? `已撤销偏好变更「${label}」。`
-          : `Undid profile change "${label}".`;
-        const { undone: undoneEntry, ok: _ok, ...restRes } = res;
+        let human_receipt = hasCjk
+          ? batchCount > 1
+            ? `已一并撤销包含「${label}」在内的 ${batchCount} 项变更。`
+            : `已撤销${kindLabelZh[uKind] || '变更'}「${label}」。`
+          : batchCount > 1
+            ? `Undid ${batchCount} changes including "${label}".`
+            : `Undid ${kindLabelEn[uKind] || 'change'} "${label}".`;
+        if (syncRes && syncRes.warnings.length > 0) {
+          human_receipt += hasCjk
+            ? `（注意：${syncRes.warnings[0]}）`
+            : ` (Note: ${syncRes.warnings[0]})`;
+        }
+        const { undone: undoneEntry, undoneBatch, ok: _ok, ...restRes } = res;
         return {
           content: [
             {
@@ -2699,10 +2816,15 @@ export class EvoMcpDispatcher {
               text: JSON.stringify(
                 {
                   ok: true,
+                  scope: isGlobalRoot ? 'global' : 'project',
                   ...restRes,
                   undone: true,
                   ...(undoneEntry ? { undone_entry: undoneEntry } : {}),
-                  synced_profile_targets: syncRes.updatedTargets,
+                  ...(undoneBatch && undoneBatch.length > 1 ? { undone_batch: undoneBatch } : {}),
+                  synced_profile_targets: syncRes ? syncRes.updatedTargets : syncedProjectFiles,
+                  ...(syncRes && syncRes.warnings.length > 0
+                    ? { profile_sync_warnings: syncRes.warnings }
+                    : {}),
                   human_receipt,
                 },
                 null,
@@ -2749,6 +2871,21 @@ export class EvoMcpDispatcher {
       hook_trigger: proposal.hook_trigger,
     };
 
+    // Bidirectional personal memory <-> global scope smart inference
+    if (payload.kind === 'memory') {
+      const hasTargets = Array.isArray(payload.target_symbols) && payload.target_symbols.length > 0;
+      if (payload.memory_type === 'personal' && !payload.scope) {
+        payload.scope = 'global';
+      } else if (
+        payload.scope === 'global' &&
+        !payload.memory_type &&
+        !hasTargets
+      ) {
+        payload.memory_type = 'personal';
+      }
+    }
+
+    // Universal smart inference for title / l0_summary / id across ALL capability kinds
     if (payload.kind === 'preference' && typeof payload.content === 'string' && payload.content.trim()) {
       const rawContent = payload.content.trim();
       const cleaned = cleanMarkdownInline(rawContent);
@@ -2771,6 +2908,44 @@ export class EvoMcpDispatcher {
       if (!payload.id || !String(payload.id).trim()) {
         payload.id = buildDeterministicId(payload.title || payload.l0_summary, rawContent, new Set());
       }
+    } else if (
+      payload.kind === 'rule' ||
+      payload.kind === 'skill' ||
+      payload.kind === 'memory' ||
+      payload.kind === 'tool'
+    ) {
+      const hasSupersedes =
+        typeof payload.supersedes_id === 'string' && sanitizeId(payload.supersedes_id).length >= 3;
+      const seedBody =
+        payload.kind === 'rule'
+          ? String(payload.content || '').trim()
+          : payload.kind === 'skill'
+            ? String(payload.l1_contract || payload.l2_sop || payload.content || '').trim()
+            : payload.kind === 'memory'
+              ? String(payload.symptom || payload.solution || payload.root_cause || payload.content || '').trim()
+              : String(payload.description || payload.script_code || '').trim();
+      if (!hasSupersedes && seedBody) {
+        const cleaned = cleanMarkdownInline(seedBody.split(/\r?\n/).find((l) => l.trim()) || seedBody);
+        if (!payload.title || !String(payload.title).trim()) {
+          payload.title =
+            String(payload.name || payload.l0_summary || cleaned.slice(0, 72) || `${payload.kind}-item`).trim();
+        }
+        if (!payload.l0_summary || !String(payload.l0_summary).trim()) {
+          payload.l0_summary = cleaned.slice(0, 130) || payload.title;
+        }
+        if (!payload.id || !String(payload.id).trim()) {
+          const generated = buildDeterministicId(payload.title || payload.l0_summary, seedBody, new Set());
+          const prefixMap: Record<string, string> = {
+            rule: 'rule',
+            skill: 'skill',
+            memory: 'mem',
+            tool: 'tool',
+          };
+          payload.id = generated.startsWith('pref-')
+            ? `${prefixMap[payload.kind] || payload.kind}-${generated.slice(5)}`
+            : generated;
+        }
+      }
     }
 
     const gatekeeper = reqCtx.wsCtx.gatekeeper || reqCtx.gatekeeper!;
@@ -2779,6 +2954,14 @@ export class EvoMcpDispatcher {
       telemetry && !telemetry.isClosed()
         ? telemetry.getSessionFlag('active_session_epoch') || undefined
         : undefined;
+
+    let autoResolvedMeta: {
+      batchId?: string;
+      evictedIds: string[];
+      supersededIds: string[];
+      downgradedToOnDemand?: boolean;
+      downgradedToScoped?: boolean;
+    } = { evictedIds: [], supersededIds: [] };
 
     const finishPropose = (result: ReturnType<EvoGatekeeper['evaluateAndCommit']>) => {
       if (!result.passed) {
@@ -2796,11 +2979,19 @@ export class EvoMcpDispatcher {
       const committedId = String(
         (result.diagnostics as Record<string, unknown> | undefined)?.id || sanitizeId(payload.id || '')
       );
+      const supersededForSession = Array.from(
+        new Set(
+          [
+            ...(payload.supersedes_id ? [payload.supersedes_id] : []),
+            ...autoResolvedMeta.supersededIds,
+          ].filter(Boolean)
+        )
+      );
       this.recordSessionProposal(
         storage.rootDir,
         committedId,
         payload.kind,
-        payload.supersedes_id ? [payload.supersedes_id] : undefined,
+        supersededForSession.length > 0 ? supersededForSession : undefined,
         payload.enabled !== false,
         activeEpoch
       );
@@ -2810,6 +3001,7 @@ export class EvoMcpDispatcher {
         payload.kind === 'memory' &&
         (result.diagnostics as Record<string, unknown> | undefined)?.memory_type === 'personal';
 
+      let syncWarnings: string[] = [];
       if (payload.kind === 'rule' || payload.kind === 'tool' || payload.kind === 'skill') {
         if (!isGlobalRoot) {
           syncManagedRuleBlocks(storage.rootDir);
@@ -2819,12 +3011,14 @@ export class EvoMcpDispatcher {
         }
         if (isGlobalRoot && payload.kind === 'skill') {
           const syncRes = syncGlobalUserProfile(storage.rootDir);
+          syncWarnings = syncRes.warnings || [];
           result.diagnostics = {
             ...(result.diagnostics || {}),
             synced_profile_targets: syncRes.updatedTargets,
             profile_tokens: syncRes.totalTokens,
             max_profile_tokens: syncRes.maxTokens,
             menu_tokens: syncRes.menuTokens,
+            ...(syncWarnings.length > 0 ? { profile_sync_warnings: syncWarnings } : {}),
           };
         }
       } else if (
@@ -2832,15 +3026,35 @@ export class EvoMcpDispatcher {
         (payload.kind === 'preference' || isPersonalMemCommit)
       ) {
         const syncRes = syncGlobalUserProfile(storage.rootDir);
+        syncWarnings = syncRes.warnings || [];
         result.diagnostics = {
           ...(result.diagnostics || {}),
           synced_profile_targets: syncRes.updatedTargets,
           profile_tokens: syncRes.totalTokens,
           max_profile_tokens: syncRes.maxTokens,
           menu_tokens: syncRes.menuTokens,
+          ...(syncWarnings.length > 0 ? { profile_sync_warnings: syncWarnings } : {}),
         };
       } else if (!isGlobalRoot && payload.kind === 'preference') {
         syncManagedRuleBlocks(storage.rootDir);
+      }
+
+      if (
+        autoResolvedMeta.evictedIds.length > 0 ||
+        autoResolvedMeta.supersededIds.length > 0 ||
+        autoResolvedMeta.downgradedToOnDemand ||
+        autoResolvedMeta.downgradedToScoped
+      ) {
+        result.diagnostics = {
+          ...(result.diagnostics || {}),
+          auto_resolved: {
+            ...(autoResolvedMeta.batchId ? { batch_id: autoResolvedMeta.batchId } : {}),
+            ...(autoResolvedMeta.evictedIds.length > 0 ? { demoted_to_on_demand: autoResolvedMeta.evictedIds } : {}),
+            ...(autoResolvedMeta.supersededIds.length > 0 ? { replaced_conflicts: autoResolvedMeta.supersededIds } : {}),
+            ...(autoResolvedMeta.downgradedToOnDemand ? { saved_as_on_demand: true } : {}),
+            ...(autoResolvedMeta.downgradedToScoped ? { saved_as_scoped_rule: true } : {}),
+          },
+        };
       }
 
       const displayTitle = String(payload.title || payload.l0_summary || committedId).trim();
@@ -2854,58 +3068,226 @@ export class EvoMcpDispatcher {
         .filter(Boolean)
         .join(' ');
       const hasCjk = /[\u4e00-\u9fff]/.test(textForLang);
+      const effectiveAlwaysOn =
+        (result.diagnostics as Record<string, unknown> | undefined)?.always_on !== undefined
+          ? Boolean((result.diagnostics as Record<string, unknown>).always_on)
+          : payload.always_on !== false;
+      const kindHumanZh: Record<string, string> = {
+        rule: '规则',
+        skill: '工作流程',
+        tool: '工具',
+        memory: isPersonalMemCommit ? '个人经验' : '排障经验',
+      };
+      const kindHumanEn: Record<string, string> = {
+        rule: 'rule',
+        skill: 'workflow',
+        tool: 'tool',
+        memory: isPersonalMemCommit ? 'personal note' : 'lesson',
+      };
+
       let human_receipt: string;
       if (payload.kind === 'preference') {
         if (hasCjk) {
-          human_receipt =
-            payload.always_on === false
-              ? `已记住按需偏好「${displayTitle}」（触发：${payload.trigger_cue || '按需'}）。说「撤销」即可取消。`
-              : `已记住偏好「${displayTitle}」，之后会自动生效。说「撤销」即可取消。`;
+          human_receipt = !effectiveAlwaysOn
+            ? `已记住按需偏好「${displayTitle}」（触发：${payload.trigger_cue || '按需'}）。说「撤销」即可取消。`
+            : `已记住偏好「${displayTitle}」，之后会自动生效。说「撤销」即可取消。`;
+          if (autoResolvedMeta.evictedIds.length > 0) {
+            human_receipt += ` 已自动将 ${autoResolvedMeta.evictedIds.length} 条低频偏好转为按需加载以腾出空间。`;
+          }
+          if (autoResolvedMeta.supersededIds.length > 0) {
+            human_receipt += ` 已自动替换原有冲突偏好。`;
+          }
         } else {
-          human_receipt = `Saved preference "${displayTitle}". Say 'undo' to remove it.`;
+          human_receipt = !effectiveAlwaysOn
+            ? `Saved on-demand preference "${displayTitle}". Say 'undo' to revert.`
+            : `Saved preference "${displayTitle}". Say 'undo' to remove it.`;
+          if (autoResolvedMeta.evictedIds.length > 0) {
+            human_receipt += ` Moved ${autoResolvedMeta.evictedIds.length} lower-priority item(s) to on-demand to fit.`;
+          }
+          if (autoResolvedMeta.supersededIds.length > 0) {
+            human_receipt += ` Replaced conflicting preference automatically.`;
+          }
         }
       } else {
         human_receipt = hasCjk
-          ? `已记录 ${payload.kind}「${displayTitle}」（${committedId}）。`
-          : `Saved ${payload.kind} "${displayTitle}" (${committedId}).`;
+          ? `已记住${kindHumanZh[payload.kind] || '记录'}「${displayTitle}」。说「撤销」即可取消。`
+          : `Saved ${kindHumanEn[payload.kind] || payload.kind} "${displayTitle}". Say 'undo' to revert.`;
+        if (autoResolvedMeta.downgradedToScoped) {
+          human_receipt += hasCjk
+            ? '（核心预算已满，已自动存为按路径生效的局部规则。）'
+            : ' (Core budget full; saved automatically as a path-scoped rule.)';
+        }
+      }
+      if (syncWarnings.length > 0) {
+        human_receipt += hasCjk
+          ? ` ⚠️ 同步提醒：${syncWarnings[0]}`
+          : ` ⚠️ Sync warning: ${syncWarnings[0]}`;
       }
 
       return {
         content: [
           {
             type: 'text' as const,
-            text: JSON.stringify({ ...result, human_receipt }, null, 2),
+            text: JSON.stringify(
+              { ...result, ...(payload.id ? { id: payload.id } : {}), human_receipt },
+              null,
+              2
+            ),
           },
         ],
       };
     };
 
-    const autoResolve = Boolean((proposal as any).auto_resolve) && payload.kind === 'preference';
-    const tryBuildAutoResolveRetry = (
-      result: ReturnType<EvoGatekeeper['evaluateAndCommit']>
-    ): ProposalPayload | null => {
-      if (result.passed || !autoResolve) return null;
-      if (result.error_code === 'ERR_DUPLICATE_CAPABILITY') {
-        const conflictId =
-          (result as any).conflicting_ids?.[0] ||
-          (storage.getPreference(sanitizeId(payload.id || ''))
-            ? sanitizeId(payload.id || '')
-            : undefined);
-        if (conflictId) {
-          return { ...payload, supersedes_id: conflictId };
-        }
-      } else if (result.error_code === 'ERR_PROFILE_BUDGET_EXCEEDED') {
-        const lowValId = (result as any).low_value_candidates?.[0]?.id;
-        if (lowValId) {
-          const lowPref = storage.getPreference(lowValId);
-          if (lowPref) {
-            const prefPath = path.join(storage.preferencesDir, `${lowValId}.md`);
-            let prevSnap: string | undefined;
-            if (fs.existsSync(prefPath)) {
-              try {
-                prevSnap = fs.readFileSync(prefPath, 'utf8');
-              } catch {}
+    const prefAutoResolve =
+      payload.kind === 'preference' && (proposal as any).auto_resolve !== false;
+    const ruleAutoResolve =
+      payload.kind === 'rule' && (proposal as any).auto_resolve === true;
+
+    const runWithAutoResolve = async (isAsync: boolean): Promise<any> => {
+      const evalCommit = (p: ProposalPayload) =>
+        isAsync ? gatekeeper.evaluateAndCommitAsync(p) : Promise.resolve(gatekeeper.evaluateAndCommit(p));
+
+      let currentPayload: ProposalPayload = { ...payload };
+      let res = await evalCommit(currentPayload);
+      if (res.passed) {
+        return finishPropose(res);
+      }
+
+      if (ruleAutoResolve && res.error_code === 'ERR_BUDGET_EXCEEDED' && currentPayload.core) {
+        currentPayload = {
+          ...currentPayload,
+          core: false,
+          scope_glob: currentPayload.scope_glob && currentPayload.scope_glob !== '*' ? currentPayload.scope_glob : '**/*',
+        };
+        autoResolvedMeta.downgradedToScoped = true;
+        res = await evalCommit(currentPayload);
+        return finishPropose(res);
+      }
+
+      if (!prefAutoResolve) {
+        return finishPropose(res);
+      }
+
+      // Loop-converge preference conflicts & profile budget overflow as ONE atomic undoable batch
+      const batchId = `auto-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const preBatchFileSnapshots = new Map<string, string | null>();
+      const preBatchHistorySize = fs.existsSync(storage.profileHistoryPath)
+        ? fs.statSync(storage.profileHistoryPath).size
+        : -1;
+      const preBatchArchives = new Set(
+        fs.existsSync(storage.archiveDir) ? fs.readdirSync(storage.archiveDir) : []
+      );
+      const snapshotPrefOnce = (prefId: string) => {
+        const cleanPrefId = sanitizeId(prefId);
+        if (!cleanPrefId || preBatchFileSnapshots.has(cleanPrefId)) return;
+        const p = path.join(storage.preferencesDir, `${cleanPrefId}.md`);
+        preBatchFileSnapshots.set(cleanPrefId, fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null);
+      };
+      const rollbackBatchMutations = () => {
+        for (const [prefId, content] of preBatchFileSnapshots.entries()) {
+          const p = path.join(storage.preferencesDir, `${prefId}.md`);
+          if (content === null) {
+            if (fs.existsSync(p)) {
+              try { fs.unlinkSync(p); } catch {}
             }
+          } else {
+            fs.mkdirSync(path.dirname(p), { recursive: true });
+            fs.writeFileSync(p, content, 'utf8');
+          }
+        }
+        if (fs.existsSync(storage.archiveDir)) {
+          for (const f of fs.readdirSync(storage.archiveDir)) {
+            if (!preBatchArchives.has(f)) {
+              try { fs.rmSync(path.join(storage.archiveDir, f), { recursive: true, force: true }); } catch {}
+            }
+          }
+        }
+        if (preBatchHistorySize === -1) {
+          if (fs.existsSync(storage.profileHistoryPath)) {
+            try { fs.unlinkSync(storage.profileHistoryPath); } catch {}
+          }
+        } else if (fs.existsSync(storage.profileHistoryPath)) {
+          try {
+            fs.truncateSync(storage.profileHistoryPath, preBatchHistorySize);
+          } catch {}
+        }
+        storage.rebuildUserProfileDigest();
+        telemetry?.syncFromDisk();
+      };
+
+      let mutatedInBatch = false;
+      const MAX_AUTO_RESOLVE_STEPS = 8;
+      for (let step = 0; step < MAX_AUTO_RESOLVE_STEPS && !res.passed; step++) {
+        if (res.error_code === 'ERR_DUPLICATE_CAPABILITY') {
+          const rawConflicts: string[] = Array.isArray((res as any).conflicting_ids)
+            ? (res as any).conflicting_ids.map((x: unknown) => sanitizeId(String(x))).filter(Boolean)
+            : [];
+          const selfId = sanitizeId(currentPayload.id || '');
+          if (rawConflicts.length === 0 && selfId && storage.getPreference(selfId)) {
+            rawConflicts.push(selfId);
+          }
+          const uniqueConflicts = Array.from(new Set(rawConflicts));
+          if (uniqueConflicts.length === 0) break;
+
+          // If multiple conflicting items exist, archive extra ones with batch_id and supersede the primary one
+          const primaryConflict = uniqueConflicts[0];
+          const extraConflicts = uniqueConflicts.slice(1);
+          for (const extraId of extraConflicts) {
+            const extraPref = storage.getPreference(extraId);
+            if (!extraPref) continue;
+            snapshotPrefOnce(extraId);
+            const snapText = preBatchFileSnapshots.get(extraId) || undefined;
+            if (storage.archiveCapability(extraId, 'preference', `Replaced during auto_resolve by ${selfId || 'new preference'}`)) {
+              mutatedInBatch = true;
+              autoResolvedMeta.batchId = batchId;
+              autoResolvedMeta.supersededIds.push(extraId);
+              storage.appendProfileHistory({
+                ts: new Date().toISOString(),
+                action: 'archive',
+                id: extraId,
+                kind: 'preference',
+                title: extraPref.title || extraId,
+                batch_id: batchId,
+                ...(snapText ? { previous_snapshot: snapText } : {}),
+                reason: `Archived conflicting preference during auto_resolve`,
+              });
+            }
+          }
+          if (extraConflicts.length > 0) {
+            telemetry?.syncFromDisk();
+          }
+
+          if (currentPayload.supersedes_id === primaryConflict && extraConflicts.length === 0) {
+            // Already tried superseding primaryConflict and still failed; avoid infinite loop
+            break;
+          }
+          snapshotPrefOnce(primaryConflict);
+          autoResolvedMeta.batchId = batchId;
+          autoResolvedMeta.supersededIds.push(primaryConflict);
+          currentPayload = {
+            ...currentPayload,
+            supersedes_id: primaryConflict,
+            batch_id: batchId,
+          };
+          res = await evalCommit(currentPayload);
+          continue;
+        }
+
+        if (res.error_code === 'ERR_PROFILE_BUDGET_EXCEEDED') {
+          const candidates: Array<{ id: string }> = Array.isArray((res as any).low_value_candidates)
+            ? (res as any).low_value_candidates
+            : [];
+          const nextCandidate = candidates.find((c) => {
+            const cid = sanitizeId(c.id);
+            const p = cid ? storage.getPreference(cid) : null;
+            return Boolean(p && p.always_on !== false && cid !== sanitizeId(currentPayload.id || ''));
+          });
+
+          if (nextCandidate) {
+            const lowValId = sanitizeId(nextCandidate.id);
+            const lowPref = storage.getPreference(lowValId)!;
+            snapshotPrefOnce(lowValId);
+            const prevSnap = preBatchFileSnapshots.get(lowValId) || undefined;
             const nowIso = new Date().toISOString();
             storage.savePreference({
               ...lowPref,
@@ -2913,37 +3295,223 @@ export class EvoMcpDispatcher {
               trigger_cue: lowPref.trigger_cue || lowPref.l0_summary,
               updated_at: nowIso,
             });
+            storage.rebuildUserProfileDigest();
             storage.appendProfileHistory({
               ts: nowIso,
               action: 'update',
               id: lowValId,
               kind: 'preference',
               title: lowPref.title,
-              previous_snapshot: prevSnap,
+              batch_id: batchId,
+              ...(prevSnap ? { previous_snapshot: prevSnap } : {}),
               reason: 'Demoted to on-demand during auto_resolve budget eviction',
             });
-            return payload;
+            telemetry?.syncFromDisk();
+            mutatedInBatch = true;
+            autoResolvedMeta.batchId = batchId;
+            autoResolvedMeta.evictedIds.push(lowValId);
+            currentPayload = {
+              ...currentPayload,
+              batch_id: batchId,
+            };
+            res = await evalCommit(currentPayload);
+            continue;
           }
+
+          // No demotable candidates exist (e.g., single item exceeds atomic cap or budget completely full):
+          // Only gracefully demote the incoming item to on-demand if caller did NOT explicitly force always_on: true
+          // on an oversized atomic item, OR if we already freed everything possible and still need to fit.
+          if (mutatedInBatch && currentPayload.always_on !== false) {
+            currentPayload = {
+              ...currentPayload,
+              always_on: false,
+              trigger_cue: currentPayload.trigger_cue || currentPayload.l0_summary || currentPayload.title,
+              batch_id: batchId,
+            };
+            autoResolvedMeta.downgradedToOnDemand = true;
+            res = await evalCommit(currentPayload);
+            continue;
+          }
+          break;
         }
+
+        break;
       }
-      return null;
+
+      if (!res.passed && mutatedInBatch) {
+        rollbackBatchMutations();
+      }
+      return finishPropose(res);
     };
 
     if (asyncMode) {
-      return gatekeeper.evaluateAndCommitAsync(payload).then((res) => {
-        const retryPayload = tryBuildAutoResolveRetry(res);
-        if (retryPayload) {
-          return gatekeeper.evaluateAndCommitAsync(retryPayload).then(finishPropose);
+      return runWithAutoResolve(true);
+    }
+    // Preserve synchronous return contract for callers using handleToolCall (sync)
+    let syncResult: any;
+    const syncEvalCommit = (p: ProposalPayload) => gatekeeper.evaluateAndCommit(p);
+    let currentPayload: ProposalPayload = { ...payload };
+    let res = syncEvalCommit(currentPayload);
+    if (!res.passed) {
+      if (ruleAutoResolve && res.error_code === 'ERR_BUDGET_EXCEEDED' && currentPayload.core) {
+        currentPayload = {
+          ...currentPayload,
+          core: false,
+          scope_glob: currentPayload.scope_glob && currentPayload.scope_glob !== '*' ? currentPayload.scope_glob : '**/*',
+        };
+        autoResolvedMeta.downgradedToScoped = true;
+        res = syncEvalCommit(currentPayload);
+      } else if (prefAutoResolve) {
+        const batchId = `auto-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+        const preBatchFileSnapshots = new Map<string, string | null>();
+        const preBatchHistorySize = fs.existsSync(storage.profileHistoryPath)
+          ? fs.statSync(storage.profileHistoryPath).size
+          : -1;
+        const preBatchArchives = new Set(
+          fs.existsSync(storage.archiveDir) ? fs.readdirSync(storage.archiveDir) : []
+        );
+        const snapshotPrefOnce = (prefId: string) => {
+          const cleanPrefId = sanitizeId(prefId);
+          if (!cleanPrefId || preBatchFileSnapshots.has(cleanPrefId)) return;
+          const p = path.join(storage.preferencesDir, `${cleanPrefId}.md`);
+          preBatchFileSnapshots.set(cleanPrefId, fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null);
+        };
+        const rollbackBatchMutations = () => {
+          for (const [prefId, content] of preBatchFileSnapshots.entries()) {
+            const p = path.join(storage.preferencesDir, `${prefId}.md`);
+            if (content === null) {
+              if (fs.existsSync(p)) {
+                try { fs.unlinkSync(p); } catch {}
+              }
+            } else {
+              fs.mkdirSync(path.dirname(p), { recursive: true });
+              fs.writeFileSync(p, content, 'utf8');
+            }
+          }
+          if (fs.existsSync(storage.archiveDir)) {
+            for (const f of fs.readdirSync(storage.archiveDir)) {
+              if (!preBatchArchives.has(f)) {
+                try { fs.rmSync(path.join(storage.archiveDir, f), { recursive: true, force: true }); } catch {}
+              }
+            }
+          }
+          if (preBatchHistorySize === -1) {
+            if (fs.existsSync(storage.profileHistoryPath)) {
+              try { fs.unlinkSync(storage.profileHistoryPath); } catch {}
+            }
+          } else if (fs.existsSync(storage.profileHistoryPath)) {
+            try { fs.truncateSync(storage.profileHistoryPath, preBatchHistorySize); } catch {}
+          }
+          storage.rebuildUserProfileDigest();
+          telemetry?.syncFromDisk();
+        };
+
+        let mutatedInBatch = false;
+        for (let step = 0; step < 8 && !res.passed; step++) {
+          if (res.error_code === 'ERR_DUPLICATE_CAPABILITY') {
+            const rawConflicts: string[] = Array.isArray((res as any).conflicting_ids)
+              ? (res as any).conflicting_ids.map((x: unknown) => sanitizeId(String(x))).filter(Boolean)
+              : [];
+            const selfId = sanitizeId(currentPayload.id || '');
+            if (rawConflicts.length === 0 && selfId && storage.getPreference(selfId)) {
+              rawConflicts.push(selfId);
+            }
+            const uniqueConflicts = Array.from(new Set(rawConflicts));
+            if (uniqueConflicts.length === 0) break;
+            const primaryConflict = uniqueConflicts[0];
+            const extraConflicts = uniqueConflicts.slice(1);
+            for (const extraId of extraConflicts) {
+              const extraPref = storage.getPreference(extraId);
+              if (!extraPref) continue;
+              snapshotPrefOnce(extraId);
+              const snapText = preBatchFileSnapshots.get(extraId) || undefined;
+              if (storage.archiveCapability(extraId, 'preference', `Replaced during auto_resolve by ${selfId || 'new preference'}`)) {
+                mutatedInBatch = true;
+                autoResolvedMeta.batchId = batchId;
+                autoResolvedMeta.supersededIds.push(extraId);
+                storage.appendProfileHistory({
+                  ts: new Date().toISOString(),
+                  action: 'archive',
+                  id: extraId,
+                  kind: 'preference',
+                  title: extraPref.title || extraId,
+                  batch_id: batchId,
+                  ...(snapText ? { previous_snapshot: snapText } : {}),
+                  reason: `Archived conflicting preference during auto_resolve`,
+                });
+              }
+            }
+            if (extraConflicts.length > 0) telemetry?.syncFromDisk();
+            if (currentPayload.supersedes_id === primaryConflict && extraConflicts.length === 0) break;
+            snapshotPrefOnce(primaryConflict);
+            autoResolvedMeta.batchId = batchId;
+            autoResolvedMeta.supersededIds.push(primaryConflict);
+            currentPayload = { ...currentPayload, supersedes_id: primaryConflict, batch_id: batchId };
+            res = syncEvalCommit(currentPayload);
+            continue;
+          }
+          if (res.error_code === 'ERR_PROFILE_BUDGET_EXCEEDED') {
+            const candidates: Array<{ id: string }> = Array.isArray((res as any).low_value_candidates)
+              ? (res as any).low_value_candidates
+              : [];
+            const nextCandidate = candidates.find((c) => {
+              const cid = sanitizeId(c.id);
+              const p = cid ? storage.getPreference(cid) : null;
+              return Boolean(p && p.always_on !== false && cid !== sanitizeId(currentPayload.id || ''));
+            });
+            if (nextCandidate) {
+              const lowValId = sanitizeId(nextCandidate.id);
+              const lowPref = storage.getPreference(lowValId)!;
+              snapshotPrefOnce(lowValId);
+              const prevSnap = preBatchFileSnapshots.get(lowValId) || undefined;
+              const nowIso = new Date().toISOString();
+              storage.savePreference({
+                ...lowPref,
+                always_on: false,
+                trigger_cue: lowPref.trigger_cue || lowPref.l0_summary,
+                updated_at: nowIso,
+              });
+              storage.rebuildUserProfileDigest();
+              storage.appendProfileHistory({
+                ts: nowIso,
+                action: 'update',
+                id: lowValId,
+                kind: 'preference',
+                title: lowPref.title,
+                batch_id: batchId,
+                ...(prevSnap ? { previous_snapshot: prevSnap } : {}),
+                reason: 'Demoted to on-demand during auto_resolve budget eviction',
+              });
+              telemetry?.syncFromDisk();
+              mutatedInBatch = true;
+              autoResolvedMeta.batchId = batchId;
+              autoResolvedMeta.evictedIds.push(lowValId);
+              currentPayload = { ...currentPayload, batch_id: batchId };
+              res = syncEvalCommit(currentPayload);
+              continue;
+            }
+            if (mutatedInBatch && currentPayload.always_on !== false) {
+              currentPayload = {
+                ...currentPayload,
+                always_on: false,
+                trigger_cue: currentPayload.trigger_cue || currentPayload.l0_summary || currentPayload.title,
+                batch_id: batchId,
+              };
+              autoResolvedMeta.downgradedToOnDemand = true;
+              res = syncEvalCommit(currentPayload);
+              continue;
+            }
+            break;
+          }
+          break;
         }
-        return finishPropose(res);
-      });
+        if (!res.passed && mutatedInBatch) {
+          rollbackBatchMutations();
+        }
+      }
     }
-    const firstRes = gatekeeper.evaluateAndCommit(payload);
-    const retryPayload = tryBuildAutoResolveRetry(firstRes);
-    if (retryPayload) {
-      return finishPropose(gatekeeper.evaluateAndCommit(retryPayload));
-    }
-    return finishPropose(firstRes);
+    syncResult = finishPropose(res);
+    return syncResult;
   }
 
   private proposeSchemaError(args: Record<string, unknown>) {
@@ -2982,13 +3550,26 @@ export class EvoMcpDispatcher {
     const cleanId = rawIdStr ? sanitizeId(rawIdStr) : '';
     const rawSupStr = typeof args.supersedes_id === 'string' ? args.supersedes_id.trim() : '';
     const cleanSup = rawSupStr ? sanitizeId(rawSupStr) : '';
-    const isPrefWithContent =
-      rawKind === 'preference' && typeof args.content === 'string' && args.content.trim().length > 0;
+    const hasSeedBody =
+      (rawKind === 'preference' && typeof args.content === 'string' && args.content.trim().length > 0) ||
+      (rawKind === 'rule' && typeof args.content === 'string' && args.content.trim().length > 0) ||
+      (rawKind === 'skill' &&
+        ((typeof args.l1_contract === 'string' && args.l1_contract.trim().length > 0) ||
+          (typeof args.l2_sop === 'string' && args.l2_sop.trim().length > 0) ||
+          (typeof args.content === 'string' && args.content.trim().length > 0))) ||
+      (rawKind === 'memory' &&
+        ((typeof args.symptom === 'string' && args.symptom.trim().length > 0) ||
+          (typeof args.solution === 'string' && args.solution.trim().length > 0) ||
+          (typeof args.root_cause === 'string' && args.root_cause.trim().length > 0) ||
+          (typeof args.content === 'string' && args.content.trim().length > 0))) ||
+      (rawKind === 'tool' &&
+        ((typeof args.script_code === 'string' && args.script_code.trim().length > 0) ||
+          (typeof args.description === 'string' && args.description.trim().length > 0)));
 
     if (args.id !== undefined && (typeof args.id !== 'string' || cleanId.length < 3)) {
       return fail('Proposal id must be a string with at least 3 alphanumeric/hyphen characters.');
     }
-    if (!isPrefWithContent && (cleanId || cleanSup).length < 3) {
+    if (!hasSeedBody && (cleanId || cleanSup).length < 3) {
       return fail('Proposal id must be at least 3 alphanumeric/hyphen characters.');
     }
 
@@ -3003,7 +3584,7 @@ export class EvoMcpDispatcher {
     const rawL0 = String(args.l0_summary ?? '').trim();
     const hasSupersedes = cleanSup.length >= 3;
 
-    if (!rawL0 && !isPrefWithContent) {
+    if (!rawL0 && !hasSeedBody) {
       let canInheritFromExisting = false;
       if (hasSupersedes) {
         if (this.isGlobalWriteRoute('evo_propose', args)) {
@@ -3151,9 +3732,11 @@ export class EvoMcpDispatcher {
       )
     );
 
+    const compactBatchId = `compact-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
     const compactedProposalPayload = {
       ...effectiveMergedProposal,
       origin: 'compacted',
+      batch_id: compactBatchId,
     };
     const sharedCompactOpts = {
       preservedCreatedAt,
@@ -3225,21 +3808,29 @@ export class EvoMcpDispatcher {
         (t) => storage.getPreference(t.id) !== null || storage.getSkill(t.id) !== null
       );
       const hasAnyPrefTarget = existingTargets.some((t) => storage.getPreference(t.id) !== null);
-      const archivedPrefSnapshots: Array<{ id: string; title: string; snapshot: string }> = [];
+      const archivedHistorySnapshots: Array<{
+        id: string;
+        kind: EvoKind;
+        title: string;
+        snapshot?: string;
+        files?: Record<string, string>;
+        wasCore?: boolean;
+      }> = [];
       for (const target of existingTargets) {
-        const pref = storage.getPreference(target.id);
-        if (!pref) continue;
-        const cleanPrefId = sanitizeId(target.id);
-        const prefPath = path.join(storage.preferencesDir, `${cleanPrefId}.md`);
-        if (fs.existsSync(prefPath)) {
-          try {
-            archivedPrefSnapshots.push({
-              id: cleanPrefId,
-              title: pref.title || cleanPrefId,
-              snapshot: fs.readFileSync(prefPath, 'utf8'),
+        const cleanTid = sanitizeId(target.id);
+        const kindsToCheck: EvoKind[] = ['preference', 'rule', 'skill', 'tool', 'memory'];
+        for (const k of kindsToCheck) {
+          const snap = storage.snapshotCapabilityForHistory(cleanTid, k);
+          if (snap) {
+            archivedHistorySnapshots.push({
+              id: cleanTid,
+              kind: k,
+              title: snap.title || cleanTid,
+              snapshot: snap.snapshot,
+              files: snap.files,
+              wasCore: snap.wasCore,
             });
-          } catch {
-            // ignore read error
+            break;
           }
         }
       }
@@ -3287,15 +3878,18 @@ export class EvoMcpDispatcher {
         } else {
           const archivedSet = new Set(archived.map((a) => sanitizeId(a)));
           const nowTs = new Date().toISOString();
-          for (const prefSnap of archivedPrefSnapshots) {
-            if (!archivedSet.has(prefSnap.id)) continue;
+          for (const capSnap of archivedHistorySnapshots) {
+            if (!archivedSet.has(capSnap.id)) continue;
             storage.appendProfileHistory({
               ts: nowTs,
               action: 'archive',
-              id: prefSnap.id,
-              kind: 'preference',
-              title: prefSnap.title,
-              previous_snapshot: prefSnap.snapshot,
+              id: capSnap.id,
+              kind: capSnap.kind,
+              title: capSnap.title,
+              batch_id: compactBatchId,
+              ...(capSnap.snapshot ? { previous_snapshot: capSnap.snapshot } : {}),
+              ...(capSnap.files ? { previous_files: capSnap.files } : {}),
+              ...(capSnap.wasCore !== undefined ? { was_core: capSnap.wasCore } : {}),
               reason: `Compacted into ${mergedCleanId}: ${reason}`,
             });
           }
@@ -3323,6 +3917,7 @@ export class EvoMcpDispatcher {
               profile_tokens: syncRes.totalTokens,
               max_profile_tokens: syncRes.maxTokens,
               menu_tokens: syncRes.menuTokens,
+              ...(syncRes.warnings.length > 0 ? { profile_sync_warnings: syncRes.warnings } : {}),
             };
           }
         } else if (!isGlobalRoot) {

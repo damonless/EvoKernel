@@ -367,9 +367,21 @@ export function renderEvoTree(
   const formattedLines = lines.map((line) =>
     formatTerminalOutput(line, { color: options?.color, ascii: options?.ascii })
   );
-  return formattedLines
-    .map((line) => truncateTerminalLine(line, options?.maxCols, options?.full))
-    .join('\n');
+  let wasTruncated = false;
+  const outputLines = formattedLines.map((line) => {
+    const truncated = truncateTerminalLine(line, options?.maxCols, options?.full);
+    if (truncated !== line) wasTruncated = true;
+    return truncated;
+  });
+  if (wasTruncated && !options?.full) {
+    outputLines.push(
+      formatTerminalOutput('ℹ️  Some lines were truncated to fit terminal width — pass `--full` to view complete lines.', {
+        color: options?.color,
+        ascii: options?.ascii,
+      })
+    );
+  }
+  return outputLines.join('\n');
 }
 
 function resolveRealPathWithFallback(p: string): string {

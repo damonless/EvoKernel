@@ -896,6 +896,9 @@ export function renderVirtualizeReport(result: VirtualizeResult): string {
   if (result.mode === 'dry-run') {
     lines.push('');
     lines.push('💡 Run `evo virtualize` (without `--dry-run`) to apply this optimization, or `evo virtualize --restore` to undo at any time.');
+  } else if (result.mode === 'virtualize') {
+    lines.push('');
+    lines.push('↩️  Undo anytime: run `evo virtualize --restore` to restore all folded MCP servers back to host configs.');
   }
 
   return lines.join('\n');
